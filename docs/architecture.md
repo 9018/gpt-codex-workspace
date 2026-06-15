@@ -1,241 +1,157 @@
 # GPT-Codex Workspace Architecture
 
 Date: 2026-06-15
-Status: v1 operational
+Status: v2 encoded goal workflow
 Default MCP endpoint: `https://mcp.gptwork.cc.cd/mcp/dev-token`
 
 ## Objective
 
-Build a publicly distributable collaboration system that connects ChatGPT and Codex to the same project backend.
+GPTWork connects ChatGPT and Codex to one backend MCP service.
 
-First version scope:
-
-- Backend MCP with path-based token auth — the URL suffix after `/mcp/` is the bearer token.
-- Team, project, and workspace management.
-- Hosted workspace adapter.
-- SSH workspace adapter.
-- ChatGPT App / connector for project status, task creation, and task monitoring.
-- Codex marketplace plugin for actual workspace work.
-- Task queue where ChatGPT can create work and Codex can execute and report back.
-- ChatGPT coordination requests where Codex can ask ChatGPT for analysis, decisions, or next-step instructions.
-- Permissions, quotas, audit logs, and safety boundaries.
+- ChatGPT writes user-facing plans and creates encoded goals.
+- Codex executes decoded readable goals in hosted or SSH workspaces.
+- The backend stores identity, workspaces, goals, tasks, context files, bundles, logs, and results.
+- Codex plugin distribution comes from `9018/gpt-codex-workspace`.
 
 ## Operating Model
 
 ```text
-ChatGPT App = command, analysis, coordination, mobile access
-Codex Plugin = implementation, testing, file edits, browser checks
-Backend MCP = identity, project state, workspaces, SSH, task queue, audit
+ChatGPT App = command, preview, encoded goal creation, status review
+Codex Plugin = implementation, deployment, testing, verification
+Backend MCP = auth, project state, workspace IO, goal/task queue, audit
 ```
 
 ## High-Level Flow
 
 ```text
-User on ChatGPT mobile
-  -> GPTWork ChatGPT connector
-  -> Backend MCP
-  -> Task queue
-  -> Codex plugin / worker
-  -> Hosted or SSH workspace
-  -> Results returned to backend
-  -> ChatGPT summarizes status to user
+User request
+  -> ChatGPT readable preview
+  -> payload JSON
+  -> base64 payload
+  -> create_encoded_goal(assign_to_codex=true)
+  -> Backend decodes and writes .gptwork/goals/<goal_id>/ files
+  -> Backend creates/links task
+  -> Codex reads goal.md/context.json/transcript.md
+  -> Codex executes and writes result.md
+  -> append_goal_message reports progress/results
 ```
 
-## Backend Components
-
-### Auth Service
+## Auth Service
 
 Authentication is path-based. The URL suffix after `/mcp/` is used as the bearer token:
 
-- `https://mcp.gptwork.cc.cd/mcp/dev-token` → token = `dev-token`
-- `https://mcp.gptwork.cc.cd/mcp/workspace-a` → token = `workspace-a`
+- `https://mcp.gptwork.cc.cd/mcp/dev-token` -> token = `dev-token`
+- `https://mcp.gptwork.cc.cd/mcp/workspace-a` -> token = `workspace-a`
 
-ChatGPT connectors that cannot send custom `Authorization` headers use these token-path URLs directly. Clients that support custom headers may still use `/mcp` with `Authorization: Bearer <token>`.
+Clients that support custom headers may still use `/mcp` with `Authorization: Bearer <token>`. ChatGPT should normally use the path-token URL and auth mode `none`.
 
-Tokens are validated against `GPTWORK_TOKENS` and resolved to a token context containing:
+## Workspace Service
 
-- user_id, user_name, team_id
-- project_ids, workspace_ids
-- scopes (project:read, workspace:write, shell:exec, etc.)
+GPTWork supports hosted and SSH workspaces.
 
-If `GPTWORK_REQUIRE_AUTH=false`, all requests run as the `anonymous` context.
+- Hosted workspace root is configured with `GPTWORK_WORKSPACE_ROOT`.
+- SSH workspaces prefer key authentication.
+- Hosts outside `10.0.0.0/8` use default SOCKS proxy `10.0.1.105:20177` unless overridden.
+- File operations stay inside the selected workspace root.
 
-### Project Service
+## Encoded Goal Service
 
-Stores teams, projects, members, workspaces, default workspace, and recent activity.
-
-### Workspace Service
-
-Provides a uniform interface over hosted and SSH workspaces.
-
-Required guarantees:
-
-- File operations remain inside configured workspace root.
-- Symlink traversal outside root is blocked.
-- File, output, command, and browser limits are enforced.
-- Every high-risk action is audited.
-
-### SSH Workspace Adapter
-
-Connects advanced users' remote servers to the project backend.
-
-SSH credentials are stored only in the backend, encrypted at rest. ChatGPT and Codex plugins receive only API tokens and never receive SSH private keys.
-
-Supported operations map to SFTP and SSH exec:
-
-- list/read/write files
-- upload/download
-- move/copy/delete
-- search
-- sha256
-- zip/unzip
-- shell_exec when allowed
-
-### Task Service
-
-Tracks work created by ChatGPT, Codex, users, or API clients.
-
-Statuses:
+Primary tool:
 
 ```text
-draft
-queued
-assigned
-planning
-running
-waiting_for_review
-blocked
-failed
-completed
-cancelled
+create_encoded_goal
 ```
 
-### Audit Service
+Input:
 
-Records token use, project selection, workspace selection, file writes/deletes, shell commands, SSH connections, uploads, downloads, browser sessions, task assignments, and task completion.
-
-## Token Scopes (Server-Configured)
-
-Scope sets are assigned per token via `GPTWORK_TOKEN_CONTEXTS` on the server side, not by the end user.
-
-Available scopes:
-
-```text
-project:read       project:admin
-task:create        task:update      task:assign_codex
-workspace:read     workspace:write
-files:upload       files:download
-shell:exec         ssh:use
-browser:use        audit:read
+```json
+{
+  "preview_text": "readable explanation shown to the user",
+  "payload_base64": "base64(JSON.stringify(payload))",
+  "assign_to_codex": true
+}
 ```
 
-The default `dev-token` has all scopes enabled. User-facing token scoping is not exposed as a self-service feature in v1.
+Decoded payload:
 
-## ChatGPT App Responsibilities
-
-ChatGPT should optimize for command and coordination:
-
-- Select project and workspace.
-- View active tasks.
-- Create a Codex task.
-- Assign a task to Codex.
-- Summarize task logs and verification results.
-- Ask for user confirmation before high-risk actions.
-
-ChatGPT should not directly expose raw shell execution as a default primary action.
-
-## Codex Plugin Responsibilities
-
-Codex should optimize for implementation:
-
-- Read assigned tasks.
-- Inspect project files.
-- Edit workspace files.
-- Run requested checks.
-- Use browser tools for verification.
-- Attach logs and artifacts.
-- Update task status.
-- Return a concise summary for ChatGPT/mobile review.
-
-## Codex Plugin Distribution
-
-The Codex marketplace entry lives at:
-
-```text
-.agents/plugins/marketplace.json
+```json
+{
+  "user_request": "original user request",
+  "goal_prompt": "complete readable Codex instruction",
+  "context_summary": "conversation summary",
+  "mode": "builder | deploy | admin",
+  "workspace_id": "hosted-default",
+  "messages": [],
+  "memories": [],
+  "attachments": []
+}
 ```
 
-The plugin lives at:
+Workspace files:
 
 ```text
-plugins/gpt-codex-workspace/
+.gptwork/goals/<goal_id>/goal.md
+.gptwork/goals/<goal_id>/context.json
+.gptwork/goals/<goal_id>/transcript.md
+.gptwork/goals/<goal_id>/payload.json
+.gptwork/goals/<goal_id>/payload.base64
+.gptwork/goals/<goal_id>/result.md
+.gptwork/goals/<goal_id>/attachments/
 ```
 
-The plugin starts a local MCP proxy with:
+Base64 is transport encoding only. The backend and Codex always keep readable decoded files.
 
-```text
-plugins/gpt-codex-workspace/.mcp.json
-plugins/gpt-codex-workspace/mcp/server.mjs
+## Compatibility Task Service
+
+`create_task` and `assign_task_to_codex` remain available.
+
+- `create_task` with a normal description automatically creates a linked goal.
+- `create_task` with a `gptwork.encoded_goal.v1` envelope decodes the payload and links a readable goal.
+- `assign_task_to_codex` links old tasks to a goal before Codex execution.
+- Ordinary readonly tasks are promoted to `builder`; only the dedicated session inventory task remains readonly.
+
+## Bundles
+
+Instruction payloads use `JSON -> base64`.
+
+Files use `zip -> base64`:
+
+- `upload_bundle_base64`
+- `download_bundle_base64`
+- `create_zip_archive`
+- `extract_zip_archive`
+
+Bundles referenced by a goal are stored under `.gptwork/goals/<goal_id>/attachments/`.
+
+## Codex Worker
+
+Default command:
+
+```bash
+codex exec --yolo --skip-git-repo-check < promptFile
 ```
 
-The proxy reads:
+Override:
 
-```text
-GPTWORK_API_TOKEN
-GPTWORK_MCP_URL
+```bash
+GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
 ```
 
-`GPTWORK_MCP_URL` defaults to:
+Worker prompts include the goal file paths and require Codex to read `goal.md`, `context.json`, and `transcript.md` before acting.
+
+## Tool Groups
+
+Shared goals:
 
 ```text
-https://mcp.gptwork.cc.cd/mcp
-```
-
-For local LAN development, set `GPTWORK_MCP_URL=http://10.0.1.103:8787/mcp`.
-
-## ChatGPT App Distribution
-
-ChatGPT connects directly to the backend MCP endpoint. Since ChatGPT's MCP connector does not always support custom HTTP headers, the token is embedded in the URL path:
-
-```text
-https://mcp.gptwork.cc.cd/mcp/dev-token
-```
-
-Connector metadata:
-
-```text
-Connector name: GPTWork
-Description: Coordinate ChatGPT and Codex across project workspaces, task queues, and SSH environments.
-Connector URL: https://mcp.gptwork.cc.cd/mcp/YOUR_TOKEN
-```
-
-When configuring the ChatGPT connector, set Auth mode to **none** / **unauthenticated**. The backend extracts the token from the URL path automatically.
-
-## v1 MCP Tool Groups
-
-Project tools:
-
-```text
-health_check
-get_current_user
-list_projects
-get_project
-list_workspaces
-get_workspace_info
-set_active_workspace
-list_recent_activity
-```
-
-Shared goals tools:
-
-```text
+create_encoded_goal
 create_goal
 list_goals
 get_goal_context
 append_goal_message
 ```
 
-Task tools:
+Tasks:
 
 ```text
 create_task
@@ -247,16 +163,10 @@ attach_task_artifact
 assign_task_to_codex
 complete_task
 request_human_review
-list_codex_sessions_metadata
-create_codex_session_inventory_task
 run_assigned_codex_tasks
-create_chatgpt_request
-list_chatgpt_requests
-get_chatgpt_request
-answer_chatgpt_request
 ```
 
-Workspace tools:
+Workspace files:
 
 ```text
 list_dir
@@ -265,6 +175,8 @@ read_text_file
 download_file_base64
 write_text_file
 upload_base64_file
+upload_bundle_base64
+download_bundle_base64
 upload_from_url
 mkdir
 delete_path
@@ -277,55 +189,50 @@ extract_zip_archive
 shell_exec
 ```
 
-Browser tools:
+Coordination:
 
 ```text
-browser_new_session
-browser_goto
-browser_current_state
-browser_get_text
-browser_get_html
-browser_click
-browser_fill
-browser_press
-browser_wait_for_selector
-browser_scroll
-browser_screenshot
-browser_evaluate
+create_chatgpt_request
+list_chatgpt_requests
+get_chatgpt_request
+answer_chatgpt_request
 ```
 
-## Public Release Checklist
+GitHub sync:
 
-Backend:
+```text
+sync_to_github
+sync_from_github
+sync_github_comments
+github_status
+```
 
-- Path-based token auth implemented.
-- Project/workspace model implemented.
-- Hosted workspace adapter implemented.
-- SSH workspace adapter implemented.
-- Task queue implemented.
-- Audit logs implemented.
-- Scope checks implemented.
-- Limits implemented.
+## Distribution
 
-ChatGPT:
+Codex plugin marketplace source:
 
-- Public endpoint works over HTTPS.
-- Connector metadata is clear.
-- Project and task flows tested.
-- Mobile access tested after web connection.
+```text
+9018/gpt-codex-workspace
+```
 
-Codex:
+Plugin files:
 
-- Marketplace manifest exists.
-- Plugin manifest exists.
-- Local MCP proxy starts.
-- Proxy forwards token and endpoint correctly.
-- Proxy works with the default endpoint.
-- Workspace coordination skill is discoverable.
+```text
+plugins/gpt-codex-workspace/.mcp.json
+plugins/gpt-codex-workspace/mcp/server.mjs
+plugins/gpt-codex-workspace/skills/workspace-coordination/SKILL.md
+```
 
-## Open Questions
+Required plugin env:
 
-- Should public branding be GPTWork or GPT-Codex Workspace?
-- Should `shell:exec` ever be exposed to ChatGPT in v1?
-- Should the backend run its own Codex worker, or only coordinate user-owned Codex sessions?
-- Should SSH workspaces be project-admin managed only, or can each user bring their own remote workspace?
+```text
+GPTWORK_API_TOKEN=dev-token
+GPTWORK_MCP_URL=http://10.0.1.103:8787/mcp
+```
+
+ChatGPT connector:
+
+```text
+Connector URL: https://mcp.gptwork.cc.cd/mcp/dev-token
+Auth mode: none / unauthenticated
+```

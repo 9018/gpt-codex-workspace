@@ -46,12 +46,15 @@ test("tools/list exposes project, task, workspace, shell, and browser tools", as
 
   const names = response.result.tools.map((tool) => tool.name);
   assert.ok(names.includes("list_projects"));
+  assert.ok(names.includes("create_encoded_goal"));
   assert.ok(names.includes("create_goal"));
   assert.ok(names.includes("list_goals"));
   assert.ok(names.includes("get_goal_context"));
   assert.ok(names.includes("append_goal_message"));
   assert.ok(names.includes("create_task"));
   assert.ok(names.includes("write_text_file"));
+  assert.ok(names.includes("upload_bundle_base64"));
+  assert.ok(names.includes("download_bundle_base64"));
   assert.ok(names.includes("shell_exec"));
   assert.ok(names.includes("browser_goto"));
   for (const tool of response.result.tools) {

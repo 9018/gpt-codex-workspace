@@ -75,6 +75,44 @@ test("ChatGPT can create a Codex goal with shared conversation memory and linked
   assert.equal(context.task.id, created.task.id);
   assert.equal(context.conversation.messages[0].role, "user");
   assert.equal(context.memories[0].value, "Public MCP is https://mcp.gptwork.cc.cd/mcp/dev-token");
+  assert.match(context.workspace_files.goal_md, /^\.gptwork\/goals\/goal_/);
+  const goalMd = await callTool(server, "read_text_file", { path: context.workspace_files.goal_md });
+  assert.match(goalMd.content, /## Goal Prompt/);
+});
+
+test("ChatGPT can create an encoded goal and the backend writes readable workspace context files", async () => {
+  const server = await makeServer();
+  const preview = "我理解你的需求是：部署新版本并验证服务状态。";
+  const payload = {
+    user_request: "部署新版本到测试环境",
+    goal_prompt: "部署新版本到测试环境，完成后验证端口、日志和健康检查。",
+    context_summary: "GPTChat translated the user request before base64 transport.",
+    mode: "deploy",
+    workspace_id: "hosted-default",
+    messages: [
+      { role: "user", content: "部署新版本到测试环境" }
+    ],
+    memories: [{ key: "env", value: "test" }]
+  };
+
+  const created = await callTool(server, "create_encoded_goal", {
+    preview_text: preview,
+    payload_base64: Buffer.from(JSON.stringify(payload), "utf8").toString("base64"),
+    assign_to_codex: true
+  });
+
+  assert.equal(created.goal.user_request, payload.user_request);
+  assert.equal(created.goal.goal_prompt, payload.goal_prompt);
+  assert.equal(created.goal.preview_text, preview);
+  assert.equal(created.task.assignee, "codex");
+  assert.equal(created.workspace_files.goal_md, `.gptwork/goals/${created.goal.id}/goal.md`);
+
+  const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
+  assert.equal(context.workspace_files.payload_json, `.gptwork/goals/${created.goal.id}/payload.json`);
+  assert.match(context.codex_instruction, /Read \.gptwork\/goals\//);
+  assert.equal(context.conversation.messages.at(-1).content, preview);
+  const payloadJson = await callTool(server, "read_text_file", { path: context.workspace_files.payload_json });
+  assert.match(payloadJson.content, /部署新版本到测试环境/);
 });
 
 test("Codex can append progress to the shared goal conversation", async () => {
@@ -102,6 +140,31 @@ test("Codex can append progress to the shared goal conversation", async () => {
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
   assert.equal(context.conversation.messages.at(-1).role, "codex");
   assert.equal(context.memories.at(-1).value, "Codex started plugin MCP proxy inspection.");
+  assert.equal(context.workspace_files.transcript_md, `.gptwork/goals/${created.goal.id}/transcript.md`);
+});
+
+test("append_goal_message refreshes context files without overwriting result.md", async () => {
+  const server = await makeServer();
+  const created = await callTool(server, "create_goal", {
+    user_request: "Preserve final result",
+    goal_prompt: "Write a result and then append progress.",
+    assign_to_codex: true
+  });
+
+  await callTool(server, "write_text_file", {
+    path: created.workspace_files.result_md,
+    content: "# Result\n\nFinal summary stays here.\n",
+    overwrite: true
+  });
+  await callTool(server, "append_goal_message", {
+    goal_id: created.goal.id,
+    role: "codex",
+    content: "Progress appended after result was written."
+  });
+
+  const resultMd = await callTool(server, "read_text_file", { path: created.workspace_files.result_md });
+  assert.match(resultMd.content, /Final summary stays here/);
+  assert.doesNotMatch(resultMd.content, /Pending/);
 });
 
 test("legacy readonly goals and linked ordinary tasks are promoted when read", async () => {

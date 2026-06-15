@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
 async function makeServer() {
@@ -79,6 +79,9 @@ test("task tools create, list, update, and complete tasks", async () => {
     assignee: "codex"
   });
   assert.equal(created.task.status, "queued");
+  assert.match(created.goal.id, /^goal_/);
+  assert.equal(created.goal.task_id, created.task.id);
+  assert.equal(created.task.goal_id, created.goal.id);
 
   const listed = await callTool(server, "list_tasks");
   assert.equal(listed.tasks.length, 1);
@@ -95,6 +98,36 @@ test("task tools create, list, update, and complete tasks", async () => {
   });
   assert.equal(completed.task.status, "completed");
   assert.equal(completed.task.result.summary, "Done");
+});
+
+test("create_task accepts an encoded envelope and links it as a readable goal", async () => {
+  const server = await makeServer();
+  const payload = {
+    user_request: "更新部署并连接目标服务",
+    goal_prompt: "更新部署并连接目标服务，完成后回写验证结果。",
+    context_summary: "Encoded task compatibility flow.",
+    mode: "deploy",
+    workspace_id: "hosted-default"
+  };
+  const envelope = {
+    kind: "gptwork.encoded_goal.v1",
+    encoding: "base64",
+    content_type: "application/json; charset=utf-8",
+    preview_text: "我理解你的需求是：更新部署并连接目标服务。",
+    payload_base64: Buffer.from(JSON.stringify(payload), "utf8").toString("base64")
+  };
+
+  const created = await callTool(server, "create_task", {
+    title: "Encoded deploy",
+    description: JSON.stringify(envelope),
+    mode: "deploy"
+  });
+
+  assert.equal(created.goal.goal_prompt, payload.goal_prompt);
+  assert.equal(created.goal.preview_text, envelope.preview_text);
+  assert.equal(created.task.goal_id, created.goal.id);
+  const goalMd = await callTool(server, "read_text_file", { path: created.workspace_files.goal_md });
+  assert.match(goalMd.content, /更新部署并连接目标服务/);
 });
 
 test("ordinary tasks cannot be left in readonly mode", async () => {
@@ -335,6 +368,44 @@ test("hosted workspace supports write, read, search, sha256, and shell_exec", as
   assert.equal(shell.returncode, 0);
   assert.equal(shell.stdout, "shell-ok");
 });
+
+test("hosted workspace supports zip bundle upload and download as base64", async () => {
+  const server = await makeServer();
+  const zipBase64 = await makeZipBase64({ "bundle/hello.txt": "hello bundle" });
+
+  const uploaded = await callTool(server, "upload_bundle_base64", {
+    path: "incoming/bundle.zip",
+    zip_base64: zipBase64,
+    overwrite: true,
+    extract: true,
+    target_dir: "incoming/extracted"
+  });
+  assert.equal(uploaded.ok, true);
+  assert.match(uploaded.sha256, /^[a-f0-9]{64}$/);
+
+  const read = await callTool(server, "read_text_file", { path: "incoming/extracted/bundle/hello.txt" });
+  assert.equal(read.content, "hello bundle");
+
+  const downloaded = await callTool(server, "download_bundle_base64", { source_dir: "incoming/extracted" });
+  assert.equal(downloaded.ok, true);
+  assert.match(downloaded.zip_base64, /^[A-Za-z0-9+/=]+$/);
+});
+
+async function makeZipBase64(files) {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-test-zip-"));
+  for (const [path, content] of Object.entries(files)) {
+    const fullPath = join(root, path);
+    await mkdir(dirname(fullPath), { recursive: true });
+    await writeFile(fullPath, content, "utf8");
+  }
+  const zipPath = join(root, "bundle.zip");
+  const { execFile } = await import("node:child_process");
+  await new Promise((resolve, reject) => {
+    execFile(process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"), ["-m", "zipfile", "-c", zipPath, "bundle"], { cwd: root }, (error) => error ? reject(error) : resolve());
+  });
+  const { readFile } = await import("node:fs/promises");
+  return (await readFile(zipPath)).toString("base64");
+}
 
 test("token context scopes projects and current user", async () => {
   const server = await makeScopedServer();

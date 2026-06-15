@@ -3,6 +3,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { exec, execSync } from "node:child_process";
 import {
   cp,
+  mkdtemp,
   mkdir,
   readFile,
   readdir,
@@ -12,6 +13,7 @@ import {
   writeFile
 } from "node:fs/promises";
 import { appendFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { StateStore } from "./state-store.mjs";
 import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
@@ -33,6 +35,8 @@ export async function createGptWorkServer(options = {}) {
     tokenContexts,
     requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
     codexHome: options.codexHome || process.env.GPTWORK_CODEX_HOME || "/home/a9017",
+    codexExecArgs: options.codexExecArgs || process.env.GPTWORK_CODEX_EXEC_ARGS || "--yolo --skip-git-repo-check",
+    pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
     maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
     maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
     shellTimeout: Number(process.env.GPTWORK_SHELL_TIMEOUT || 60)
@@ -178,13 +182,14 @@ function createTools({ store, config, browser, github }) {
       return { activities: state.activities.slice(-limit).reverse() };
     }),
 
-    create_goal: tool("Create a shared goal from a ChatGPT-written goal prompt. Use this when ChatGPT turns the user's request into a Codex-executable goal. Stores the raw request, goal prompt, conversation messages, durable memories, and optionally creates an assigned Codex task linked to the same context.", schema({ user_request: "string", goal_prompt: "string", context_summary: "string", project_id: "string", workspace_id: "string", mode: "string", assign_to_codex: "boolean", title: "string", messages: "array", memories: "array" }, ["user_request", "goal_prompt"]), async (args, context) => createGoal(store, args, context)),
+    create_goal: tool("Create a shared goal from a ChatGPT-written goal prompt. Use this when ChatGPT turns the user's request into a Codex-executable goal. Stores the raw request, goal prompt, conversation messages, durable memories, workspace-visible context files, and optionally creates an assigned Codex task linked to the same context.", schema({ user_request: "string", goal_prompt: "string", context_summary: "string", project_id: "string", workspace_id: "string", mode: "string", assign_to_codex: "boolean", title: "string", messages: "array", memories: "array", payload: "object", payload_base64: "string", preview_text: "string", bundles: "array" }, ["user_request", "goal_prompt"]), async (args, context) => createGoal(store, config, args, context)),
+    create_encoded_goal: tool("Create a shared Codex goal from a GPTChat preview plus base64-encoded JSON payload. The server decodes the payload, stores readable goal/context/transcript files, and assigns Codex when requested.", schema({ preview_text: "string", payload_base64: "string", assign_to_codex: "boolean" }, ["preview_text", "payload_base64"]), async (args, context) => createEncodedGoal(store, config, args, context)),
     list_goals: tool("List shared GPTWork goals for ChatGPT and Codex. Codex should use this to discover assigned or open goal prompts before starting work.", schema({ status: "string", assignee: "string", workspace_id: "string", limit: "integer" }), async (args, context) => listGoals(store, args, context)),
-    get_goal_context: tool("Return the full shared goal context: goal prompt, raw user request, conversation messages, durable memories, and linked Codex task. Codex should call this before acting on a goal or linked task.", schema({ goal_id: "string", task_id: "string" }, []), async (args, context) => getGoalContext(store, args, context)),
-    append_goal_message: tool("Append a ChatGPT, user, or Codex message to a shared goal conversation and optionally store a memory item for future Codex context.", schema({ goal_id: "string", task_id: "string", role: "string", content: "string", memory_key: "string", memory_value: "string" }, ["content"]), async (args, context) => appendGoalMessage(store, args, context)),
+    get_goal_context: tool("Return the full shared goal context: goal prompt, raw user request, conversation messages, durable memories, linked Codex task, and workspace-visible context files. Codex should call this before acting on a goal or linked task.", schema({ goal_id: "string", task_id: "string" }, []), async (args, context) => getGoalContext(store, config, args, context)),
+    append_goal_message: tool("Append a ChatGPT, user, or Codex message to a shared goal conversation and optionally store a memory item for future Codex context. Also updates the workspace transcript/context files.", schema({ goal_id: "string", task_id: "string", role: "string", content: "string", memory_key: "string", memory_value: "string" }, ["content"]), async (args, context) => appendGoalMessage(store, config, args, context)),
 
     create_task: tool("Create a new project task. ChatGPT uses this to tell Codex what to do. Assign it to Codex and Codex will execute it. Tasks sync to GitHub Issues if configured. For listing Codex session files, use list_codex_sessions_metadata or create_codex_session_inventory_task instead of a free-text task.", schema({ title: "string", description: "string", assignee: "string", workspace_id: "string", mode: "string" }, ["title"]), async (args, context) => {
-      const result = await createTask(store, args, context);
+      const result = await createTask(store, config, args, context);
       github.syncTask(result.task).catch(() => {});
       return result;
     }),
@@ -204,18 +209,19 @@ function createTools({ store, config, browser, github }) {
     }),
     append_task_log: tool("Append a task log entry.", schema({ task_id: "string", message: "string" }, ["task_id", "message"]), async ({ task_id, message }) => updateTask(store, task_id, (task) => { task.logs.push({ time: new Date().toISOString(), message }); })),
     attach_task_artifact: tool("Attach a task artifact reference.", schema({ task_id: "string", path: "string", label: "string" }, ["task_id", "path"]), async ({ task_id, path, label }) => updateTask(store, task_id, (task) => { task.artifacts.push({ path, label: label || basename(path), time: new Date().toISOString() }); })),
-    assign_task_to_codex: tool("Assign a task to Codex for execution. Ordinary tasks run in builder mode so Codex may edit files and perform implementation or deployment steps according to the task. The server ignores readonly for ordinary tasks; only the dedicated safe Codex session inventory task can remain readonly. Pass mode=deploy for Docker/service deployment or mode=admin for privileged maintenance.", schema({ task_id: "string", mode: "string" }, ["task_id"]), async ({ task_id, mode }) => {
+    assign_task_to_codex: tool("Assign a task to Codex for execution. Ordinary tasks run in builder mode so Codex may edit files and perform implementation or deployment steps according to the task. The server ignores readonly for ordinary tasks; only the dedicated safe Codex session inventory task can remain readonly. Pass mode=deploy for Docker/service deployment or mode=admin for privileged maintenance.", schema({ task_id: "string", mode: "string" }, ["task_id"]), async ({ task_id, mode }, context) => {
       const result = await updateTask(store, task_id, (task) => {
         task.assignee = "codex";
         task.status = "assigned";
         task.mode = normalizeAssignedTaskMode(task, mode);
       });
+      const linked = await ensureTaskGoal(store, config, result.task.id, context, { assign_to_codex: true });
       github.syncTask(result.task).catch(() => {});
-      return result;
+      return linked;
     }),
     list_codex_sessions_metadata: tool("Use this when the user asks to list /home/a9017 Codex sessions. Lists only files under the approved .codex/sessions directory. Metadata only: relative path, size, and modified time. Does not read session contents.", schema({ year: "string", month: "string", day: "string", limit: "integer" }), async (args, context) => listCodexSessionsMetadata(config, args, context)),
     create_codex_session_inventory_task: tool("Use this instead of create_task plus assign_task_to_codex when the user asks Codex to list Codex sessions. Creates a safe readonly task, streams progress, immediately runs the approved built-in handler, and returns the completed task with metadata-only results. It explicitly forbids transcript contents, tokens, configs, cookies, cache files, memories, or shell snapshots.", schema({ limit: "integer" }), async (args, context) => {
-      const result = await createCodexSessionInventoryTask(store, args, context);
+      const result = await createCodexSessionInventoryTask(store, config, args, context);
       github.syncTask(result.task).catch(() => {});
       emitTaskProgress(context, result.task, "started", "Safe Codex session metadata inventory started.");
       const completed = await completeCodexSessionInventoryTask(store, config, github, result.task, context);
@@ -255,6 +261,8 @@ function createTools({ store, config, browser, github }) {
     download_file_base64: tool("Download a file as base64.", schema({ path: "string", max_bytes: "integer", workspace_id: "string" }, ["path"]), async (args, context) => workspaceDownloadBase64(store, config, args, context)),
     write_text_file: tool("Write a UTF-8 text file.", schema({ path: "string", content: "string", overwrite: "boolean", workspace_id: "string" }, ["path", "content"]), async (args, context) => workspaceWriteText(store, config, args, context)),
     upload_base64_file: tool("Upload a base64 encoded file.", schema({ path: "string", content_base64: "string", overwrite: "boolean", workspace_id: "string" }, ["path", "content_base64"]), async (args, context) => workspaceUploadBase64(store, config, args, context)),
+    upload_bundle_base64: tool("Upload a ZIP bundle encoded as base64. Optionally extract it in the workspace after upload.", schema({ path: "string", zip_base64: "string", overwrite: "boolean", extract: "boolean", target_dir: "string", sha256_expected: "string", workspace_id: "string" }, ["path", "zip_base64"]), async (args, context) => workspaceUploadBundleBase64(store, config, args, context)),
+    download_bundle_base64: tool("Create a ZIP bundle from a workspace directory or selected paths and return it as base64 with a SHA256 digest.", schema({ source_dir: "string", paths: "array", workspace_id: "string" }, []), async (args, context) => workspaceDownloadBundleBase64(store, config, args, context)),
     upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
     init_chunk_upload: tool("Initialize a chunk upload session.", schema({ path: "string", total_chunks: "integer" }, ["path", "total_chunks"]), async ({ path, total_chunks }) => ({ upload_id: randomUUID(), path, total_chunks })),
     upload_file_chunk: tool("Accept a chunk upload placeholder.", schema({ upload_id: "string", chunk_index: "integer", chunk_base64: "string" }, ["upload_id", "chunk_index", "chunk_base64"]), async ({ upload_id, chunk_index }) => ({ ok: true, upload_id, chunk_index })),
@@ -629,9 +637,10 @@ function setDefaultWorkspace(state, workspace) {
   }
 }
 
-async function createTask(store, args, context = defaultTokenContext("system")) {
+async function createTask(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
   const state = await store.load();
+  ensureGoalState(state);
   requireProjectAccess(context, args.project_id || "default");
   if (args.workspace_id) requireWorkspaceAccess(context, args.workspace_id);
   const now = new Date().toISOString();
@@ -654,7 +663,9 @@ async function createTask(store, args, context = defaultTokenContext("system")) 
   state.tasks.push(task);
   state.activities.push({ time: now, type: "task.created", task_id: task.id, title: task.title });
   await store.save();
-  return { task };
+  if (isCodexSessionInventoryTaskKind(task)) return { task };
+  const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: Boolean(task.assignee) });
+  return { task: linked.task, goal: linked.goal, conversation: linked.conversation, memories: linked.memories, workspace_files: linked.workspace_files };
 }
 
 function ensureGoalState(state) {
@@ -665,7 +676,7 @@ function ensureGoalState(state) {
   state.activities ||= [];
 }
 
-async function createGoal(store, args, context = defaultTokenContext("system")) {
+async function createGoal(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
   requireScope(context, "task:update");
   const projectId = args.project_id || "default";
@@ -691,6 +702,7 @@ async function createGoal(store, args, context = defaultTokenContext("system")) 
     user_request: String(args.user_request || ""),
     goal_prompt: String(args.goal_prompt || ""),
     context_summary: String(args.context_summary || ""),
+    preview_text: String(args.preview_text || ""),
     title: args.title || titleFromGoal(args),
     created_by: context.user_id,
     assignee: assignToCodex ? "codex" : "",
@@ -722,8 +734,33 @@ async function createGoal(store, args, context = defaultTokenContext("system")) 
     state.activities.push({ time: now, type: "goal.assigned_codex", goal_id: goalId, task_id: task.id, title: goal.title });
   }
 
+  const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {
+    payload: args.payload || null,
+    payload_base64: args.payload_base64 || "",
+    bundles: args.bundles || [],
+    initialize_result: true
+  }, context);
   await store.save();
-  return { goal, conversation, memories, task };
+  return { goal, conversation, memories, task, workspace_files };
+}
+
+async function createEncodedGoal(store, config, { preview_text, payload_base64, assign_to_codex = true } = {}, context = defaultTokenContext("system")) {
+  requireScope(context, "task:create");
+  requireScope(context, "task:update");
+  const payload = decodeBase64Json(payload_base64, "payload_base64");
+  if (!payload.user_request || !payload.goal_prompt) throw new Error("encoded goal payload requires user_request and goal_prompt");
+  const messages = Array.isArray(payload.messages) ? [...payload.messages] : [];
+  if (preview_text && !messages.some((message) => String(message.content || "") === String(preview_text))) {
+    messages.push({ role: "chatgpt", content: String(preview_text) });
+  }
+  return createGoal(store, config, {
+    ...payload,
+    messages,
+    preview_text,
+    payload,
+    payload_base64,
+    assign_to_codex: payload.assign_to_codex ?? assign_to_codex
+  }, context);
 }
 
 async function listGoals(store, { status, assignee, workspace_id, limit = 50 } = {}, context = defaultTokenContext("system")) {
@@ -739,7 +776,7 @@ async function listGoals(store, { status, assignee, workspace_id, limit = 50 } =
   return { goals: goals.slice(-maxItems).reverse() };
 }
 
-async function getGoalContext(store, { goal_id, task_id } = {}, context = defaultTokenContext("system")) {
+async function getGoalContext(store, config, { goal_id, task_id } = {}, context = defaultTokenContext("system")) {
   requireScope(context, "project:read");
   const state = await store.load();
   ensureGoalState(state);
@@ -750,10 +787,10 @@ async function getGoalContext(store, { goal_id, task_id } = {}, context = defaul
   const conversation = state.conversations.find((item) => item.id === goal.conversation_id) || null;
   const memories = state.memories.filter((item) => item.goal_id === goal.id);
   const task = goal.task_id ? state.tasks.find((item) => item.id === goal.task_id) || null : null;
-  return { goal, conversation, memories, task };
+  return { goal, conversation, memories, task, workspace_files: goalWorkspaceFiles(goal), codex_instruction: codexInstruction(goal) };
 }
 
-async function appendGoalMessage(store, args, context = defaultTokenContext("system")) {
+async function appendGoalMessage(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:update");
   const state = await store.load();
   ensureGoalState(state);
@@ -786,8 +823,11 @@ async function appendGoalMessage(store, args, context = defaultTokenContext("sys
     state.memories.push(memory);
   }
   state.activities.push({ time: now, type: "goal.message_appended", goal_id: goal.id, role: message.role });
+  const memories = state.memories.filter((item) => item.goal_id === goal.id);
+  const task = goal.task_id ? state.tasks.find((item) => item.id === goal.task_id) || null : null;
+  const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, { initialize_result: false }, context);
   await store.save();
-  return { goal, conversation, message, memory };
+  return { goal, conversation, message, memory, workspace_files };
 }
 
 function findGoalInState(state, { goal_id, task_id } = {}) {
@@ -796,6 +836,232 @@ function findGoalInState(state, { goal_id, task_id } = {}) {
     : state.goals.find((item) => item.task_id === task_id);
   if (!goal) throw new Error(`goal not found: ${goal_id || task_id || "missing id"}`);
   return goal;
+}
+
+async function ensureTaskGoal(store, config, taskId, context = defaultTokenContext("system"), options = {}) {
+  const state = await store.load();
+  ensureGoalState(state);
+  const task = state.tasks.find((item) => item.id === taskId);
+  if (!task) throw new Error(`task not found: ${taskId}`);
+  if (isCodexSessionInventoryTaskKind(task)) return { task };
+
+  let goal = task.goal_id ? state.goals.find((item) => item.id === task.goal_id) : null;
+  if (goal) {
+    const conversation = state.conversations.find((item) => item.id === goal.conversation_id) || null;
+    const memories = state.memories.filter((item) => item.goal_id === goal.id);
+    const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {}, context);
+    return { task, goal, conversation, memories, workspace_files };
+  }
+
+  const encoded = decodeTaskDescriptionEnvelope(task.description || "");
+  const payload = encoded?.payload || taskPayloadFromTask(task);
+  const created = await createGoal(store, config, {
+    ...payload,
+    title: payload.title || task.title,
+    project_id: payload.project_id || task.project_id,
+    workspace_id: payload.workspace_id || task.workspace_id,
+    mode: payload.mode || task.mode || "builder",
+    assign_to_codex: options.assign_to_codex ?? task.assignee === "codex",
+    preview_text: encoded?.preview_text || payload.preview_text || "",
+    payload: encoded?.payload || payload,
+    payload_base64: encoded?.payload_base64 || ""
+  }, context);
+
+  await updateTask(store, task.id, (item) => {
+    item.goal_id = created.goal.id;
+    item.conversation_id = created.conversation.id;
+    if (created.task && created.task.id !== item.id) {
+      created.goal.task_id = item.id;
+    }
+  });
+
+  const linkedState = await store.load();
+  const createdTask = created.task && created.task.id !== task.id ? created.task : null;
+  if (createdTask) {
+    const index = linkedState.tasks.findIndex((item) => item.id === createdTask.id);
+    if (index !== -1) linkedState.tasks.splice(index, 1);
+  }
+  goal = linkedState.goals.find((item) => item.id === created.goal.id);
+  goal.task_id = task.id;
+  const linkedTask = linkedState.tasks.find((item) => item.id === task.id);
+  const conversation = linkedState.conversations.find((item) => item.id === goal.conversation_id) || null;
+  const memories = linkedState.memories.filter((item) => item.goal_id === goal.id);
+  const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, linkedTask, {}, context);
+  await store.save();
+  return { task: linkedTask, goal, conversation, memories, workspace_files };
+}
+
+function taskPayloadFromTask(task) {
+  return {
+    user_request: task.description || task.title,
+    goal_prompt: [
+      `Task: ${task.title}`,
+      "",
+      task.description || "",
+      "",
+      "Execute this task in the selected workspace and report progress/results back to GPTWork."
+    ].join("\n"),
+    context_summary: "Created automatically from create_task compatibility flow.",
+    project_id: task.project_id,
+    workspace_id: task.workspace_id,
+    mode: task.mode || "builder",
+    messages: [
+      { role: "user", content: task.description || task.title },
+      { role: "chatgpt", content: `Created compatibility goal from task ${task.id}.` }
+    ],
+    memories: []
+  };
+}
+
+function decodeTaskDescriptionEnvelope(description) {
+  const text = String(description || "").trim();
+  if (!text) return null;
+  let envelope = null;
+  try {
+    const parsed = JSON.parse(text);
+    if (parsed?.kind === "gptwork.encoded_goal.v1" && parsed.payload_base64) envelope = parsed;
+  } catch {}
+  if (!envelope) {
+    const match = text.match(/payload_base64\s*[:=]\s*([A-Za-z0-9+/=\r\n]+)/);
+    if (match) envelope = { payload_base64: match[1].replace(/\s+/g, "") };
+  }
+  if (!envelope?.payload_base64) return null;
+  const payload = decodeBase64Json(envelope.payload_base64, "task.description payload_base64");
+  if (!payload.user_request || !payload.goal_prompt) throw new Error("encoded task payload requires user_request and goal_prompt");
+  return { payload, payload_base64: envelope.payload_base64, preview_text: envelope.preview_text || "" };
+}
+
+function decodeBase64Json(value, label) {
+  let decoded = "";
+  try {
+    decoded = Buffer.from(String(value || ""), "base64").toString("utf8");
+    return JSON.parse(decoded);
+  } catch (error) {
+    throw new Error(`invalid ${label}: ${error.message}`);
+  }
+}
+
+function goalWorkspaceFiles(goal) {
+  const dir = `.gptwork/goals/${goal.id}`;
+  return {
+    dir,
+    goal_md: `${dir}/goal.md`,
+    context_json: `${dir}/context.json`,
+    transcript_md: `${dir}/transcript.md`,
+    result_md: `${dir}/result.md`,
+    payload_json: `${dir}/payload.json`,
+    payload_base64: `${dir}/payload.base64`,
+    bundle_zip: `${dir}/bundle.zip`,
+    attachments_dir: `${dir}/attachments`
+  };
+}
+
+async function writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, extras = {}, context = defaultTokenContext("system")) {
+  const workspaceFiles = goalWorkspaceFiles(goal);
+  const payload = extras.payload || {
+    user_request: goal.user_request,
+    goal_prompt: goal.goal_prompt,
+    context_summary: goal.context_summary,
+    mode: goal.mode,
+    workspace_id: goal.workspace_id,
+    messages: conversation?.messages || [],
+    memories
+  };
+  const payloadJson = JSON.stringify(payload, null, 2);
+  const payloadBase64 = extras.payload_base64 || Buffer.from(payloadJson, "utf8").toString("base64");
+  const files = [
+    { path: workspaceFiles.goal_md, content: renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) },
+    { path: workspaceFiles.context_json, content: JSON.stringify({ goal, conversation, memories, task, workspace_files: workspaceFiles, codex_instruction: codexInstruction(goal) }, null, 2) },
+    { path: workspaceFiles.transcript_md, content: renderTranscriptMarkdown(goal, conversation) },
+    { path: workspaceFiles.payload_json, content: payloadJson },
+    { path: workspaceFiles.payload_base64, content: payloadBase64 }
+  ];
+  if (extras.initialize_result || typeof extras.result_content === "string") {
+    files.push({ path: workspaceFiles.result_md, content: typeof extras.result_content === "string" ? extras.result_content : "# Result\n\nPending.\n" });
+  }
+  for (const file of files) {
+    await writeWorkspaceTextInternal(store, config, goal.workspace_id, file.path, file.content, context);
+  }
+  for (const bundle of Array.isArray(extras.bundles) ? extras.bundles : []) {
+    if (!bundle?.zip_base64) continue;
+    const name = safeBundleName(bundle.name || `bundle-${randomUUID()}.zip`);
+    const zipPath = `${workspaceFiles.attachments_dir}/${name}`;
+    await workspaceUploadBundleBase64(store, config, { path: zipPath, zip_base64: bundle.zip_base64, overwrite: true, extract: true, target_dir: `${workspaceFiles.attachments_dir}/${name.replace(/\.zip$/i, "")}`, sha256_expected: bundle.sha256, workspace_id: goal.workspace_id }, context);
+  }
+  return workspaceFiles;
+}
+
+async function writeWorkspaceTextInternal(store, config, workspaceId, path, content, context) {
+  return workspaceWriteText(store, config, { path, content, overwrite: true, workspace_id: workspaceId }, context);
+}
+
+function renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) {
+  return [
+    `# GPTWork Goal ${goal.id}`,
+    "",
+    `Title: ${goal.title}`,
+    `Status: ${goal.status}`,
+    `Mode: ${goal.mode}`,
+    `Workspace: ${goal.workspace_id}`,
+    task ? `Task: ${task.id}` : "Task: none",
+    "",
+    "## User Request",
+    "",
+    goal.user_request || "(none)",
+    "",
+    "## GPTChat Preview",
+    "",
+    goal.preview_text || "(none)",
+    "",
+    "## Goal Prompt",
+    "",
+    goal.goal_prompt || "(none)",
+    "",
+    "## Context Summary",
+    "",
+    goal.context_summary || "(none)",
+    "",
+    "## Workspace Files",
+    "",
+    `- context: ${workspaceFiles.context_json}`,
+    `- transcript: ${workspaceFiles.transcript_md}`,
+    `- result: ${workspaceFiles.result_md}`,
+    "",
+    "## Memories",
+    "",
+    ...(memories.length ? memories.map((memory) => `- ${memory.key}: ${memory.value}`) : ["(none)"]),
+    "",
+    "## Execution Contract",
+    "",
+    "Read context.json and transcript.md before acting. Execute the goal prompt, update result.md, and append progress with append_goal_message."
+  ].join("\n");
+}
+
+function renderTranscriptMarkdown(goal, conversation) {
+  const messages = conversation?.messages || [];
+  return [
+    `# Transcript for ${goal.id}`,
+    "",
+    ...messages.flatMap((message) => [
+      `## ${message.role} - ${message.created_at}`,
+      "",
+      message.content || "",
+      ""
+    ])
+  ].join("\n");
+}
+
+function codexInstruction(goal) {
+  const files = goalWorkspaceFiles(goal);
+  return [
+    "You are executing a GPTWork encoded/shared goal.",
+    `Read ${files.goal_md}, ${files.context_json}, and ${files.transcript_md} before acting.`,
+    "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message."
+  ].join("\n");
+}
+
+function safeBundleName(name) {
+  return basename(String(name || "bundle.zip")).replace(/[^A-Za-z0-9._-]/g, "_") || "bundle.zip";
 }
 
 function buildGoalTask(goal, conversation, createdBy) {
@@ -949,9 +1215,9 @@ function validateDateSegment(value) {
   return text;
 }
 
-async function createCodexSessionInventoryTask(store, { limit = 50 } = {}, context = defaultTokenContext("system")) {
+async function createCodexSessionInventoryTask(store, config, { limit = 50 } = {}, context = defaultTokenContext("system")) {
   const boundedLimit = Math.max(1, Math.min(Number(limit) || 50, 200));
-  const result = await createTask(store, {
+  const result = await createTask(store, config, {
     title: "List Codex session metadata",
     description: [
       "List Codex session file metadata under /home/a9017/.codex/sessions only.",
@@ -992,7 +1258,7 @@ async function runAssignedCodexTasks(store, config, github, { limit = 10, concur
       const completed = await completeCodexSessionInventoryTask(store, config, github, task, context);
       return { task_id: completed.task.id, status: completed.task.status, kind: completed.task.result?.kind || "unknown", count: completed.task.result?.sessions?.count ?? 0 };
     }
-    if (task.mode === "builder" || task.mode === "deploy") {
+    if (task.mode === "builder" || task.mode === "deploy" || task.mode === "admin") {
       return await processGeneralTask(store, config, task, context);
     }
     return { task_id: task.id, status: task.status, skipped: true, reason: "no safe built-in handler for this assigned task" };
@@ -1066,6 +1332,18 @@ async function processGeneralTask(store, config, task, context) {
     });
     return { task_id: task.id, status: task.status, skipped: true, reason: `unsupported workspace type: ${workspace.type}` };
   }
+  const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: true });
+  const goal = linked.goal;
+  const conversation = linked.conversation;
+  const memories = linked.memories || [];
+  const workspaceFiles = linked.workspace_files || goalWorkspaceFiles(goal);
+  if (goal) {
+    await appendGoalMessage(store, config, {
+      goal_id: goal.id,
+      role: "codex",
+      content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
+    }, context);
+  }
   // Mark as running to prevent duplicate processing by subsequent ticks
   await updateTask(store, task.id, (item) => {
     item.status = "running";
@@ -1075,9 +1353,26 @@ async function processGeneralTask(store, config, task, context) {
   const mode = task.mode || "builder";
   const promptFile = `/tmp/.gptwork-task-${task.id}.txt`;
   const separator = "=".repeat(60);
+  const goalContext = goal ? JSON.stringify({ goal, conversation, memories, workspace_files: workspaceFiles }, null, 2) : "{}";
   const fullPrompt = `# Task: ${task.title}
 
 ${task.description || ""}
+
+${goal ? `# GPTWork Goal Context
+
+You are executing a GPTWork encoded/shared goal.
+
+Read these files before acting:
+- ${workspaceFiles.goal_md}
+- ${workspaceFiles.context_json}
+- ${workspaceFiles.transcript_md}
+
+Follow ${workspaceFiles.goal_md} exactly.
+Write final results to ${workspaceFiles.result_md}.
+When complete, report a concise summary so GPTWork can call append_goal_message.
+
+Structured context:
+${goalContext}` : ""}
 
 ${separator}
 Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
@@ -1092,7 +1387,7 @@ ${separator}`;
   await writeFile(promptFile, fullPrompt, "utf8");
   let summary = "";
   try {
-    const cmd = "codex exec --skip-git-repo-check < " + promptFile;
+    const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
     const cr = await runLocalShell(cmd, workspace.root, 60, 1000000);
     const out = (cr.stdout || "").trim();
     if (out) {
@@ -1113,6 +1408,16 @@ ${separator}`;
     item.result = { summary, kind: "codex_executed", completed_at: doneAt };
     item.logs.push({ time: doneAt, message: "[worker] completed: task processed by Codex CLI" });
   });
+  if (goal) {
+    await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nCompleted at: ${doneAt}\n`, context);
+    await appendGoalMessage(store, config, {
+      goal_id: goal.id,
+      role: "codex",
+      content: `[worker] Completed task ${task.id}.\n\n${summary}`,
+      memory_key: "codex_last_result",
+      memory_value: summary.slice(0, 4000)
+    }, context);
+  }
   try { github.syncTask(result.task).catch(() => {}); } catch {}
   return { task_id: result.task.id, status: "completed", kind: "codex_executed" };
 }
@@ -1331,6 +1636,43 @@ async function workspaceUploadFromUrl(store, config, { url, path, overwrite = fa
   return workspaceUploadBase64(store, config, { path, content_base64: content.toString("base64"), overwrite, workspace_id }, context);
 }
 
+async function workspaceUploadBundleBase64(store, config, { path, zip_base64, overwrite = false, extract = false, target_dir = "", sha256_expected = "", workspace_id }, context) {
+  requireScope(context, "files:upload");
+  const uploaded = await workspaceUploadBase64(store, config, { path, content_base64: zip_base64, overwrite, workspace_id }, context);
+  if (sha256_expected && uploaded.sha256 !== sha256_expected) throw new Error(`bundle sha256 mismatch: expected ${sha256_expected}, got ${uploaded.sha256}`);
+  let extracted = null;
+  if (extract) {
+    extracted = await workspaceShellZip(store, config, "extract", { zip_path: path, target_dir: target_dir || dirname(path), workspace_id }, context);
+  }
+  return { ok: true, path, size: uploaded.size, sha256: uploaded.sha256, extracted };
+}
+
+async function workspaceDownloadBundleBase64(store, config, { source_dir = "", paths = [], workspace_id }, context) {
+  requireScope(context, "files:download");
+  const workspace = await selectWorkspace(store, workspace_id, context);
+  if (workspace.type === "ssh") throw new Error("download_bundle_base64 currently supports hosted workspaces only");
+  const tmpRoot = await mkdtemp(join(tmpdir(), "gptwork-bundle-"));
+  const bundlePath = join(tmpRoot, "bundle.zip");
+  const source = source_dir || ".";
+  if (Array.isArray(paths) && paths.length) {
+    const staging = join(tmpRoot, "staging");
+    await mkdir(staging, { recursive: true });
+    for (const item of paths) {
+      const resolved = await resolveWorkspacePath(workspace.root, item);
+      const target = join(staging, resolved.relativePath);
+      await ensureParent(target);
+      await cp(resolved.absolutePath, target, { recursive: true, force: true });
+    }
+    await runZipCommand("create", staging, bundlePath, config.pythonCommand);
+  } else {
+    const resolved = await resolveWorkspacePath(workspace.root, source);
+    await runZipCommand("create", resolved.absolutePath, bundlePath, config.pythonCommand);
+  }
+  const bytes = await readFile(bundlePath);
+  await rm(tmpRoot, { recursive: true, force: true });
+  return { ok: true, source_dir: source, paths, size: bytes.length, sha256: sha256(bytes), zip_base64: bytes.toString("base64") };
+}
+
 async function workspaceMkdir(store, config, args, context) {
   requireScope(context, "workspace:write");
   const { workspace, path: resolvedPath } = await resolvePath(store, config, args, context);
@@ -1424,9 +1766,18 @@ async function workspaceShellExec(store, config, { command, cwd = ".", timeout, 
 
 async function workspaceShellZip(store, config, mode, args, context) {
   const command = mode === "create"
-    ? "python3 -m zipfile -c " + shellQuotee(args.zip_path) + " " + shellQuotee(args.source_dir)
-    : "python3 -m zipfile -e " + shellQuotee(args.zip_path) + " " + shellQuotee(args.target_dir || ".");
+    ? config.pythonCommand + " -m zipfile -c " + shellQuotee(args.zip_path) + " " + shellQuotee(args.source_dir)
+    : config.pythonCommand + " -m zipfile -e " + shellQuotee(args.zip_path) + " " + shellQuotee(args.target_dir || ".");
   return workspaceShellExec(store, config, { command, cwd: ".", workspace_id: args.workspace_id }, context);
+}
+
+async function runZipCommand(mode, sourcePath, zipPath, pythonCommand = process.platform === "win32" ? "python" : "python3") {
+  const command = mode === "create"
+    ? pythonCommand + " -m zipfile -c " + shellQuotee(zipPath) + " " + shellQuotee(sourcePath)
+    : pythonCommand + " -m zipfile -e " + shellQuotee(zipPath) + " " + shellQuotee(sourcePath);
+  const result = await runLocalShell(command, dirname(zipPath), 60, 1000000);
+  if (result.returncode !== 0) throw new Error(`zip command failed: ${result.stderr || result.stdout}`);
+  return result;
 }
 
 function runLocalShell(command, cwd, timeout, maxOutputBytes) {
@@ -1454,6 +1805,7 @@ function sha256(bytes) {
 }
 
 function shellQuotee(value) {
+  if (process.platform === "win32") return `"${String(value).replaceAll('"', '\\"')}"`;
   return `'${String(value).replaceAll("'", "'\\''")}'`;
 }
 
