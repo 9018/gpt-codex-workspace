@@ -1,0 +1,36 @@
+{ 
+  "name": "gpt-codex-workspace",
+  "version": "0.2.0",
+  "description": "Coordinate ChatGPT and Codex across hosted and SSH project workspaces with GitHub Issues sync.",
+  "author": {
+    "name": "GPTWork"
+  },
+  "homepage": "https://github.com/9018/gpt-codex-workspace",
+  "repository": "https://github.com/9018/gpt-codex-workspace",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "codex",
+    "chatgpt",
+    "workspace",
+    "ssh",
+    "sftp",
+    "collaboration",
+    "github-issues"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "GPT-Codex Workspace",
+    "shortDescription": "Coordinate project work across ChatGPT, Codex, SSH workspaces with GitHub Issues sync.",
+    "longDescription": "GPT-Codex Workspace connects Codex to a shared project backend with hosted and SSH workspaces, task coordination, full file operations, controlled shell execution, browser automation, uploads, downloads, permissions, audit logs, and optional GitHub Issues sync for public visibility.",
+    "developerName": "GPTWork",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write"
+    ],
+    "websiteURL": "https://github.com/9018/gpt-codex-workspace",
+    "brandColor": "#2563EB"
+  }
+}

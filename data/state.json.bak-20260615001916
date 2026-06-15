@@ -1,0 +1,41 @@
+{
+  "users": [
+    {
+      "id": "user_default",
+      "name": "Default User"
+    }
+  ],
+  "teams": [
+    {
+      "id": "team_default",
+      "name": "Default Team"
+    }
+  ],
+  "projects": [
+    {
+      "id": "default",
+      "team_id": "team_default",
+      "name": "Default Project",
+      "description": "Default GPTWork project",
+      "default_workspace_id": "hosted-default",
+      "created_at": "2026-06-14T15:28:06.847Z",
+      "updated_at": "2026-06-14T15:28:06.847Z"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "hosted-default",
+      "project_id": "default",
+      "name": "Hosted Default",
+      "type": "hosted",
+      "root": "/home/a9017/mcp/gpt-codex-workspace/workspaces/default",
+      "default": true,
+      "created_at": "2026-06-14T15:28:06.847Z",
+      "updated_at": "2026-06-14T15:28:06.847Z"
+    }
+  ],
+  "tasks": [],
+  "chatgpt_requests": [],
+  "activities": [],
+  "audit": []
+}

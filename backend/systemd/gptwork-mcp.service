@@ -1,0 +1,24 @@
+[Unit]
+Description=GPTWork MCP backend
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/a9017/mcp/gpt-codex-workspace/backend
+Environment=GPTWORK_HOST=0.0.0.0
+Environment=GPTWORK_PORT=8787
+Environment=GPTWORK_STATE_PATH=/home/a9017/mcp/gpt-codex-workspace/data/state.json
+Environment=GPTWORK_WORKSPACE_ROOT=/home/a9017/mcp/workspace
+Environment=GPTWORK_TOKENS=dev-token,test
+Environment=GPTWORK_REQUIRE_AUTH=true
+Environment=GPTWORK_CODEX_WORKER=true
+Environment=GPTWORK_CODEX_HOME=/home/a9017
+Environment=GPTWORK_CODEX_WORKER_INTERVAL_MS=5000
+Environment=GPTWORK_CODEX_WORKER_CONCURRENCY=4
+Environment=GPTWORK_LOG_PATH=/home/a9017/mcp/gpt-codex-workspace/backend/gptwork.log
+ExecStart=/usr/bin/node /home/a9017/mcp/gpt-codex-workspace/backend/src/cli.mjs
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=default.target

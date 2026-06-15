@@ -1,0 +1,398 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createGptWorkServer } from "../src/gptwork-server.mjs";
+
+async function makeServer() {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-tools-"));
+  return createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+}
+
+async function makeScopedServer() {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-scoped-"));
+  return createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    tokenContexts: {
+      "admin-token": {
+        user_id: "user_admin",
+        user_name: "Admin User",
+        team_id: "team_default",
+        project_ids: ["default"],
+        workspace_ids: ["*"],
+        scopes: ["project:read", "project:admin", "workspace:read", "workspace:write", "ssh:use", "shell:exec"]
+      },
+      "reader-token": {
+        user_id: "user_reader",
+        user_name: "Reader User",
+        team_id: "team_default",
+        project_ids: ["default"],
+        workspace_ids: ["hosted-default"],
+        scopes: ["project:read", "workspace:read"]
+      }
+    },
+    requireAuth: true
+  });
+}
+
+async function callTool(server, name, args = {}) {
+  return callToolAs(server, "test-token", name, args);
+}
+
+async function callToolAs(server, token, name, args = {}) {
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: Math.floor(Math.random() * 100000),
+    method: "tools/call",
+    params: { name, arguments: args }
+  }, { authorization: `Bearer ${token}` });
+
+  assert.equal(response.error, undefined, JSON.stringify(response.error));
+  return response.result.structuredContent;
+}
+
+test("project and workspace tools expose a seeded default project", async () => {
+  const server = await makeServer();
+
+  const projects = await callTool(server, "list_projects");
+  assert.equal(projects.projects.length, 1);
+  assert.equal(projects.projects[0].id, "default");
+
+  const workspaces = await callTool(server, "list_workspaces", { project_id: "default" });
+  assert.equal(workspaces.workspaces[0].type, "hosted");
+});
+
+test("task tools create, list, update, and complete tasks", async () => {
+  const server = await makeServer();
+
+  const created = await callTool(server, "create_task", {
+    title: "Fix test",
+    description: "Run the check",
+    assignee: "codex"
+  });
+  assert.equal(created.task.status, "queued");
+
+  const listed = await callTool(server, "list_tasks");
+  assert.equal(listed.tasks.length, 1);
+
+  const updated = await callTool(server, "append_task_log", {
+    task_id: created.task.id,
+    message: "Started"
+  });
+  assert.equal(updated.task.logs[0].message, "Started");
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Done"
+  });
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.result.summary, "Done");
+});
+
+test("ordinary tasks cannot be left in readonly mode", async () => {
+  const server = await makeServer();
+
+  const draft = await callTool(server, "create_task", {
+    title: "Deploy Docker service",
+    description: "Build and deploy the Docker service on the remote workspace.",
+    mode: "readonly"
+  });
+  assert.equal(draft.task.mode, "builder");
+
+  const assigned = await callTool(server, "assign_task_to_codex", {
+    task_id: draft.task.id,
+    mode: "readonly"
+  });
+  assert.equal(assigned.task.assignee, "codex");
+  assert.equal(assigned.task.status, "assigned");
+  assert.equal(assigned.task.mode, "builder");
+
+  const deployDraft = await callTool(server, "create_task", {
+    title: "Deploy Docker service with elevated mode",
+    description: "Build and deploy the Docker service on the remote workspace."
+  });
+  const deployAssigned = await callTool(server, "assign_task_to_codex", {
+    task_id: deployDraft.task.id,
+    mode: "deploy"
+  });
+  assert.equal(deployAssigned.task.mode, "deploy");
+});
+
+test("legacy ordinary readonly tasks are promoted when read", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-legacy-mode-"));
+  const statePath = join(root, "state.json");
+  const now = new Date().toISOString();
+  await writeFile(statePath, JSON.stringify({
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{
+      id: "default",
+      team_id: "team_default",
+      name: "Default Project",
+      description: "Default GPTWork project",
+      default_workspace_id: "hosted-default",
+      created_at: now,
+      updated_at: now
+    }],
+    workspaces: [{
+      id: "hosted-default",
+      project_id: "default",
+      name: "Hosted Default",
+      type: "hosted",
+      root: join(root, "workspace"),
+      default: true,
+      created_at: now,
+      updated_at: now
+    }],
+    tasks: [{
+      id: "task_legacy_readonly_deploy",
+      project_id: "default",
+      workspace_id: "hosted-default",
+      title: "Deploy Docker service",
+      description: "Build and deploy a Docker service on the workspace.",
+      created_by: "user_default",
+      assignee: "codex",
+      status: "assigned",
+      mode: "readonly",
+      logs: [],
+      artifacts: [],
+      result: null,
+      created_at: now,
+      updated_at: now
+    }],
+    goals: [],
+    conversations: [],
+    memories: [],
+    chatgpt_requests: [],
+    activities: [],
+    audit: []
+  }, null, 2), "utf8");
+
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const listed = await callTool(server, "list_tasks");
+  assert.equal(listed.tasks[0].mode, "builder");
+
+  const fetched = await callTool(server, "get_task", { task_id: "task_legacy_readonly_deploy" });
+  assert.equal(fetched.task.mode, "builder");
+});
+
+test("safe Codex session inventory tasks remain readonly when assigned", async () => {
+  const server = await makeServer();
+
+  const draft = await callTool(server, "create_task", {
+    title: "List Codex session metadata",
+    description: [
+      "List Codex session file metadata under /home/a9017/.codex/sessions only.",
+      "Return at most 10 files with relative_path, size, and modified_at.",
+      "Do not read session file contents.",
+      "Do not inspect tokens, configs, cookies, cache files, memories, or shell snapshots."
+    ].join("\n"),
+    mode: "readonly"
+  });
+
+  const assigned = await callTool(server, "assign_task_to_codex", { task_id: draft.task.id });
+  assert.equal(assigned.task.mode, "readonly");
+});
+
+test("completed Codex session inventory tasks remain readonly when read", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-completed-inventory-"));
+  const sessionDir = join(root, ".codex", "sessions", "2026", "06", "15");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, "rollout-2026-06-15T01-02-03-session-a.jsonl"), "SECRET transcript text", "utf8");
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const completed = await callToolAs(server, "test-token", "create_codex_session_inventory_task", {});
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.mode, "readonly");
+
+  const fetched = await callToolAs(server, "test-token", "get_task", { task_id: completed.task.id });
+  assert.equal(fetched.task.status, "completed");
+  assert.equal(fetched.task.mode, "readonly");
+});
+
+test("Codex session inventory tools expose metadata only and create an assigned task", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-codex-home-"));
+  const sessionDir = join(root, ".codex", "sessions", "2026", "06", "15");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, "rollout-2026-06-15T01-02-03-session-a.jsonl"), "SECRET transcript text", "utf8");
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const listed = await callToolAs(server, "test-token", "list_codex_sessions_metadata", {
+    year: "2026",
+    month: "06",
+    day: "15",
+    limit: 10
+  });
+  assert.equal(listed.root, join(root, ".codex", "sessions"));
+  assert.equal(listed.count, 1);
+  assert.equal(listed.sessions[0].name, "rollout-2026-06-15T01-02-03-session-a.jsonl");
+  assert.match(listed.sessions[0].relative_path, /^2026\/06\/15\//);
+  assert.equal(listed.sessions[0].content, undefined);
+  assert.doesNotMatch(JSON.stringify(listed), /SECRET/);
+
+  const created = await callToolAs(server, "test-token", "create_codex_session_inventory_task", {});
+  assert.equal(created.task.assignee, "codex");
+  assert.equal(created.task.status, "completed");
+  assert.match(created.task.title, /Codex session metadata/i);
+  assert.match(created.task.description, /Do not read session file contents/);
+  assert.equal(created.task.result.kind, "codex_session_inventory");
+  assert.equal(created.task.result.sessions.count, 1);
+});
+
+test("safe Codex worker completes assigned session inventory tasks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-codex-worker-"));
+  const sessionDir = join(root, ".codex", "sessions", "2026", "06", "15");
+  await mkdir(sessionDir, { recursive: true });
+  await writeFile(join(sessionDir, "rollout-2026-06-15T01-02-03-session-a.jsonl"), "SECRET transcript text", "utf8");
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const draft = await callToolAs(server, "test-token", "create_task", {
+    title: "List Codex session metadata",
+    description: [
+      "List Codex session file metadata under /home/a9017/.codex/sessions only.",
+      "Return at most 10 files with relative_path, size, and modified_at.",
+      "Do not read session file contents.",
+      "Do not inspect tokens, configs, cookies, cache files, memories, or shell snapshots."
+    ].join("\n"),
+    mode: "readonly"
+  });
+  const created = await callToolAs(server, "test-token", "assign_task_to_codex", { task_id: draft.task.id });
+  assert.equal(created.task.status, "assigned");
+
+  const run = await callToolAs(server, "test-token", "run_assigned_codex_tasks", { limit: 5 });
+  assert.equal(run.completed, 1);
+  assert.equal(run.tasks[0].task_id, created.task.id);
+  assert.equal(run.tasks[0].status, "completed");
+
+  const fetched = await callToolAs(server, "test-token", "get_task", { task_id: created.task.id });
+  assert.equal(fetched.task.status, "completed");
+  assert.equal(fetched.task.result.kind, "codex_session_inventory");
+  assert.equal(fetched.task.result.sessions.count, 1);
+  assert.equal(fetched.task.result.sessions.sessions[0].content, undefined);
+  assert.ok(fetched.task.logs.some((log) => /Safe Codex worker completed/.test(log.message)));
+  assert.doesNotMatch(JSON.stringify(fetched), /SECRET/);
+});
+
+test("hosted workspace supports write, read, search, sha256, and shell_exec", async () => {
+  const server = await makeServer();
+
+  const written = await callTool(server, "write_text_file", {
+    path: "notes/hello.txt",
+    content: "hello gptwork",
+    overwrite: true
+  });
+  assert.equal(written.size, 13);
+
+  const read = await callTool(server, "read_text_file", { path: "notes/hello.txt" });
+  assert.equal(read.content, "hello gptwork");
+
+  const search = await callTool(server, "search_files", { q: "gptwork" });
+  assert.equal(search.count, 1);
+
+  const digest = await callTool(server, "sha256_file", { path: "notes/hello.txt" });
+  assert.match(digest.sha256, /^[a-f0-9]{64}$/);
+
+  const shell = await callTool(server, "shell_exec", {
+    command: `${process.execPath} -e "process.stdout.write('shell-ok')"`,
+    timeout: 5
+  });
+  assert.equal(shell.returncode, 0);
+  assert.equal(shell.stdout, "shell-ok");
+});
+
+test("token context scopes projects and current user", async () => {
+  const server = await makeScopedServer();
+
+  const user = await callToolAs(server, "reader-token", "get_current_user");
+  assert.equal(user.user.id, "user_reader");
+  assert.equal(user.team_id, "team_default");
+  assert.deepEqual(user.scopes, ["project:read", "workspace:read"]);
+
+  const projects = await callToolAs(server, "reader-token", "list_projects");
+  assert.deepEqual(projects.projects.map((project) => project.id), ["default"]);
+});
+
+test("project admins can create, update, test, and delete SSH workspaces", async () => {
+  const server = await makeScopedServer();
+
+  const created = await callToolAs(server, "admin-token", "create_workspace", {
+    project_id: "default",
+    id: "ssh-main",
+    name: "Main SSH",
+    type: "ssh",
+    host: "10.0.1.103",
+    user: "a9017",
+    port: 22,
+    root: "/home/a9017/mcp",
+    default: true
+  });
+  assert.equal(created.workspace.id, "ssh-main");
+  assert.equal(created.workspace.type, "ssh");
+  assert.equal(created.workspace.host, "10.0.1.103");
+
+  const listedForAdmin = await callToolAs(server, "admin-token", "list_workspaces", { project_id: "default" });
+  assert.deepEqual(listedForAdmin.workspaces.map((workspace) => workspace.id).sort(), ["hosted-default", "ssh-main"]);
+
+  const listedForReader = await callToolAs(server, "reader-token", "list_workspaces", { project_id: "default" });
+  assert.deepEqual(listedForReader.workspaces.map((workspace) => workspace.id), ["hosted-default"]);
+
+  const updated = await callToolAs(server, "admin-token", "update_workspace", {
+    workspace_id: "ssh-main",
+    name: "Production SSH",
+    root: "/home/a9017/mcp/gpt-codex-workspace"
+  });
+  assert.equal(updated.workspace.name, "Production SSH");
+  assert.equal(updated.workspace.root, "/home/a9017/mcp/gpt-codex-workspace");
+
+  const tested = await callToolAs(server, "admin-token", "test_workspace_connection", {
+    workspace_id: "ssh-main",
+    dry_run: true
+  });
+  assert.equal(tested.ok, true);
+  assert.equal(tested.dry_run, true);
+  assert.match(tested.command, /a9017@10\.0\.1\.103/);
+
+  const removed = await callToolAs(server, "admin-token", "delete_workspace", {
+    workspace_id: "ssh-main"
+  });
+  assert.equal(removed.ok, true);
+
+  const listedAfterDelete = await callToolAs(server, "admin-token", "list_workspaces", { project_id: "default" });
+  assert.deepEqual(listedAfterDelete.workspaces.map((workspace) => workspace.id), ["hosted-default"]);
+});

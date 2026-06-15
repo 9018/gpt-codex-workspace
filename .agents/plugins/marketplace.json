@@ -1,0 +1,22 @@
+{
+  "name": "gptwork",
+  "interface": {
+    "displayName": "GPTWork"
+  },
+  "plugins": [
+    {
+      "name": "gpt-codex-workspace",
+      "source": {
+        "source": "git-subdir",
+        "url": "https://github.com/9018/gpt-codex-workspace.git",
+        "path": "./plugins/gpt-codex-workspace",
+        "ref": "main"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}
