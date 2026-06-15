@@ -10,7 +10,7 @@ For complex execution requests, ChatGPT should not call direct shell tools or ra
 2. Show that preview to the user.
 3. Put the same intent into payload JSON.
 4. Base64 encode the JSON.
-5. Call `create_encoded_goal` with `assign_to_codex: true`.
+5. Call `create_encoded_goal` with `assign_to_codex: true` and a practical `wait_ms` when the user expects immediate progress.
 
 Base64 is only transport encoding. It is not a secrecy mechanism and must not be treated as a way to hide intent. The backend stores readable `payload.json`, `goal.md`, `context.json`, and `transcript.md`; Codex reads the readable files.
 
@@ -86,9 +86,12 @@ Then call:
 create_encoded_goal({
   preview_text,
   payload_base64,
-  assign_to_codex: true
+  assign_to_codex: true,
+  wait_ms: 90000
 })
 ```
+
+`create_encoded_goal` returns a concise public file list by default: `dir`, `goal_md`, and `result_md`. Debug/context files such as `context.json`, `transcript.md`, `payload.json`, and `payload.base64` are still written, but are returned under `internal_files` or from `get_goal_context` so ChatGPT does not flood the user with paths. If `wait_ms` is provided, the response also includes `execution.status`, `execution.result`, and recent transcript messages; ChatGPT should show those instead of asking the user to poll a task id manually.
 
 Return to the user:
 

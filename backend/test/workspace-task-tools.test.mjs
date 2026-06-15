@@ -342,6 +342,39 @@ test("safe Codex worker completes assigned session inventory tasks", async () =>
   assert.doesNotMatch(JSON.stringify(fetched), /SECRET/);
 });
 
+test("general Codex worker completes linked goals and writes concise results", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-general-worker-"));
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    codexHome: root,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('FULL_SUMMARY=worker-ok')"`,
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const created = await callToolAs(server, "test-token", "create_goal", {
+    user_request: "Run worker",
+    goal_prompt: "Return worker-ok.",
+    context_summary: "Worker status sync test.",
+    assign_to_codex: true
+  });
+
+  const run = await callToolAs(server, "test-token", "run_assigned_codex_tasks", { limit: 1 });
+  assert.equal(run.completed, 1);
+
+  const fetchedTask = await callToolAs(server, "test-token", "get_task", { task_id: created.task.id });
+  assert.equal(fetchedTask.task.status, "completed");
+  assert.equal(fetchedTask.task.result.kind, "codex_executed");
+  assert.match(fetchedTask.task.result.summary, /FULL_SUMMARY=worker-ok/);
+
+  const context = await callToolAs(server, "test-token", "get_goal_context", { goal_id: created.goal.id });
+  assert.equal(context.goal.status, "completed");
+  assert.equal(context.task.status, "completed");
+  assert.match(context.conversation.messages.at(-1).content, /FULL_SUMMARY=worker-ok/);
+});
+
 test("hosted workspace supports write, read, search, sha256, and shell_exec", async () => {
   const server = await makeServer();
 

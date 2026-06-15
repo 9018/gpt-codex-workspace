@@ -36,6 +36,7 @@ export async function createGptWorkServer(options = {}) {
     requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
     codexHome: options.codexHome || process.env.GPTWORK_CODEX_HOME || "/home/a9017",
     codexExecArgs: options.codexExecArgs || process.env.GPTWORK_CODEX_EXEC_ARGS || "--yolo --skip-git-repo-check",
+    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 300),
     pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
     maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
     maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
@@ -183,7 +184,7 @@ function createTools({ store, config, browser, github }) {
     }),
 
     create_goal: tool("Create a shared goal from a ChatGPT-written goal prompt. Use this when ChatGPT turns the user's request into a Codex-executable goal. Stores the raw request, goal prompt, conversation messages, durable memories, workspace-visible context files, and optionally creates an assigned Codex task linked to the same context.", schema({ user_request: "string", goal_prompt: "string", context_summary: "string", project_id: "string", workspace_id: "string", mode: "string", assign_to_codex: "boolean", title: "string", messages: "array", memories: "array", payload: "object", payload_base64: "string", preview_text: "string", bundles: "array" }, ["user_request", "goal_prompt"]), async (args, context) => createGoal(store, config, args, context)),
-    create_encoded_goal: tool("Create a shared Codex goal from a GPTChat preview plus base64-encoded JSON payload. The server decodes the payload, stores readable goal/context/transcript files, and assigns Codex when requested.", schema({ preview_text: "string", payload_base64: "string", assign_to_codex: "boolean" }, ["preview_text", "payload_base64"]), async (args, context) => createEncodedGoal(store, config, args, context)),
+    create_encoded_goal: tool("Create a shared Codex goal from a GPTChat preview plus base64-encoded JSON payload. The server decodes the payload, stores readable goal/context/transcript files, assigns Codex when requested, and can wait briefly for execution status with wait_ms.", schema({ preview_text: "string", payload_base64: "string", assign_to_codex: "boolean", wait_ms: "integer" }, ["preview_text", "payload_base64"]), async (args, context) => createEncodedGoal(store, config, args, context)),
     list_goals: tool("List shared GPTWork goals for ChatGPT and Codex. Codex should use this to discover assigned or open goal prompts before starting work.", schema({ status: "string", assignee: "string", workspace_id: "string", limit: "integer" }), async (args, context) => listGoals(store, args, context)),
     get_goal_context: tool("Return the full shared goal context: goal prompt, raw user request, conversation messages, durable memories, linked Codex task, and workspace-visible context files. Codex should call this before acting on a goal or linked task.", schema({ goal_id: "string", task_id: "string" }, []), async (args, context) => getGoalContext(store, config, args, context)),
     append_goal_message: tool("Append a ChatGPT, user, or Codex message to a shared goal conversation and optionally store a memory item for future Codex context. Also updates the workspace transcript/context files.", schema({ goal_id: "string", task_id: "string", role: "string", content: "string", memory_key: "string", memory_value: "string" }, ["content"]), async (args, context) => appendGoalMessage(store, config, args, context)),
@@ -744,7 +745,7 @@ async function createGoal(store, config, args, context = defaultTokenContext("sy
   return { goal, conversation, memories, task, workspace_files };
 }
 
-async function createEncodedGoal(store, config, { preview_text, payload_base64, assign_to_codex = true } = {}, context = defaultTokenContext("system")) {
+async function createEncodedGoal(store, config, { preview_text, payload_base64, assign_to_codex = true, wait_ms = 0 } = {}, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
   requireScope(context, "task:update");
   const payload = decodeBase64Json(payload_base64, "payload_base64");
@@ -753,7 +754,7 @@ async function createEncodedGoal(store, config, { preview_text, payload_base64, 
   if (preview_text && !messages.some((message) => String(message.content || "") === String(preview_text))) {
     messages.push({ role: "chatgpt", content: String(preview_text) });
   }
-  return createGoal(store, config, {
+  const created = await createGoal(store, config, {
     ...payload,
     messages,
     preview_text,
@@ -761,6 +762,13 @@ async function createEncodedGoal(store, config, { preview_text, payload_base64, 
     payload_base64,
     assign_to_codex: payload.assign_to_codex ?? assign_to_codex
   }, context);
+  const execution = await waitForTaskExecution(store, created.task, wait_ms);
+  return {
+    ...created,
+    workspace_files: publicGoalWorkspaceFiles(created.goal, payload),
+    internal_files: internalGoalWorkspaceFiles(created.goal, payload),
+    execution
+  };
 }
 
 async function listGoals(store, { status, assignee, workspace_id, limit = 50 } = {}, context = defaultTokenContext("system")) {
@@ -954,6 +962,77 @@ function goalWorkspaceFiles(goal) {
     bundle_zip: `${dir}/bundle.zip`,
     attachments_dir: `${dir}/attachments`
   };
+}
+
+function publicGoalWorkspaceFiles(goal, payload = {}) {
+  const files = goalWorkspaceFiles(goal);
+  const visible = {
+    dir: files.dir,
+    goal_md: files.goal_md,
+    result_md: files.result_md
+  };
+  if (hasGoalBundles(payload)) visible.attachments_dir = files.attachments_dir;
+  return visible;
+}
+
+function internalGoalWorkspaceFiles(goal, payload = {}) {
+  const files = goalWorkspaceFiles(goal);
+  const internal = {
+    context_json: files.context_json,
+    transcript_md: files.transcript_md,
+    payload_json: files.payload_json,
+    payload_base64: files.payload_base64
+  };
+  if (hasGoalBundles(payload)) internal.attachments_dir = files.attachments_dir;
+  return internal;
+}
+
+function hasGoalBundles(payload = {}) {
+  return Array.isArray(payload.bundles) && payload.bundles.some((bundle) => bundle?.zip_base64);
+}
+
+async function waitForTaskExecution(store, task, waitMs = 0) {
+  const boundedWaitMs = Math.max(0, Math.min(Number(waitMs) || 0, 300000));
+  const deadline = Date.now() + boundedWaitMs;
+  let snapshot = await taskExecutionSnapshot(store, task);
+  while (boundedWaitMs > 0 && snapshot.task && !isTaskTerminal(snapshot.task) && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, Math.min(500, Math.max(25, deadline - Date.now()))));
+    snapshot = await taskExecutionSnapshot(store, task);
+  }
+  return snapshot;
+}
+
+async function taskExecutionSnapshot(store, task) {
+  const state = await store.load();
+  const freshTask = task?.id ? state.tasks.find((item) => item.id === task.id) || task : null;
+  const goal = freshTask?.goal_id
+    ? state.goals?.find((item) => item.id === freshTask.goal_id) || null
+    : state.goals?.find((item) => item.task_id === freshTask?.id) || null;
+  const conversation = goal?.conversation_id ? state.conversations?.find((item) => item.id === goal.conversation_id) || null : null;
+  const messages = conversation?.messages || [];
+  return {
+    status: freshTask?.status || goal?.status || "open",
+    task: freshTask,
+    goal_status: goal?.status || null,
+    result: freshTask?.result || null,
+    messages_tail: messages.slice(-5)
+  };
+}
+
+function isTaskTerminal(task) {
+  return ["completed", "failed", "waiting_for_review", "cancelled"].includes(task?.status);
+}
+
+async function updateGoalStatus(store, goalId, status, updatedAt = new Date().toISOString()) {
+  const state = await store.load();
+  ensureGoalState(state);
+  const goal = state.goals.find((item) => item.id === goalId);
+  if (!goal) return null;
+  goal.status = status;
+  goal.updated_at = updatedAt;
+  state.activities.push({ time: updatedAt, type: `goal.${status}`, goal_id: goal.id, title: goal.title });
+  await store.save();
+  return goal;
 }
 
 async function writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, extras = {}, context = defaultTokenContext("system")) {
@@ -1353,7 +1432,6 @@ async function processGeneralTask(store, config, task, context) {
   const mode = task.mode || "builder";
   const promptFile = `/tmp/.gptwork-task-${task.id}.txt`;
   const separator = "=".repeat(60);
-  const goalContext = goal ? JSON.stringify({ goal, conversation, memories, workspace_files: workspaceFiles }, null, 2) : "{}";
   const fullPrompt = `# Task: ${task.title}
 
 ${task.description || ""}
@@ -1365,14 +1443,12 @@ You are executing a GPTWork encoded/shared goal.
 Read these files before acting:
 - ${workspaceFiles.goal_md}
 - ${workspaceFiles.context_json}
-- ${workspaceFiles.transcript_md}
 
 Follow ${workspaceFiles.goal_md} exactly.
+Use ${workspaceFiles.context_json} only for metadata you need.
+Do not dump or re-read ${workspaceFiles.transcript_md} unless the goal explicitly requires prior conversation details.
 Write final results to ${workspaceFiles.result_md}.
-When complete, report a concise summary so GPTWork can call append_goal_message.
-
-Structured context:
-${goalContext}` : ""}
+When complete, print a concise operational summary. GPTWork will append that summary to the shared transcript.` : ""}
 
 ${separator}
 Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
@@ -1388,7 +1464,7 @@ ${separator}`;
   let summary = "";
   try {
     const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
-    const cr = await runLocalShell(cmd, workspace.root, 60, 1000000);
+    const cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
     const out = (cr.stdout || "").trim();
     if (out) {
       const hdr = out.indexOf(separator);
@@ -1409,6 +1485,7 @@ ${separator}`;
     item.logs.push({ time: doneAt, message: "[worker] completed: task processed by Codex CLI" });
   });
   if (goal) {
+    await updateGoalStatus(store, goal.id, "completed", doneAt);
     await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nCompleted at: ${doneAt}\n`, context);
     await appendGoalMessage(store, config, {
       goal_id: goal.id,

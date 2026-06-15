@@ -1,7 +1,7 @@
 # GPTWork Current Status
 
-Date: 2026-06-15
-Status: encoded goal workflow implemented locally; backend target is 10.0.1.103.
+Date: 2026-06-16
+Status: encoded goal workflow is implemented and tuned for GPTChat -> Codex execution on 10.0.1.103.
 
 ## What This Project Is
 
@@ -44,11 +44,12 @@ Path-based auth is the preferred ChatGPT setup. The backend extracts the token f
 User natural language request
   -> ChatGPT writes a readable preview
   -> ChatGPT builds payload JSON
-  -> ChatGPT sends create_encoded_goal(preview_text, payload_base64, assign_to_codex=true)
+  -> ChatGPT sends create_encoded_goal(preview_text, payload_base64, assign_to_codex=true, wait_ms=90000)
   -> Backend decodes base64 and saves readable files
   -> Backend creates/links task and assigns Codex
-  -> Codex reads .gptwork/goals/<goal_id>/goal.md, context.json, transcript.md
-  -> Codex executes, writes result.md, and calls append_goal_message
+  -> Codex reads .gptwork/goals/<goal_id>/goal.md and context.json
+  -> Codex executes, writes result.md, and GPTWork appends the result to the shared transcript
+  -> ChatGPT receives an execution snapshot in the same tool response when wait_ms is set
 ```
 
 Primary ChatGPT entry:
@@ -75,8 +76,9 @@ Every goal writes these workspace files:
 .gptwork/goals/<goal_id>/payload.json
 .gptwork/goals/<goal_id>/payload.base64
 .gptwork/goals/<goal_id>/result.md
-.gptwork/goals/<goal_id>/attachments/
 ```
+
+The public `create_encoded_goal` response intentionally returns only concise paths (`dir`, `goal_md`, `result_md`). Internal/debug paths (`context.json`, `transcript.md`, `payload.json`, `payload.base64`) are available as `internal_files` and through `get_goal_context`. Attachment directories are only created and returned when a bundle is uploaded.
 
 Important boundary: base64 is transport encoding only. The user sees the readable preview, the backend stores readable JSON/Markdown, and Codex executes readable instructions.
 
@@ -112,6 +114,12 @@ Override with:
 
 ```bash
 GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
+```
+
+Codex execution timeout defaults to 300 seconds. Override with:
+
+```bash
+GPTWORK_CODEX_EXEC_TIMEOUT=300
 ```
 
 Zip operations use Python. Override if needed:

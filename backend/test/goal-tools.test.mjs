@@ -106,6 +106,12 @@ test("ChatGPT can create an encoded goal and the backend writes readable workspa
   assert.equal(created.goal.preview_text, preview);
   assert.equal(created.task.assignee, "codex");
   assert.equal(created.workspace_files.goal_md, `.gptwork/goals/${created.goal.id}/goal.md`);
+  assert.equal(created.workspace_files.result_md, `.gptwork/goals/${created.goal.id}/result.md`);
+  assert.equal(created.workspace_files.payload_json, undefined);
+  assert.equal(created.workspace_files.payload_base64, undefined);
+  assert.equal(created.workspace_files.bundle_zip, undefined);
+  assert.equal(created.workspace_files.attachments_dir, undefined);
+  assert.equal(created.internal_files.payload_json, `.gptwork/goals/${created.goal.id}/payload.json`);
 
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
   assert.equal(context.workspace_files.payload_json, `.gptwork/goals/${created.goal.id}/payload.json`);
@@ -113,6 +119,28 @@ test("ChatGPT can create an encoded goal and the backend writes readable workspa
   assert.equal(context.conversation.messages.at(-1).content, preview);
   const payloadJson = await callTool(server, "read_text_file", { path: context.workspace_files.payload_json });
   assert.match(payloadJson.content, /部署新版本到测试环境/);
+});
+
+test("create_encoded_goal can wait briefly and returns execution status without a second task lookup", async () => {
+  const server = await makeServer();
+  const payload = {
+    user_request: "Run a short Codex goal",
+    goal_prompt: "Write a concise result.",
+    context_summary: "Testing immediate status shape.",
+    workspace_id: "hosted-default"
+  };
+
+  const created = await callTool(server, "create_encoded_goal", {
+    preview_text: "I will run a short Codex goal.",
+    payload_base64: Buffer.from(JSON.stringify(payload), "utf8").toString("base64"),
+    assign_to_codex: true,
+    wait_ms: 1
+  });
+
+  assert.equal(created.execution.status, "assigned");
+  assert.equal(created.execution.task.id, created.task.id);
+  assert.equal(created.execution.result, null);
+  assert.ok(Array.isArray(created.execution.messages_tail));
 });
 
 test("Codex can append progress to the shared goal conversation", async () => {

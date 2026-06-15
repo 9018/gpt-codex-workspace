@@ -127,13 +127,14 @@ When ChatGPT receives a user request, it follows this order:
    create_encoded_goal({
      preview_text: "readable summary shown to the user",
      payload_base64: "base64(JSON.stringify(payload))",
-     assign_to_codex: true
+     assign_to_codex: true,
+     wait_ms: 90000
    })
    ```
 
-3. **Backend writes readable goal files.** The backend decodes base64, stores `goal.md`, `context.json`, `transcript.md`, `payload.json`, `payload.base64`, and creates/links a task.
+3. **Backend writes readable goal files.** The backend decodes base64, stores `goal.md`, `context.json`, `transcript.md`, `payload.json`, `payload.base64`, and creates/links a task. The public tool response only shows the concise files (`dir`, `goal_md`, `result_md`); debug files are returned as `internal_files` or through `get_goal_context`.
 
-4. **Codex executes.** Codex discovers the assigned goal via `list_goals`, loads context via `get_goal_context`, reads the workspace goal files, writes `result.md`, and reports back via `append_goal_message`.
+4. **Codex executes.** Codex discovers the assigned goal via `list_goals`, loads context via `get_goal_context`, reads the workspace goal files, writes `result.md`, and reports back via `append_goal_message`. When `wait_ms` is provided, ChatGPT receives an `execution` snapshot in the same tool result and should show that instead of asking the user to poll the task id.
 
 What ChatGPT can usually do directly: read files, list directories, check service status, search files, list tasks/goals, health checks.
 
@@ -147,7 +148,7 @@ In ChatGPT, create an encoded shared goal:
 
 > @GPTWork Turn this into a Codex goal: fix the failing login test on the remote workspace, preserve this conversation context, and assign it to Codex.
 
-ChatGPT should write a clear `preview_text` from the user's request, then build a payload containing `user_request`, `goal_prompt`, `context_summary`, `messages`, `memories`, `workspace_id`, and `mode`. It sends the payload as `payload_base64` to `create_encoded_goal(assign_to_codex=true)`. The backend stores readable goal files, conversation records, memory records, and creates a linked Codex task. Codex then calls `get_goal_context`, reads the goal files, and writes progress back with `append_goal_message`.
+ChatGPT should write a clear `preview_text` from the user's request, then build a payload containing `user_request`, `goal_prompt`, `context_summary`, `messages`, `memories`, `workspace_id`, and `mode`. It sends the payload as `payload_base64` to `create_encoded_goal(assign_to_codex=true, wait_ms=90000)`. The backend stores readable goal files, conversation records, memory records, and creates a linked Codex task. Codex then calls `get_goal_context`, reads the goal files, and writes progress back with `append_goal_message`.
 
 Compatibility remains: `create_goal` still works, and `create_task` + `assign_task_to_codex` automatically creates or links a goal. The recommended ChatGPT path for complex execution is `create_encoded_goal`.
 
@@ -185,7 +186,7 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 - `test_workspace_connection` — Test SSH connectivity
 
 ### Shared Goals
-- `create_encoded_goal` — Decode a base64 JSON payload, store readable goal/context/transcript files, and optionally assign Codex
+- `create_encoded_goal` — Decode a base64 JSON payload, store readable goal/context/transcript files, optionally assign Codex, and return an execution snapshot when `wait_ms` is set
 - `create_goal` — Store a ChatGPT-written goal prompt, raw user request, conversation messages, durable memories, and optional assigned Codex task
 - `list_goals` — List open or assigned shared goals for ChatGPT and Codex
 - `get_goal_context` — Return the goal prompt, raw request, conversation, memories, and linked task before Codex starts work
