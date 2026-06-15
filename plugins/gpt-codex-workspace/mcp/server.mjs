@@ -142,12 +142,22 @@ function parseRemoteResponse(body) {
       if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
     }
 
+    let finalResponse = null;
     for (const line of dataLines) {
       if (!line || line === "[DONE]") continue;
-      return JSON.parse(line);
+      const message = JSON.parse(line);
+
+      // Notification (no id) — forward to client immediately, keep scanning
+      if (!Object.prototype.hasOwnProperty.call(message, "id")) {
+        writeFrame(message);
+        continue;
+      }
+
+      // Response with id — keep the latest one as final
+      finalResponse = message;
     }
 
-    return null;
+    return finalResponse;
   }
 
   return JSON.parse(trimmed);
