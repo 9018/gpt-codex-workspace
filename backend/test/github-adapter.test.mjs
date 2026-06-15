@@ -1,4 +1,4 @@
-﻿import test from "node:test";
+import test from "node:test";
 import assert from "node:assert/strict";
 import { createGithubSync } from "../src/github-adapter.mjs";
 import { mkdtemp, writeFile } from "node:fs/promises";

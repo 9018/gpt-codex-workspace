@@ -1,6 +1,6 @@
 import http from "node:http";
 import { randomUUID, createHash } from "node:crypto";
-import { exec, execSync } from "node:child_process";
+import { exec, execSync, spawn } from "node:child_process";
 import {
   cp,
   mkdtemp,
@@ -20,6 +20,9 @@ import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
+import { createBarkNotifier } from "./bark-notifier.mjs";
+
+let barkNotifier = null;
 
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 
@@ -36,17 +39,19 @@ export async function createGptWorkServer(options = {}) {
     requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
     codexHome: options.codexHome || process.env.GPTWORK_CODEX_HOME || "/home/a9017",
     codexExecArgs: options.codexExecArgs || process.env.GPTWORK_CODEX_EXEC_ARGS || "--yolo --skip-git-repo-check",
-    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 300),
+    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 1800),
     pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
     maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
     maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
+    barkKey: options.barkKey || process.env.GPTWORK_BARK_KEY || "",
     shellTimeout: Number(process.env.GPTWORK_SHELL_TIMEOUT || 60)
   };
   const store = new StateStore(config);
   await store.load();
   const browser = createBrowserRegistry();
   const github = createGithubSync(config);
-  const tools = createTools({ store, config, browser, github });
+  const bark = createBarkNotifier(config); barkNotifier = bark;
+  const tools = createTools({ store, config, browser, github, bark });
 
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
@@ -140,7 +145,7 @@ export function startCodexWorker(server, {
   };
 }
 
-function createTools({ store, config, browser, github }) {
+function createTools({ store, config, browser, github, bark }) {
   const tool = (description, inputSchema, handler) => ({ description, inputSchema, handler });
   return {
     health_check: tool("Check whether the GPTWork MCP server is running.", schema({}), async () => ({ ok: true, service: "gptwork-mcp", time: new Date().toISOString() })),
@@ -320,7 +325,8 @@ function createTools({ store, config, browser, github }) {
     browser_screenshot: tool("Return screenshot placeholder metadata.", schema({ session_id: "string", path: "string" }, ["session_id"]), async ({ session_id, path = "" }) => ({ ok: false, session_id, path, error: "screenshots require a Playwright-enabled browser adapter" })),
     browser_set_input_files: tool("Return file upload placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
     browser_click_and_download: tool("Return download placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
-    browser_evaluate: tool("Evaluate JavaScript placeholder.", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script))
+    browser_evaluate: tool("Evaluate JavaScript placeholder.", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
+    test_bark_notification: tool("Send a test Bark notification to verify the Bark push service is configured correctly. Returns ok:true if the notification was sent.", schema({}), async () => bark && bark.isEnabled() ? bark.testSend() : ({ ok: false, reason: "bark not initialized" })),
   };
 }
 
@@ -489,7 +495,8 @@ function limits(config) {
   return {
     max_read_bytes: config.maxReadBytes,
     max_shell_output_bytes: config.maxShellOutputBytes,
-    shell_timeout: config.shellTimeout
+    shell_timeout: config.shellTimeout,
+    codex_exec_timeout: config.codexExecTimeout
   };
 }
 
@@ -1455,48 +1462,81 @@ Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
 Use ${workspace.root} as the base directory for all file operations.
 
 After completing ALL steps, output a structured report with these exact fields:
-CREATED_PATH=<path to created directory or file, or "none">
-DECODED_CONTENT=<content that was decoded, or "none">
-CLEANUP_OK=<yes/no>
-FULL_SUMMARY=<one line summary of what was done>
+STATUS=<completed|failed|timed_out>
+SUMMARY=<one line>
+CHANGED_FILES=<comma separated or none>
+TESTS=<commands and pass/fail or none>
+COMMIT=<sha or none>
+REMOTE_HEAD=<sha or none>
 ${separator}`;
   await writeFile(promptFile, fullPrompt, "utf8");
-  let summary = "";
-  try {
-    const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
-    const cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
-    const out = (cr.stdout || "").trim();
-    if (out) {
-      const hdr = out.indexOf(separator);
-      summary = hdr >= 0 ? out.substring(hdr) : out;
+ let summary = "";
+  let parsedStatus = null;
+ try {
+   const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
+   const cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
+   const out = (cr.stdout || "").trim();
+   if (out) {
+     const hdr = out.indexOf(separator);
+     summary = hdr >= 0 ? out.substring(hdr) : out;
+      const statusMatch = summary.match(/^STATUS=(\S+)/m);
+      if (statusMatch) parsedStatus = statusMatch[1];
+   }
+   if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
+    if (cr.timed_out) parsedStatus = "timed_out";
+ } catch (e) {
+   summary = "[ERROR] " + e.message;
+    parsedStatus = "failed";
+ } finally {
+   try { await rm(promptFile, { force: true }); } catch {}
+ }
+ if (!summary) summary = "Task completed (no output captured)";
+ const doneAt = new Date().toISOString();
+  if (parsedStatus === "timed_out" || parsedStatus === "failed" || summary.includes("[TIMEOUT]")) {
+    const timeoutSeconds = config.codexExecTimeout;
+    const result = await updateTask(store, task.id, (item) => {
+      item.status = "failed";
+      item.result = {
+        kind: "codex_timeout",
+        timed_out: true,
+        timeout_seconds: timeoutSeconds,
+        summary: summary + "\n[TIMEOUT]",
+        completed_at: doneAt
+      };
+      item.logs.push({ time: doneAt, message: `[worker] timed out after ${timeoutSeconds}s` });
+    });
+    if (goal) {
+      await updateGoalStatus(store, goal.id, "failed", doneAt);
+      await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nFailed due to timeout at: ${doneAt}\n`, context);
+      await appendGoalMessage(store, config, {
+        goal_id: goal.id,
+        role: "codex",
+        content: `[worker] Task ${task.id} timed out after ${timeoutSeconds}s.\n\n${summary}`,
+        memory_key: "codex_last_result",
+        memory_value: `[TIMEOUT after ${timeoutSeconds}s] ${summary.slice(0, 3800)}`
+      }, context);
     }
-    if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
-    if (cr.timed_out) summary += "\n[TIMEOUT]";
-  } catch (e) {
-    summary = "[ERROR] " + e.message;
-  } finally {
-    try { await rm(promptFile, { force: true }); } catch {}
+    try { github.syncTask(result.task).catch(() => {}); } catch {}
+    return { task_id: result.task.id, status: "failed", kind: "codex_timeout" };
   }
-  if (!summary) summary = "Task completed (no output captured)";
-  const doneAt = new Date().toISOString();
-  const result = await updateTask(store, task.id, (item) => {
-    item.status = "completed";
-    item.result = { summary, kind: "codex_executed", completed_at: doneAt };
-    item.logs.push({ time: doneAt, message: "[worker] completed: task processed by Codex CLI" });
-  });
-  if (goal) {
-    await updateGoalStatus(store, goal.id, "completed", doneAt);
-    await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nCompleted at: ${doneAt}\n`, context);
-    await appendGoalMessage(store, config, {
-      goal_id: goal.id,
-      role: "codex",
-      content: `[worker] Completed task ${task.id}.\n\n${summary}`,
-      memory_key: "codex_last_result",
-      memory_value: summary.slice(0, 4000)
-    }, context);
-  }
-  try { github.syncTask(result.task).catch(() => {}); } catch {}
-  return { task_id: result.task.id, status: "completed", kind: "codex_executed" };
+ const result = await updateTask(store, task.id, (item) => {
+   item.status = "completed";
+   item.result = { summary, kind: "codex_executed", completed_at: doneAt };
+   item.logs.push({ time: doneAt, message: "[worker] completed: task processed by Codex CLI" });
+ });
+ if (goal) {
+   await updateGoalStatus(store, goal.id, "completed", doneAt);
+   await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nCompleted at: ${doneAt}\n`, context);
+   await appendGoalMessage(store, config, {
+     goal_id: goal.id,
+     role: "codex",
+     content: `[worker] Completed task ${task.id}.\n\n${summary}`,
+     memory_key: "codex_last_result",
+     memory_value: summary.slice(0, 4000)
+   }, context);
+ }
+ try { github.syncTask(result.task).catch(() => {}); } catch {}
+ return { task_id: result.task.id, status: "completed", kind: "codex_executed" };
 }
 
 function emitTaskProgress(context, task, phase, message) {
@@ -1557,6 +1597,20 @@ async function updateTask(store, task_id, updater) {
   updater(task);
   task.updated_at = new Date().toISOString();
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
+  
+  // Send Bark notification for terminal task states
+  if (barkNotifier && barkNotifier.isEnabled() && !task.notified) {
+    const terminal = ["completed", "failed", "cancelled"];
+    if (terminal.includes(task.status)) {
+      try {
+        const nres = await barkNotifier.send(`[GPTWork] ${task.status}`, task.title || "(no title)", `task-${task.status}`);
+        if (nres.ok) {
+          task.notified = true;
+          task.notified_at = new Date().toISOString();
+        }
+      } catch (e) { /* notification failure is non-critical */ }
+    }
+  }
   await store.save();
   return { task };
 }
@@ -1860,19 +1914,92 @@ async function runZipCommand(mode, sourcePath, zipPath, pythonCommand = process.
 function runLocalShell(command, cwd, timeout, maxOutputBytes) {
   return new Promise((resolve) => {
     const started = Date.now();
-    const child = exec(command, { cwd, timeout: timeout * 1000, maxBuffer: maxOutputBytes }, (error, stdout, stderr) => {
+    const shell = process.platform === "win32" ? "cmd" : "/bin/sh";
+    const shellFlag = process.platform === "win32" ? "/c" : "-c";
+    const maxBuf = Number(maxOutputBytes) || 1048576;
+
+    const child = spawn(shell, [shellFlag, command], {
+      cwd,
+      detached: process.platform !== "win32",
+      stdio: ["pipe", "pipe", "pipe"],
+      maxBuffer: maxBuf
+    });
+
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let stdoutTruncated = false;
+    let stderrTruncated = false;
+
+    child.stdout.on("data", (data) => {
+      if (!stdoutTruncated) {
+        stdout += data.toString();
+        if (Buffer.byteLength(stdout) >= maxBuf) {
+          stdoutTruncated = true;
+          child.stdout.destroy();
+        }
+      }
+    });
+
+    child.stderr.on("data", (data) => {
+      if (!stderrTruncated) {
+        stderr += data.toString();
+        if (Buffer.byteLength(stderr) >= maxBuf) {
+          stderrTruncated = true;
+          child.stderr.destroy();
+        }
+      }
+    });
+
+    const timeoutMs = timeout * 1000;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid) {
+          // Kill the entire process group
+          process.kill(-child.pid, "SIGTERM");
+        }
+      } catch {}
+      // After short grace period, SIGKILL the process group
+      setTimeout(() => {
+        try {
+          if (child.pid) {
+            process.kill(-child.pid, "SIGKILL");
+          }
+        } catch {}
+      }, 3000);
+    }, timeoutMs);
+
+    child.on("error", (err) => {
+      clearTimeout(timer);
       resolve({
         command,
         cwd,
-        returncode: error?.code ?? 0,
+        returncode: -1,
         stdout,
-        stderr,
-        timed_out: error?.killed || false,
+        stderr: stderr || err.message,
+        timed_out: timedOut,
         duration_ms: Date.now() - started,
-        stdout_truncated: Buffer.byteLength(stdout) >= maxOutputBytes,
-        stderr_truncated: Buffer.byteLength(stderr) >= maxOutputBytes
+        stdout_truncated: stdoutTruncated,
+        stderr_truncated: stderrTruncated
       });
     });
+
+    child.on("exit", (code, signal) => {
+      clearTimeout(timer);
+      resolve({
+        command,
+        cwd,
+        returncode: code ?? -1,
+        stdout,
+        stderr,
+        timed_out: timedOut || (signal === "SIGTERM" || signal === "SIGKILL"),
+        duration_ms: Date.now() - started,
+        stdout_truncated: stdoutTruncated,
+        stderr_truncated: stderrTruncated
+      });
+    });
+
     child.stdin?.end();
   });
 }

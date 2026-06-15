@@ -1,4 +1,4 @@
-﻿# GPT-Codex Workspace
+# GPT-Codex Workspace
 
 A bidirectional coordination system between **ChatGPT** and **Codex** for collaborative project development.
 
