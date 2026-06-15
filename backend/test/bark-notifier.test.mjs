@@ -8,6 +8,18 @@ import { loadRuntimeEnv } from "../src/runtime-env.mjs";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
 // ================================================================
+// Test isolation: prevent leaked GPTWORK_BARK_* env vars from
+// previous runs (e.g. GPTWORK_BARK_KEY) from affecting tests.
+// Save originals and clear them. Tests that need specific env
+// values set them explicitly and clean up in their own scope.
+// ================================================================
+const _BARK_VARS = ["GPTWORK_BARK_ENABLED","GPTWORK_BARK_URL","GPTWORK_BARK_KEY","GPTWORK_BARK_GROUP","GPTWORK_BARK_SOUND","GPTWORK_BARK_LEVEL"];
+const _savedBarkEnv = {};
+for (const _k of _BARK_VARS) { if (_k in process.env) { _savedBarkEnv[_k] = process.env[_k]; delete process.env[_k]; } }
+process.on("exit", () => { for (const [_k, _v] of Object.entries(_savedBarkEnv)) { process.env[_k] = _v; } });
+
+
+// ================================================================
 // Unit tests: createBarkNotifier
 // ================================================================
 
@@ -179,6 +191,11 @@ test("loadRuntimeEnv: loads env from file and fills missing values", async () =>
   const envDir = join(root, ".gptwork");
   await mkdir(envDir, { recursive: true });
   const envFile = join(envDir, "runtime.env");
+  // Ensure vars are not already set (test isolation cleared bark vars above,
+  // but check for any that might have been restored)
+  for (const _v of ["GPTWORK_BARK_ENABLED","GPTWORK_BARK_KEY","GPTWORK_BARK_GROUP","GPTWORK_BARK_SOUND","GPTWORK_BARK_LEVEL","GPTWORK_BARK_URL"]) {
+    delete process.env[_v];
+  }
   await writeFile(envFile, [
     "GPTWORK_BARK_ENABLED=false",
     "GPTWORK_BARK_KEY=env-test-key",
@@ -197,9 +214,10 @@ test("loadRuntimeEnv: loads env from file and fills missing values", async () =>
   assert.ok(result.keys.includes("GPTWORK_BARK_SOUND"));
   assert.equal(result.keys.length, 4);
 
-  // Clean up env vars set by this test
-  const _barkEnvVars = ["GPTWORK_BARK_ENABLED","GPTWORK_BARK_KEY","GPTWORK_BARK_GROUP","GPTWORK_BARK_SOUND"];
-  for (const _v of _barkEnvVars) delete process.env[_v];
+  // Clean up env vars set by this test and any remaining GPTWORK_BARK_* vars
+  for (const _k of Object.keys(process.env)) {
+    if (_k.startsWith("GPTWORK_BARK_")) delete process.env[_k];
+  }
 });
 
 test("loadRuntimeEnv: process.env keeps highest priority", async () => {
