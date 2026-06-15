@@ -21,6 +21,7 @@ import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
 import { createBarkNotifier } from "./bark-notifier.mjs";
+import { loadRuntimeEnv } from "./runtime-env.mjs";
 
 let barkNotifier = null;
 
@@ -30,6 +31,12 @@ export async function createGptWorkServer(options = {}) {
   const tokenContexts = normalizeTokenContexts(
     options.tokenContexts || parseTokenContexts(process.env.GPTWORK_TOKEN_CONTEXTS || ""),
     options.tokens || parseTokens(process.env.GPTWORK_TOKENS || process.env.GPTWORK_API_TOKEN || "dev-token,test")
+  );
+  // Load workspace-local runtime env before building config so env vars
+  // from the runtime file are available for process.env fallbacks.
+  const envLoadResult = loadRuntimeEnv(
+    options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default",
+    process.env.GPTWORK_RUNTIME_ENV_FILE
   );
   const config = {
     statePath: options.statePath || process.env.GPTWORK_STATE_PATH || "./data/state.json",
@@ -43,7 +50,12 @@ export async function createGptWorkServer(options = {}) {
     pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
     maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
     maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
-    barkKey: options.barkKey || process.env.GPTWORK_BARK_KEY || "",
+    barkEnabled: options.barkEnabled ?? process.env.GPTWORK_BARK_ENABLED,
+    barkUrl: options.barkUrl ?? process.env.GPTWORK_BARK_URL,
+    barkKey: options.barkKey ?? process.env.GPTWORK_BARK_KEY,
+    barkGroup: options.barkGroup ?? process.env.GPTWORK_BARK_GROUP,
+    barkSound: options.barkSound ?? process.env.GPTWORK_BARK_SOUND,
+    barkLevel: options.barkLevel ?? process.env.GPTWORK_BARK_LEVEL,
     shellTimeout: Number(process.env.GPTWORK_SHELL_TIMEOUT || 60)
   };
   const store = new StateStore(config);
@@ -326,7 +338,8 @@ function createTools({ store, config, browser, github, bark }) {
     browser_set_input_files: tool("Return file upload placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
     browser_click_and_download: tool("Return download placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
     browser_evaluate: tool("Evaluate JavaScript placeholder.", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
-    test_bark_notification: tool("Send a test Bark notification to verify the Bark push service is configured correctly. Returns ok:true if the notification was sent.", schema({}), async () => bark && bark.isEnabled() ? bark.testSend() : ({ ok: false, reason: "bark not initialized" })),
+    notification_status: tool("Return Bark notification configuration status. Returns only safe booleans (enabled, configured, url_set, key_set, group, sound_set, level_set). Never exposes the real endpoint or key.", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false })),
+    test_bark_notification: tool("Send a test Bark notification to verify the Bark push service is configured correctly. Returns ok:true if the notification was sent, or ok:false with error message if not configured.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, error: "bark not initialized" })),
   };
 }
 
@@ -1598,14 +1611,29 @@ async function updateTask(store, task_id, updater) {
   task.updated_at = new Date().toISOString();
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
   
-  // Send Bark notification for terminal task states
-  if (barkNotifier && barkNotifier.isEnabled() && !task.notified) {
-    const terminal = ["completed", "failed", "cancelled"];
-    if (terminal.includes(task.status)) {
+  // Send Bark notification for terminal task states.
+  // Deduplicate per task id + status + channel (bark).
+  if (barkNotifier && barkNotifier.isEnabled()) {
+    const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout"];
+    const chKey = `notified:bark:${task.status}`;
+    if (terminal.includes(task.status) && !task[chKey]) {
       try {
-        const nres = await barkNotifier.send(`[GPTWork] ${task.status}`, task.title || "(no title)", `task-${task.status}`);
+        // Build body with task title, id, status, and first line of summary
+        let body = `[${task.id}] ${task.title || "(no title)"}`;
+        if (task.result && task.result.summary) {
+          const firstLine = task.result.summary.split("\n")[0].trim();
+          if (firstLine) body += `\n${firstLine}`;
+        }
+        // Include short commit/remote head values if present
+        if (task.result && task.result.commit) {
+          body += `\ncommit: ${task.result.commit.slice(0, 12)}`;
+        }
+        if (task.result && task.result.remote_head) {
+          body += `\nremote: ${task.result.remote_head.slice(0, 12)}`;
+        }
+        const nres = await barkNotifier.send(`[GPTWork] ${task.status}`, body, `task-${task.status}`);
         if (nres.ok) {
-          task.notified = true;
+          task[chKey] = true;
           task.notified_at = new Date().toISOString();
         }
       } catch (e) { /* notification failure is non-critical */ }

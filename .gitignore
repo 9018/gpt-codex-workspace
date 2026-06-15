@@ -6,3 +6,7 @@ node_modules/
 *.log
 coverage/
 dist/
+
+# Runtime env files
+.gptwork/*.env
+.gptwork/runtime.env
