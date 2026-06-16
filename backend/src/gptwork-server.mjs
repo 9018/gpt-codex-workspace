@@ -20,6 +20,7 @@ import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
+import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
 import { parseCodexResult, buildTaskResult } from "./codex-result-parser.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
@@ -95,7 +96,13 @@ export async function createGptWorkServer(options = {}) {
   if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
   if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
   const bark = createBarkNotifier(barkOptions, barkConfigSource); barkNotifier = bark;
-  const tools = createTools({ store, config, browser, github, bark, envLoadResult });
+  // Create the repo registry
+  const registry = new RepoRegistry({
+    registryPath: join(config.defaultWorkspaceRoot, ".gptwork/repos.json"),
+    workspaceRoot: config.defaultWorkspaceRoot,
+  });
+  await registry.load().catch(function() {});
+  const tools = createTools({ store, config, browser, github, bark, envLoadResult, registry });
 
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
@@ -189,7 +196,7 @@ export function startCodexWorker(server, {
   };
 }
 
-function createTools({ store, config, browser, github, bark, envLoadResult }) {
+function createTools({ store, config, browser, github, bark, envLoadResult, registry }) {
   const tool = (description, inputSchema, handler) => ({ description, inputSchema, handler });
 
   /** Try to find the repo root directory by walking up from cwd looking for .git. */
@@ -363,6 +370,65 @@ function createTools({ store, config, browser, github, bark, envLoadResult }) {
       known_issues: github.getKnownIssues().length,
       env_vars_set: { repo: !!process.env.GPTWORK_GITHUB_REPO, token: !!process.env.GPTWORK_GITHUB_TOKEN }
     })),
+    register_repository: tool("Register a repository in the workspace registry so Codex can find it via canonical path instead of stale temporary clones.", schema({ remote_url: "string", canonical_path: "string", default_branch: "string", roles: "string", tags: "string", status: "string" }, ["remote_url"]), async (args) => {
+      const info = {
+        remote_url: args.remote_url,
+        canonical_path: args.canonical_path || null,
+        default_branch: args.default_branch || null,
+        roles: args.roles ? args.roles.split(",").map(s => s.trim()).filter(Boolean) : [],
+        tags: args.tags ? args.tags.split(",").map(s => s.trim()).filter(Boolean) : [],
+        status: args.status || "active",
+      };
+      const record = await registry.register(info);
+      return { ok: true, record };
+    }),
+
+    list_repositories: tool("List all registered repositories in the workspace registry with canonical paths.", schema({}), async () => {
+      const repos = registry.list();
+      return { count: repos.length, repositories: repos };
+    }),
+
+    get_repository_status: tool("Get detailed status for a registered repository, including canonical/stale detection and ahead/behind. If no repo_id/owner/repo_name is provided and there is exactly one registered repo, it will be used automatically. Multi-repo projects must specify repo_id.", schema({ repo_id: "string", owner: "string", repo_name: "string" }, []), async (args) => {
+      let record = null;
+      if (args.repo_id) {
+        record = registry.get(args.repo_id);
+      } else if (args.owner && args.repo_name) {
+        record = registry.findByName(args.owner, args.repo_name);
+      } else {
+        record = registry.getDefaultRepo();
+      }
+      if (!record) {
+        const count = registry.count();
+        if (count === 0) return { error: "No repositories registered. Use register_repository first.", repositories: [] };
+        if (count > 1) return { error: "Multiple repositories registered. Please specify repo_id, owner/repo, or repo_name.", repositories: registry.list().map(r => ({ repo_id: r.repo_id, owner: r.owner, repo_name: r.repo_name })) };
+        return { error: "Repository not found." };
+      }
+      const status = await getRepoStatus(record, registry.workspaceRoot, registry);
+      return status;
+    }),
+
+    resolve_canonical_repository: tool("Resolve which repository to use for the current task context. If exactly one repo is registered, returns it; if multiple, returns the best match or asks for repo_id. Call this before doing repo work.", schema({ repo_id: "string", owner: "string", repo_name: "string" }, []), async (args) => {
+      let record = null;
+      if (args.repo_id) {
+        record = registry.get(args.repo_id);
+      } else if (args.owner && args.repo_name) {
+        record = registry.findByName(args.owner, args.repo_name);
+      } else {
+        record = registry.getDefaultRepo();
+      }
+      if (!record) {
+        const count = registry.count();
+        if (count === 0) return { error: "No repositories registered. Use register_repository first.", repositories: [] };
+        if (count > 1) return { error: "Multiple repositories registered. Please specify repo_id, owner/repo, or repo_name. Available: " + registry.list().map(r => r.repo_id).join(", ") };
+        return { error: "Repository not found." };
+      }
+      return { ok: true, repo_id: record.repo_id, canonical_path: record.canonical_path, remote_url: record.remote_url, default_branch: record.default_branch, owner: record.owner, repo_name: record.repo_name };
+    }),
+
+    detect_stale_clones: tool("Scan the workspace root for stale temporary clones (.tmp-* directories) that could confuse Codex status checks. Returns matching directory names and whether they contain git repos.", schema({}), async () => {
+      const clones = await detectStaleTempClones(registry.workspaceRoot);
+      return { count: clones.length, clones };
+    }),
 
     sync_github_comments: tool("Poll GitHub Issues for new comments and import ChatGPT responses as answers to coordination requests. After ChatGPT responds to a question via GitHub Issue comment, use this to bring the answer back into the system.", schema({}), async () => {
       const responses = await github.importResponsesFromComments(store);

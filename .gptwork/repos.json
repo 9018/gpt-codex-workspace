@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "updated_at": "2026-06-16T21:50:00.000Z",
+  "repositories": [
+    {
+      "repo_id": "github.com/9018/gpt-codex-workspace",
+      "provider": "github",
+      "host": "github.com",
+      "owner": "9018",
+      "repo_name": "gpt-codex-workspace",
+      "remote_url": "git@github.com:9018/gpt-codex-workspace.git",
+      "default_branch": "main",
+      "canonical_path": "/home/a9017/mcp/gpt-codex-workspace",
+      "roles": ["primary", "deploy"],
+      "tags": ["gptwork", "backend"],
+      "status": "active",
+      "created_at": "2026-06-16T21:50:00.000Z",
+      "updated_at": "2026-06-16T21:50:00.000Z"
+    }
+  ]
+}
