@@ -287,3 +287,98 @@ test("git_remote_list_files returns error for bad ref", async () => {
     await rm(base, { recursive: true, force: true });
   }
 });
+
+// ================================================================
+// Tests: resolve_repo default_branch fix and ref fallback
+// ================================================================
+
+test("git_remote_resolve_repo default_branch reports discovered default branch", async () => {
+  const { base, workDir, bareDir } = await createRepoPair();
+  try {
+    // Change bare repo HEAD to a non-main branch to test default_branch detection
+    execSync("git checkout -b develop", { cwd: workDir, stdio: "pipe" });
+    await writeFile(join(workDir, "FEATURE.md"), "# Feature\n");
+    execSync("git add -A", { cwd: workDir, stdio: "pipe" });
+    execSync("git commit -m 'feature branch'", { cwd: workDir, stdio: "pipe" });
+    execSync("git push -u origin develop", { cwd: workDir, stdio: "pipe" });
+    // Set bare repo HEAD to develop (simulating a different default branch on remote)
+    execSync("git symbolic-ref HEAD refs/heads/develop", { cwd: bareDir, stdio: "pipe" });
+    // Resync local origin/HEAD
+    execSync("git remote set-head origin --auto 2>&1 || true", { cwd: workDir, stdio: "pipe" });
+    // Detach HEAD
+    execSync("git checkout --detach HEAD", { cwd: workDir, stdio: "pipe" });
+    // Fetch to update refs
+    execSync("git fetch origin 2>&1", { cwd: workDir, stdio: "pipe" });
+
+    const result = handleResolveRepo(
+      { repo_path: workDir },
+      { registry: null, defaultWorkspaceRoot: null, defaultRemote: "origin" }
+    );
+    assert.equal(result.ok, true);
+    assert.equal(result.found, true);
+    // Now origin/HEAD has been set to origin/develop, so default_branch should be "develop"
+    assert.equal(result.default_branch, "develop",
+      `default_branch should be "develop" (from origin/HEAD), got "${result.default_branch}"`);
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("git_remote_read_file falls back to origin/main when no ref provided and defaults are empty", async () => {
+  const { base, workDir } = await createRepoPair();
+  try {
+    // Call handleReadFile without ref, with empty defaultRemote and defaultBranch
+    const result = handleReadFile(
+      { repo_path: workDir, path: "README.md", max_bytes: 10000 },
+      { registry: null, defaultWorkspaceRoot: null, defaultRepo: "", defaultBranch: "", defaultRepoPath: "", defaultRemote: "" }
+    );
+    assert.equal(result.ok, true, "should fall back to origin/main when defaults are empty");
+    assert.ok(result.content.includes("Test Repo"), "should read README.md from origin/main");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("git_remote_list_files falls back to origin/main when no ref provided and defaults are empty", async () => {
+  const { base, workDir } = await createRepoPair();
+  try {
+    const result = handleListFiles(
+      { repo_path: workDir, path: "", limit: 200 },
+      { registry: null, defaultWorkspaceRoot: null, defaultRepo: "", defaultBranch: "", defaultRepoPath: "", defaultRemote: "" }
+    );
+    assert.equal(result.ok, true, "should fall back to origin/main when defaults are empty");
+    assert.ok(result.files.length >= 4, "should list files from origin/main");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});
+
+test("git_remote tools accept defaultRepoPath from context", async () => {
+  const { base, workDir } = await createRepoPair();
+  try {
+    // Pass null args but defaultRepoPath in context
+    const ctx = {
+      registry: null,
+      defaultWorkspaceRoot: null,
+      defaultRepo: "",
+      defaultBranch: "main",
+      defaultRepoPath: workDir,
+      defaultRemote: "origin"
+    };
+    // handleResolveRepo should find the repo via defaultRepoPath
+    const resolveResult = handleResolveRepo({ repo: null }, ctx);
+    assert.equal(resolveResult.ok, true);
+    assert.equal(resolveResult.found, true);
+    assert.ok(resolveResult.repo_path, "should resolve repo path from defaultRepoPath");
+
+    // handleStatus should work with defaultRepoPath
+    const statusResult = handleStatus(
+      { remote: "origin", branch: "main", fetch: false },
+      ctx
+    );
+    assert.equal(statusResult.ok, true);
+    assert.ok(statusResult.local_head, "should get local head via defaultRepoPath");
+  } finally {
+    await rm(base, { recursive: true, force: true });
+  }
+});

@@ -55,9 +55,9 @@ function _getBool(key, defaultVal) {
  * `sources` maps each config key to its source label.
  * `envLoadResult` is the raw result from loadRuntimeEnv ({ loadedPath, keys }).
  */
-export function buildRuntimeConfig(workspaceRoot, overridePath) {
+export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = []) {
   const envLoadResult = loadRuntimeEnv(workspaceRoot, overridePath);
-  const loadedKeys = envLoadResult.keys;
+  const loadedKeys = [...new Set([...envLoadResult.keys, ...preloadedKeys])];
 
   // Source resolver: runtime.env set this key? process.env had it already? default.
   function _source(envKey) {
@@ -72,7 +72,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath) {
     // Server
     host: _get("GPTWORK_HOST", "127.0.0.1"),
     port: _getNum("GPTWORK_PORT", 8787),
-    workspaceRoot: _get("GPTWORK_WORKSPACE_ROOT", workspaceRoot + "/data/workspaces/default"),
+    workspaceRoot: _get("GPTWORK_WORKSPACE_ROOT", workspaceRoot),
     statePath: _get("GPTWORK_STATE_PATH", workspaceRoot + "/.gptwork/state.json"),
     runtimeEnvFile: _get("GPTWORK_RUNTIME_ENV_FILE", ".gptwork/runtime.env"),
 

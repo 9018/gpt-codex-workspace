@@ -47,10 +47,15 @@ export async function createGptWorkServer(options = {}) {
     options.tokenContexts || parseTokenContexts(process.env.GPTWORK_TOKEN_CONTEXTS || ""),
     options.tokens || parseTokens(process.env.GPTWORK_TOKENS || process.env.GPTWORK_API_TOKEN || "dev-token,test")
   );
-  // Load workspace-local runtime env before building config so env vars
-  // from the runtime file are available for process.env fallbacks.
-  // Determine effective state path and workspace root
-  const defaultWorkspaceRoot = options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default";
+  // Load workspace-local runtime env FIRST so runtime.env values
+  // (GPTWORK_WORKSPACE_ROOT, GPTWORK_STATE_PATH, etc.) are available
+  // for path computation.  Precedence: options > process.env > runtime.env > defaults.
+  const _baseWorkspaceRoot = options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default";
+  const earlyEnvResult = loadRuntimeEnv(_baseWorkspaceRoot, process.env.GPTWORK_RUNTIME_ENV_FILE);
+
+  // After runtime.env is loaded, recompute workspace root and state path
+  // so GPTWORK_WORKSPACE_ROOT / GPTWORK_STATE_PATH from the file take effect.
+  const defaultWorkspaceRoot = options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || _baseWorkspaceRoot;
   const hasExplicitStatePath = options.statePath !== undefined || process.env.GPTWORK_STATE_PATH !== undefined;
   const oldDefaultStatePath = options.statePath !== undefined ? null : "./data/state.json";
   const statePath = hasExplicitStatePath
@@ -59,7 +64,8 @@ export async function createGptWorkServer(options = {}) {
 
   const rc = buildRuntimeConfig(
     defaultWorkspaceRoot,
-    process.env.GPTWORK_RUNTIME_ENV_FILE
+    process.env.GPTWORK_RUNTIME_ENV_FILE,
+    earlyEnvResult.keys  // pass preloaded keys so source tracking stays correct
   );
   const { config: rcc, sources, envLoadResult } = rc;
   const config = {
@@ -86,9 +92,44 @@ export async function createGptWorkServer(options = {}) {
     defaultBranch: rcc.defaultBranch,
     defaultRepoPath: rcc.defaultRepoPath,
     defaultRemote: rcc.defaultRemote,
+    // GitHub config from unified config
+    githubEnabled: rcc.githubEnabled,
+    githubRepo: rcc.githubRepo,
+    githubToken: rcc.githubToken,
     // Config sources for diagnostics
     _sources: sources,
   };
+  // Augment source tracking: options overrides take highest precedence.
+  // Keys explicitly passed via createGptWorkServer(options) are labeled "options".
+  {
+    const OPTIONS_SOURCE_MAP = [
+      ['statePath', 'statePath'],
+      ['defaultWorkspaceRoot', 'workspaceRoot'],
+      ['requireAuth', 'requireAuth'],
+      ['codexHome', 'codexHome'],
+      ['codexExecArgs', 'codexExecArgs'],
+      ['codexExecTimeout', 'codexExecTimeout'],
+      ['maxReadBytes', 'maxReadBytes'],
+      ['maxShellOutputBytes', 'maxShellOutputBytes'],
+      ['barkEnabled', 'barkEnabled'],
+      ['barkUrl', 'barkUrl'],
+      ['barkKey', 'barkKey'],
+      ['barkGroup', 'barkGroup'],
+      ['barkSound', 'barkSound'],
+      ['barkLevel', 'barkLevel'],
+      ['barkIconUrl', 'barkIconUrl'],
+      ['barkClickUrl', 'barkClickUrl'],
+      ['defaultRepo', 'defaultRepo'],
+      ['defaultBranch', 'defaultBranch'],
+      ['defaultRepoPath', 'defaultRepoPath'],
+      ['defaultRemote', 'defaultRemote'],
+    ];
+    for (const [optKey, sourceKey] of OPTIONS_SOURCE_MAP) {
+      if (options[optKey] !== undefined) {
+        sources[sourceKey] = 'options';
+      }
+    }
+  }
   const store = new StateStore({ ...config, oldDefaultStatePath });
   await store.load();
   const browser = createBrowserRegistry();
@@ -552,10 +593,14 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         } : { enabled: false, configured: false, source: "none" },
         // GitHub sync status (safe, no secrets)
         github: {
-          api_sync_enabled: !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
-          api_repo_set: !!process.env.GPTWORK_GITHUB_REPO,
-          api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN,
+          api_sync_enabled: sources.githubEnabled === "default"
+            ? !!(config.githubRepo && config.githubToken)
+            : config.githubEnabled && !!(config.githubRepo && config.githubToken),
+          api_repo_set: !!config.githubRepo,
+          api_token_set: !!config.githubToken,
           source: sources.githubEnabled,
+          direct_git_available: true,
+          direct_git_reader_available: true,
         },
       };
     }),
@@ -563,13 +608,13 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
     git_remote_resolve_repo: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Finds an existing Git checkout for a repo (owner/name, URL, or path). Returns repo_path, remote info, and local/tracking HEADs. Does NOT auto-clone.", schema({ repo: "string", repo_path: "string" }, []), async (args) => handleResolveRepo(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
 
-    git_remote_fetch: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Runs git fetch to update remote tracking refs from the local Git checkout.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string" }, []), async (args) => handleFetch(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
+    git_remote_fetch: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Runs git fetch to update remote tracking refs from the local Git checkout.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string" }, []), async (args) => handleFetch(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_status: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Returns local HEAD, tracking HEAD, remote HEAD (from git ls-remote), equality flags, and dirty state.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean" }, []), async (args) => handleStatus(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
+    git_remote_status: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Returns local HEAD, tracking HEAD, remote HEAD (from git ls-remote), equality flags, and dirty state.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean" }, []), async (args) => handleStatus(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_list_files: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Lists files from a Git ref using git ls-tree --name-only without checking out the ref.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", limit: "integer" }, []), async (args) => handleListFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
+    git_remote_list_files: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Lists files from a Git ref using git ls-tree --name-only without checking out the ref.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", limit: "integer" }, []), async (args) => handleListFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_read_file: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Reads file content from a Git ref using git show <ref>:<path> without checking out the ref. Supports truncation via max_bytes.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", max_bytes: "integer" }, ["path"]), async (args) => handleReadFile(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
+    git_remote_read_file: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Reads file content from a Git ref using git show <ref>:<path> without checking out the ref. Supports truncation via max_bytes.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", max_bytes: "integer" }, ["path"]), async (args) => handleReadFile(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
   };
 }

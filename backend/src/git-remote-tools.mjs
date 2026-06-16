@@ -129,15 +129,17 @@ export function handleResolveRepo(args, { registry, defaultWorkspaceRoot, defaul
   if (!repoDir) {
     return { ok: false, found: false, error: "Repository not found. No matching Git checkout discovered. Use repo_path to specify the path.", repo: repo || null, repo_path: repo_path || null };
   }
-  const remoteUrl = getRemoteUrl(repoDir, "origin");
+  const effectiveRemote = defaultRemote || "origin";
+  const remoteUrl = getRemoteUrl(repoDir, effectiveRemote);
   const currentBranch = getCurrentBranch(repoDir);
   const localHead = getLocalHead(repoDir);
-  const tracking = getTrackingRef(repoDir, "origin", currentBranch || "main");
+  const tracking = getTrackingRef(repoDir, effectiveRemote, currentBranch || "main");
   let resolvedDefaultBranch = "main";
-  const remoteHeadRef = _gitExec(repoDir, "symbolic-ref refs/remotes/origin/HEAD 2>/dev/null");
+  const remoteHeadRef = _gitExec(repoDir, `symbolic-ref refs/remotes/${effectiveRemote}/HEAD 2>/dev/null`);
   if (remoteHeadRef) {
-    const m = remoteHeadRef.match(/refs\/remotes\/origin\/(.+)/);
-    if (m) defaultBranch = m[1];
+    const escapedRemote = effectiveRemote.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const m = remoteHeadRef.match(new RegExp('refs/remotes/' + escapedRemote + '/(.+)'));
+    if (m) resolvedDefaultBranch = m[1];
   }
   return {
     ok: true, found: true, repo_path: repoDir, remote: "origin",
@@ -186,7 +188,7 @@ export function handleStatus(args, { registry, defaultWorkspaceRoot, defaultRepo
 export function handleListFiles(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
   const repo = args.repo !== undefined ? args.repo : defaultRepo;
   const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
-  const ref = args.ref || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const ref = args.ref || `${defaultRemote || "origin"}/${defaultBranch || "main"}`;
   const path = args.path;
   const limit = args.limit || 200;
   const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
@@ -201,7 +203,7 @@ export function handleListFiles(args, { registry, defaultWorkspaceRoot, defaultR
 export function handleReadFile(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
   const repo = args.repo !== undefined ? args.repo : defaultRepo;
   const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
-  const ref = args.ref || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const ref = args.ref || `${defaultRemote || "origin"}/${defaultBranch || "main"}`;
   const path = args.path;
   const max_bytes = args.max_bytes || 200000;
   if (!path) return { ok: false, error: "path is required" };

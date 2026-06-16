@@ -302,8 +302,8 @@ test("runtime_status includes config_sources with per-key routing", async () => 
   // default_repo loads from runtime.env created in makeServer
   assert.equal(status.config_sources.default_repo, "runtime.env");
   assert.equal(status.config_sources.default_branch, "runtime.env");
-  // state_path was not set via env, so source is "default"
-  assert.equal(status.config_sources.state_path, "default");
+  // state_path was set via options in makeServer, so source is "options"
+  assert.equal(status.config_sources.state_path, "options");
   // max_read_bytes is never set in env, so should be default
   assert.equal(status.config_sources.max_read_bytes, "default");
 });
@@ -340,9 +340,17 @@ test("runtime_status does not expose secrets in bark/github fields", async () =>
 
 test("runtime_status shows github sync status safely", async () => {
   clearGptWorkVars();
-  const server = await makeServer();
+  // Set env vars BEFORE server creation so config captures them
   process.env.GPTWORK_GITHUB_REPO = "owner/repo";
   process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret_12345";
+  const root = await mkdtemp(join(tmpdir(), "gptwork-rc-test-"));
+  const workspaceRoot = root + "/workspace";
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
   const status = await callTool(server, "runtime_status");
   const str = JSON.stringify(status);
   assert.ok(!str.includes("ghp_secret_12345"), "should not leak github token");
@@ -429,4 +437,86 @@ test("runtime_status shows bark block with source field", async () => {
   assert.equal(typeof status.bark.source, "string");
   assert.ok(["process.env", "runtime.env", "default", "disabled", "options", "none"].includes(status.bark.source) ||
     status.bark.source.startsWith("workspace-"), "valid source label");
+});
+
+// ================================================================
+// Tests: runtime.env setting GPTWORK_WORKSPACE_ROOT / GPTWORK_STATE_PATH
+// ================================================================
+
+test("runtime.env GPTWORK_WORKSPACE_ROOT controls effective workspace root", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile("GPTWORK_WORKSPACE_ROOT=/custom/workspace/root\n");
+  const rc = buildRuntimeConfig(root);
+  assert.equal(rc.config.workspaceRoot, "/custom/workspace/root");
+  assert.equal(rc.sources.workspaceRoot, "runtime.env");
+});
+
+test("runtime.env GPTWORK_STATE_PATH controls effective state path", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile("GPTWORK_STATE_PATH=/custom/state/path.json\n");
+  const rc = buildRuntimeConfig(root);
+  assert.equal(rc.config.statePath, "/custom/state/path.json");
+  assert.equal(rc.sources.statePath, "runtime.env");
+});
+
+test("options source tracking shows options for passed bark defaults", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-rc-opt-"));
+  const workspaceRoot = root + "/workspace";
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    tokens: ["test-token"],
+    requireAuth: true,
+    barkKey: "opt-injected-key",
+    barkUrl: "https://opt.example.com",
+    defaultRepo: "opt-owner/opt-repo",
+    defaultBranch: "develop",
+  });
+  const status = await callTool(server, "runtime_status");
+  // bark keys passed via options
+  assert.equal(status.config_sources.bark_key, "options");
+  assert.equal(status.config_sources.bark_url, "options");
+  // git defaults passed via options
+  assert.equal(status.config_sources.default_repo, "options");
+  assert.equal(status.config_sources.default_branch, "options");
+  // state_path passed via options
+  assert.equal(status.config_sources.state_path, "options");
+});
+
+// ================================================================
+// Tests: Preloaded keys parameter for buildRuntimeConfig
+// ================================================================
+
+test("buildRuntimeConfig accepts preloadedKeys for correct source tracking", async () => {
+  clearGptWorkVars();
+  const { root, envFile } = await makeEnvFile("GPTWORK_CODEX_EXEC_TIMEOUT=1234\n");
+  // Load env early (as gptwork-server now does)
+  const earlyResult = loadRuntimeEnv(root, envFile);
+  assert.ok(earlyResult.keys.includes("GPTWORK_CODEX_EXEC_TIMEOUT"));
+  // Now call buildRuntimeConfig with preloaded keys - source should still be "runtime.env"
+  const rc = buildRuntimeConfig(root, envFile, earlyResult.keys);
+  assert.equal(rc.config.codexExecTimeout, 1234);
+  assert.equal(rc.sources.codexExecTimeout, "runtime.env");
+});
+
+// ================================================================
+// Tests: GPTWORK_GITHUB_ENABLED=false disables API sync even with repo/token
+// ================================================================
+
+test("buildRuntimeConfig GPTWORK_GITHUB_ENABLED=false disables even with repo/token", async () => {
+  clearGptWorkVars();
+  process.env.GPTWORK_GITHUB_ENABLED = "false";
+  process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret";
+  const { config } = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(config.githubEnabled, false, "githubEnabled should be false when GPTWORK_GITHUB_ENABLED=false");
+  assert.equal(config.githubRepo, "owner/repo");
+  assert.equal(config.githubToken, "ghp_secret");
+  // Also verify createGithubSync respects this
+  const { createGithubSync } = await import("../src/github-adapter.mjs");
+  const sync = createGithubSync(config);
+  assert.equal(sync.enabled, false, "github sync should be disabled when GPTWORK_GITHUB_ENABLED=false");
+  delete process.env.GPTWORK_GITHUB_ENABLED;
+  delete process.env.GPTWORK_GITHUB_REPO;
+  delete process.env.GPTWORK_GITHUB_TOKEN;
 });

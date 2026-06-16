@@ -104,3 +104,64 @@ test("createGithubSync tracks known issues after poll", async (t) => {
   process.env.GPTWORK_GITHUB_REPO = oldRepo || "";
   process.env.GPTWORK_GITHUB_TOKEN = oldToken || "";
 });
+
+// ================================================================
+// Tests: GPTWORK_GITHUB_ENABLED controls API sync
+// ================================================================
+
+test("createGithubSync GPTWORK_GITHUB_ENABLED=false disables even with repo/token", () => {
+  const oldEnabled = process.env.GPTWORK_GITHUB_ENABLED;
+  const oldRepo = process.env.GPTWORK_GITHUB_REPO;
+  const oldToken = process.env.GPTWORK_GITHUB_TOKEN;
+  process.env.GPTWORK_GITHUB_ENABLED = "false";
+  process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret";
+  const sync = createGithubSync({});
+  assert.equal(sync.enabled, false, "should be disabled when GPTWORK_GITHUB_ENABLED=false");
+  process.env.GPTWORK_GITHUB_ENABLED = oldEnabled || "";
+  process.env.GPTWORK_GITHUB_REPO = oldRepo || "";
+  process.env.GPTWORK_GITHUB_TOKEN = oldToken || "";
+});
+
+test("createGithubSync GPTWORK_GITHUB_ENABLED=true enables API sync", () => {
+  const oldEnabled = process.env.GPTWORK_GITHUB_ENABLED;
+  const oldRepo = process.env.GPTWORK_GITHUB_REPO;
+  const oldToken = process.env.GPTWORK_GITHUB_TOKEN;
+  process.env.GPTWORK_GITHUB_ENABLED = "true";
+  process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret";
+  const sync = createGithubSync({});
+  assert.equal(sync.enabled, true, "should be enabled when GPTWORK_GITHUB_ENABLED=true and repo/token set");
+  process.env.GPTWORK_GITHUB_ENABLED = oldEnabled || "";
+  process.env.GPTWORK_GITHUB_REPO = oldRepo || "";
+  process.env.GPTWORK_GITHUB_TOKEN = oldToken || "";
+});
+
+test("createGithubSync respects config.githubEnabled=false even with repo/token", () => {
+  const oldEnabled = process.env.GPTWORK_GITHUB_ENABLED;
+  const oldRepo = process.env.GPTWORK_GITHUB_REPO;
+  const oldToken = process.env.GPTWORK_GITHUB_TOKEN;
+  // Clear env so no auto-detect interference
+  process.env.GPTWORK_GITHUB_ENABLED = "false";
+  process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret";
+  const sync = createGithubSync({});
+  assert.equal(sync.enabled, false, "should respect githubEnabled=false from config");
+  process.env.GPTWORK_GITHUB_ENABLED = oldEnabled || "";
+  process.env.GPTWORK_GITHUB_REPO = oldRepo || "";
+  process.env.GPTWORK_GITHUB_TOKEN = oldToken || "";
+});
+
+test("createGithubSync status() reflects closure state, not direct env reads", () => {
+  const oldRepo = process.env.GPTWORK_GITHUB_REPO;
+  const oldToken = process.env.GPTWORK_GITHUB_TOKEN;
+  process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret";
+  const sync = createGithubSync({});
+  const st = sync.status();
+  assert.equal(st.api_sync_enabled, true, "status should report enabled");
+  assert.equal(st.api_repo, "owner/repo");
+  assert.equal(st.api_token_set, true);
+  process.env.GPTWORK_GITHUB_REPO = oldRepo || "";
+  process.env.GPTWORK_GITHUB_TOKEN = oldToken || "";
+});

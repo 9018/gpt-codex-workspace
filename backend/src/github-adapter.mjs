@@ -44,9 +44,13 @@ function splitRepo(repoFull) {
 
 
 export function createGithubSync(config) {
-  const repo = process.env.GPTWORK_GITHUB_REPO || "";
-  const token = process.env.GPTWORK_GITHUB_TOKEN || "";
-  const enabled = !!(repo && token);
+  // Use config values (resolved from options/process.env/runtime.env) with
+  // direct process.env fallback for backward compatibility.
+  // GPTWORK_GITHUB_ENABLED=false explicitly disables API sync even when
+  // repo and token are set.  When unset, auto-enable based on repo+token.
+  const repo = config.githubRepo || process.env.GPTWORK_GITHUB_REPO || "";
+  const token = config.githubToken || process.env.GPTWORK_GITHUB_TOKEN || "";
+  const enabled = process.env.GPTWORK_GITHUB_ENABLED !== "false" && !!(repo && token);
   let knownIssues = [];
   let knownComments = [];
 
@@ -311,12 +315,10 @@ export function createGithubSync(config) {
      * Distinguishes API sync not configured from git/SSH/gh available.
      */
     status() {
-      const r = process.env.GPTWORK_GITHUB_REPO || "";
-      const t = process.env.GPTWORK_GITHUB_TOKEN || "";
       return {
-        api_sync_enabled: !!(r && t),
-        api_repo: r || null,
-        api_token_set: !!t,
+        api_sync_enabled: enabled,
+        api_repo: repo || null,
+        api_token_set: !!token,
         detected_repo_from_workspace: null,
         detected_remote_url: null,
         direct_git_available: null,
