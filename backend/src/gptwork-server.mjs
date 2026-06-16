@@ -12,7 +12,7 @@ import {
   stat,
   writeFile
 } from "node:fs/promises";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative } from "node:path";
 import { StateStore } from "./state-store.mjs";
@@ -20,11 +20,22 @@ import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
-import { createBarkNotifier } from "./bark-notifier.mjs";
+import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 
 let barkNotifier = null;
 
+
+const PROCESS_STARTED_AT = new Date();
+
+/** Determine whether runtime env loaded Bark config vars. */
+function determineBarkConfigSource(envLoadResultKeys) {
+  const barkVars = ["GPTWORK_BARK_ENABLED", "GPTWORK_BARK_URL", "GPTWORK_BARK_KEY", "GPTWORK_BARK_GROUP", "GPTWORK_BARK_SOUND", "GPTWORK_BARK_LEVEL"];
+  const fromEnv = barkVars.filter(v => envLoadResultKeys.includes(v));
+  if (fromEnv.length > 0) return "workspace-runtime-env";
+  const anySet = barkVars.some(v => process.env[v] !== undefined);
+  return anySet ? "process.env" : "disabled";
+}
 const MCP_PROTOCOL_VERSION = "2025-03-26";
 
 export async function createGptWorkServer(options = {}) {
@@ -62,8 +73,20 @@ export async function createGptWorkServer(options = {}) {
   await store.load();
   const browser = createBrowserRegistry();
   const github = createGithubSync(config);
-  const bark = createBarkNotifier(config); barkNotifier = bark;
-  const tools = createTools({ store, config, browser, github, bark });
+  const barkConfigSource = determineBarkConfigSource(envLoadResult.keys);
+  // Pass only explicitly-provided bark options (not resolved values from process.env)
+  // so createBarkNotifier can correctly track whether values came from options or env.
+  const barkOptions = {};
+  if (options.barkEnabled !== undefined) barkOptions.barkEnabled = options.barkEnabled;
+  if (options.barkUrl !== undefined) barkOptions.barkUrl = options.barkUrl;
+  if (options.barkKey !== undefined) barkOptions.barkKey = options.barkKey;
+  if (options.barkGroup !== undefined) barkOptions.barkGroup = options.barkGroup;
+  if (options.barkSound !== undefined) barkOptions.barkSound = options.barkSound;
+  if (options.barkLevel !== undefined) barkOptions.barkLevel = options.barkLevel;
+  if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
+  if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
+  const bark = createBarkNotifier(barkOptions, barkConfigSource); barkNotifier = bark;
+  const tools = createTools({ store, config, browser, github, bark, envLoadResult });
 
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
@@ -157,8 +180,24 @@ export function startCodexWorker(server, {
   };
 }
 
-function createTools({ store, config, browser, github, bark }) {
+function createTools({ store, config, browser, github, bark, envLoadResult }) {
   const tool = (description, inputSchema, handler) => ({ description, inputSchema, handler });
+
+  /** Try to find the repo root directory by walking up from cwd looking for .git. */
+  function resolveRepoDir() {
+    const start = process.cwd();
+    let dir = start;
+    for (let i = 0; i < 6; i++) {
+      try {
+        if (statSync(join(dir, ".git")).isDirectory()) return dir;
+      } catch (e) {}
+      const parent = dirname(dir);
+      if (parent === dir) break;
+      dir = parent;
+    }
+    return null;
+  }
+
   return {
     health_check: tool("Check whether the GPTWork MCP server is running.", schema({}), async () => ({ ok: true, service: "gptwork-mcp", time: new Date().toISOString() })),
     get_current_user: tool("Return the current token-bound user context.", schema({}), async (_args, context) => ({
@@ -338,8 +377,62 @@ function createTools({ store, config, browser, github, bark }) {
     browser_set_input_files: tool("Return file upload placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
     browser_click_and_download: tool("Return download placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
     browser_evaluate: tool("Evaluate JavaScript placeholder.", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
-    notification_status: tool("Return Bark notification configuration status. Returns only safe booleans (enabled, configured, url_set, key_set, group, sound_set, level_set). Never exposes the real endpoint or key.", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false })),
-    test_bark_notification: tool("Send a test Bark notification to verify the Bark push service is configured correctly. Returns ok:true if the notification was sent, or ok:false with error message if not configured.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, error: "bark not initialized" })),
+    runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
+      const repoDir = resolveRepoDir();
+      let repo_head = null, remote_head = null, running_commit = null;
+      let worktree_dirty = false, dirty_paths = [];
+
+      if (repoDir) {
+        try {
+          const out = execSync("git rev-parse HEAD 2>/dev/null", { cwd: repoDir, timeout: 5000, encoding: "utf8" }).trim();
+          if (out) repo_head = out;
+        } catch (e) {}
+        try {
+          const line = execSync("git ls-remote origin refs/heads/main 2>/dev/null", { cwd: repoDir, timeout: 2000, encoding: "utf8" }).trim();
+          if (line) remote_head = line.split(/\s+/)[0];
+        } catch (e) {}
+        try {
+          const statusOut = execSync("git status --short 2>/dev/null", { cwd: repoDir, timeout: 5000, encoding: "utf8" }).trim();
+          if (statusOut.length > 0) {
+            worktree_dirty = true;
+            dirty_paths = statusOut.split("\n").filter(l => l.trim()).map(l => l.trim());
+          }
+        } catch (e) {}
+        running_commit = repo_head;
+      }
+
+      const statePath = config.statePath;
+      const statePathAbs = statePath.startsWith("/") ? statePath : join(process.cwd(), statePath);
+      const statePathInsideRepo = repoDir ? statePathAbs.startsWith(repoDir) : false;
+
+      const envPath = envLoadResult.loadedPath;
+      let envFileExists = false;
+      if (envPath) {
+        try {
+          envFileExists = existsSync(envPath);
+        } catch (e) {}
+      }
+
+      return {
+        pid: process.pid,
+        started_at: PROCESS_STARTED_AT.toISOString(),
+        repo_head,
+        remote_head,
+        running_commit,
+        defaultWorkspaceRoot: config.defaultWorkspaceRoot,
+        codex_exec_timeout: config.codexExecTimeout,
+        runtime_env_file_path: envPath,
+        runtime_env_file_exists: envFileExists,
+        runtime_env_loaded: envLoadResult.keys.length > 0,
+        runtime_env_keys_loaded: envLoadResult.keys,
+        state_path: statePath,
+        state_path_inside_repo: statePathInsideRepo,
+        worktree_dirty,
+        dirty_paths
+      };
+    }),
+    notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null })),
+    test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
   };
 }
 
@@ -1611,32 +1704,45 @@ async function updateTask(store, task_id, updater) {
   task.updated_at = new Date().toISOString();
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
   
-  // Send Bark notification for terminal task states.
+  // Send Bark notification for terminal task states with policy check.
   // Deduplicate per task id + status + channel (bark).
   if (barkNotifier && barkNotifier.isEnabled()) {
-    const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout"];
+    const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout", "waiting_for_review", "waiting_review"];
     const chKey = `notified:bark:${task.status}`;
     if (terminal.includes(task.status) && !task[chKey]) {
-      try {
-        // Build body with task title, id, status, and first line of summary
-        let body = `[${task.id}] ${task.title || "(no title)"}`;
-        if (task.result && task.result.summary) {
-          const firstLine = task.result.summary.split("\n")[0].trim();
-          if (firstLine) body += `\n${firstLine}`;
-        }
-        // Include short commit/remote head values if present
-        if (task.result && task.result.commit) {
-          body += `\ncommit: ${task.result.commit.slice(0, 12)}`;
-        }
-        if (task.result && task.result.remote_head) {
-          body += `\nremote: ${task.result.remote_head.slice(0, 12)}`;
-        }
-        const nres = await barkNotifier.send(`[GPTWork] ${task.status}`, body, `task-${task.status}`);
-        if (nres.ok) {
-          task[chKey] = true;
-          task.notified_at = new Date().toISOString();
-        }
-      } catch (e) { /* notification failure is non-critical */ }
+      // Policy check before sending
+      const classification = classifyNotification(task);
+      if (!classification.should_notify) {
+        task.last_notification_policy = classification.reason;
+      } else {
+        try {
+          const { title, body } = formatNotification(task, task.status);
+          const nres = await barkNotifier.send(title, body, `task-${task.status}`);
+          if (nres.ok) {
+            task[chKey] = true;
+            task.notified_at = new Date().toISOString();
+          }
+          // Persist notification diagnostics safely (no endpoint/key values)
+          task.notifications ||= [];
+          task.notifications.push({
+            channel: "bark",
+            event: nres.ok ? "sent" : "failed",
+            attempted_at: new Date().toISOString(),
+            ok: nres.ok,
+            response_code: nres.ok ? 200 : null,
+            response_message: nres.ok ? (nres.bark_id || "ok") : null,
+            error_short: nres.ok ? null : (nres.reason || nres.error || null),
+            source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
+            group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
+            endpoint_kind: (() => {
+              const s = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
+              return s.url_set ? "url" : s.key_set ? "key" : "none";
+            })(),
+            icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
+            url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
+          });
+        } catch (e) { /* notification failure is non-critical */ }
+      }
     }
   }
   await store.save();

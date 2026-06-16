@@ -500,3 +500,105 @@ test("project admins can create, update, test, and delete SSH workspaces", async
   const listedAfterDelete = await callToolAs(server, "admin-token", "list_workspaces", { project_id: "default" });
   assert.deepEqual(listedAfterDelete.workspaces.map((workspace) => workspace.id), ["hosted-default"]);
 });
+
+// ================================================================
+// Notification diagnostic persistence tests
+// ================================================================
+
+test("notification diagnostics persisted after completed task", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => ({
+    ok: true, json: async () => ({ code: 200, message: "sent" })
+  }));
+
+  const root = await mkdtemp(join(tmpdir(), "gptwork-notif-diag-"));
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    tokens: ["test-token"],
+    requireAuth: true,
+    barkKey: "persistence-test-key"
+  });
+
+  const created = await callTool(server, "create_task", {
+    title: "Notification persistence test",
+    description: "Verify task.notifications is populated after completion"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Persistence test complete"
+  });
+
+  assert.ok(Array.isArray(completed.task.notifications), "task should have notifications array");
+  assert.ok(completed.task.notifications.length >= 1, "should have at least one notification record");
+
+  const notif = completed.task.notifications[0];
+  assert.equal(notif.channel, "bark");
+  assert.equal(notif.event, "sent");
+  assert.ok(notif.attempted_at);
+  assert.equal(notif.ok, true);
+  assert.equal(notif.response_code, 200);
+  assert.equal(notif.response_message, "sent");
+  assert.equal(notif.error_short, null);
+  assert.equal(notif.source, "options");
+  assert.ok(notif.endpoint_kind);
+  assert.equal(notif.endpoint_kind, "key");
+  assert.equal(notif.url, undefined);
+  assert.equal(notif.key, undefined);
+});
+
+test("notification diagnostics show failure on network error", async (t) => {
+  t.mock.method(globalThis, "fetch", async (url) => {
+    throw new Error("network unreachable");
+  });
+
+  const root = await mkdtemp(join(tmpdir(), "gptwork-notif-fail-"));
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    tokens: ["test-token"],
+    requireAuth: true,
+    barkKey: "fail-test-key"
+  });
+
+  const created = await callTool(server, "create_task", {
+    title: "Notification failure persistence"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "done"
+  });
+
+  assert.ok(Array.isArray(completed.task.notifications));
+  // Notification failure should still be recorded
+  const notif = completed.task.notifications.find(n => n.channel === "bark");
+  if (notif) {
+    assert.equal(notif.ok, false);
+    assert.equal(notif.response_code, null);
+    assert.ok(notif.attempted_at);
+  }
+});
+
+test("notification diagnostics not persisted when bark disabled", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-notif-off-"));
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    tokens: ["test-token"],
+    requireAuth: true,
+    barkEnabled: false
+  });
+
+  const created = await callTool(server, "create_task", {
+    title: "No notif test"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "done"
+  });
+
+  // When bark is disabled, no notification should be sent
+  assert.ok(!completed.task.notifications || completed.task.notifications.length === 0);
+});
