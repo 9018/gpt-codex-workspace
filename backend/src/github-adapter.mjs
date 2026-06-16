@@ -1,6 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { execSync } from "node:child_process";
 
+
+/**
+ * Determine if a value is truthy (like _getBool in runtime-config.mjs but
+ * standalone).  When undefined/null returns false (default-off).
+ */
+function _isTruthy(v) {
+  if (v === undefined || v === null) return false;
+  if (typeof v === "boolean") return v;
+  return v === "true" || v === "1";
+}
+
 /**
  * Parse an owner/repo string from text like:
  *   "repo:9018/gpt-codex-workspace"
@@ -44,13 +55,14 @@ function splitRepo(repoFull) {
 
 
 export function createGithubSync(config) {
+export function createGithubSync(config) {
   // Use config values (resolved from options/process.env/runtime.env) with
   // direct process.env fallback for backward compatibility.
   // GPTWORK_GITHUB_ENABLED=false explicitly disables API sync even when
-  // repo and token are set.  When unset, auto-enable based on repo+token.
+  // repo and token are set.  When unset, default to disabled.
   const repo = config.githubRepo || process.env.GPTWORK_GITHUB_REPO || "";
   const token = config.githubToken || process.env.GPTWORK_GITHUB_TOKEN || "";
-  const enabled = process.env.GPTWORK_GITHUB_ENABLED !== "false" && !!(repo && token);
+  const enabled = _isTruthy(process.env.GPTWORK_GITHUB_ENABLED) && !!(repo && token);
   let knownIssues = [];
   let knownComments = [];
 
@@ -315,10 +327,16 @@ export function createGithubSync(config) {
      * Distinguishes API sync not configured from git/SSH/gh available.
      */
     status() {
+    status() {
+      const r = process.env.GPTWORK_GITHUB_REPO || "";
+      const t = process.env.GPTWORK_GITHUB_TOKEN || "";
+      const ge = process.env.GPTWORK_GITHUB_ENABLED;
+      const githubEnabled = _isTruthy(ge);
+      const apiSyncEnabled = githubEnabled && !!(r && t);
       return {
-        api_sync_enabled: enabled,
-        api_repo: repo || null,
-        api_token_set: !!token,
+        api_sync_enabled: apiSyncEnabled,
+        api_repo: r || null,
+        api_token_set: !!t,
         detected_repo_from_workspace: null,
         detected_remote_url: null,
         direct_git_available: null,
@@ -474,7 +492,7 @@ async function grabIssue(issueNumber, repoFull) {
  * Compute full status with async shell checks.
  */
 function getStatusWithAsyncChecks(cwd) {
-  const base = { api_sync_enabled: !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN), api_repo: process.env.GPTWORK_GITHUB_REPO || null, api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN, detected_repo_from_workspace: null, detected_remote_url: null, direct_git_available: null, ssh_auth_likely_available: null, gh_cli_available: null, last_delivery_channel: null };
+  const base = { api_sync_enabled: _isTruthy(process.env.GPTWORK_GITHUB_ENABLED) && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN), api_repo: process.env.GPTWORK_GITHUB_REPO || null, api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN, detected_repo_from_workspace: null, detected_remote_url: null, direct_git_available: null, ssh_auth_likely_available: null, gh_cli_available: null, last_delivery_channel: null };
   const gitCheck = checkDirectGitAvailable(cwd);
   base.direct_git_available = gitCheck.available;
   if (gitCheck.available) {
@@ -493,7 +511,7 @@ function getStatusWithAsyncChecks(cwd) {
  * Build a result for sync_to_github that includes both API sync and direct git push status.
  */
 function syncToGitHubResult(task, existingDelivery) {
-  const apiEnabled = !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN);
+  const apiEnabled = _isTruthy(process.env.GPTWORK_GITHUB_ENABLED) && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN);
   const result = {
     api_sync: apiEnabled ? "enabled" : "disabled",
     direct_git_result: "unavailable",

@@ -342,6 +342,7 @@ test("runtime_status shows github sync status safely", async () => {
   clearGptWorkVars();
   // Set env vars BEFORE server creation so config captures them
   process.env.GPTWORK_GITHUB_REPO = "owner/repo";
+  process.env.GPTWORK_GITHUB_ENABLED = "true";
   process.env.GPTWORK_GITHUB_TOKEN = "ghp_secret_12345";
   const root = await mkdtemp(join(tmpdir(), "gptwork-rc-test-"));
   const workspaceRoot = root + "/workspace";
@@ -358,6 +359,7 @@ test("runtime_status shows github sync status safely", async () => {
   assert.equal(status.github.api_token_set, true);
   assert.equal(status.github.api_sync_enabled, true);
   assert.equal(typeof status.github.source, "string");
+  delete process.env.GPTWORK_GITHUB_ENABLED;
   delete process.env.GPTWORK_GITHUB_REPO;
   delete process.env.GPTWORK_GITHUB_TOKEN;
 });

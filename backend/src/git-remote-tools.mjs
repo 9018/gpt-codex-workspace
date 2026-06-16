@@ -219,3 +219,213 @@ export function handleReadFile(args, { registry, defaultWorkspaceRoot, defaultRe
     return { ok: false, error: `Failed to read file "${path}" at ref "${ref}": ${err.message || err}`, repo_path: repoDir, ref, path };
   }
 }
+
+// ---------------------------------------------------------------------------
+// git_remote_changed_files
+// ---------------------------------------------------------------------------
+
+export function handleChangedFiles(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const base = args.base || "HEAD";
+  const head = args.head || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const path = args.path;
+  const limit = args.limit || 500;
+
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
+  if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
+
+  const out = _gitExec(repoDir, `diff --name-status ${base}..${head}${path ? ` -- ${path}` : ""} 2>/dev/null`);
+  if (out === null) return { ok: false, error: `Failed to diff ${base}..${head}. The refs may not exist or be invalid.`, repo_path: repoDir || null, base, head };
+
+  const lines = out ? out.split("\n").filter(Boolean) : [];
+  const files = lines.slice(0, limit).map((line) => {
+    const parts = line.split("\t");
+    const status = parts[0];
+    const filePath = parts[1];
+    let old_path;
+    if ((status[0] === "R" || status[0] === "C") && parts.length >= 3) {
+      old_path = parts[1];
+      return { status, path: parts[2], old_path };
+    }
+    return { status, path: filePath };
+  });
+
+  return {
+    ok: true,
+    repo_path: repoDir,
+    base,
+    head,
+    path: path || null,
+    total_count: lines.length,
+    truncated: lines.length > limit,
+    files,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// git_remote_diff
+// ---------------------------------------------------------------------------
+
+export function handleDiff(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const base = args.base || "HEAD";
+  const head = args.head || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const path = args.path;
+  const maxBytes = args.max_bytes || 200000;
+
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
+  if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
+
+  try {
+    const buf = execSync(`git diff ${base}..${head}${path ? ` -- ${path}` : ""}`, {
+      cwd: repoDir,
+      encoding: "buffer",
+      stdio: "pipe",
+      timeout: 30000,
+    });
+    const bytes = buf.length;
+    const truncated = bytes > maxBytes;
+    const diff = truncated ? buf.subarray(0, maxBytes).toString("utf8") : buf.toString("utf8");
+    return { ok: true, repo_path: repoDir, base, head, path: path || null, diff, bytes, truncated };
+  } catch (err) {
+    if (err.stderr && err.stderr.includes("bad revision")) {
+      return { ok: false, error: `Failed to diff ${base}..${head}. The refs may not exist or be invalid.`, repo_path: repoDir };
+    }
+    return { ok: false, error: `Failed to diff ${base}..${head}: ${err.message || err}`, repo_path: repoDir };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// git_remote_show_commit
+// ---------------------------------------------------------------------------
+
+export function handleShowCommit(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const ref = args.ref || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const maxFiles = args.max_files || 100;
+
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
+  if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
+
+  // Use git show with custom format and --name-status
+  // The format outputs key:value lines, then --- separator, then name-status lines
+  const raw = _gitExec(repoDir, `show --format="SHA:%H%nSHORT:%h%nSUBJECT:%s%nAUTHOR_NAME:%an%nAUTHOR_EMAIL:%ae%nAUTHORED_AT:%ai%nCOMMITTED_AT:%ci%n---" --name-status ${ref} 2>/dev/null`);
+  if (raw === null) return { ok: false, error: `Failed to show commit "${ref}". The ref may not exist or be invalid.`, repo_path: repoDir };
+
+  // Split metadata and file sections
+  const sepIdx = raw.indexOf("\n---\n");
+  const metaRaw = sepIdx >= 0 ? raw.slice(0, sepIdx) : raw;
+  const filesRaw = sepIdx >= 0 ? raw.slice(sepIdx + 5) : "";
+
+  // Parse metadata
+  const meta = {};
+  for (const line of metaRaw.split("\n")) {
+    const colonIdx = line.indexOf(":");
+    if (colonIdx > 0) {
+      meta[line.slice(0, colonIdx)] = line.slice(colonIdx + 1);
+    }
+  }
+
+  // Parse file list
+  const fileLines = filesRaw.split("\n").filter(Boolean);
+  const files = fileLines.slice(0, maxFiles).map((line) => {
+    const parts = line.split("\t");
+    const status = parts[0];
+    const filePath = parts[1];
+    let old_path;
+    if ((status[0] === "R" || status[0] === "C") && parts.length >= 3) {
+      old_path = parts[1];
+      return { status, path: parts[2], old_path };
+    }
+    return { status, path: filePath };
+  });
+
+  return {
+    ok: true,
+    repo_path: repoDir,
+    ref,
+    sha: meta.SHA || null,
+    short_sha: meta.SHORT || null,
+    subject: meta.SUBJECT || null,
+    author_name: meta.AUTHOR_NAME || null,
+    author_email: meta.AUTHOR_EMAIL || null,
+    authored_at: meta.AUTHORED_AT || null,
+    committed_at: meta.COMMITTED_AT || null,
+    files,
+    total_count: fileLines.length,
+    truncated: fileLines.length > maxFiles,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// git_remote_compare_local
+// ---------------------------------------------------------------------------
+
+export function handleCompareLocal(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const remote = args.remote || defaultRemote || "origin";
+  const branch = args.branch || defaultBranch || "main";
+  const fetchEnabled = args.fetch !== undefined ? args.fetch : true;
+  const limit = args.limit || 200;
+
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
+  if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
+
+  // Fetch remote tracking refs
+  if (fetchEnabled) _gitExec(repoDir, `fetch ${remote} ${branch} 2>/dev/null`);
+
+  const localHead = getLocalHead(repoDir);
+  const trackingRef = `refs/remotes/${remote}/${branch}`;
+  const trackingHead = _gitExec(repoDir, `rev-parse ${trackingRef} 2>/dev/null`) || null;
+  const remoteHead = getRemoteHeadViaLsRemote(repoDir, remote, branch);
+  const dirty = getDirtyInfo(repoDir);
+
+  // ahead/behind counts
+  let aheadCount = 0;
+  let behindCount = 0;
+  if (localHead && trackingHead) {
+    const aheadOut = _gitExec(repoDir, `rev-list --count ${trackingRef}..HEAD 2>/dev/null`);
+    const behindOut = _gitExec(repoDir, `rev-list --count HEAD..${trackingRef} 2>/dev/null`);
+    if (aheadOut) aheadCount = parseInt(aheadOut, 10) || 0;
+    if (behindOut) behindCount = parseInt(behindOut, 10) || 0;
+  }
+
+  // Changed files between HEAD and tracking
+  const changedOut = _gitExec(repoDir, `diff --name-status HEAD..${trackingRef} 2>/dev/null`);
+  let changedFiles = [];
+  if (changedOut) {
+    const lines = changedOut.split("\n").filter(Boolean).slice(0, limit);
+    changedFiles = lines.map((line) => {
+      const parts = line.split("\t");
+      const status = parts[0];
+      const filePath = parts[1];
+      let old_path;
+      if ((status[0] === "R" || status[0] === "C") && parts.length >= 3) {
+        old_path = parts[1];
+        return { status, path: parts[2], old_path };
+      }
+      return { status, path: filePath };
+    });
+  }
+
+  return {
+    ok: true,
+    repo_path: repoDir,
+    remote,
+    branch,
+    local_head: localHead || null,
+    tracking_head: trackingHead,
+    remote_head: remoteHead,
+    local_equals_tracking: localHead && trackingHead ? localHead === trackingHead : null,
+    tracking_equals_remote: trackingHead && remoteHead ? trackingHead === remoteHead : null,
+    dirty: dirty.dirty,
+    dirty_paths: dirty.dirtyPaths,
+    ahead_count: aheadCount,
+    behind_count: behindCount,
+    changed_files: changedFiles,
+  };
+}

@@ -25,7 +25,7 @@ import { createBarkNotifier, classifyNotification, formatNotification, formatMan
 import { parseCodexResult, buildTaskResult } from "./codex-result-parser.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
-import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile } from "./git-remote-tools.mjs";
+import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
 
 let barkNotifier = null;
 
@@ -593,11 +593,9 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         } : { enabled: false, configured: false, source: "none" },
         // GitHub sync status (safe, no secrets)
         github: {
-          api_sync_enabled: sources.githubEnabled === "default"
-            ? !!(config.githubRepo && config.githubToken)
-            : config.githubEnabled && !!(config.githubRepo && config.githubToken),
-          api_repo_set: !!config.githubRepo,
-          api_token_set: !!config.githubToken,
+          api_sync_enabled: (process.env.GPTWORK_GITHUB_ENABLED === "true" || process.env.GPTWORK_GITHUB_ENABLED === "1") && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
+          api_repo_set: !!process.env.GPTWORK_GITHUB_REPO,
+          api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN,
           source: sources.githubEnabled,
           direct_git_available: true,
           direct_git_reader_available: true,
@@ -615,6 +613,15 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     git_remote_list_files: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Lists files from a Git ref using git ls-tree --name-only without checking out the ref.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", limit: "integer" }, []), async (args) => handleListFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
     git_remote_read_file: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Reads file content from a Git ref using git show <ref>:<path> without checking out the ref. Supports truncation via max_bytes.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", max_bytes: "integer" }, ["path"]), async (args) => handleReadFile(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultRepoPath: config.defaultRepoPath, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
+
+    git_remote_changed_files: tool("Inspect GitHub remote repository changes without GitHub connector. Lists changed files between two refs/commits using git diff --name-status. Supports path scoping and limit.", schema({ repo: "string", repo_path: "string", base: "string", head: "string", path: "string", limit: "integer" }, []), async (args) => handleChangedFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
+
+    git_remote_diff: tool("Inspect GitHub remote repository changes without GitHub connector. Returns unified diff between two refs/commits, optionally path-scoped. Truncates safely by max_bytes.", schema({ repo: "string", repo_path: "string", base: "string", head: "string", path: "string", max_bytes: "integer" }, []), async (args) => handleDiff(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
+
+    git_remote_show_commit: tool("Inspect GitHub remote repository changes without GitHub connector. Shows metadata and file list for one commit/ref using git show --name-status.", schema({ repo: "string", repo_path: "string", ref: "string", max_files: "integer" }, []), async (args) => handleShowCommit(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
+
+    git_remote_compare_local: tool("Inspect GitHub remote repository changes without GitHub connector. One-shot comparison: returns local HEAD, tracking HEAD, remote HEAD, ahead/behind counts, dirty state, and changed files summary. Fetches remote tracking refs by default.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean", limit: "integer" }, []), async (args) => handleCompareLocal(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
+
 
   };
 }
