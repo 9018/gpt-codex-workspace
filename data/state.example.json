@@ -1,0 +1,44 @@
+{
+  "users": [
+    {
+      "id": "user_example",
+      "name": "Example User"
+    }
+  ],
+  "teams": [
+    {
+      "id": "team_example",
+      "name": "Example Team"
+    }
+  ],
+  "projects": [
+    {
+      "id": "example",
+      "team_id": "team_example",
+      "name": "Example Project",
+      "description": "Example GPTWork project - this is a sample file, not live state",
+      "default_workspace_id": "hosted-default",
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "workspaces": [
+    {
+      "id": "hosted-default",
+      "project_id": "example",
+      "name": "Example Workspace",
+      "type": "hosted",
+      "root": "/tmp/gptwork-example",
+      "default": true,
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "updated_at": "2026-01-01T00:00:00.000Z"
+    }
+  ],
+  "goals": [],
+  "conversations": [],
+  "memories": [],
+  "tasks": [],
+  "chatgpt_requests": [],
+  "activities": [],
+  "audit": []
+}

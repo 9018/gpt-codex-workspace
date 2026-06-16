@@ -1,15 +1,18 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
 
 export class StateStore {
-  constructor({ statePath, defaultWorkspaceRoot }) {
+  constructor({ statePath, defaultWorkspaceRoot, oldDefaultStatePath }) {
     this.statePath = statePath;
     this.defaultWorkspaceRoot = defaultWorkspaceRoot;
+    this.oldDefaultStatePath = oldDefaultStatePath || null;
     this.state = null;
+    this._migrationSource = null;
   }
 
   async load() {
     if (this.state) return this.state;
+    await this._migrateIfNeeded();
     try {
       this.state = JSON.parse(await readFile(this.statePath, "utf8"));
     } catch {
@@ -22,6 +25,24 @@ export class StateStore {
   async save() {
     await mkdir(dirname(this.statePath), { recursive: true });
     await writeFile(this.statePath, JSON.stringify(this.state, null, 2), "utf8");
+  }
+
+  async _migrateIfNeeded() {
+    if (!this.oldDefaultStatePath) return;
+    try {
+      await readFile(this.statePath, "utf8");
+      return;
+    } catch {}
+    try {
+      await readFile(this.oldDefaultStatePath, "utf8");
+      await mkdir(dirname(this.statePath), { recursive: true });
+      await copyFile(this.oldDefaultStatePath, this.statePath);
+      this._migrationSource = resolve(this.oldDefaultStatePath);
+    } catch {}
+  }
+
+  get migrationSource() {
+    return this._migrationSource;
   }
 
   defaultState() {

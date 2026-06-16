@@ -14,13 +14,14 @@ import {
 } from "node:fs/promises";
 import { appendFileSync, existsSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, relative } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { StateStore } from "./state-store.mjs";
 import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
 import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
+import { parseCodexResult, buildTaskResult } from "./codex-result-parser.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 
 let barkNotifier = null;
@@ -45,13 +46,21 @@ export async function createGptWorkServer(options = {}) {
   );
   // Load workspace-local runtime env before building config so env vars
   // from the runtime file are available for process.env fallbacks.
+  // Determine effective state path and workspace root
+  const defaultWorkspaceRoot = options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default";
+  const hasExplicitStatePath = options.statePath !== undefined || process.env.GPTWORK_STATE_PATH !== undefined;
+  const oldDefaultStatePath = "./data/state.json";
+  const statePath = hasExplicitStatePath
+    ? (options.statePath || process.env.GPTWORK_STATE_PATH)
+    : join(defaultWorkspaceRoot, ".gptwork/state.json");
+
   const envLoadResult = loadRuntimeEnv(
-    options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default",
+    defaultWorkspaceRoot,
     process.env.GPTWORK_RUNTIME_ENV_FILE
   );
   const config = {
-    statePath: options.statePath || process.env.GPTWORK_STATE_PATH || "./data/state.json",
-    defaultWorkspaceRoot: options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default",
+    statePath,
+    defaultWorkspaceRoot,
     tokens: Object.keys(tokenContexts),
     tokenContexts,
     requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
@@ -69,7 +78,7 @@ export async function createGptWorkServer(options = {}) {
     barkLevel: options.barkLevel ?? process.env.GPTWORK_BARK_LEVEL,
     shellTimeout: Number(process.env.GPTWORK_SHELL_TIMEOUT || 60)
   };
-  const store = new StateStore(config);
+  const store = new StateStore({ ...config, oldDefaultStatePath });
   await store.load();
   const browser = createBrowserRegistry();
   const github = createGithubSync(config);
@@ -1576,75 +1585,71 @@ COMMIT=<sha or none>
 REMOTE_HEAD=<sha or none>
 ${separator}`;
   await writeFile(promptFile, fullPrompt, "utf8");
- let summary = "";
-  let parsedStatus = null;
- try {
-   const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
-   const cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
-   const out = (cr.stdout || "").trim();
-   if (out) {
-     const hdr = out.indexOf(separator);
-     summary = hdr >= 0 ? out.substring(hdr) : out;
-      const statusMatch = summary.match(/^STATUS=(\S+)/m);
-      if (statusMatch) parsedStatus = statusMatch[1];
-   }
-   if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
-    if (cr.timed_out) parsedStatus = "timed_out";
- } catch (e) {
-   summary = "[ERROR] " + e.message;
-    parsedStatus = "failed";
- } finally {
-   try { await rm(promptFile, { force: true }); } catch {}
- }
- if (!summary) summary = "Task completed (no output captured)";
- const doneAt = new Date().toISOString();
-  if (parsedStatus === "timed_out" || parsedStatus === "failed" || summary.includes("[TIMEOUT]")) {
-    const timeoutSeconds = config.codexExecTimeout;
-    const result = await updateTask(store, task.id, (item) => {
-      item.status = "failed";
-      item.result = {
-        kind: "codex_timeout",
-        timed_out: true,
-        timeout_seconds: timeoutSeconds,
-        summary: summary + "\n[TIMEOUT]",
-        completed_at: doneAt
-      };
-      item.logs.push({ time: doneAt, message: `[worker] timed out after ${timeoutSeconds}s` });
-    });
-    if (goal) {
-      await updateGoalStatus(store, goal.id, "failed", doneAt);
-      await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nFailed due to timeout at: ${doneAt}\n`, context);
-      await appendGoalMessage(store, config, {
-        goal_id: goal.id,
-        role: "codex",
-        content: `[worker] Task ${task.id} timed out after ${timeoutSeconds}s.\n\n${summary}`,
-        memory_key: "codex_last_result",
-        memory_value: `[TIMEOUT after ${timeoutSeconds}s] ${summary.slice(0, 3800)}`
-      }, context);
+  let summary = "";
+  let parsedResult = null;
+  let cr = null;
+  try {
+    const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
+    cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
+    const out = (cr.stdout || "").trim();
+    parsedResult = parseCodexResult(out);
+    if (parsedResult.summary) {
+      summary = parsedResult.summary;
+    } else {
+      if (out) {
+        const hdr = out.indexOf(separator);
+        summary = hdr >= 0 ? out.substring(hdr) : out;
+      }
+      if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
     }
-    try { github.syncTask(result.task).catch(() => {}); } catch {}
-    return { task_id: result.task.id, status: "failed", kind: "codex_timeout" };
+  } catch (e) {
+    summary = "[ERROR] " + e.message;
+  } finally {
+    try { await rm(promptFile, { force: true }); } catch {}
   }
- const result = await updateTask(store, task.id, (item) => {
-   item.status = "completed";
-   item.result = { summary, kind: "codex_executed", completed_at: doneAt };
-   item.logs.push({ time: doneAt, message: "[worker] completed: task processed by Codex CLI" });
- });
- if (goal) {
-   await updateGoalStatus(store, goal.id, "completed", doneAt);
-   await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md, `# Result\n\n${summary}\n\nCompleted at: ${doneAt}\n`, context);
-   await appendGoalMessage(store, config, {
-     goal_id: goal.id,
-     role: "codex",
-     content: `[worker] Completed task ${task.id}.\n\n${summary}`,
-     memory_key: "codex_last_result",
-     memory_value: summary.slice(0, 4000)
-   }, context);
- }
- try { github.syncTask(result.task).catch(() => {}); } catch {}
- return { task_id: result.task.id, status: "completed", kind: "codex_executed" };
-}
+ if (!summary) summary = "Task completed (no output captured)";
 
+  const timedOut = cr?.timed_out || false;
+  if (parsedResult && parsedResult.structured && parsedResult.status === "completed" && cr && cr.returncode !== 0) {
+    parsedResult.status = "failed";
+  }
+  const taskResult = parsedResult
+    ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout })
+    : {
+        kind: timedOut ? "codex_timeout" : "codex_failed",
+        summary,
+        completed_at: new Date().toISOString(),
+        ...(timedOut ? { timed_out: true, timeout_seconds: config.codexExecTimeout } : { timed_out: false })
+      };
+
+  const doneAt = new Date().toISOString();
+  const taskStatus = taskResult.kind === "codex_executed" ? "completed"
+    : taskResult.kind === "codex_timeout" ? "timed_out"
+    : "failed";
+
+  const result = await updateTask(store, task.id, (item) => {
+    item.status = taskStatus;
+    item.result = { ...taskResult, completed_at: doneAt };
+    item.logs.push({ time: doneAt, message: taskResult.kind === "codex_timeout"
+      ? "[worker] timed out after " + config.codexExecTimeout + "s"
+      : "[worker] completed: task processed by Codex CLI" });
+  });
+  if (goal) {
+    const goalStatus = taskStatus === "timed_out" ? "failed" : taskStatus;
+    await updateGoalStatus(store, goal.id, goalStatus, doneAt);
+    const statusLabel = taskStatus === "timed_out" ? "Timed out" : "Completed";
+    await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md,
+      "# Result\n\n" + summary + "\n\n" + statusLabel + " at: " + doneAt + "\n", context);
+    await appendGoalMessage(store, config, {
+      goal_id: goal.id,
+      role: "codex",
+      content: "[worker] " + statusLabel + " task " + task.id + ".\n\n" + summary,
+      memory_key: "codex_last_result",
+      memory_value: summary.slice(0, 4000)
+    }, context);
+  }
+  try { github.syncTask(result.task).catch(() => {}); } catch {}
+  return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
 function emitTaskProgress(context, task, phase, message) {
   context.emitProgress?.({
     jsonrpc: "2.0",

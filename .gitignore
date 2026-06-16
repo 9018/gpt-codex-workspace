@@ -10,3 +10,11 @@ dist/
 # Runtime env files
 .gptwork/*.env
 .gptwork/runtime.env
+
+# Runtime state files
+data/state.json
+.gptwork/state.json
+.gptwork/*.state.json
+# Runtime data created when running from backend/ directory
+backend/data/
+
