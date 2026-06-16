@@ -24,6 +24,7 @@ import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTe
 import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
 import { parseCodexResult, buildTaskResult } from "./codex-result-parser.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
+import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile } from "./git-remote-tools.mjs";
 
 let barkNotifier = null;
@@ -56,29 +57,37 @@ export async function createGptWorkServer(options = {}) {
     ? (options.statePath || process.env.GPTWORK_STATE_PATH)
     : join(defaultWorkspaceRoot, ".gptwork/state.json");
 
-  const envLoadResult = loadRuntimeEnv(
+  const rc = buildRuntimeConfig(
     defaultWorkspaceRoot,
     process.env.GPTWORK_RUNTIME_ENV_FILE
   );
+  const { config: rcc, sources, envLoadResult } = rc;
   const config = {
     statePath,
     defaultWorkspaceRoot,
     tokens: Object.keys(tokenContexts),
     tokenContexts,
-    requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
-    codexHome: options.codexHome || process.env.GPTWORK_CODEX_HOME || "/home/a9017",
-    codexExecArgs: options.codexExecArgs || process.env.GPTWORK_CODEX_EXEC_ARGS || "--yolo --skip-git-repo-check",
-    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 2400),
-    pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
-    maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
-    maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
-    barkEnabled: options.barkEnabled ?? process.env.GPTWORK_BARK_ENABLED,
-    barkUrl: options.barkUrl ?? process.env.GPTWORK_BARK_URL,
-    barkKey: options.barkKey ?? process.env.GPTWORK_BARK_KEY,
-    barkGroup: options.barkGroup ?? process.env.GPTWORK_BARK_GROUP,
-    barkSound: options.barkSound ?? process.env.GPTWORK_BARK_SOUND,
-    barkLevel: options.barkLevel ?? process.env.GPTWORK_BARK_LEVEL,
-    shellTimeout: Number(process.env.GPTWORK_SHELL_TIMEOUT || 60)
+    requireAuth: options.requireAuth ?? rcc.requireAuth,
+    codexHome: options.codexHome || rcc.codexHome,
+    codexExecArgs: options.codexExecArgs || rcc.codexExecArgs,
+    codexExecTimeout: Number(options.codexExecTimeout || rcc.codexExecTimeout),
+    pythonCommand: options.pythonCommand || rcc.python,
+    maxReadBytes: rcc.maxReadBytes,
+    maxShellOutputBytes: rcc.maxShellOutputBytes,
+    barkEnabled: options.barkEnabled ?? rcc.barkEnabled,
+    barkUrl: options.barkUrl ?? rcc.barkUrl,
+    barkKey: options.barkKey ?? rcc.barkKey,
+    barkGroup: options.barkGroup ?? rcc.barkGroup,
+    barkSound: options.barkSound ?? rcc.barkSound,
+    barkLevel: options.barkLevel ?? rcc.barkLevel,
+    shellTimeout: rcc.shellTimeout,
+    // Git defaults from unified config
+    defaultRepo: rcc.defaultRepo,
+    defaultBranch: rcc.defaultBranch,
+    defaultRepoPath: rcc.defaultRepoPath,
+    defaultRemote: rcc.defaultRemote,
+    // Config sources for diagnostics
+    _sources: sources,
   };
   const store = new StateStore({ ...config, oldDefaultStatePath });
   await store.load();
@@ -103,7 +112,7 @@ export async function createGptWorkServer(options = {}) {
     workspaceRoot: config.defaultWorkspaceRoot,
   });
   await registry.load().catch(function() {});
-  const tools = createTools({ store, config, browser, github, bark, envLoadResult, registry });
+  const tools = createTools({ store, config, browser, github, bark, envLoadResult, sources, registry });
 
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
@@ -197,7 +206,7 @@ export function startCodexWorker(server, {
   };
 }
 
-function createTools({ store, config, browser, github, bark, envLoadResult, registry }) {
+function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry }) {
   const tool = (description, inputSchema, handler) => ({ description, inputSchema, handler });
 
   /** Try to find the repo root directory by walking up from cwd looking for .git. */
@@ -497,6 +506,14 @@ function createTools({ store, config, browser, github, bark, envLoadResult, regi
         running_commit,
         defaultWorkspaceRoot: config.defaultWorkspaceRoot,
         codex_exec_timeout: config.codexExecTimeout,
+        codex_exec_args: config.codexExecArgs,
+        shell_timeout: config.shellTimeout,
+        max_read_bytes: config.maxReadBytes,
+        max_shell_output_bytes: config.maxShellOutputBytes,
+        default_repo: config.defaultRepo,
+        default_branch: config.defaultBranch,
+        default_repo_path: config.defaultRepoPath,
+        default_remote: config.defaultRemote,
         runtime_env_file_path: envPath,
         runtime_env_file_exists: envFileExists,
         runtime_env_loaded: envLoadResult.keys.length > 0,
@@ -504,20 +521,55 @@ function createTools({ store, config, browser, github, bark, envLoadResult, regi
         state_path: statePath,
         state_path_inside_repo: statePathInsideRepo,
         worktree_dirty,
-        dirty_paths
+        dirty_paths,
+        // Config sources for key operational values
+        config_sources: {
+          codex_exec_timeout: sources.codexExecTimeout,
+          shell_timeout: sources.shellTimeout,
+          state_path: sources.statePath,
+          default_repo: sources.defaultRepo,
+          default_branch: sources.defaultBranch,
+          default_repo_path: sources.defaultRepoPath,
+          default_remote: sources.defaultRemote,
+          bark_enabled: sources.barkEnabled,
+          bark_url: sources.barkUrl,
+          bark_key: sources.barkKey,
+          github_enabled: sources.githubEnabled,
+          github_repo: sources.githubRepo,
+          github_token: sources.githubToken,
+          workspace_root: sources.workspaceRoot,
+          max_read_bytes: sources.maxReadBytes,
+          max_shell_output_bytes: sources.maxShellOutputBytes,
+        },
+        // Bark status (safe, no secrets)
+        bark: bark ? {
+          enabled: bark.isEnabled ? bark.isEnabled() : false,
+          configured: bark.getStatus ? bark.getStatus().configured : false,
+          source: bark.getStatus ? bark.getStatus().source : "unknown",
+          url_set: bark.getStatus ? bark.getStatus().url_set : false,
+          key_set: bark.getStatus ? bark.getStatus().key_set : false,
+          group: bark.getStatus ? bark.getStatus().group : "gptwork",
+        } : { enabled: false, configured: false, source: "none" },
+        // GitHub sync status (safe, no secrets)
+        github: {
+          api_sync_enabled: !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
+          api_repo_set: !!process.env.GPTWORK_GITHUB_REPO,
+          api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN,
+          source: sources.githubEnabled,
+        },
       };
     }),
     notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null })),
     test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
-    git_remote_resolve_repo: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Finds an existing Git checkout for a repo (owner/name, URL, or path). Returns repo_path, remote info, and local/tracking HEADs. Does NOT auto-clone.", schema({ repo: "string", repo_path: "string" }, []), async (args) => handleResolveRepo(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot })),
+    git_remote_resolve_repo: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Finds an existing Git checkout for a repo (owner/name, URL, or path). Returns repo_path, remote info, and local/tracking HEADs. Does NOT auto-clone.", schema({ repo: "string", repo_path: "string" }, []), async (args) => handleResolveRepo(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
 
-    git_remote_fetch: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Runs git fetch to update remote tracking refs from the local Git checkout.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string" }, []), async (args) => handleFetch(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot })),
+    git_remote_fetch: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Runs git fetch to update remote tracking refs from the local Git checkout.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string" }, []), async (args) => handleFetch(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_status: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Returns local HEAD, tracking HEAD, remote HEAD (from git ls-remote), equality flags, and dirty state.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean" }, []), async (args) => handleStatus(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot })),
+    git_remote_status: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Returns local HEAD, tracking HEAD, remote HEAD (from git ls-remote), equality flags, and dirty state.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean" }, []), async (args) => handleStatus(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_list_files: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Lists files from a Git ref using git ls-tree --name-only without checking out the ref.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", limit: "integer" }, []), async (args) => handleListFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot })),
+    git_remote_list_files: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Lists files from a Git ref using git ls-tree --name-only without checking out the ref.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", limit: "integer" }, []), async (args) => handleListFiles(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
-    git_remote_read_file: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Reads file content from a Git ref using git show <ref>:<path> without checking out the ref. Supports truncation via max_bytes.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", max_bytes: "integer" }, ["path"]), async (args) => handleReadFile(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot })),
+    git_remote_read_file: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Reads file content from a Git ref using git show <ref>:<path> without checking out the ref. Supports truncation via max_bytes.", schema({ repo: "string", repo_path: "string", ref: "string", path: "string", max_bytes: "integer" }, ["path"]), async (args) => handleReadFile(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRemote: config.defaultRemote })),
 
   };
 }

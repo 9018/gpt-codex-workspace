@@ -122,9 +122,10 @@ function getDirtyInfo(repoDir) {
 // Tool handlers  (called from gptwork-server.mjs createTools)
 // ---------------------------------------------------------------------------
 
-export function handleResolveRepo(args, { registry, defaultWorkspaceRoot }) {
-  const { repo, repo_path } = args;
-  const repoDir = resolveRepo(repo, repo_path, registry, defaultWorkspaceRoot);
+export function handleResolveRepo(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
   if (!repoDir) {
     return { ok: false, found: false, error: "Repository not found. No matching Git checkout discovered. Use repo_path to specify the path.", repo: repo || null, repo_path: repo_path || null };
   }
@@ -132,7 +133,7 @@ export function handleResolveRepo(args, { registry, defaultWorkspaceRoot }) {
   const currentBranch = getCurrentBranch(repoDir);
   const localHead = getLocalHead(repoDir);
   const tracking = getTrackingRef(repoDir, "origin", currentBranch || "main");
-  let defaultBranch = "main";
+  let resolvedDefaultBranch = "main";
   const remoteHeadRef = _gitExec(repoDir, "symbolic-ref refs/remotes/origin/HEAD 2>/dev/null");
   if (remoteHeadRef) {
     const m = remoteHeadRef.match(/refs\/remotes\/origin\/(.+)/);
@@ -140,15 +141,18 @@ export function handleResolveRepo(args, { registry, defaultWorkspaceRoot }) {
   }
   return {
     ok: true, found: true, repo_path: repoDir, remote: "origin",
-    remote_url: remoteUrl, default_branch: defaultBranch,
+    remote_url: remoteUrl, default_branch: resolvedDefaultBranch,
     current_branch: currentBranch || null, local_head: localHead || null,
     tracking_ref: tracking.trackingRef, tracking_head: tracking.trackingHead,
   };
 }
 
-export function handleFetch(args, { registry, defaultWorkspaceRoot }) {
-  const { repo, repo_path, remote = "origin", branch = "main" } = args;
-  const repoDir = resolveRepo(repo, repo_path, registry, defaultWorkspaceRoot);
+export function handleFetch(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const remote = args.remote || defaultRemote || "origin";
+  const branch = args.branch || defaultBranch || "main";
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
   if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
   _gitExec(repoDir, `fetch ${remote} ${branch} 2>&1`);
   const trackingRef = `refs/remotes/${remote}/${branch}`;
@@ -156,9 +160,13 @@ export function handleFetch(args, { registry, defaultWorkspaceRoot }) {
   return { ok: true, repo_path: repoDir, remote, branch, tracking_ref: trackingRef, tracking_head: trackingHead };
 }
 
-export function handleStatus(args, { registry, defaultWorkspaceRoot }) {
-  const { repo, repo_path, remote = "origin", branch = "main", fetch = true } = args;
-  const repoDir = resolveRepo(repo, repo_path, registry, defaultWorkspaceRoot);
+export function handleStatus(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const remote = args.remote || defaultRemote || "origin";
+  const branch = args.branch || defaultBranch || "main";
+  const fetch = args.fetch !== undefined ? args.fetch : true;
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
   if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
   if (fetch) _gitExec(repoDir, `fetch ${remote} ${branch} 2>/dev/null`);
   const localHead = getLocalHead(repoDir);
@@ -175,9 +183,13 @@ export function handleStatus(args, { registry, defaultWorkspaceRoot }) {
   };
 }
 
-export function handleListFiles(args, { registry, defaultWorkspaceRoot }) {
-  const { repo, repo_path, ref = "origin/main", path, limit = 200 } = args;
-  const repoDir = resolveRepo(repo, repo_path, registry, defaultWorkspaceRoot);
+export function handleListFiles(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const ref = args.ref || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const path = args.path;
+  const limit = args.limit || 200;
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
   if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
   const treeArgs = path ? `ls-tree -r --name-only ${ref} ${path}` : `ls-tree -r --name-only ${ref}`;
   const out = _gitExec(repoDir, treeArgs);
@@ -186,10 +198,14 @@ export function handleListFiles(args, { registry, defaultWorkspaceRoot }) {
   return { ok: true, repo_path: repoDir, ref, path: path || null, total_count: files.length, truncated: files.length > limit, limit, files: files.slice(0, limit) };
 }
 
-export function handleReadFile(args, { registry, defaultWorkspaceRoot }) {
-  const { repo, repo_path, ref = "origin/main", path, max_bytes = 200000 } = args;
+export function handleReadFile(args, { registry, defaultWorkspaceRoot, defaultRepo, defaultBranch, defaultRepoPath, defaultRemote }) {
+  const repo = args.repo !== undefined ? args.repo : defaultRepo;
+  const repo_path = args.repo_path !== undefined ? args.repo_path : defaultRepoPath;
+  const ref = args.ref || (defaultRemote + "/" + defaultBranch || "origin/main");
+  const path = args.path;
+  const max_bytes = args.max_bytes || 200000;
   if (!path) return { ok: false, error: "path is required" };
-  const repoDir = resolveRepo(repo, repo_path, registry, defaultWorkspaceRoot);
+  const repoDir = resolveRepo(repo || null, repo_path || null, registry, defaultWorkspaceRoot);
   if (!repoDir) return { ok: false, found: false, error: "Repository not found." };
   try {
     const buf = execSync(`git show ${ref}:${path}`, { cwd: repoDir, encoding: "buffer", stdio: "pipe", timeout: 15000 });

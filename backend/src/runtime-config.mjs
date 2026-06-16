@@ -1,0 +1,171 @@
+/**
+ * Unified runtime configuration for GPTWork/workmcp.
+ *
+ * Loads runtime.env (dotenv-style KEY=VALUE with comments),
+ * resolves all GPTWORK_* config keys with proper precedence:
+ *   process.env > runtime.env > code defaults
+ *
+ * Exports:
+ *   loadRuntimeEnv    - (re-exported from runtime-env.mjs) low-level env file loader
+ *   buildRuntimeConfig - build full resolved config with per-key source tracking
+ *
+ * The returned sources map identifies where each config value came from:
+ *   "process.env"    - set in the system/process environment
+ *   "runtime.env"    - loaded from the runtime.env file
+ *   "default"        - code-defined default (no explicit value anywhere)
+ */
+
+import { loadRuntimeEnv } from "./runtime-env.mjs";
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+function _get(key, defaultVal) {
+  const v = process.env[key];
+  return v !== undefined ? v : defaultVal;
+}
+
+function _getNum(key, defaultVal) {
+  const v = process.env[key];
+  if (v === undefined) return defaultVal;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : defaultVal;
+}
+
+function _getBool(key, defaultVal) {
+  const v = process.env[key];
+  if (v === undefined) return defaultVal;
+  if (typeof v === "boolean") return v;
+  return v === "true" || v === "1";
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+/**
+ * Build the full resolved runtime configuration object with per-key source tracking.
+ *
+ * @param {string}  workspaceRoot  - absolute path to the workspace root directory
+ * @param {string}  [overridePath] - explicit path to runtime.env file (override)
+ * @returns {{ config: object, sources: object<string,string>, envLoadResult: object }}
+ *
+ * `config` contains the final resolved values for all operational keys.
+ * `sources` maps each config key to its source label.
+ * `envLoadResult` is the raw result from loadRuntimeEnv ({ loadedPath, keys }).
+ */
+export function buildRuntimeConfig(workspaceRoot, overridePath) {
+  const envLoadResult = loadRuntimeEnv(workspaceRoot, overridePath);
+  const loadedKeys = envLoadResult.keys;
+
+  // Source resolver: runtime.env set this key? process.env had it already? default.
+  function _source(envKey) {
+    if (loadedKeys.includes(envKey)) return "runtime.env";
+    if (process.env[envKey] !== undefined) return "process.env";
+    return "default";
+  }
+
+  // ── Resolved values ──────────────────────────────────────────────
+
+  const config = {
+    // Server
+    host: _get("GPTWORK_HOST", "127.0.0.1"),
+    port: _getNum("GPTWORK_PORT", 8787),
+    workspaceRoot: _get("GPTWORK_WORKSPACE_ROOT", workspaceRoot + "/data/workspaces/default"),
+    statePath: _get("GPTWORK_STATE_PATH", workspaceRoot + "/.gptwork/state.json"),
+    runtimeEnvFile: _get("GPTWORK_RUNTIME_ENV_FILE", ".gptwork/runtime.env"),
+
+    // Codex
+    codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 2400),
+    codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
+    codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),
+
+    // Git defaults
+    defaultRepo: _get("GPTWORK_DEFAULT_REPO", ""),
+    defaultBranch: _get("GPTWORK_DEFAULT_BRANCH", "main"),
+    defaultRepoPath: _get("GPTWORK_DEFAULT_REPO_PATH", ""),
+    defaultRemote: _get("GPTWORK_DEFAULT_REMOTE", "origin"),
+
+    // Bark
+    barkEnabled: _get("GPTWORK_BARK_ENABLED", ""),
+    barkUrl: _get("GPTWORK_BARK_URL", ""),
+    barkKey: _get("GPTWORK_BARK_KEY", ""),
+    barkGroup: _get("GPTWORK_BARK_GROUP", "gptwork"),
+    barkSound: _get("GPTWORK_BARK_SOUND", ""),
+    barkLevel: _get("GPTWORK_BARK_LEVEL", ""),
+    barkIconUrl: _get("GPTWORK_BARK_ICON_URL", ""),
+    barkClickUrl: _get("GPTWORK_BARK_CLICK_URL", ""),
+    barkBadge: _get("GPTWORK_BARK_BADGE", ""),
+
+    // GitHub
+    githubEnabled: _getBool("GPTWORK_GITHUB_ENABLED", false),
+    githubRepo: _get("GPTWORK_GITHUB_REPO", ""),
+    githubToken: _get("GPTWORK_GITHUB_TOKEN", ""),
+
+    // Shell/exec
+    shellTimeout: _getNum("GPTWORK_SHELL_TIMEOUT", 60),
+    maxOutputBytes: _getNum("GPTWORK_MAX_OUTPUT_BYTES", 200000),
+    maxReadBytes: _getNum("GPTWORK_MAX_READ_BYTES", 200000),
+    maxShellOutputBytes: _getNum("GPTWORK_MAX_SHELL_OUTPUT_BYTES", 200000),
+
+    // Other
+    codexHome: _get("GPTWORK_CODEX_HOME", "/home/a9017"),
+    python: _get("GPTWORK_PYTHON", process.platform === "win32" ? "python" : "python3"),
+    logPath: _get("GPTWORK_LOG_PATH", ""),
+    requireAuth: _getBool("GPTWORK_REQUIRE_AUTH", true),
+    tokens: _get("GPTWORK_TOKENS", "dev-token,test"),
+    sshSocksProxy: _get("GPTWORK_SSH_SOCKS_PROXY", "10.0.1.105:20177"),
+    tokenContexts: _get("GPTWORK_TOKEN_CONTEXTS", ""),
+  };
+
+  // ── Per-key source tracking ──────────────────────────────────────
+
+  /** Maps config camelCase key -> env var name */
+  const KEY_MAP = {
+    host: "GPTWORK_HOST",
+    port: "GPTWORK_PORT",
+    workspaceRoot: "GPTWORK_WORKSPACE_ROOT",
+    statePath: "GPTWORK_STATE_PATH",
+    runtimeEnvFile: "GPTWORK_RUNTIME_ENV_FILE",
+    codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
+    codexExecArgs: "GPTWORK_CODEX_EXEC_ARGS",
+    codexConcurrency: "GPTWORK_CODEX_CONCURRENCY",
+    defaultRepo: "GPTWORK_DEFAULT_REPO",
+    defaultBranch: "GPTWORK_DEFAULT_BRANCH",
+    defaultRepoPath: "GPTWORK_DEFAULT_REPO_PATH",
+    defaultRemote: "GPTWORK_DEFAULT_REMOTE",
+    barkEnabled: "GPTWORK_BARK_ENABLED",
+    barkUrl: "GPTWORK_BARK_URL",
+    barkKey: "GPTWORK_BARK_KEY",
+    barkGroup: "GPTWORK_BARK_GROUP",
+    barkSound: "GPTWORK_BARK_SOUND",
+    barkLevel: "GPTWORK_BARK_LEVEL",
+    barkIconUrl: "GPTWORK_BARK_ICON_URL",
+    barkClickUrl: "GPTWORK_BARK_CLICK_URL",
+    barkBadge: "GPTWORK_BARK_BADGE",
+    githubEnabled: "GPTWORK_GITHUB_ENABLED",
+    githubRepo: "GPTWORK_GITHUB_REPO",
+    githubToken: "GPTWORK_GITHUB_TOKEN",
+    shellTimeout: "GPTWORK_SHELL_TIMEOUT",
+    maxOutputBytes: "GPTWORK_MAX_OUTPUT_BYTES",
+    maxReadBytes: "GPTWORK_MAX_READ_BYTES",
+    maxShellOutputBytes: "GPTWORK_MAX_SHELL_OUTPUT_BYTES",
+    codexHome: "GPTWORK_CODEX_HOME",
+    python: "GPTWORK_PYTHON",
+    logPath: "GPTWORK_LOG_PATH",
+    requireAuth: "GPTWORK_REQUIRE_AUTH",
+    tokens: "GPTWORK_TOKENS",
+    sshSocksProxy: "GPTWORK_SSH_SOCKS_PROXY",
+    tokenContexts: "GPTWORK_TOKEN_CONTEXTS",
+  };
+
+  const sources = {};
+  for (const [ck, ev] of Object.entries(KEY_MAP)) {
+    sources[ck] = _source(ev);
+  }
+
+  return { config, sources, envLoadResult };
+}
+
+export { loadRuntimeEnv };

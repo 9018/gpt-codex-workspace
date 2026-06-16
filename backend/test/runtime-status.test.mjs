@@ -89,11 +89,17 @@ test("runtime_status does not expose private values", async () => {
   const server = await makeServer();
   const status = await callTool(server, "runtime_status");
   const str = JSON.stringify(status);
-  // Should not contain credential-related keys
+  // Should not contain credential-related keys or values
   assert.ok(!str.includes("barkUrl"), "should not contain barkUrl");
   assert.ok(!str.includes("barkKey"), "should not contain barkKey");
   assert.ok(!str.includes("api_key"), "should not contain api_key");
-  assert.ok(!str.includes("token"), "should not contain token");
+  // Check that no actual credential values are present
+  // (field names like api_token_set are safe booleans)
+  if (status.github) {
+    assert.equal(typeof status.github.api_token_set, "boolean");
+    assert.equal(typeof status.github.api_repo_set, "boolean");
+  }
+  assert.ok(!str.match(/ghp_\w+/), "should not contain token values");
   assert.ok(!str.includes("secret"), "should not contain secret");
   assert.ok(!str.includes("password"), "should not contain password");
 });

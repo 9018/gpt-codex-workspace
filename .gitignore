@@ -9,6 +9,7 @@ dist/
 
 # Runtime env files
 .gptwork/*.env
+!.gptwork/*.env.example
 .gptwork/runtime.env
 
 # Runtime state files
