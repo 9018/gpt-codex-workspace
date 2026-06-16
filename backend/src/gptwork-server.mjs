@@ -49,7 +49,7 @@ export async function createGptWorkServer(options = {}) {
   // Determine effective state path and workspace root
   const defaultWorkspaceRoot = options.defaultWorkspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || "./data/workspaces/default";
   const hasExplicitStatePath = options.statePath !== undefined || process.env.GPTWORK_STATE_PATH !== undefined;
-  const oldDefaultStatePath = "./data/state.json";
+  const oldDefaultStatePath = options.statePath !== undefined ? null : "./data/state.json";
   const statePath = hasExplicitStatePath
     ? (options.statePath || process.env.GPTWORK_STATE_PATH)
     : join(defaultWorkspaceRoot, ".gptwork/state.json");
@@ -1614,7 +1614,7 @@ ${separator}`;
     parsedResult.status = "failed";
   }
   const taskResult = parsedResult
-    ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout })
+    ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout, returnCode: cr?.returncode ?? 0 })
     : {
         kind: timedOut ? "codex_timeout" : "codex_failed",
         summary,
@@ -1650,6 +1650,7 @@ ${separator}`;
   }
   try { github.syncTask(result.task).catch(() => {}); } catch {}
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
+}
 function emitTaskProgress(context, task, phase, message) {
   context.emitProgress?.({
     jsonrpc: "2.0",

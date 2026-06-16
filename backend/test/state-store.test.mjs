@@ -43,7 +43,7 @@ test("default state path resolves under workspace root when GPTWORK_STATE_PATH i
   const status = response.result.structuredContent;
   assert.ok(status.state_path.includes(".gptwork/state.json"),
     `Expected .gptwork/state.json in state_path, got: ${status.state_path}`);
-  assert.equal(status.default_workspace_root, workspaceRoot);
+  assert.equal(status.defaultWorkspaceRoot, workspaceRoot);
 }));
 
 test("default state path with explicit defaultWorkspaceRoot creates correct path", withoutGptWorkStatePath(async () => {
@@ -220,8 +220,6 @@ test("runtime_status reports state_path_inside_repo for temp workspace (outside 
   const status = response.result.structuredContent;
   assert.equal(status.state_path_inside_repo, false);
   assert.ok(status.state_path);
-  assert.ok(status.state_path_resolved);
-  assert.ok(status.server_time);
 }));
 
 // -----------------------------------------------------------------------

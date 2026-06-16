@@ -367,12 +367,12 @@ test("general Codex worker completes linked goals and writes concise results", a
   const fetchedTask = await callToolAs(server, "test-token", "get_task", { task_id: created.task.id });
   assert.equal(fetchedTask.task.status, "completed");
   assert.equal(fetchedTask.task.result.kind, "codex_executed");
-  assert.match(fetchedTask.task.result.summary, /SUMMARY=worker-ok/);
+  assert.equal(fetchedTask.task.result.summary, "worker-ok");
 
   const context = await callToolAs(server, "test-token", "get_goal_context", { goal_id: created.goal.id });
   assert.equal(context.goal.status, "completed");
   assert.equal(context.task.status, "completed");
-  assert.match(context.conversation.messages.at(-1).content, /SUMMARY=worker-ok/);
+  assert.match(context.conversation.messages.at(-1).content, /worker-ok/);
 });
 
 test("hosted workspace supports write, read, search, sha256, and shell_exec", async () => {

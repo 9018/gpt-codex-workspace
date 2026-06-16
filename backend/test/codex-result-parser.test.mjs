@@ -117,12 +117,12 @@ test("STATUS=completed with non-zero exit code - override in processGeneralTask 
   assert.equal(result.timed_out, false);
 });
 
-test("no structured STATUS field stores kind=codex_failed", () => {
+test("no structured STATUS with non-zero exit stores kind=codex_failed", () => {
   const output = "Some unstructured output without the expected fields";
   const parsed = parseCodexResult(output);
   assert.equal(parsed.status, null);
   assert.equal(parsed.structured, false);
-  const result = buildTaskResult(parsed);
+  const result = buildTaskResult(parsed, { returnCode: 1 });
   assert.equal(result.kind, "codex_failed");
   assert.equal(result.timed_out, false);
   assert.equal(result.structured, false);
@@ -247,7 +247,7 @@ test("raw_summary_excerpt is capped at 500 chars", () => {
 
 test("buildTaskResult preserves structured=false for non-structured output", () => {
   const parsed = { status: null, summary: null, changed_files: [], structured: false };
-  const result = buildTaskResult(parsed);
+  const result = buildTaskResult(parsed, { returnCode: 1 });
   assert.equal(result.kind, "codex_failed");
   assert.equal(result.structured, false);
 });

@@ -135,7 +135,7 @@ export function parseCodexResult(output) {
  * @param {number} options.timeoutSeconds - Timeout duration in seconds
  * @returns {object} Task result object
  */
-export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0 } = {}) {
+export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, returnCode = 0 } = {}) {
   const now = new Date().toISOString();
 
   if (timedOut) {
@@ -177,16 +177,44 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0 }
     };
   }
 
-  // If no structured STATUS field was found, treat as failed
+  // If STATUS=timed_out but process didn't actually time out, treat as failed
+  if (parsed.status === "timed_out") {
+    return {
+      kind: "codex_failed",
+      summary: parsed.summary || "Codex execution reported timeout (no process timeout)",
+      structured: parsed.structured,
+      changed_files: parsed.changed_files,
+      tests: parsed.tests,
+      commit: parsed.commit,
+      remote_head: parsed.remote_head,
+      completed_at: now,
+      timed_out: false
+    };
+  }
+
+  // If no structured STATUS field was found, use exit code to decide
+  if (returnCode !== 0) {
+    return {
+      kind: "codex_failed",
+      summary: parsed.summary || "Codex execution failed (non-zero exit)",
+      structured: parsed.structured,
+      changed_files: parsed.changed_files,
+      tests: parsed.tests,
+      commit: parsed.commit,
+      remote_head: parsed.remote_head,
+      completed_at: now,
+      timed_out: false
+    };
+  }
+
   return {
-    kind: "codex_failed",
-    summary: parsed.summary || "Codex execution failed (no structured status)",
+    kind: "codex_executed",
+    summary: parsed.summary || "Codex execution completed (no structured summary)",
     structured: parsed.structured,
     changed_files: parsed.changed_files,
     tests: parsed.tests,
     commit: parsed.commit,
     remote_head: parsed.remote_head,
-    completed_at: now,
-    timed_out: false
+    completed_at: now
   };
 }
