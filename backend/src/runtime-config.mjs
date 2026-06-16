@@ -57,7 +57,8 @@ function _getBool(key, defaultVal) {
  */
 export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = []) {
   const envLoadResult = loadRuntimeEnv(workspaceRoot, overridePath);
-  const loadedKeys = [...new Set([...envLoadResult.keys, ...preloadedKeys])];
+  envLoadResult.keys = [...new Set([...envLoadResult.keys, ...preloadedKeys])];
+  const loadedKeys = envLoadResult.keys;
 
   // Source resolver: runtime.env set this key? process.env had it already? default.
   function _source(envKey) {
