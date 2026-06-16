@@ -66,7 +66,7 @@ export async function createGptWorkServer(options = {}) {
     requireAuth: options.requireAuth ?? process.env.GPTWORK_REQUIRE_AUTH !== "false",
     codexHome: options.codexHome || process.env.GPTWORK_CODEX_HOME || "/home/a9017",
     codexExecArgs: options.codexExecArgs || process.env.GPTWORK_CODEX_EXEC_ARGS || "--yolo --skip-git-repo-check",
-    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 1800),
+    codexExecTimeout: Number(options.codexExecTimeout || process.env.GPTWORK_CODEX_EXEC_TIMEOUT || 2400),
     pythonCommand: options.pythonCommand || process.env.GPTWORK_PYTHON || (process.platform === "win32" ? "python" : "python3"),
     maxReadBytes: Number(process.env.GPTWORK_MAX_READ_BYTES || 200000),
     maxShellOutputBytes: Number(process.env.GPTWORK_MAX_SHELL_OUTPUT_BYTES || 200000),
