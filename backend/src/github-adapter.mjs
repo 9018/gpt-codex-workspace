@@ -55,7 +55,6 @@ function splitRepo(repoFull) {
 
 
 export function createGithubSync(config) {
-export function createGithubSync(config) {
   // Use config values (resolved from options/process.env/runtime.env) with
   // direct process.env fallback for backward compatibility.
   // GPTWORK_GITHUB_ENABLED=false explicitly disables API sync even when
@@ -326,7 +325,6 @@ export function createGithubSync(config) {
      * Return a comprehensive GitHub connectivity status object.
      * Distinguishes API sync not configured from git/SSH/gh available.
      */
-    status() {
     status() {
       const r = process.env.GPTWORK_GITHUB_REPO || "";
       const t = process.env.GPTWORK_GITHUB_TOKEN || "";
