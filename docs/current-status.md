@@ -143,9 +143,16 @@ Preview fields:
 - Approximate size metrics
 - Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
 
-### MCP Tool: project_context_status
+### MCP Tool: project_context_status / context_status
 
-A new `project_context_status(task_id?)` tool returns a concise context health and source precedence diagnostic. Use this before large Codex runs to verify project-level context is configured and understand what sources contribute to the Codex prompt.
+Two names for the same context health diagnostic:
+
+- `project_context_status(task_id?)` — Canonical name, recommended for scripts and automation.
+- `context_status(task_id?)` — Friendly alias, responds naturally to queries like "上下文状态". Calls the same implementation.
+
+Both return:
+
+A new `project_context_status(task_id?)` / `context_status(task_id?)` tool returns a concise context health and source precedence diagnostic. Use this before large Codex runs to verify project-level context is configured and understand what sources contribute to the Codex prompt.
 
 Output fields (base diagnostic, no task_id required):
 - `canonical_repo_path` — Absolute path to the canonical repo
@@ -164,7 +171,7 @@ When `task_id` is provided, the output also includes:
 - `task` — Object with task_id, task_status, linked_goal_id, preview_available, transcript_count, memory_count, approximate_context_bytes
 - Additional warnings for task_no_linked_goal, huge_context
 
-Use preview_codex_context when you need the full execution preview. Use project_context_status when you need a quick health check.
+Use preview_codex_context when you need the full execution preview. Use project_context_status or context_status when you need a quick health check.
 
 A new `preview_codex_context(task_id)` tool shows what Codex will see before execution. Use this before large Codex runs to verify the execution environment.
 

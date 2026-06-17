@@ -749,3 +749,107 @@ test("gptwork_doctor remains quiet/nominal when context is healthy", async () =>
   assert.equal(contextStatusSuggestions.length, 0,
     "Doctor should not suggest project_context_status when context is healthy. Got: " + JSON.stringify(suggestions));
 });
+
+// ================================================================
+// context_status alias tests
+// ================================================================
+
+test("context_status is exposed in tools/list", async () => {
+  const server = await makeServer();
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {}
+  }, { authorization: "Bearer test-token" });
+
+  const toolNames = response.result.tools.map(t => t.name);
+  assert.ok(toolNames.includes("project_context_status"),
+    "project_context_status should appear in tools/list. Got: " + JSON.stringify(toolNames));
+  assert.ok(toolNames.includes("context_status"),
+    "context_status should appear in tools/list. Got: " + JSON.stringify(toolNames));
+});
+
+test("context_status works without task_id", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "context_status", {});
+  assert.equal(result.task, undefined);
+  assert.ok(result.project_context.project_env_key_count >= 0);
+  assert.ok(result.repo_registered !== undefined);
+  assert.equal(result.context_source_precedence.length, 5);
+  assert.ok(result.canonical_repo_path !== undefined);
+  assert.ok(result.workspace_root !== undefined);
+  assert.ok(Array.isArray(result.warnings));
+  assert.ok(result.project_context !== undefined);
+  assert.ok(typeof result.project_context.project_md_exists === "boolean");
+});
+
+test("context_status returns equivalent output shape to project_context_status", async () => {
+  const server = await makeServer();
+  const result1 = await callTool(server, "project_context_status", {});
+  const result2 = await callTool(server, "context_status", {});
+
+  // Both should have the same top-level keys and nested structure
+  const keys = ["canonical_repo_path", "repo_registered", "workspace_root", "project_context", "context_source_precedence", "warnings"];
+  for (const key of keys) {
+    assert.ok(key in result1, `project_context_status should have key: ${key}`);
+    assert.ok(key in result2, `context_status should have key: ${key}`);
+  }
+
+  // Both should have consistent project_context structure
+  assert.equal(result1.project_context.project_md_exists, result2.project_context.project_md_exists);
+  assert.equal(result1.project_context.project_env_exists, result2.project_context.project_env_exists);
+  assert.equal(result1.project_context.project_env_key_count, result2.project_context.project_env_key_count);
+  assert.equal(result1.context_source_precedence.length, result2.context_source_precedence.length);
+});
+
+test("context_status works with a task_id linked to a goal", async () => {
+  const server = await makeServer();
+
+  // Create a goal to ensure a linked task exists
+  const created = await callTool(server, "create_goal", {
+    user_request: "Context status alias test",
+    goal_prompt: "Test context_status with task_id.",
+    context_summary: "Testing task-specific diagnostics via alias.",
+    assign_to_codex: true,
+    workspace_id: "hosted-default"
+  });
+
+  const result = await callTool(server, "context_status", { task_id: created.task.id });
+  assert.ok(result.task !== undefined);
+  assert.equal(result.task.task_id, created.task.id);
+  assert.equal(result.task.task_status, "assigned");
+  assert.ok(result.task.linked_goal_id || result.task.linked_goal_id === null);
+  assert.equal(result.task.linked_goal_id, created.goal.id);
+  assert.ok(typeof result.task.memory_count === "number");
+
+  // Verify project_context_status returns identical result for same task_id
+  const result2 = await callTool(server, "project_context_status", { task_id: created.task.id });
+  assert.equal(result2.task.task_id, created.task.id);
+  assert.equal(result2.task.linked_goal_id, result.task.linked_goal_id);
+});
+
+test("gptwork_doctor mentions both names when context is unhealthy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-doctor-unhealthy-"));
+  const repoPath = join(root, "unhealthy-repo");
+  await mkdir(join(repoPath, ".git"), { recursive: true });
+  // No project.md or project.env — context is unhealthy
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: repoPath,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const doctor = await callTool(server, "gptwork_doctor", {});
+  const suggestions = doctor.suggested_next_actions;
+
+  // Doctor should suggest running context status when project files are missing
+  const contextSuggestions = suggestions.filter(s =>
+    s.includes("context_status") || s.includes("project_context_status")
+  );
+  assert.ok(contextSuggestions.length > 0,
+    "Doctor should suggest context status tooling when context is unhealthy. Got: " + JSON.stringify(suggestions));
+});
