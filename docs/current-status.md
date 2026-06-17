@@ -412,7 +412,7 @@ Before spawning Codex for a builder/deploy/admin task, `processGeneralTask` acqu
 1. If no lock exists for that repo, a new lock file is created with `status: "held"`.
 2. If a lock exists with `status: "released"`, it can be overwritten.
 3. If a lock is held by **the same task** (re-entrant), the heartbeat is updated and acquisition succeeds.
-4. If a lock is held by **a different task**, acquisition returns `{ acquired: false, heldByTask }` — the task is marked `waiting_for_review` with a log message and Codex is not spawned.
+4. If a lock is held by **a different task**, acquisition returns `{ acquired: false, heldByTask }` — the task is marked `waiting_for_lock` with log message, `lock_blocked_by` metadata (holding task id), and Codex is not spawned. No Bark notification is sent for `waiting_for_lock`.
 
 ### Lock Release
 
@@ -420,12 +420,22 @@ The lock is released after Codex execution completes (regardless of result: comp
 
 - **Safe-restart scheduled**: If the task has an active restart marker (pending/scheduled/restarted), the lock stays held with `restart_state: "scheduled"` during the restart window. The lock is released after Phase C verification finalizes the task.
 
+### Lock Retry (waiting_for_lock)
+
+When a builder/deploy/admin task encounters a held repo lock, it is set to `waiting_for_lock` status. This is a non-terminal, transient state:
+
+- The `run_assigned_codex_tasks` worker includes `waiting_for_lock` in its candidate filter, so blocked tasks are automatically retried on each worker tick (default interval: 5 seconds).
+- On each retry, `acquireRepoLock` is called again. If the lock is now free, the task proceeds to `running` and Codex execution begins.
+- If the lock is still held, the task remains `waiting_for_lock` with updated `lock_blocked_by` metadata.
+- On retry, any stale `lock_blocked_at` / `lock_blocked_by` fields are cleared before attempting lock acquisition.
+- No Bark notification is sent for `waiting_for_lock` transitions — this is a transient internal state, not a terminal status requiring human review.
+
 ### How Same-Repo Concurrency Is Blocked
 
 The `runAssignedCodexTasks` tool processes assigned tasks with bounded concurrency (default: 4). For each builder/deploy/admin task, it calls `processGeneralTask` which:
 
 1. Checks if the task has a canonical repo path
-2. Calls `acquireRepoLock` — if another task holds the lock, the current task is marked `waiting_for_review` with log: `"repo locked by task X, retry after completion. Skipping."`
+2. Calls `acquireRepoLock` — if another task holds the lock, the current task is marked `waiting_for_lock` with `lock_blocked_by` metadata and log: `"repo locked by task X, retry after completion. Skipping."`
 3. If lock acquired, proceeds to spawn Codex normally
 
 Since lock acquisition happens early in `processGeneralTask` (before marking `running`), two concurrent worker ticks cannot both spawn Codex for the same repo.

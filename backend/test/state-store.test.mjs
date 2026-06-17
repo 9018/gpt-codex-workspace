@@ -1,9 +1,9 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { StateStore } from "../src/state-store.mjs";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
@@ -294,4 +294,43 @@ test("StateStore defaultState creates correct structure", async () => {
   assert.deepEqual(state.goals, []);
   assert.deepEqual(state.conversations, []);
   assert.deepEqual(state.memories, []);
+});
+
+// -----------------------------------------------------------------------
+// P0-2: Concurrent save is serialized and uses atomic write
+// -----------------------------------------------------------------------
+
+test("StateStore concurrent saves are serialized and use atomic write", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-concurrent-"));
+  const statePath = join(root, "state.json");
+
+  const store = new StateStore({
+    statePath,
+    defaultWorkspaceRoot: join(root, "workspace")
+  });
+
+  const state = await store.load();
+  assert.ok(state, "state should load");
+
+  // Trigger multiple concurrent saves
+  const savePromises = [];
+  for (let i = 0; i < 10; i++) {
+    state.tasks.push({ id: "task_" + i, title: "Task " + i });
+    savePromises.push(store.save());
+    state.tasks.push({ id: "task_extra_" + i, title: "Extra " + i });
+    savePromises.push(store.save());
+  }
+
+  // Wait for all saves to complete
+  await Promise.all(savePromises);
+
+  // After all saves, the file should be valid JSON
+  const content = await readFile(statePath, "utf8");
+  const parsed = JSON.parse(content);
+  assert.ok(parsed, "state file should contain valid JSON after concurrent saves");
+
+  // Temp files should be cleaned up (no .tmp files left)
+  const dir = await readdir(dirname(statePath));
+  const tmpFiles = dir.filter((f) => f.endsWith(".tmp"));
+  assert.equal(tmpFiles.length, 0, "no temp files should remain after save: " + JSON.stringify(tmpFiles));
 });

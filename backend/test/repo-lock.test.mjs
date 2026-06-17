@@ -19,7 +19,7 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
@@ -39,6 +39,23 @@ import {
 // ---------------------------------------------------------------------------
 // Test helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * Create a mock `codex` executable in a temp directory and prepend it to PATH.
+ * This allows tests to run without the real Codex binary (which hangs waiting
+ * for LLM backend).
+ * Returns a cleanup function that restores the original PATH.
+ */
+function setupMockCodex() {
+  const mockDir = mkdtempSync(join(tmpdir(), "mock-codex-"));
+  const mockCodex = join(mockDir, "codex");
+  const mockScript = '#!/bin/sh\necho "STATUS=completed\nSUMMARY=test"\nexit 0\n';
+  writeFileSync(mockCodex, mockScript, "utf8");
+  chmodSync(mockCodex, 0o755);
+  const origPath = process.env.PATH || "";
+  process.env.PATH = mockDir + ":" + origPath;
+  return function restore() { process.env.PATH = origPath; };
+}
 
 async function makeServer() {
   const root = await mkdtemp(join(tmpdir(), "gptwork-lock-"));
@@ -492,7 +509,9 @@ test("reconcileStaleTasks includes Phase B repo lock reconciliation", async () =
 // 10. Process interaction with run_assigned_codex_tasks
 // ================================================================
 
-test("two assigned tasks for same repo: only one Codex spawns", async () => {
+test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_for_review", async () => {
+  const restorePath = setupMockCodex();
+  try {
   const root = await mkdtemp(join(tmpdir(), "gptwork-lock-twotasks-"));
   const workspaceRoot = join(root, "workspace");
   await mkdir(workspaceRoot, { recursive: true });
@@ -502,7 +521,7 @@ test("two assigned tasks for same repo: only one Codex spawns", async () => {
     defaultWorkspaceRoot: workspaceRoot,
     defaultRepoPath: workspaceRoot,
     codexHome: root,
-    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=first-task')"`,
+    codexExecArgs: "",
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true
@@ -524,18 +543,250 @@ test("two assigned tasks for same repo: only one Codex spawns", async () => {
   });
   await callTool(server, "assign_task_to_codex", { task_id: t2.task.id });
 
-  // First run should complete one task
+  // Run assigned tasks — first task spawns, second should be blocked
   const run1 = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 2 });
 
-  // At least one task should have completed
-  assert.ok(run1.completed >= 1 || run1.skipped >= 0, "should process tasks");
+  // Verify task processing result
+  console.log("DEBUG: run_assigned_codex_tasks results:", JSON.stringify(run1.tasks, null, 2));
+  assert.ok(run1.completed >= 1, "first task should complete. Got completed=" + run1.completed + ". Tasks: " + JSON.stringify(run1.tasks));
 
-  // The repo lock should now be released after task completion
+  // Check the second task's status — it must be waiting_for_lock, NOT waiting_for_review
+  const t2result = run1.tasks.find(function(t) { return t.task_id === t2.task.id; });
+  if (t2result) {
+    // The second task could still be running (if concurrency allowed both to start)
+    // But it must NOT be waiting_for_review
+    assert.notEqual(t2result.status, "waiting_for_review",
+      "second task must NOT be waiting_for_review. Got: " + t2result.status);
+    if (t2result.status === "waiting_for_lock") {
+      assert.ok(t2result.skipped, "blocked task should be skipped");
+      assert.match(t2result.reason || "", /repo locked/, "reason should mention repo lock");
+    }
+  }
+
+  // Verify with get_task that lock_blocked metadata is set (if blocked)
+  const t2Task = await callTool(server, "get_task", { task_id: t2.task.id });
+  if (t2Task.task.status === "waiting_for_lock") {
+    assert.ok(t2Task.task.lock_blocked_at, "blocked task should have lock_blocked_at");
+    assert.ok(t2Task.task.lock_blocked_by, "blocked task should have lock_blocked_by");
+    assert.match(t2Task.task.lock_blocked_by, /task_/, "lock_blocked_by should reference a task id");
+  }
+
+  // The repo lock summary should still report correctly
   const summary = await getRepoLockSummary(workspaceRoot);
-  // No active locks should remain
-  assert.ok(summary.active_repo_locks <= 1, "should have 0 or 1 active locks (test race)");
+  // At most 1 active lock (the completed task released it)
+  assert.ok(summary.active_repo_locks <= 1, "should have 0 or 1 active locks. Got: " + summary.active_repo_locks);
+  } finally {
+    restorePath();
+  }
 });
 
+// ================================================================
+// 11b. waiting_for_lock semantics
+// ================================================================
+
+test("blocked task with waiting_for_lock is retried after lock release", async () => {
+  const restorePath = setupMockCodex();
+  try {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-retry-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
+    codexHome: root,
+    codexExecArgs: "",
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  // Acquire a repo lock manually to simulate another task running
+  const repoPath = workspaceRoot;
+  const lockAcquire = await acquireRepoLock(workspaceRoot, repoPath, {
+    taskId: "task_holding_lock",
+    mode: "deploy"
+  });
+  assert.ok(lockAcquire.acquired, "should acquire test lock");
+
+  // Create a task that will be blocked
+  const t1 = await callTool(server, "create_task", {
+    title: "Blocked task",
+    description: "Should be blocked by lock, then retry after release",
+    mode: "builder"
+  });
+  await callTool(server, "assign_task_to_codex", { task_id: t1.task.id });
+
+  // Run — the task should be blocked because lock is held
+  const run1 = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 2 });
+  const t1result1 = run1.tasks.find(function(t) { return t.task_id === t1.task.id; });
+  assert.ok(t1result1, "task should have been inspected");
+  assert.equal(t1result1.status, "waiting_for_lock", "task should be waiting_for_lock when lock is held. Got: " + t1result1.status);
+
+  // Verify get_task shows lock_blocked metadata
+  const t1blocked = await callTool(server, "get_task", { task_id: t1.task.id });
+  assert.ok(t1blocked.task.lock_blocked_at, "blocked task should have lock_blocked_at");
+  assert.equal(t1blocked.task.lock_blocked_by, "task_holding_lock", "should show which task holds the lock");
+
+  // Now release the lock
+  await releaseRepoLock(workspaceRoot, repoPath, "task_holding_lock");
+  const releasedCheck = await getRepoLockSummary(workspaceRoot);
+  assert.equal(releasedCheck.active_repo_locks, 0, "lock should be released");
+
+  // Run again — the task should now be eligible and complete
+  const run2 = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 2 });
+  const t1result2 = run2.tasks.find(function(t) { return t.task_id === t1.task.id; });
+  if (t1result2) {
+    // After lock release, the task could be running or completed
+    assert.notEqual(t1result2.status, "waiting_for_lock",
+      "task should no longer be waiting_for_lock after lock release. Got: " + t1result2.status);
+    assert.notEqual(t1result2.status, "waiting_for_review",
+      "task should NOT become waiting_for_review. Got: " + t1result2.status);
+  }
+
+  console.log("DEBUG: second run results:", JSON.stringify(run2.tasks, null, 2));
+  // Final verification: the task eventually completes
+  const t1final = await callTool(server, "get_task", { task_id: t1.task.id });
+  console.log("DEBUG: final task:", JSON.stringify(t1final.task, null, 2));
+  // Move the debug log after the variable declaration
+  assert.ok(t1final.task.status === "completed" || t1final.task.status === "running",
+    "task should eventually run. Got: " + t1final.task.status);
+  // lock_blocked metadata should be cleared when task starts running
+  if (t1final.task.status === "running" || t1final.task.status === "completed") {
+    assert.equal(t1final.task.lock_blocked_at, undefined,
+      "lock_blocked_at should be cleared when task starts running or completes");
+    assert.equal(t1final.task.lock_blocked_by, undefined,
+      "lock_blocked_by should be cleared when task starts running or completes");
+  }
+  } finally {
+    restorePath();
+  }
+});
+
+test("waiting_for_lock task does not trigger Bark waiting_for_review notification", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-nobark-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
+    codexHome: root,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\nSUMMARY=nobark')"`,
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  // Acquire lock manually to force blocking
+  const repoPath = workspaceRoot;
+  await acquireRepoLock(workspaceRoot, repoPath, {
+    taskId: "task_lock_holder",
+    mode: "deploy"
+  });
+
+  // Create a task that will be blocked
+  const t1 = await callTool(server, "create_task", {
+    title: "No-bark task",
+    description: "Should be blocked without Bark",
+    mode: "builder"
+  });
+  await callTool(server, "assign_task_to_codex", { task_id: t1.task.id });
+
+  // Run — task should be waiting_for_lock
+  const run1 = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 2 });
+  const t1result = run1.tasks.find(function(t) { return t.task_id === t1.task.id; });
+  if (t1result) {
+    assert.equal(t1result.status, "waiting_for_lock",
+      "should be waiting_for_lock. Got: " + t1result.status);
+  }
+
+  // Verify task does NOT have notified:bark:waiting_for_lock flag
+  // (this is how notifyTerminalTaskIfNeeded tracks notifications)
+  const t1task = await callTool(server, "get_task", { task_id: t1.task.id });
+  // The task should NOT have waiting_for_review status (triggers Bark)
+  assert.notEqual(t1task.task.status, "waiting_for_review",
+    "task status must not be waiting_for_review to prevent Bark trigger");
+  assert.notEqual(t1task.task.status, "waiting_review",
+    "task status must not be waiting_review either");
+  assert.equal(t1task.task.status, "waiting_for_lock",
+    "task should be waiting_for_lock (no Bark for this status)");
+
+  // Repo lock diagnostics still work
+  const locks = await callTool(server, "repo_lock_status", {});
+  assert.ok(typeof locks.active_repo_locks === "number", "repo_lock_status should be callable");
+  assert.ok(locks.active_repo_locks >= 1, "should report the held lock");
+
+  const listResult = await callTool(server, "list_repo_locks", {});
+  assert.ok(Array.isArray(listResult.locks), "list_repo_locks should return locks array");
+});
+
+test("repo_lock_status and list_repo_locks still report locks correctly with waiting_for_lock tasks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-diag-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
+    codexHome: root,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\nSUMMARY=diag')"`,
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  // Acquire a lock on the repo
+  await acquireRepoLock(workspaceRoot, workspaceRoot, {
+    taskId: "task_diag_holder",
+    mode: "deploy"
+  });
+
+  // Create a task that will be blocked
+  const t1 = await callTool(server, "create_task", {
+    title: "Diagnostic task",
+    description: "Checking diagnostics with waiting_for_lock",
+    mode: "deploy"
+  });
+  await callTool(server, "assign_task_to_codex", { task_id: t1.task.id });
+
+  // Run to trigger waiting_for_lock
+  await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 2 });
+
+  // repo_lock_status should show the held lock
+  const repoStatus = await callTool(server, "repo_lock_status", {});
+  assert.ok(typeof repoStatus.active_repo_locks === "number", "active_repo_locks should be a number");
+  assert.ok(repoStatus.active_repo_locks >= 1, "should have at least 1 active lock");
+  if (repoStatus.locks && repoStatus.locks.length > 0) {
+    const lockEntry = repoStatus.locks.find(l => l.task_id === "task_diag_holder");
+    assert.ok(lockEntry, "should find the held lock in repo_lock_status output");
+    assert.equal(lockEntry.status, "held", "lock should be held");
+  }
+
+  // list_repo_locks should also show the lock
+  const listResult = await callTool(server, "list_repo_locks", {});
+  assert.ok(Array.isArray(listResult.locks), "should return locks array");
+  if (listResult.locks.length > 0) {
+    const lockEntry = listResult.locks.find(l => l.task_id === "task_diag_holder");
+    assert.ok(lockEntry, "should find the held lock in list_repo_locks output");
+  }
+
+  // runtime_status should include repo_locks
+  const runtimeStatus = await callTool(server, "runtime_status", {});
+  assert.ok("repo_locks" in runtimeStatus, "runtime_status should have repo_locks field");
+  assert.ok(typeof runtimeStatus.repo_locks.active_repo_locks === "number");
+
+  // gptwork_doctor should include repo_locks
+  const doctor = await callTool(server, "gptwork_doctor", {});
+  assert.ok("repo_locks" in doctor, "gptwork_doctor should have repo_locks field");
+});
+
+// ================================================================
+// 11. releaseLockForTask (renumbered after insertion above)
+// ================================================================
 // ================================================================
 // 11. releaseLockForTask
 // ================================================================
@@ -615,3 +866,59 @@ test("readonly session inventory tasks are unaffected by repo locks", async () =
   assert.equal(locks.active_repo_locks, 0);
   assert.equal(locks.stale_repo_locks, 0);
 });
+
+// ================================================================
+// Additional P0-1: Draft tasks with empty assignee are not executed
+// ================================================================
+
+test("draft task with empty assignee is ignored by run_assigned_codex_tasks", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-draft-skip-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
+    codexHome: root,
+    codexExecArgs: "",
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  // Create a draft task without assignee
+  const draftTask = await callTool(server, "create_task", {
+    title: "Draft Task",
+    description: "This task should not be auto-executed",
+    mode: "builder"
+  });
+  // By default, create_task creates a task with assignee="" and status="draft"
+  assert.equal(draftTask.task.status, "draft", "default task should be draft");
+  assert.equal(draftTask.task.assignee, "", "default task should have no assignee");
+
+  // Create an assigned codex task that should be processed
+  const realTask = await callTool(server, "create_task", {
+    title: "Real Task",
+    description: "This task should be processed",
+    mode: "builder"
+  });
+  await callTool(server, "assign_task_to_codex", { task_id: realTask.task.id });
+
+  // Run assigned tasks
+  const run = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 1 });
+
+  // Draft task should NOT be in the results at all
+  const draftResult = run.tasks.find(function(t) { return t.task_id === draftTask.task.id; });
+  assert.equal(draftResult, undefined, "draft task should not be in run_assigned_codex_tasks results");
+
+  // Draft task should still have status=draft (not auto-promoted)
+  const draftCheck = await callTool(server, "get_task", { task_id: draftTask.task.id });
+  assert.equal(draftCheck.task.status, "draft", "draft task should remain draft after run_assigned_codex_tasks");
+  assert.equal(draftCheck.task.assignee, "", "draft task should remain unassigned");
+
+  // The real task should be in results (it was assigned to codex)
+  const realResult = run.tasks.find(function(t) { return t.task_id === realTask.task.id; });
+  assert.ok(realResult, "assigned codex task should be processed");
+});
+

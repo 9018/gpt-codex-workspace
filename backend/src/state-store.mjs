@@ -1,5 +1,6 @@
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
+import { randomUUID } from "node:crypto";
 
 export class StateStore {
   constructor({ statePath, defaultWorkspaceRoot, oldDefaultStatePath }) {
@@ -8,6 +9,7 @@ export class StateStore {
     this.oldDefaultStatePath = oldDefaultStatePath || null;
     this.state = null;
     this._migrationSource = null;
+    this._saveLock = null;
   }
 
   async load() {
@@ -24,7 +26,14 @@ export class StateStore {
 
   async save() {
     await mkdir(dirname(this.statePath), { recursive: true });
-    await writeFile(this.statePath, JSON.stringify(this.state, null, 2), "utf8");
+    // Serialize concurrent saves to prevent interleaving.
+    // Use temp-file + atomic rename to avoid partial writes on crash.
+    this._saveLock = (this._saveLock || Promise.resolve()).then(async () => {
+      const tmpPath = this.statePath + "." + randomUUID() + ".tmp";
+      await writeFile(tmpPath, JSON.stringify(this.state, null, 2), "utf8");
+      await rename(tmpPath, this.statePath);
+    });
+    return this._saveLock;
   }
 
   async _migrateIfNeeded() {

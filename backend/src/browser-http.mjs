@@ -1,10 +1,21 @@
+/**
+ * Lightweight HTTP browser module.
+ * 
+ * This module performs server-side HTTP/HTML extraction only. It does NOT:
+ * - Execute page JavaScript
+ * - Support real click/fill/press/scroll interactions
+ * - Take full browser screenshots
+ * 
+ * For full browser automation (JS execution, rendering, screenshots),
+ * a Playwright-enabled adapter is required.
+ */
 import { randomUUID } from "node:crypto";
 
 export function createBrowserRegistry() {
   const sessions = new Map();
 
   return {
-    newSession({ headless = true, viewport_width = 1365, viewport_height = 768 } = {}) {
+    newSession({ headless = true, viewport_width = 1365, viewport_height = 768 } = {})  {
       const session = {
         session_id: randomUUID(),
         headless,

@@ -131,14 +131,29 @@ export function createGithubSync(config) {
   }
 
   return {
+    /**
+     * Search GitHub API for an existing issue containing a Task ID or Request ID.
+     * Used as fallback when in-memory knownIssues is empty (e.g., after restart).
+     */
+    async _findExistingIssue(searchBody) {
+      if (!enabled) return null;
+      const res = await api("GET", "/issues?labels=gptwork-task,gptwork-question&state=open&per_page=100");
+      if (!Array.isArray(res)) return null;
+      return res.find((i) => (i.body || "").includes(searchBody)) || null;
+    },
+
     enabled,
 
     async syncTask(task) {
       if (!enabled) return { ok: false, reason: "github not configured" };
       const label = "task-" + task.status;
-      const existing = knownIssues.find((i) =>
+      let existing = knownIssues.find((i) =>
         i.body && i.body.includes("**Task ID**: `" + task.id + "`")
       );
+      if (!existing) {
+        const found = await this._findExistingIssue("**Task ID**: `" + task.id + "`");
+        if (found) existing = found;
+      }
       try {
         if (existing) {
           const res = await api("PATCH", "/issues/" + existing.number, {
@@ -167,9 +182,13 @@ export function createGithubSync(config) {
 
     async syncChatGptRequest(request) {
       if (!enabled) return { ok: false, reason: "github not configured" };
-      const existing = knownIssues.find((i) =>
+      let existing = knownIssues.find((i) =>
         i.body && i.body.includes("**Request ID**: `" + request.id + "`")
       );
+      if (!existing) {
+        const found = await this._findExistingIssue("**Request ID**: `" + request.id + "`");
+        if (found) existing = found;
+      }
       try {
         if (existing) {
           await api("PATCH", "/issues/" + existing.number, {
@@ -198,7 +217,7 @@ export function createGithubSync(config) {
 
     async pollIssues() {
       if (!enabled) return [];
-      const res = await api("GET", "/issues?labels=gptwork-task,gptwork-question&state=open&per_page=50");
+      const res = await api("GET", "/issues?labels=gptwork-task,gptwork-question&state=open&per_page=100");
       if (!res) return [];
       knownIssues = Array.isArray(res) ? res : [];
       knownComments = {};

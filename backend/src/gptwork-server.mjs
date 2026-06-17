@@ -1025,7 +1025,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     download_bundle_base64: tool("Create a ZIP bundle from a workspace directory or selected paths and return it as base64 with a SHA256 digest.", schema({ source_dir: "string", paths: "array", workspace_id: "string" }, []), async (args, context) => workspaceDownloadBundleBase64(store, config, args, context)),
     upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
     mkdir: tool("Create a directory.", schema({ path: "string", workspace_id: "string" }, ["path"]), async (args, context) => workspaceMkdir(store, config, args, context)),
-    delete_path: tool("归档或清理文件/目录。文件先移入回收位置，确认后可永久清除。", schema({ path: "string", recursive: "boolean", workspace_id: "string" }, ["path"]), async (args, context) => workspaceDelete(store, config, args, context)),
+    delete_path: tool("Permanently delete a file or directory. Files are deleted immediately, without recycle/trash. Use with caution.", schema({ path: "string", recursive: "boolean", workspace_id: "string" }, ["path"]), async (args, context) => workspaceDelete(store, config, args, context)),
     move_path: tool("Move or rename a file/directory.", schema({ src: "string", dst: "string", overwrite: "boolean", workspace_id: "string" }, ["src", "dst"]), async (args, context) => workspaceMove(store, config, args, context)),
     copy_path: tool("Copy a file or directory.", schema({ src: "string", dst: "string", overwrite: "boolean", workspace_id: "string" }, ["src", "dst"]), async (args, context) => workspaceCopy(store, config, args, context)),
     search_files: tool("Search text content and file names under a directory.", schema({ q: "string", path: "string", limit: "integer", workspace_id: "string" }, ["q"]), async (args, context) => workspaceSearch(store, config, args, context)),
@@ -1118,19 +1118,19 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return { checked_issues: github.getKnownIssues().length, responses_found: responses.length, responses: responses.map((r) => ({ request_id: r.request_id, from: r.user })) };
     }),
 
-    browser_new_session: tool("Create a lightweight browser session.", schema({ headless: "boolean", viewport_width: "integer", viewport_height: "integer" }), async (args) => browser.newSession(args)),
+    browser_new_session: tool("Create a lightweight HTTP browser session (no JS execution, no real rendering).", schema({ headless: "boolean", viewport_width: "integer", viewport_height: "integer" }), async (args) => browser.newSession(args)),
     browser_list_sessions: tool("List browser sessions.", schema({}), async () => browser.listSessions()),
     browser_close_session: tool("Close a browser session.", schema({ session_id: "string" }, ["session_id"]), async ({ session_id }) => browser.closeSession(session_id)),
-    browser_goto: tool("Navigate a browser session to a URL.", schema({ session_id: "string", url: "string" }, ["session_id", "url"]), async ({ session_id, url }) => browser.goto(session_id, url)),
+    browser_goto: tool("Navigate a browser session to a URL. Performs a server-side HTTP GET; page JavaScript is not executed.", schema({ session_id: "string", url: "string" }, ["session_id", "url"]), async ({ session_id, url }) => browser.goto(session_id, url)),
     browser_current_state: tool("Return current page URL and title.", schema({ session_id: "string" }, ["session_id"]), async ({ session_id }) => browser.currentState(session_id)),
     browser_get_text: tool("Extract visible inner text.", schema({ session_id: "string", max_chars: "integer" }, ["session_id"]), async ({ session_id, max_chars }) => browser.getText(session_id, max_chars)),
     browser_get_html: tool("Extract HTML.", schema({ session_id: "string", max_chars: "integer" }, ["session_id"]), async ({ session_id, max_chars }) => browser.getHtml(session_id, max_chars)),
     browser_extract_links: tool("Extract links.", schema({ session_id: "string", limit: "integer" }, ["session_id"]), async ({ session_id, limit }) => browser.extractLinks(session_id, limit)),
-    browser_click: tool("Record a click.", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.click(session_id, selector)),
-    browser_fill: tool("Record input fill.", schema({ session_id: "string", selector: "string", text: "string" }, ["session_id", "selector", "text"]), async ({ session_id, selector, text }) => browser.fill(session_id, selector, text)),
-    browser_press: tool("Record key press.", schema({ session_id: "string", selector: "string", key: "string" }, ["session_id", "selector", "key"]), async ({ session_id, selector, key }) => browser.press(session_id, selector, key)),
-    browser_wait_for_selector: tool("Wait for selector.", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.waitForSelector(session_id, selector)),
-    browser_scroll: tool("Record scroll.", schema({ session_id: "string", x: "integer", y: "integer" }, ["session_id"]), async ({ session_id, x, y }) => browser.scroll(session_id, x, y)),
+    browser_click: tool("Record a click target (lightweight HTTP browser; clicks do not trigger JS or navigation).", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.click(session_id, selector)),
+    browser_fill: tool("Record input fill target (lightweight HTTP browser; does not execute form JS).", schema({ session_id: "string", selector: "string", text: "string" }, ["session_id", "selector", "text"]), async ({ session_id, selector, text }) => browser.fill(session_id, selector, text)),
+    browser_press: tool("Record key press (lightweight HTTP browser; does not execute JS).", schema({ session_id: "string", selector: "string", key: "string" }, ["session_id", "selector", "key"]), async ({ session_id, selector, key }) => browser.press(session_id, selector, key)),
+    browser_wait_for_selector: tool("Wait for selector (lightweight HTTP browser; no JS or DOM mutation tracking).", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.waitForSelector(session_id, selector)),
+    browser_scroll: tool("Record scroll target (lightweight HTTP browser; does not execute JS).", schema({ session_id: "string", x: "integer", y: "integer" }, ["session_id"]), async ({ session_id, x, y }) => browser.scroll(session_id, x, y)),
     browser_screenshot: tool("[EXPERIMENTAL] Take a browser screenshot. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", path: "string" }, ["session_id"]), async ({ session_id, path = "" }) => ({ ok: false, session_id, path, error: "screenshots require a Playwright-enabled browser adapter" })),
     browser_set_input_files: tool("[EXPERIMENTAL] Upload files to a browser input. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
     browser_click_and_download: tool("[EXPERIMENTAL] Click an element and download its target. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
@@ -2410,13 +2410,13 @@ async function runAssignedCodexTasks(store, config, github, { limit = 10, concur
   const state = await store.load();
   await normalizeLegacyModes(store, state);
   const candidates = state.tasks
-    .filter((task) => (task.assignee === "codex" || task.assignee === "") && (task.status === "assigned" || task.status === "queued" || task.status === "draft") && canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id))
+    .filter((task) => task.assignee === "codex" && (task.status === "assigned" || task.status === "queued"  || task.status === "waiting_for_lock") && canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id))
     .slice(0, maxTasks);
 
 
   const results = await mapConcurrent(candidates, maxConcurrency, async (task) => {
     // Auto-promote queued tasks to assigned
-    if (task.status === "queued" || task.status === "draft") {
+    if (task.status === "queued" ) {
       await updateTask(store, task.id, (t) => { t.status = "assigned"; if (!t.assignee) t.assignee = "codex"; t.logs.push({ time: new Date().toISOString(), message: `[worker] auto-assigned from ${task.status}` }); });
       task.status = "assigned";
     }
@@ -2510,6 +2510,11 @@ async function processGeneralTask(store, config, task, context) {
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
+  // Clear any previous repo lock blocking metadata if this is a retry
+  await updateTask(store, task.id, (item) => {
+    delete item.lock_blocked_at;
+    delete item.lock_blocked_by;
+  });
   // Acquire repo lock to prevent concurrent same-repo Codex execution
   const _repoLockPath = config.defaultRepoPath;
   if (_repoLockPath) {
@@ -2521,7 +2526,9 @@ async function processGeneralTask(store, config, task, context) {
     if (!_lockResult.acquired) {
       const _lockMsg = "[worker] repo locked by task " + _lockResult.heldByTask + ", retry after completion. Skipping.";
       await updateTask(store, task.id, function(item) {
-        item.status = "waiting_for_review";
+        item.status = "waiting_for_lock";
+        item.lock_blocked_at = new Date().toISOString();
+        item.lock_blocked_by = _lockResult.heldByTask;
         item.logs.push({ time: new Date().toISOString(), message: _lockMsg });
       });
       if (goal) {
@@ -2531,7 +2538,7 @@ async function processGeneralTask(store, config, task, context) {
           content: _lockMsg
         }, context);
       }
-      return { task_id: task.id, status: "waiting_for_review", skipped: true, reason: _lockMsg };
+      return { task_id: task.id, status: "waiting_for_lock", skipped: true, reason: _lockMsg };
     }
   }
   // Mark as running to prevent duplicate processing by subsequent ticks
@@ -2912,7 +2919,25 @@ async function resolvePath(store, config, args, context) {
 async function workspaceListDir(store, config, { path = ".", recursive = false, limit = 500, workspace_id }, context) {
   requireScope(context, "workspace:read");
   const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
-  if (workspace.type === "ssh") return sshListDir(workspace, path, 15);
+  if (workspace.type === "ssh") {
+    const raw = await sshListDir(workspace, path, 15);
+    // Parse ls -la output into structured items for consistency with hosted
+    const items = [];
+    for (const line of (raw.stdout || "").split("\n")) {
+      if (items.length >= limit) break;
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("total ") || trimmed.startsWith("d********")) continue;
+      // Parse typical ls -la line: permissions links owner group size date name
+      const parts = trimmed.split(/\s+/);
+      if (parts.length < 9) continue;
+      const name = parts.slice(8).join(" ");
+      if (name === "." || name === "..") continue;
+      const type = parts[0].startsWith("d") ? "directory" : "file";
+      const size = parseInt(parts[4], 10) || 0;
+      items.push({ path: name, name, type, size, modified_at: parts[5] + " " + parts[6] + " " + parts[7] });
+    }
+    return { path, recursive, count: items.length, limit, items, raw: { returncode: raw.returncode, stdout: raw.stdout, stderr: raw.stderr } };
+  }
   const items = [];
   async function walk(abs, rel) {
     for (const entry of await readdir(abs, { withFileTypes: true })) {
@@ -3089,7 +3114,12 @@ async function workspaceCopy(store, config, { src, dst, overwrite = false, works
 async function workspaceSearch(store, config, { q, path = ".", limit = 50, workspace_id }, context) {
   requireScope(context, "workspace:read");
   const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
-  if (workspace.type === "ssh") return sshSearchFiles(workspace, q, resolvedPath, 60, limit);
+  if (workspace.type === "ssh") {
+    const raw = await sshSearchFiles(workspace, q, resolvedPath, 60, limit);
+    const paths = (raw.stdout || "").trim().split("\n").filter(Boolean).slice(0, limit);
+    const results = paths.map((p) => ({ path: p, matched_name: true, matched_content: true, snippet: "" }));
+    return { q, path, count: results.length, results, raw: { returncode: raw.returncode, stdout: raw.stdout, stderr: raw.stderr } };
+  }
   const results = [];
   async function walk(abs, rel) {
     for (const entry of await readdir(abs, { withFileTypes: true })) {
