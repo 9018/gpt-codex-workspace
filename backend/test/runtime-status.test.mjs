@@ -1,3 +1,4 @@
+import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
@@ -170,7 +171,7 @@ test("notification_status source shows workspace-runtime-env when bark config lo
   // sets process.env values before notifier creation. The configSource
   // parameter is "workspace-runtime-env" but the source tracking correctly
   // identifies the value came from process.env.
-  assert.equal(status.source, "process.env");
+  assert.equal(status.source, "workspace-runtime-env");
 });
 
 // ================================================================

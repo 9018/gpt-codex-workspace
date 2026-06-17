@@ -1,3 +1,4 @@
+import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
