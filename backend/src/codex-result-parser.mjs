@@ -1,16 +1,80 @@
 /**
  * Codex result parser - extracts structured fields from Codex CLI output.
  *
- * Codex is instructed to emit a structured report with these fields:
- *   STATUS=<completed|failed|timed_out>
- *   SUMMARY=<one line>
- *   CHANGED_FILES=<comma separated or none>
- *   TESTS=<commands and pass/fail or none>
- *   COMMIT=<sha or none>
- *   REMOTE_HEAD=<sha or none>
+ * Two parsing modes:
+ *   1. result.json (preferred) - a JSON file written by Codex at the end of execution
+ *   2. stdout structured fields (fallback) - STATUS=<...>, SUMMARY=<...>, etc.
  *
- * This parser extracts those fields and normalizes them into a consistent object.
+ * result.json contract:
+ *   {
+ *     "status": "completed" | "failed" | "timed_out",
+ *     "summary": "string",
+ *     "changed_files": ["file1.js", "file2.js"],
+ *     "tests": "string describing test results",
+ *     "commit": "sha256",
+ *     "remote_head": "sha256",
+ *     "warnings": ["string", ...],
+ *     "followups": ["string", ...]
+ *   }
+ *
+ * The parser first looks for a result.json at a known path. If found and valid,
+ * it uses that. Otherwise it falls back to parsing the stdout structured fields.
  */
+
+import { readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+
+// ---------------------------------------------------------------------------
+// result.json parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Try to parse a result.json file from a known path.
+ *
+ * @param {string} resultJsonPath - Absolute path to result.json file.
+ * @returns {Promise<object|null>} Parsed result object or null if not found/invalid.
+ */
+export async function parseResultJson(resultJsonPath) {
+  if (!resultJsonPath) return null;
+  try {
+    if (!existsSync(resultJsonPath)) return null;
+    const text = await readFile(resultJsonPath, "utf8");
+    const data = JSON.parse(text);
+
+    // Validate contract fields
+    const validStatuses = ["completed", "failed", "timed_out"];
+    const status = data.status && validStatuses.includes(data.status) ? data.status : null;
+    const summary = typeof data.summary === "string" ? data.summary : null;
+    const changedFiles = Array.isArray(data.changed_files) ? data.changed_files.filter(f => typeof f === "string") : [];
+    const tests = typeof data.tests === "string" ? data.tests : null;
+    const commit = typeof data.commit === "string" ? data.commit : null;
+    const remoteHead = typeof data.remote_head === "string" ? data.remote_head : null;
+    const warnings = Array.isArray(data.warnings) ? data.warnings.filter(w => typeof w === "string") : [];
+    const followups = Array.isArray(data.followups) ? data.followups.filter(f => typeof f === "string") : [];
+
+    if (!status) return null;
+
+    return {
+      status,
+      summary,
+      changed_files: changedFiles,
+      tests,
+      commit,
+      remote_head: remoteHead,
+      warnings,
+      followups,
+      structured: true,
+      from_json: true,
+      json_errors: [],
+    };
+  } catch {
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// stdout structured parser (original)
+// ---------------------------------------------------------------------------
 
 /**
  * Parse the structured report from Codex output.
@@ -23,7 +87,10 @@
  *   - tests: string or null
  *   - commit: string or null
  *   - remote_head: string or null
+ *   - warnings: string[] (always empty from stdout parser)
+ *   - followups: string[] (always empty from stdout parser)
  *   - structured: boolean - true if any structured fields were found
+ *   - from_json: false
  *   - raw_summary_excerpt: first 500 chars of raw output for diagnostics
  */
 export function parseCodexResult(output) {
@@ -35,7 +102,10 @@ export function parseCodexResult(output) {
       tests: null,
       commit: null,
       remote_head: null,
+      warnings: [],
+      followups: [],
       structured: false,
+      from_json: false,
       raw_summary_excerpt: null
     };
   }
@@ -121,18 +191,60 @@ export function parseCodexResult(output) {
     tests,
     commit,
     remote_head: remoteHead,
+    warnings: [],
+    followups: [],
     structured,
+    from_json: false,
     raw_summary_excerpt: output.slice(0, 500)
   };
 }
 
+// ---------------------------------------------------------------------------
+// Combined parser (prefers result.json, falls back to stdout)
+// ---------------------------------------------------------------------------
+
+/**
+ * Try to parse result.json first. If not found or invalid, fall back to
+ * parsing the stdout structured fields.
+ *
+ * @param {object} options
+ * @param {string} [options.resultJsonPath] - Path to result.json file.
+ * @param {string} [options.stdout] - Raw stdout from Codex CLI execution.
+ * @returns {Promise<object>} Parsed result object.
+ */
+export async function parseCodexResultWithFallback({ resultJsonPath, stdout } = {}) {
+  // Try result.json first
+  if (resultJsonPath) {
+    const jsonResult = await parseResultJson(resultJsonPath);
+    if (jsonResult) {
+      return jsonResult;
+    }
+  }
+
+  // Fall back to stdout parser
+  const stdoutResult = parseCodexResult(stdout);
+
+  // Add a note that we attempted result.json but fell back
+  if (resultJsonPath) {
+    stdoutResult._result_json_path = resultJsonPath;
+    stdoutResult._result_json_error = "not found or invalid";
+  }
+
+  return stdoutResult;
+}
+
+// ---------------------------------------------------------------------------
+// Task result builder (unchanged interface, extended with warnings/followups)
+// ---------------------------------------------------------------------------
+
 /**
  * Build a task.result object from parsed Codex output for successful execution.
  *
- * @param {object} parsed - Result from parseCodexResult()
+ * @param {object} parsed - Result from parseCodexResult() or parseResultJson()
  * @param {object} options
  * @param {boolean} options.timedOut - Whether the process timed out
  * @param {number} options.timeoutSeconds - Timeout duration in seconds
+ * @param {number} options.returnCode - Process exit code
  * @returns {object} Task result object
  */
 export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, returnCode = 0 } = {}) {
@@ -144,6 +256,9 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       summary: parsed.summary || "Codex execution timed out",
       timed_out: true,
       timeout_seconds: timeoutSeconds,
+      changed_files: parsed.changed_files || [],
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
       completed_at: now
     };
   }
@@ -154,10 +269,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       kind: "codex_failed",
       summary: parsed.summary || "Codex execution reported failure",
       structured: parsed.structured,
-      changed_files: parsed.changed_files,
+      from_json: parsed.from_json,
+      changed_files: parsed.changed_files || [],
       tests: parsed.tests,
       commit: parsed.commit,
       remote_head: parsed.remote_head,
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
       completed_at: now,
       timed_out: false
     };
@@ -169,10 +287,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       kind: "codex_executed",
       summary: parsed.summary || "Codex execution completed (no structured summary)",
       structured: parsed.structured,
-      changed_files: parsed.changed_files,
+      from_json: parsed.from_json,
+      changed_files: parsed.changed_files || [],
       tests: parsed.tests,
       commit: parsed.commit,
       remote_head: parsed.remote_head,
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
       completed_at: now
     };
   }
@@ -183,10 +304,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       kind: "codex_failed",
       summary: parsed.summary || "Codex execution reported timeout (no process timeout)",
       structured: parsed.structured,
-      changed_files: parsed.changed_files,
+      from_json: parsed.from_json,
+      changed_files: parsed.changed_files || [],
       tests: parsed.tests,
       commit: parsed.commit,
       remote_head: parsed.remote_head,
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
       completed_at: now,
       timed_out: false
     };
@@ -198,10 +322,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       kind: "codex_failed",
       summary: parsed.summary || "Codex execution failed (non-zero exit)",
       structured: parsed.structured,
-      changed_files: parsed.changed_files,
+      from_json: parsed.from_json,
+      changed_files: parsed.changed_files || [],
       tests: parsed.tests,
       commit: parsed.commit,
       remote_head: parsed.remote_head,
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
       completed_at: now,
       timed_out: false
     };
@@ -211,10 +338,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     kind: "codex_executed",
     summary: parsed.summary || "Codex execution completed (no structured summary)",
     structured: parsed.structured,
-    changed_files: parsed.changed_files,
+    from_json: parsed.from_json,
+    changed_files: parsed.changed_files || [],
     tests: parsed.tests,
     commit: parsed.commit,
     remote_head: parsed.remote_head,
+    warnings: parsed.warnings || [],
+    followups: parsed.followups || [],
     completed_at: now
   };
 }

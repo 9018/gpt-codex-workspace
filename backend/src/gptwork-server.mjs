@@ -22,7 +22,8 @@ import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownlo
 import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
-import { parseCodexResult, buildTaskResult } from "./codex-result-parser.mjs";
+import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson } from "./codex-result-parser.mjs";
+import { buildCodexContext, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
@@ -353,6 +354,44 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return completed;
     }),
     run_assigned_codex_tasks: tool("Process assigned tasks. For session inventory tasks (readonly): safe metadata listing. For builder/deploy tasks: workspace inspection (file listing, port checks, health probes). Supports bounded concurrent execution.", schema({ limit: "integer", concurrency: "integer" }), async (args, context) => runAssignedCodexTasks(store, config, github, args, context)),
+    preview_codex_context: tool("Show what Codex will see before executing a task: task status, linked goal, workspace paths, canonical repo, project context files, transcript/memory counts, acceptance criteria, size metrics, and warnings for missing repo, dirty worktree, stale clone, or huge transcript. Use this before large Codex runs to verify the execution environment.", schema({ task_id: "string" }, ["task_id"]), async ({ task_id }, context) => {
+      requireScope(context, "task:read");
+      const task = await findTask(store, task_id);
+      const workspace = await selectWorkspace(store, task.workspace_id, context);
+      const state = await store.load();
+      const goal = task.goal_id ? state.goals.find(function(g) { return g.id === task.goal_id; }) : null;
+      let contextJson = null;
+      if (goal && workspace) {
+        try { contextJson = JSON.parse(await readFile(join(workspace.root, ".gptwork/goals/" + goal.id + "/context.json"), "utf8")); } catch {}
+      }
+      let repoRecord = null;
+      let repoStatus = null;
+      if (registry) {
+        const defaultRepo = registry.getDefaultRepo() || null;
+        if (defaultRepo && typeof defaultRepo === "object") {
+          repoRecord = defaultRepo;
+        }
+        if (!repoRecord && config.defaultRepoPath) {
+          repoRecord = registry.findByPath(config.defaultRepoPath) || null;
+        }
+        if (repoRecord) {
+          try { repoStatus = await getRepoStatus(repoRecord, config.defaultWorkspaceRoot, registry); } catch {}
+        } else if (config.defaultRepoPath) {
+          try { repoStatus = await getRepoStatus({ canonical_path: config.defaultRepoPath, default_branch: config.defaultBranch || "main", repo_id: "default", remote_url: "" }, config.defaultWorkspaceRoot); } catch {}
+        }
+      }
+      const { context: ctx, preview } = await buildCodexContext({
+        taskId: task.id,
+        task,
+        goal,
+        contextJson,
+        workspace,
+        config,
+        repoStatus,
+        repoRecord,
+      });
+      return { context: ctx, preview, preview_text: preview };
+    }),
     complete_task: tool("Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.", schema({ task_id: "string", summary: "string" }, ["task_id"]), async ({ task_id, summary = "" }) => {
       const result = await updateTask(store, task_id, (task) => { task.status = "completed"; task.result = { summary, completed_at: new Date().toISOString() }; });
       github.syncTask(result.task).catch(() => {});
@@ -1822,18 +1861,47 @@ You are executing a GPTWork encoded/shared goal.
 Read these files before acting:
 - ${workspaceFiles.goal_md}
 - ${workspaceFiles.context_json}
+- .gptwork/project.md (if present — project-level context)
+- .gptwork/project.env (if present — project-level env vars, do not commit or print secrets)
 
 Follow ${workspaceFiles.goal_md} exactly.
 Use ${workspaceFiles.context_json} only for metadata you need.
 Do not dump or re-read ${workspaceFiles.transcript_md} unless the goal explicitly requires prior conversation details.
+
 Write final results to ${workspaceFiles.result_md}.
-When complete, print a concise operational summary. GPTWork will append that summary to the shared transcript.` : ""}
+When complete, write a concise structured report in TWO formats:
+
+1. result.json — write to the task workspace directory with this exact structure:
+   {
+     "status": "completed|failed|timed_out",
+     "summary": "one-line summary",
+     "changed_files": ["path/to/file1.js", "path/to/file2.js"],
+     "tests": "npm test: passed 15/15",
+     "commit": "sha256",
+     "remote_head": "sha256",
+     "warnings": ["warning text"],
+     "followups": ["follow-up item"]
+   }
+
+2. Stdout structured report (legacy, still read):
+   STATUS=<completed|failed|timed_out>
+   SUMMARY=<one line>
+   CHANGED_FILES=<comma separated or none>
+   TESTS=<commands and pass/fail or none>
+   COMMIT=<sha or none>
+   REMOTE_HEAD=<sha or none>
+
+GPTWork will read result.json first when available, falling back to the stdout report.` : ""}
 
 ${separator}
 Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
 Use ${workspace.root} as the base directory for all file operations.
+The canonical repository is at ${config.defaultRepoPath || "(not configured)"}.
+Project context files (.gptwork/project.md, .gptwork/project.env) live under the canonical repo.
 
-After completing ALL steps, output a structured report with these exact fields:
+Write result.json to ${workspace.root}/.gptwork/goals/${goal ? goal.id : task.id}/result.json
+
+After completing ALL steps, also output the structured report to stdout (legacy format):
 STATUS=<completed|failed|timed_out>
 SUMMARY=<one line>
 CHANGED_FILES=<comma separated or none>
@@ -1849,7 +1917,9 @@ ${separator}`;
     const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
     cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
     const out = (cr.stdout || "").trim();
-    parsedResult = parseCodexResult(out);
+    // Try result.json first, fall back to stdout parsing
+    const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
+    parsedResult = await parseCodexResultWithFallback({ resultJsonPath, stdout: out });
     if (parsedResult.summary) {
       summary = parsedResult.summary;
     } else {

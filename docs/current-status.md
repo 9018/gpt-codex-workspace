@@ -124,6 +124,53 @@ direct_git_reader_available=true
 worktree_dirty=false
 ```
 
+
+## Context Layer (v3 Feature)
+
+### MCP Tool: preview_codex_context
+
+A new `preview_codex_context(task_id)` tool shows what Codex will see before execution. Use this before large Codex runs to verify the execution environment.
+
+Preview fields:
+- Task title, status, mode
+- Linked goal ID
+- Workspace root and type
+- Canonical repo path
+- Runtime/state paths
+- Project context files discovered (.gptwork/project.md, .gptwork/project.env)
+- Included transcript/memory counts
+- Acceptance criteria / constraints summary
+- Approximate size metrics
+- Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
+
+### Project-Level Context Files
+
+Project-level configuration is now supported under the canonical repo:
+
+- `.gptwork/project.md` — Project-level Markdown context, hot-loaded on each Codex context build
+- `.gptwork/project.env` — Project-level env vars (KEY=VALUE), hot-loaded on each Codex context build
+- These are distinct from `runtime.env` (service-level, requires restart)
+- `project.env` is parsed safely like runtime.env but does NOT mutate process.env
+- Do not put secrets into project.md
+
+### result.json Contract
+
+Codex workers now prefer reading a structured `result.json` file. Contract:
+
+| Field | Type | Description |
+|---|---|---|
+| `status` | string | `completed`, `failed`, or `timed_out` |
+| `summary` | string | One-line summary |
+| `changed_files` | string[] | Files modified during execution |
+| `tests` | string | Test command and outcome |
+| `commit` | string | Local commit SHA |
+| `remote_head` | string | Remote HEAD SHA |
+| `warnings` | string[] | Warning messages |
+| `followups` | string[] | Follow-up items |
+
+The server reads result.json first when present, falling back to the existing stdout parser.
+
+
 ## Codex Worker Defaults
 
 The backend worker runs Codex with:

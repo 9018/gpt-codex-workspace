@@ -302,6 +302,66 @@ curl http://127.0.0.1:8787/health
 # Then use MCP tools: runtime_status, notification_status, git_remote_status, gptwork_doctor
 ```
 
+
+
+## Context Preview
+
+Before executing large Codex tasks, use the MCP tool:
+
+- `preview_codex_context(task_id)` — Show what Codex will see before execution
+
+The preview includes:
+- Task title, status, mode
+- Linked goal ID
+- Workspace root and type
+- Canonical repo path and remote URL
+- Project context files discovered
+- Included transcript/memory counts
+- Size metrics for transcripts, memories, project files
+- Warnings for missing repo, missing goal, dirty worktree, stale clone, or large transcript
+
+## result.json Contract
+
+Codex workers now prefer reading a structured `result.json` file over parsing stdout. When Codex finishes a task, it writes:
+
+```json
+{
+  "status": "completed|failed|timed_out",
+  "summary": "one-line summary of what happened",
+  "changed_files": ["src/main.js", "src/utils.js"],
+  "tests": "npm test: passed 15/15, 0 failed",
+  "commit": "abc123def456...",
+  "remote_head": "789ghi012jkl...",
+  "warnings": ["Minor lint warnings"],
+  "followups": ["Update documentation"]
+}
+```
+
+The server reads `result.json` first when present, falling back to the existing stdout parser.
+
+## Environment Configuration
+
+GPTWork uses two levels of environment configuration:
+
+### Service-level (runtime.env)
+- Path: `.gptwork/runtime.env` under the workspace root (default)
+- Loaded once at process start via `loadRuntimeEnv()`
+- Changes require a service restart
+- Sets `GPTWORK_*` variables used by the MCP server process
+- Override path: `GPTWORK_RUNTIME_ENV_FILE` env var
+
+### Project-level (project.env and project.md)
+- Path: `<canonical-repo>/.gptwork/project.env` and `<canonical-repo>/.gptwork/project.md`
+- Loaded on every Codex context build (hot-loadable, no restart needed)
+- `project.env` uses the same `KEY=VALUE` syntax as `runtime.env` (with `#` comments)
+- `project.env` returns vars as a plain object — does NOT mutate `process.env`
+- `project.md` is read as UTF-8 text content
+- These are safe for project-specific configuration that needs to change without restarting the service
+- Do not put secrets into `project.md`; use `project.env` for key/value configuration
+
+See `docs/current-status.md` for the latest operational state.
+
+
 ## License
 
 MIT

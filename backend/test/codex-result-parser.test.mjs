@@ -1,6 +1,10 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { join } from "node:path";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { parseCodexResult, buildTaskResult } from "../src/codex-result-parser.mjs";
+import { parseCodexResult, buildTaskResult, parseResultJson, parseCodexResultWithFallback } from "../src/codex-result-parser.mjs";
 
 test("parses STATUS=completed with all fields", () => {
   const output = [
@@ -259,3 +263,230 @@ test("buildTaskResult with STATUS=timed_out without timedOut param treats as fai
   assert.equal(result.timed_out, false);
   assert.equal(result.summary, "Timed out by report");
 });
+
+// ---------------------------------------------------------------------------
+// result.json parser tests
+// ---------------------------------------------------------------------------
+
+
+test("parseResultJson returns null for missing file", async () => {
+  const result = await parseResultJson("/tmp/nonexistent-" + randomUUID() + ".json");
+  assert.equal(result, null);
+});
+
+test("parseResultJson returns null for invalid file path", async () => {
+  const result = await parseResultJson(null);
+  assert.equal(result, null);
+});
+
+test("parseResultJson parses valid result.json", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({
+    status: "completed",
+    summary: "Deployed successfully",
+    changed_files: ["src/main.js", "src/utils.js"],
+    tests: "npm test: passed 15/15",
+    commit: "abc123def456",
+    remote_head: "789ghi012jkl",
+    warnings: ["Minor lint warning"],
+    followups: ["Update docs"],
+  }));
+
+  const result = await parseResultJson(jsonPath);
+  assert.equal(result.status, "completed");
+  assert.equal(result.summary, "Deployed successfully");
+  assert.deepEqual(result.changed_files, ["src/main.js", "src/utils.js"]);
+  assert.equal(result.tests, "npm test: passed 15/15");
+  assert.equal(result.commit, "abc123def456");
+  assert.equal(result.remote_head, "789ghi012jkl");
+  assert.deepEqual(result.warnings, ["Minor lint warning"]);
+  assert.deepEqual(result.followups, ["Update docs"]);
+  assert.equal(result.structured, true);
+  assert.equal(result.from_json, true);
+});
+
+test("parseResultJson returns null for invalid status", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({ status: "unknown" }));
+  const result = await parseResultJson(jsonPath);
+  assert.equal(result, null);
+});
+
+test("parseResultJson accepts failed status", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({ status: "failed", summary: "Build broke" }));
+  const result = await parseResultJson(jsonPath);
+  assert.equal(result.status, "failed");
+  assert.equal(result.summary, "Build broke");
+});
+
+test("parseResultJson accepts timed_out status", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({ status: "timed_out", summary: "Ran out of time" }));
+  const result = await parseResultJson(jsonPath);
+  assert.equal(result.status, "timed_out");
+});
+
+test("parseResultJson validates changed_files as array", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  // String changed_files should be filtered out
+  await writeFile(jsonPath, JSON.stringify({
+    status: "completed",
+    changed_files: "src/main.js",  // not an array
+  }));
+  const result = await parseResultJson(jsonPath);
+  assert.deepEqual(result.changed_files, []);
+});
+
+test("parseResultJson with valid array but non-string elements filters them", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({
+    status: "completed",
+    changed_files: ["file1.js", 42, "file2.js", null],
+  }));
+  const result = await parseResultJson(jsonPath);
+  assert.deepEqual(result.changed_files, ["file1.js", "file2.js"]);
+});
+
+// ---------------------------------------------------------------------------
+// parseCodexResultWithFallback tests
+// ---------------------------------------------------------------------------
+
+test("parseCodexResultWithFallback prefers result.json over stdout", async () => {
+  const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
+  await mkdir(dir, { recursive: true });
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({
+    status: "completed",
+    summary: "From JSON",
+    changed_files: ["file.json"],
+    warnings: ["JSON warning"],
+    followups: ["JSON followup"],
+  }));
+
+  const stdout = "STATUS=completed\nSUMMARY=From STDOUT\nCHANGED_FILES=file.txt";
+
+  const result = await parseCodexResultWithFallback({
+    resultJsonPath: jsonPath,
+    stdout,
+  });
+
+  // Should prefer result.json
+  assert.equal(result.summary, "From JSON");
+  assert.deepEqual(result.changed_files, ["file.json"]);
+  assert.deepEqual(result.warnings, ["JSON warning"]);
+  assert.deepEqual(result.followups, ["JSON followup"]);
+  assert.equal(result.from_json, true);
+});
+
+test("parseCodexResultWithFallback falls back to stdout when result.json missing", async () => {
+  const result = await parseCodexResultWithFallback({
+    resultJsonPath: "/tmp/nonexistent-" + randomUUID() + ".json",
+    stdout: "STATUS=completed\nSUMMARY=From STDOUT\nCHANGED_FILES=file.txt",
+  });
+
+  assert.equal(result.summary, "From STDOUT");
+  assert.deepEqual(result.changed_files, ["file.txt"]);
+  assert.equal(result.from_json, false);
+  assert.equal(result.structured, true);
+});
+
+test("parseCodexResultWithFallback returns stdout result when no resultJsonPath given", async () => {
+  const result = await parseCodexResultWithFallback({
+    stdout: "STATUS=completed\nSUMMARY=Only stdout\nTESTS=passed",
+  });
+
+  assert.equal(result.summary, "Only stdout");
+  assert.equal(result.tests, "passed");
+  assert.equal(result.from_json, false);
+});
+
+// ---------------------------------------------------------------------------
+// buildTaskResult with warnings/followups
+// ---------------------------------------------------------------------------
+
+test("buildTaskResult propagates warnings and followups from JSON result", () => {
+  const parsed = {
+    status: "completed",
+    summary: "Done with extras",
+    changed_files: ["file.js"],
+    tests: "passed",
+    commit: "abc",
+    remote_head: "def",
+    warnings: ["Warning 1", "Warning 2"],
+    followups: ["Follow up 1"],
+    structured: true,
+    from_json: true,
+  };
+
+  const result = buildTaskResult(parsed);
+  assert.equal(result.kind, "codex_executed");
+  assert.deepEqual(result.warnings, ["Warning 1", "Warning 2"]);
+  assert.deepEqual(result.followups, ["Follow up 1"]);
+  assert.equal(result.from_json, true);
+});
+
+test("buildTaskResult with failure includes warnings and followups", () => {
+  const parsed = {
+    status: "failed",
+    summary: "Failed with warnings",
+    changed_files: [],
+    warnings: ["Lint error"],
+    followups: ["Fix lint"],
+    structured: true,
+    from_json: true,
+  };
+
+  const result = buildTaskResult(parsed);
+  assert.equal(result.kind, "codex_failed");
+  assert.deepEqual(result.warnings, ["Lint error"]);
+  assert.deepEqual(result.followups, ["Fix lint"]);
+});
+
+test("buildTaskResult timeout includes warnings and followups", () => {
+  const parsed = {
+    status: "completed",
+    summary: "Partial before timeout",
+    changed_files: ["partial.js"],
+    warnings: ["Timed out"],
+    followups: ["Retry"],
+    structured: true,
+    from_json: true,
+  };
+
+  const result = buildTaskResult(parsed, { timedOut: true, timeoutSeconds: 300 });
+  assert.equal(result.kind, "codex_timeout");
+  assert.deepEqual(result.warnings, ["Timed out"]);
+  assert.deepEqual(result.followups, ["Retry"]);
+  assert.deepEqual(result.changed_files, ["partial.js"]);
+});
+
+// ---------------------------------------------------------------------------
+// stdout parser unchanged contract
+// ---------------------------------------------------------------------------
+
+test("stdout parser still works without result.json", () => {
+  // This test ensures the existing stdout parser contract is unchanged.
+  // It imports from the same module and verifies the old behavior still works.
+  const output = "STATUS=completed\nSUMMARY=Legacy parse\nCHANGED_FILES=a.js, b.js";
+  const parsed = parseCodexResult(output);
+  assert.equal(parsed.status, "completed");
+  assert.equal(parsed.summary, "Legacy parse");
+  assert.deepEqual(parsed.changed_files, ["a.js", "b.js"]);
+  assert.equal(parsed.from_json, false);
+  assert.equal(parsed.structured, true);
+});
+
+console.log("result.json parser tests loaded");
