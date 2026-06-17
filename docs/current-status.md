@@ -187,6 +187,34 @@ Preview fields:
 - Approximate size metrics
 - Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
 
+### MCP Tool: context_prepare
+
+A new `context_prepare(task_id?, mode?)` tool provides safe, non-secret context hygiene fixes after `project_context_status` detects issues.
+
+Supported modes:
+- `check` (default) — Dry-run: returns planned safe fixes without writing any files.
+- `fix_safe` — Applies only safe, deterministic fixes that require no semantic judgment. Never overwrites existing content.
+- `fix_with_codex` — Reserved for future work; not yet implemented.
+
+Safe fixes in fix_safe mode:
+1. Create `.gptwork/` directory under canonical repo if missing.
+2. Create `.gptwork/project.md` from minimal template (repo name, purpose placeholder, test commands, deploy notes, "Do not store secrets here" warning).
+3. Create `.gptwork/project.env` from minimal non-secret template (commented example keys only).
+4. Populate empty `project.env` with non-secret template comments.
+5. If `task_id` is provided and the task has no linked goal, return a warning with a suggested `create_goal`/`create_task` flow.
+
+Output includes: mode, changed boolean, actions_planned, actions_applied, skipped_actions with reasons, warnings,
+project_context_status_before, project_context_status_after (when fix_safe), files_created, files_modified, and no_secrets_exposed flag.
+
+**Never writes secrets.** Does not overwrite existing project.md or project.env content. Refuses to run fix_safe on a dirty worktree to avoid racing.
+
+Comparison:
+- `project_context_status` = diagnose context health
+- `preview_codex_context` = full execution preview
+- `context_prepare(check)` = dry-run plan
+- `context_prepare(fix_safe)` = creates safe missing project context templates
+
+
 ### Project-Level Context Files
 
 Project-level configuration is now supported under the canonical repo:

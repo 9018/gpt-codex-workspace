@@ -310,6 +310,7 @@ Before executing large Codex tasks, use the MCP tool:
 
 - `preview_codex_context(task_id)` — Full execution preview: shows what Codex will see before executing a task
 - `project_context_status(task_id?)` — Concise context health and source precedence diagnostic: checks canonical repo registration, project.md/project.env existence and sizes/key counts (without secrets), context source precedence (5 layers), and optionally task-specific diagnostics (status, goal, transcript/memory counts). Lightweight alternative when you do not need the full preview.
+- `context_prepare(task_id?, mode?)` — Safe auto-fix for context hygiene after diagnostics detect issues. Defaults to `check` (dry-run, no writes). Set `mode=fix_safe` to create missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing. fix_with_codex mode is reserved for future work without semantic context summarization.
 
 The preview includes:
 - Task title, status, mode
