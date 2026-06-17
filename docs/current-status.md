@@ -1,7 +1,7 @@
 # GPTWork Current Status
 
-Date: 2026-06-16
-Status: encoded goal workflow is implemented and tuned for GPTChat -> Codex execution on 10.0.1.103.
+Date: 2026-06-17
+Status: encoded goal workflow is implemented and tuned for GPTChat -> Codex execution on 10.0.1.103. All P0 UX items resolved: placeholder tools gated by default, gptwork_doctor diagnostic tool added, workspace/repo registration validated.
 
 ## What This Project Is
 
@@ -32,7 +32,7 @@ Recommended Codex plugin source:
 | Public URL | `https://mcp.gptwork.cc.cd/mcp/dev-token` | ChatGPT connector URL, auth mode none |
 | LAN MCP URL | `http://10.0.1.103:8787/mcp` | Codex plugin and local testing |
 | Workspace root | `/home/a9017/mcp/workspace` | Default hosted workspace root |
-| Backend repo | `/home/a9017/mcp/gpt-codex-workspace` | Remote deployment repo |
+| Backend repo | `/home/a9017/mcp/workspace/gpt-codex-workspace` | Canonical code repo (workspace-relative) |
 | Lucky admin | `16601` | Reverse proxy admin UI |
 | Legacy ports | None | No legacy port is part of the target architecture |
 
@@ -102,6 +102,28 @@ Available bundle tools:
 - `download_bundle_base64`
 - existing `create_zip_archive` / `extract_zip_archive`
 
+## First Diagnostic Checks
+
+After starting the service, verify with these MCP tools (in order):
+
+1. `runtime_status` — Check process pid, running commit, workspace root, env loading, git state
+2. `notification_status` — Check Bark notification config and connectivity
+3. `git_remote_status` — Check remote tracking refs and dirty worktree
+4. `gptwork_doctor` — Comprehensive single-call diagnostics with suggested next actions
+
+Key verification values after a healthy deployment:
+
+```
+defaultWorkspaceRoot=/home/a9017/mcp/workspace
+codex_exec_timeout=2400
+default_repo=9018/gpt-codex-workspace
+default_repo_path=/home/a9017/mcp/workspace/gpt-codex-workspace
+runtime_env_loaded=true
+github.api_sync_enabled=false
+direct_git_reader_available=true
+worktree_dirty=false
+```
+
 ## Codex Worker Defaults
 
 The backend worker runs Codex with:
@@ -128,20 +150,27 @@ Zip operations use Python. Override if needed:
 GPTWORK_PYTHON=python3
 ```
 
-## Expected Environment
+## Expected Environment (runtime.env)
+
+Actual config is loaded from `/home/a9017/mcp/workspace/.gptwork/runtime.env`. Key values:
 
 ```bash
 GPTWORK_HOST=0.0.0.0
 GPTWORK_PORT=8787
 GPTWORK_REQUIRE_AUTH=true
-GPTWORK_STATE_PATH=/home/a9017/mcp/gpt-codex-workspace/data/state.json
+GPTWORK_STATE_PATH=/home/a9017/mcp/workspace/.gptwork/state.json
 GPTWORK_TOKENS=dev-token,test
 GPTWORK_WORKSPACE_ROOT=/home/a9017/mcp/workspace
+GPTWORK_RUNTIME_ENV_FILE=/home/a9017/mcp/workspace/.gptwork/runtime.env
 GPTWORK_CODEX_HOME=/home/a9017
 GPTWORK_CODEX_WORKER=true
 GPTWORK_CODEX_WORKER_INTERVAL_MS=5000
 GPTWORK_CODEX_WORKER_CONCURRENCY=4
-GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
+GPTWORK_CODEX_EXEC_ARGS=--yolo --skip-git-repo-check
+GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace
+GPTWORK_DEFAULT_BRANCH=main
+GPTWORK_DEFAULT_REPO_PATH=/home/a9017/mcp/workspace/gpt-codex-workspace
+GPTWORK_DEFAULT_REMOTE=origin
 GPTWORK_SSH_SOCKS_PROXY=10.0.1.105:20177
 ```
 

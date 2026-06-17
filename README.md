@@ -68,16 +68,31 @@ In this mode, ChatGPT interacts with GitHub Issues directly. The backend periodi
 
 ## Quick Start
 
-### 1. Backend (on your server)
+### Recommended Deployment
+
+The canonical repo is at `/home/a9017/mcp/workspace/gpt-codex-workspace`, with global runtime env at `/home/a9017/mcp/workspace/.gptwork/runtime.env` and hosted-default workspace root at `/home/a9017/mcp/workspace`.
+
+### 1. Backend (production)
 
 ```bash
-cd backend
-GPTWORK_HOST=0.0.0.0 GPTWORK_TOKENS=dev-token,test GPTWORK_REQUIRE_AUTH=true node src/cli.mjs
+cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend
+cp systemd/gptwork-mcp.service ~/.config/systemd/user/
+systemctl --user daemon-reload
+systemctl --user enable --now gptwork-mcp.service
 ```
 
-Test it:
+The `.gptwork/runtime.env` file in the workspace root configures all GPTWORK_* variables.
+Verify with:
+
 ```bash
 curl http://127.0.0.1:8787/health
+```
+
+### 2. Codex Plugin
+
+```bash
+codex plugin marketplace add 9018/gpt-codex-workspace --ref main
+codex plugin marketplace upgrade
 ```
 
 ### 2. Codex Plugin (install from marketplace)
@@ -175,6 +190,12 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 
 ## Tools (MCP Surface)
 
+### Diagnostics & Health
+- `gptwork_doctor` — Comprehensive user-facing diagnostics: process info, runtime env, workspace/repo alignment, stale clones, worktree health, Bark/GitHub sync, placeholder tool exposure, suggested next actions
+- `runtime_status` — Runtime configuration and git state
+- `notification_status` — Bark notification diagnostics
+- `health_check` — Basic liveness check
+
 ### Project & Workspace
 - `list_projects` — List available projects
 - `get_project` — Project detail
@@ -232,26 +253,29 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 ## Repository Layout
 
 ```
-.agents/plugins/marketplace.json         - Codex marketplace manifest
-plugins/gpt-codex-workspace/
-  .codex-plugin/plugin.json              - Plugin manifest
-  .mcp.json                               - MCP server config
-  mcp/server.mjs                          - Local MCP proxy to backend
-  skills/workspace-coordination/SKILL.md - Workflow skill for Codex
-backend/
-  src/cli.mjs                             - Server entry point
-  src/gptwork-server.mjs                  - MCP handler + tools
-  src/ssh-adapter.mjs                     - SSH + SFTP operations
-  src/github-adapter.mjs                  - GitHub Issues sync
-  src/state-store.mjs                     - JSON state persistence
-  src/path-utils.mjs                      - Path safety utilities
-  src/browser-http.mjs                    - Lightweight browser
-  test/                                   - 19 tests
-  systemd/gptwork-mcp.service            - systemd unit
-  .env.example                            - Environment config
-docs/
-  architecture.md                         - Architecture document
-  chatgpt-app-manifest.json              - ChatGPT App SDK manifest
+/ (workspace root: /home/a9017/mcp/workspace)
+.gptwork/
+  runtime.env                           - Global runtime env (GPTWORK_*)
+  state.json                            - Server state
+  repos.json                            - Repository registry
+  goals/                                - Shared goal files
+gpt-codex-workspace/                    - Backend code repo (canonical)
+  backend/
+    src/cli.mjs                         - Server entry point
+    src/gptwork-server.mjs              - MCP handler + tools
+    src/ssh-adapter.mjs                 - SSH + SFTP operations
+    src/github-adapter.mjs              - GitHub Issues sync
+    src/state-store.mjs                 - JSON state persistence
+    src/path-utils.mjs                  - Path safety utilities
+    src/browser-http.mjs                - Lightweight browser
+    test/                               - Test suite
+    systemd/gptwork-mcp.service        - systemd unit
+  docs/
+    architecture.md                     - Architecture document
+    current-status.md                   - Current operating state
+    chatgpt-app-manifest.json           - ChatGPT App SDK manifest
+  plugins/
+    gpt-codex-workspace/                - Codex plugin
 ```
 
 ## Deploy
@@ -266,9 +290,16 @@ systemctl --user enable --now gptwork-mcp.service
 ## Tests
 
 ```bash
-cd backend
-node --test
-# 19 tests, all pass
+cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend
+npm test        # quick test run
+npm run test:clean  # isolated test run (unsets all GPTWORK_* env vars)
+```
+
+First diagnostic checks after starting the service:
+
+```bash
+curl http://127.0.0.1:8787/health
+# Then use MCP tools: runtime_status, notification_status, git_remote_status, gptwork_doctor
 ```
 
 ## License

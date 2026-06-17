@@ -265,7 +265,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     return null;
   }
 
-  return {
+  const tools = {
     health_check: tool("Check whether the GPTWork MCP server is running.", schema({}), async () => ({ ok: true, service: "gptwork-mcp", time: new Date().toISOString() })),
     get_current_user: tool("Return the current token-bound user context.", schema({}), async (_args, context) => ({
       user: { id: context.user_id, name: context.user_name },
@@ -623,7 +623,83 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     git_remote_compare_local: tool("Inspect GitHub remote repository changes without GitHub connector. One-shot comparison: returns local HEAD, tracking HEAD, remote HEAD, ahead/behind counts, dirty state, and changed files summary. Fetches remote tracking refs by default.", schema({ repo: "string", repo_path: "string", remote: "string", branch: "string", fetch: "boolean", limit: "integer" }, []), async (args) => handleCompareLocal(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
 
 
+
+    gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({}, []), async () => {
+      const repoDir = resolveRepoDir();
+      const registryData = { entries: [], count: 0, hasCanonical: false };
+      try {
+        const allRepos = await registry.listRepositories();
+        registryData.entries = allRepos;
+        registryData.count = allRepos.length;
+        registryData.hasCanonical = allRepos.some(r => r.canonical_path === config.defaultRepoPath);
+      } catch (e) {}
+      let staleCloneCount = 0;
+      try {
+        const wsRoot = config.defaultWorkspaceRoot || "";
+        if (wsRoot && existsSync(wsRoot)) {
+          const entries = readdirSync(wsRoot, { withFileTypes: true });
+          staleCloneCount = entries.filter(e => e.isDirectory() && e.name.startsWith('.tmp-')).length;
+        }
+      } catch (e) {}
+      let worktreeDirty = false, dirtyPaths = [];
+      if (repoDir) {
+        try {
+          const out = execSync('git status --short 2>/dev/null', { cwd: repoDir, timeout: 5000, encoding: 'utf8' }).trim();
+          if (out.length > 0) { worktreeDirty = true; dirtyPaths = out.split('\n').filter(l => l.trim()).map(l => l.trim()); }
+        } catch (e) {}
+      }
+      const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
+      return {
+        pid: process.pid,
+        started_at: PROCESS_STARTED_AT.toISOString(),
+        running_commit: repoDir ? (() => { try { return execSync('git rev-parse HEAD 2>/dev/null', { cwd: repoDir, timeout: 5000, encoding: 'utf8' }).trim(); } catch(e){} return null; })() : null,
+        runtime_env_loaded: envLoadResult.keys.length > 0,
+        runtime_env_file_path: envLoadResult.loadedPath || null,
+        workspace_root: config.defaultWorkspaceRoot,
+        hosted_default_root_aligned: config.defaultWorkspaceRoot === '/home/a9017/mcp/workspace',
+        default_repo: config.defaultRepo,
+        default_branch: config.defaultBranch,
+        default_repo_path: config.defaultRepoPath,
+        repository_registry_count: registryData.count,
+        repository_registry_has_canonical_repo: registryData.hasCanonical,
+        stale_clone_count: staleCloneCount,
+        worktree_dirty: worktreeDirty,
+        dirty_paths: dirtyPaths,
+        codex_exec_timeout: config.codexExecTimeout,
+        github_api_sync_enabled: (process.env.GPTWORK_GITHUB_ENABLED === 'true' || process.env.GPTWORK_GITHUB_ENABLED === '1') && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
+        direct_git_reader_available: true,
+        bark_configured: bark ? (bark.getStatus ? bark.getStatus().configured : false) : false,
+        bark_enabled: bark ? (bark.isEnabled ? bark.isEnabled() : false) : false,
+        placeholder_tools_exposed: exposePlaceholder || false,
+        suggested_next_actions: (() => {
+          const actions = [];
+          if (envLoadResult.keys.length === 0) actions.push('Set up runtime.env with GPTWORK_* variables or configure via process.env');
+          if (!registryData.hasCanonical) actions.push('Register the canonical repo via register_repository');
+          if (staleCloneCount > 0) actions.push('Clean up ' + staleCloneCount + ' stale clone(s) (rm -rf .tmp-* in workspace root)');
+          if (worktreeDirty) actions.push('Commit or stash dirty worktree changes');
+          if (config.defaultRepo !== '9018/gpt-codex-workspace') actions.push('Set GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace for canonical repo resolution');
+          if (actions.length === 0) actions.push('All systems nominal');
+          return actions;
+        })(),
+      };
+    }),
   };
+  // Gate placeholder/experimental tools behind env flags
+  const _exposePlaceholderTools = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
+
+  if (!_exposePlaceholderTools && process.env.GPTWORK_EXPERIMENTAL_CHUNK_UPLOAD !== 'true') {
+    delete tools.init_chunk_upload;
+    delete tools.upload_file_chunk;
+    delete tools.finish_chunk_upload;
+    delete tools.abort_chunk_upload;
+  }
+  if (!_exposePlaceholderTools && process.env.GPTWORK_EXPERIMENTAL_BROWSER_TOOLS !== 'true') {
+    delete tools.browser_screenshot;
+    delete tools.browser_set_input_files;
+    delete tools.browser_click_and_download;
+    delete tools.browser_evaluate;
+  }
+  return tools;
 }
 
 async function handleHttp(req, res, server) {

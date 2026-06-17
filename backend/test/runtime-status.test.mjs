@@ -223,3 +223,79 @@ test("notification_status includes all Bark diagnostic fields", async () => {
   assert.equal(status.url, undefined);
   assert.equal(status.key, undefined);
 });
+
+
+// ================================================================
+// gptwork_doctor diagnostic tool tests
+// ================================================================
+
+test("gptwork_doctor returns process pid and running commit", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.pid, "number");
+  assert.ok(result.pid > 0);
+  assert.ok(result.started_at);
+  assert.ok(Date.parse(result.started_at) <= Date.now());
+});
+
+test("gptwork_doctor returns runtime env diagnostics", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.runtime_env_loaded, "boolean");
+  assert.ok("runtime_env_file_path" in result);
+  assert.ok("workspace_root" in result);
+  assert.equal(typeof result.workspace_root, "string");
+  assert.equal(typeof result.hosted_default_root_aligned, "boolean");
+});
+
+test("gptwork_doctor returns repo diagnostics", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.default_repo, "string");
+  assert.equal(typeof result.default_branch, "string");
+  assert.equal(typeof result.default_repo_path, "string");
+  assert.equal(typeof result.repository_registry_count, "number");
+  assert.equal(typeof result.repository_registry_has_canonical_repo, "boolean");
+});
+
+test("gptwork_doctor returns worktree and stale clone info", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.stale_clone_count, "number");
+  assert.equal(typeof result.worktree_dirty, "boolean");
+  assert.ok(Array.isArray(result.dirty_paths));
+});
+
+test("gptwork_doctor returns config and sync status", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.codex_exec_timeout, "number");
+  assert.equal(typeof result.github_api_sync_enabled, "boolean");
+  assert.equal(typeof result.direct_git_reader_available, "boolean");
+  assert.equal(typeof result.bark_configured, "boolean");
+  assert.equal(typeof result.bark_enabled, "boolean");
+});
+
+test("gptwork_doctor returns placeholder_tools_exposed and suggested_next_actions", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(typeof result.placeholder_tools_exposed, "boolean");
+  assert.equal(result.placeholder_tools_exposed, false, "placeholder tools should not be exposed by default");
+  assert.ok(Array.isArray(result.suggested_next_actions));
+  assert.ok(result.suggested_next_actions.length > 0);
+  // Each action should be a non-empty string
+  for (const action of result.suggested_next_actions) {
+    assert.equal(typeof action, "string");
+    assert.ok(action.length > 0);
+  }
+});
+
+test("gptwork_doctor does not expose secrets", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  const str = JSON.stringify(result);
+  assert.ok(!str.includes("barkUrl"), "should not contain barkUrl");
+  assert.ok(!str.includes("barkKey"), "should not contain barkKey");
+  assert.ok(!str.includes("github_token"), "should not contain github_token");
+  assert.ok(!str.match(/ghp_\w+/), "should not contain token values");
+});
