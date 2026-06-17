@@ -22,3 +22,6 @@ backend/data/
 
 # Runtime backup files
 data/*.bak-*
+
+# Accidental deployment/test copies
+backend/tmp-deploy/
