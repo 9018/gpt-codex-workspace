@@ -21,7 +21,7 @@ import { createBrowserRegistry } from "./browser-http.mjs";
 import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownloadBase64, sshWriteTextFile, sshUploadBase64, sshMkdir, sshDelete, sshMove, sshCopy, sshSha256, sshStat, sshSearchFiles } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
-import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "./bark-notifier.mjs";
+import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "./bark-notifier.mjs";
 import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson } from "./codex-result-parser.mjs";
 import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
@@ -920,6 +920,8 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         task.mode = normalizeAssignedTaskMode(task, mode);
       });
       const linked = await ensureTaskGoal(store, config, result.task.id, context, { assign_to_codex: true });
+      // Send created notification for newly assigned Codex task (after ensureTaskGoal handles goal linking)
+      notifyCreatedTaskIfNeeded(result.task);
       github.syncTask(result.task).catch(() => {});
       return linked;
     }),
@@ -1251,7 +1253,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
       };
     }),
-    notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null })),
+    notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null, last_task_event: null })),
     test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
     git_remote_resolve_repo: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Finds an existing Git checkout for a repo (owner/name, URL, or path). Returns repo_path, remote info, and local/tracking HEADs. Does NOT auto-clone.", schema({ repo: "string", repo_path: "string" }, []), async (args) => handleResolveRepo(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
 
@@ -1820,6 +1822,9 @@ async function createGoal(store, config, args, context = defaultTokenContext("sy
     state.tasks.push(task);
     goal.task_id = task.id;
     state.activities.push({ time: now, type: "goal.assigned_codex", goal_id: goalId, task_id: task.id, title: goal.title });
+    if (!args.skip_created_notification) {
+      notifyCreatedTaskIfNeeded(task);
+    }
   }
 
   const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {
@@ -1957,6 +1962,7 @@ async function ensureTaskGoal(store, config, taskId, context = defaultTokenConte
     workspace_id: payload.workspace_id || task.workspace_id,
     mode: payload.mode || task.mode || "builder",
     assign_to_codex: options.assign_to_codex ?? task.assignee === "codex",
+    skip_created_notification: true,
     preview_text: encoded?.preview_text || payload.preview_text || "",
     payload: encoded?.payload || payload,
     payload_base64: encoded?.payload_base64 || ""
@@ -2820,6 +2826,11 @@ await store.save();
 
 async function notifyTerminalTaskIfNeeded(task) {
   if (!barkNotifier || !barkNotifier.isEnabled()) return;
+  // Only notify for true terminal or human-review states.
+  // Transient states such as waiting_for_lock (repo-lock block) are intentionally
+  // excluded from the terminal list, so they never send a notification directly.
+  // If a task later reaches a terminal failure or human-review state due to a lock
+  // issue, that notification will be about the actual terminal/resolution state.
   const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout", "waiting_for_review", "waiting_review"];
   const channelKey = `notified:bark:${task.status}`;
   if (!terminal.includes(task.status) || task[channelKey]) return;
@@ -2836,6 +2847,10 @@ async function notifyTerminalTaskIfNeeded(task) {
     if (nres.ok) {
       task[channelKey] = true;
       task.notified_at = new Date().toISOString();
+      // Track safe task metadata on the barkNotifier diagnostics
+      if (barkNotifier._setTaskMetadata) {
+        barkNotifier._setTaskMetadata(task.id, task.status, task.status);
+      }
     }
     task.notifications ||= [];
     task.notifications.push({
@@ -2859,6 +2874,61 @@ async function notifyTerminalTaskIfNeeded(task) {
     // notification failure is non-critical
   }
 }
+
+/**
+ * Send a Bark notification for a newly created/assigned task.
+ * Deduplicated (one `created` notification per task) and policy-gated.
+ * Suppressed for draft tasks, readonly/internal/test mode tasks by default.
+ */
+async function notifyCreatedTaskIfNeeded(task) {
+  if (!barkNotifier || !barkNotifier.isEnabled()) return;
+  const channelKey = 'notified:bark:created';
+  if (task[channelKey]) return;
+
+  const classification = classifyCreatedNotification(task);
+  if (!classification.should_notify) {
+    task.last_notification_policy = classification.reason;
+    return;
+  }
+
+  try {
+    const { title, body } = formatCreatedNotification(task);
+    const nres = await barkNotifier.send(title, body, 'task-created');
+    if (nres.ok) {
+      task[channelKey] = true;
+      task.notified_at = new Date().toISOString();
+      // Track safe task metadata on the barkNotifier diagnostics
+      if (barkNotifier._setTaskMetadata) {
+        barkNotifier._setTaskMetadata(task.id, task.status, task.status);
+      }
+    }
+    // Track safe task metadata on the barkNotifier diagnostics
+    if (barkNotifier._setTaskMetadata) {
+      barkNotifier._setTaskMetadata(task.id, task.status, 'created');
+    }
+    task.notifications ||= [];
+    task.notifications.push({
+      channel: "bark",
+      event: nres.ok ? "sent" : "failed",
+      attempted_at: new Date().toISOString(),
+      ok: nres.ok,
+      response_code: nres.ok ? 200 : null,
+      response_message: nres.ok ? (nres.bark_id || "ok") : null,
+      error_short: nres.ok ? null : (nres.reason || nres.error || null),
+      source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
+      group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
+      endpoint_kind: (() => {
+        const st = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
+        return st.url_set ? "url" : st.key_set ? "key" : "none";
+      })(),
+      icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
+      url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
+    });
+  } catch {
+    // notification failure is non-critical
+  }
+}
+
 
 async function createChatGptRequest(store, args) {
   const state = await store.load();

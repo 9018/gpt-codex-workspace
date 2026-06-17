@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createBarkNotifier, classifyNotification, formatNotification, formatManualTestNotification } from "../src/bark-notifier.mjs";
+import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "../src/bark-notifier.mjs";
 import { loadRuntimeEnv } from "../src/runtime-env.mjs";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
@@ -1106,4 +1106,220 @@ test("classifyNotification reads GPTWORK_BARK_NOTIFY_CANCELLED env var", () => {
   const result = classifyNotification({ mode: "builder", status: "cancelled" });
   assert.equal(result.should_notify, true);
   delete process.env.GPTWORK_BARK_NOTIFY_CANCELLED;
+});
+
+// ================================================================
+// Tests: classifyCreatedNotification
+// ================================================================
+
+test("classifyCreatedNotification allows Codex-assigned builder task", () => {
+  const result = classifyCreatedNotification({ title: "My task", assignee: "codex", mode: "builder", status: "assigned" });
+  assert.equal(result.should_notify, true);
+  assert.match(result.reason, /allowed/);
+});
+
+test("classifyCreatedNotification blocks draft task", () => {
+  const result = classifyCreatedNotification({ title: "Draft", assignee: "", mode: "builder", status: "draft" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /draft/);
+});
+
+test("classifyCreatedNotification blocks non-codex assignee", () => {
+  const result = classifyCreatedNotification({ title: "Human task", assignee: "user", mode: "builder", status: "assigned" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /not assigned to Codex/);
+});
+
+test("classifyCreatedNotification blocks readonly task by default", () => {
+  const result = classifyCreatedNotification({ title: "Inventory", assignee: "codex", mode: "readonly", status: "assigned" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /readonly/);
+});
+
+test("classifyCreatedNotification blocks internal task by default", () => {
+  const result = classifyCreatedNotification({ title: "Internal", assignee: "codex", mode: "internal", status: "assigned" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /internal/);
+});
+
+test("classifyCreatedNotification blocks test mode task by default", () => {
+  const result = classifyCreatedNotification({ title: "Test", assignee: "codex", mode: "test", status: "assigned" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /test/);
+});
+
+test("classifyCreatedNotification blocks session inventory by default", () => {
+  const result = classifyCreatedNotification({ title: "Codex Session Inventory", assignee: "codex", mode: "readonly", status: "assigned" });
+  assert.equal(result.should_notify, false);
+});
+
+test("classifyCreatedNotification respects policy override for readonly", () => {
+  const result = classifyCreatedNotification({ title: "Readonly task", assignee: "codex", mode: "readonly", status: "assigned" }, { notifyReadonly: true });
+  assert.equal(result.should_notify, true);
+});
+
+test("classifyCreatedNotification respects notifyCreated policy", () => {
+  const result = classifyCreatedNotification({ title: "Task", assignee: "codex", mode: "builder", status: "assigned" }, { notifyCreated: false });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /created notifications disabled/);
+});
+
+test("classifyCreatedNotification respects global notifyTasks", () => {
+  const result = classifyCreatedNotification({ title: "Task", assignee: "codex", mode: "builder", status: "assigned" }, { notifyTasks: false });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /globally disabled/);
+});
+
+test("classifyCreatedNotification allows session inventory with notifyInternal and notifyReadonly", () => {
+  const result = classifyCreatedNotification({ title: "Codex Session Inventory", assignee: "codex", mode: "readonly", status: "assigned" }, { notifyInternal: true, notifyReadonly: true });
+  assert.equal(result.should_notify, true);
+});
+
+test("classifyCreatedNotification respects GPTWORK_BARK_NOTIFY_CREATED env var", () => {
+  process.env.GPTWORK_BARK_NOTIFY_CREATED = "false";
+  const result = classifyCreatedNotification({ title: "Task", assignee: "codex", mode: "builder", status: "assigned" });
+  assert.equal(result.should_notify, false);
+  delete process.env.GPTWORK_BARK_NOTIFY_CREATED;
+});
+
+// ================================================================
+// Tests: formatCreatedNotification
+// ================================================================
+
+test("formatCreatedNotification uses red square emoji", () => {
+  const { title } = formatCreatedNotification({ title: "Test", assignee: "codex", status: "assigned" });
+  assert.match(title, /\uD83C\uDD95/);
+  assert.match(title, /GPTWork task created/);
+  assert.match(title, /Test/);
+});
+
+test("formatCreatedNotification includes task id, status, mode, workspace, goal, created", () => {
+  const { body } = formatCreatedNotification({
+    id: "task_123",
+    title: "My Task",
+    status: "assigned",
+    mode: "builder",
+    workspace_id: "ws-1",
+    goal_id: "goal_456",
+    created_at: "2026-06-17T00:00:00Z",
+    assignee: "codex"
+  });
+  assert.match(body, /task_123/);
+  assert.match(body, /assigned/);
+  assert.match(body, /builder/);
+  assert.match(body, /ws-1/);
+  assert.match(body, /goal_456/);
+  assert.match(body, /2026-06-17/);
+});
+
+test("formatCreatedNotification omits goal_id when absent", () => {
+  const { body } = formatCreatedNotification({
+    id: "task_123",
+    title: "Task",
+    status: "assigned",
+    created_at: "2026-06-17T00:00:00Z"
+  });
+  assert.ok(!body.includes("Goal:"));
+});
+
+test("formatCreatedNotification truncates long content", () => {
+  const { body } = formatCreatedNotification({
+    id: "task_123",
+    title: "A".repeat(200),
+    status: "assigned",
+    mode: "builder",
+    workspace_id: "ws-1",
+    goal_id: "goal_456",
+    created_at: "2026-06-17T00:00:00Z"
+  });
+  assert.ok(body.length <= 4000);
+});
+
+// ================================================================
+// Tests: created notification dedup (notifyTerminalTaskIfNeeded pattern)
+// ================================================================
+
+test("classifyNotification suppresses waiting_for_lock (repo-lock block)", () => {
+  const result = classifyNotification({ title: "Locked task", mode: "builder", status: "waiting_for_lock" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /not in notification targets/);
+});
+
+test("classifyNotification suppresses draft status", () => {
+  const result = classifyNotification({ title: "Draft task", mode: "builder", status: "draft" });
+  assert.equal(result.should_notify, false);
+  assert.match(result.reason, /not in notification targets/);
+});
+
+// ================================================================
+// Tests: notification_status diagnostics
+// ================================================================
+
+test("barkNotifier getStatus includes last_task_event field", () => {
+  const bark = createBarkNotifier({ barkKey: "test-key" });
+  const status = bark.getStatus();
+  assert.ok("last_task_event" in status);
+  assert.equal(status.last_task_event, null);
+});
+
+test("barkNotifier getStatus includes last_task_id and last_task_status fields", () => {
+  const bark = createBarkNotifier({ barkKey: "test-key" });
+  const status = bark.getStatus();
+  assert.ok("last_task_id" in status);
+  assert.ok("last_task_status" in status);
+  assert.ok("last_attempt_at" in status);
+  assert.ok("last_success_at" in status);
+  assert.ok("last_failure_at" in status);
+});
+
+test("barkNotifier getDiag includes last_task_event field", () => {
+  const bark = createBarkNotifier({ barkKey: "test-key" });
+  const diag = bark.getDiag();
+  assert.ok("last_task_event" in diag);
+  assert.equal(diag.last_task_event, null);
+});
+
+test("_setTaskMetadata updates diag fields", () => {
+  const bark = createBarkNotifier({ barkKey: "test-key" });
+  bark._setTaskMetadata("task_1", "assigned", "created");
+  const status = bark.getStatus();
+  assert.equal(status.last_task_id, "task_1");
+  assert.equal(status.last_task_status, "assigned");
+  assert.equal(status.last_task_event, "created");
+});
+
+test("_setTaskMetadata allows partial updates", () => {
+  const bark = createBarkNotifier({ barkKey: "test-key" });
+  bark._setTaskMetadata(undefined, "completed");
+  const status = bark.getStatus();
+  assert.equal(status.last_task_status, "completed");
+  assert.equal(status.last_task_id, null);
+});
+
+// ================================================================
+// Tests: policy switch can disable created without disabling terminal
+// ================================================================
+
+test("classifyNotification terminal events work when created is disabled", () => {
+  // Simulate: created notifications disabled, but terminal notifications still work
+  const createdResult = classifyCreatedNotification(
+    { title: "My Task", assignee: "codex", mode: "builder", status: "assigned" },
+    { notifyCreated: false }
+  );
+  assert.equal(createdResult.should_notify, false);
+  
+  const completedResult = classifyNotification(
+    { title: "My Task", mode: "builder", status: "completed" }
+  );
+  assert.equal(completedResult.should_notify, true);
+  
+  const failedResult = classifyNotification(
+    { title: "My Task", mode: "builder", status: "failed" }
+  );
+  assert.equal(failedResult.should_notify, true);
+  
+  const timeoutResult = classifyNotification(
+    { title: "My Task", mode: "builder", status: "timed_out" }
+  );
+  assert.equal(timeoutResult.should_notify, true);
 });

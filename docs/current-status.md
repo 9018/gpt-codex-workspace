@@ -102,6 +102,74 @@ Available bundle tools:
 - `download_bundle_base64`
 - existing `create_zip_archive` / `extract_zip_archive`
 
+
+## Bark Notifications
+
+Bark push notifications are sent for task lifecycle events. All events are policy-gated and env-configurable.
+
+### Lifecycle Events
+
+| Event | Default | Description |
+|---|---|---|
+| created | enabled | Task intentionally assigned to Codex (🆕 GPTWork task created) |
+| completed | enabled | Task completed successfully (✅ GPTWork completed) |
+| failed | enabled | Task failed or codex_error (❌ GPTWork failed) |
+| timed_out | enabled | Task timed out (⏱️ GPTWork timed out) |
+| waiting_for_review | enabled | Task reached human-review state (👀 GPTWork waiting for review) |
+| started | disabled | Task started (not sent by default) |
+| lock-blocked | disabled | Repo-lock waiting states (not sent by default) |
+
+### Created Notifications
+
+Sent when a user-visible task is assigned to Codex via:
+- Goal creation with Codex assignment (`create_goal` with `assign_to_codex=true`)
+- Encoded goal creation (`create_encoded_goal` with `assign_to_codex=true`)
+- Direct task creation with Codex assignee (`create_task` with `assignee="codex"`)
+- Assigning an existing task (`assign_task_to_codex`)
+
+**Not sent for:** draft tasks, readonly session inventory tasks (by default), internal/test mode tasks.
+
+### Terminal Notifications
+
+Sent for task state transitions to terminal or human-review states:
+- `completed`, `failed` / `codex_error`, `timed_out` / `codex_timeout`, `waiting_for_review` / `waiting_review`
+
+Title and body include: task id, status, mode, workspace, tests, commit, remote head, summary, changed files, duration.
+
+### Noise Suppression
+
+Repo-lock waiting / retryable lock-blocked states (`waiting_for_lock`) never send a notification directly. If a task later reaches a true terminal failure or human-review state due to a lock issue, that notification is about the actual resolution state.
+
+### Policy Switches (env vars)
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GPTWORK_BARK_NOTIFY_TASKS` | true | Global notification toggle |
+| `GPTWORK_BARK_NOTIFY_CREATED` | true | Notify on task creation |
+| `GPTWORK_BARK_NOTIFY_STARTED` | false | Notify on task started |
+| `GPTWORK_BARK_NOTIFY_COMPLETED` | true | Notify on completions |
+| `GPTWORK_BARK_NOTIFY_FAILURES` | true | Notify on failures |
+| `GPTWORK_BARK_NOTIFY_TIMEOUTS` | true | Notify on timeouts |
+| `GPTWORK_BARK_NOTIFY_WAITING_REVIEW` | true | Notify on waiting_for_review |
+| `GPTWORK_BARK_NOTIFY_LOCK_BLOCKED` | false | Notify on lock-blocked states |
+| `GPTWORK_BARK_NOTIFY_READONLY` | false | Suppress readonly tasks |
+| `GPTWORK_BARK_NOTIFY_INTERNAL` | false | Suppress internal tasks |
+| `GPTWORK_BARK_NOTIFY_TESTS` | false | Suppress test mode tasks |
+| `GPTWORK_BARK_NOTIFY_CANCELLED` | false | Suppress cancelled tasks |
+
+### Deduplication
+
+One notification per task/event/status/channel:
+- `created`: once per task via `notified:bark:created` flag
+- Terminal events: once per task/status via `notified:bark:<status>` flag
+
+### Diagnostics
+
+The `notification_status` tool exposes safe metadata:
+- `last_task_id`, `last_task_status`, `last_task_event` (e.g. created/completed/failed/timed_out/waiting_for_review)
+- `last_attempt_at`, `last_success_at`, `last_failure_at`
+- Destination/credentials are never exposed.
+
 ## First Diagnostic Checks
 
 After starting the service, verify with these MCP tools (in order):

@@ -1,6 +1,11 @@
 /**
  * Bark push notification module for GPTWork.
  *
+ * Lifecycle events:
+ *   created     — task intentionally assigned to Codex (one per task)
+ *   terminal    — completed, failed, timed_out, waiting_for_review (one per task/status)
+ *   suppressed  — draft, readonly/internal/test mode, repo-lock waiting
+ *
  * Config sources (in priority order):
  *   1. Explicit config object passed to createBarkNotifier()
  *   2. process.env (set from runtime env or system env)
@@ -26,6 +31,9 @@
  *   GPTWORK_BARK_NOTIFY_WAITING_REVIEW=true - Notify on waiting_for_review
  *   GPTWORK_BARK_NOTIFY_FAILURES=true      - Notify on failures
  *   GPTWORK_BARK_NOTIFY_TIMEOUTS=true      - Notify on timeouts
+ *   GPTWORK_BARK_NOTIFY_CREATED=true      - Notify on task creation
+ *   GPTWORK_BARK_NOTIFY_STARTED=false     - Notify on task started (disabled by default)
+ *   GPTWORK_BARK_NOTIFY_LOCK_BLOCKED=false - Notify on lock-blocked states (disabled by default)
  *   GPTWORK_BARK_NOTIFY_COMPLETED=true     - Notify on completions
  *
  * The endpoint value is never stored, logged, or exposed in status output.
@@ -42,7 +50,8 @@ const STATUS_EMOJI = {
   waiting_review: "\uD83D\uDC40",
   waiting_for_review: "\uD83D\uDC40",
   codex_timeout: "\u23F1\uFE0F",
-  manual_test: "\uD83E\uDDEA"
+  manual_test: "\uD83E\uDDEA",
+  created: "\uD83C\uDD95"
 };
 
 /**
@@ -160,7 +169,8 @@ export function createBarkNotifier(options = {}, configSource = "unknown") {
     last_response_message: null,
     last_error_short: null,
     last_task_id: null,
-    last_task_status: null
+    last_task_status: null,
+    last_task_event: null
   };
 
   function _recordDiag(result, attemptedAt) {
@@ -346,7 +356,8 @@ export function createBarkNotifier(options = {}, configSource = "unknown") {
       last_response_message: _diag.last_response_message,
       last_error_short: _diag.last_error_short,
       last_task_id: _diag.last_task_id,
-      last_task_status: _diag.last_task_status
+      last_task_status: _diag.last_task_status,
+      last_task_event: _diag.last_task_event
     };
   }
 
@@ -365,7 +376,8 @@ export function createBarkNotifier(options = {}, configSource = "unknown") {
       group: cfg.group,
       endpoint_kind: cfg.hasUrl ? "url" : cfg.hasKey ? "key" : "none",
       icon_set: cfg.hasIcon,
-      url_action_set: cfg.hasClickUrl
+      url_action_set: cfg.hasClickUrl,
+      last_task_event: _diag.last_task_event
     };
   }
 
@@ -383,7 +395,13 @@ export function createBarkNotifier(options = {}, configSource = "unknown") {
     return "unknown";
   }
 
-  return { isEnabled, send, testSend, getStatus, getDiag };
+  function _setTaskMetadata(taskId, taskStatus, eventType) {
+    if (taskId !== undefined) _diag.last_task_id = taskId;
+    if (taskStatus !== undefined) _diag.last_task_status = taskStatus;
+    if (eventType !== undefined) _diag.last_task_event = eventType;
+  }
+
+  return { isEnabled, send, testSend, getStatus, getDiag, _setTaskMetadata };
 }
 
 // ================================================================
@@ -472,6 +490,70 @@ export function classifyNotification(task, policy = {}) {
   return { should_notify: true, reason: "policy allows notification" };
 }
 
+
+
+/**
+ * Classify a task for CREATED notification policy compliance.
+ *
+ * Determines whether a Bark notification should be sent for task creation.
+ * Suppressed by default for draft, readonly, internal, test mode tasks.
+ *
+ * @param {object} task   Task object with { mode, status, title, assignee }
+ * @param {object} [policy]  Optional policy overrides
+ * @returns {{ should_notify: boolean, reason: string }}
+ */
+export function classifyCreatedNotification(task, policy = {}) {
+  const notifyCreated = policy.notifyCreated ?? process.env.GPTWORK_BARK_NOTIFY_CREATED !== "false";
+  const notifyTasks = policy.notifyTasks ?? process.env.GPTWORK_BARK_NOTIFY_TASKS !== "false";
+  const notifyReadonly = policy.notifyReadonly ?? process.env.GPTWORK_BARK_NOTIFY_READONLY === "true";
+  const notifyInternal = policy.notifyInternal ?? process.env.GPTWORK_BARK_NOTIFY_INTERNAL === "true";
+  const notifyTests = policy.notifyTests ?? process.env.GPTWORK_BARK_NOTIFY_TESTS === "true";
+
+  if (!notifyTasks) {
+    return { should_notify: false, reason: "notifications globally disabled (GPTWORK_BARK_NOTIFY_TASKS)" };
+  }
+  if (!notifyCreated) {
+    return { should_notify: false, reason: "created notifications disabled by policy (GPTWORK_BARK_NOTIFY_CREATED)" };
+  }
+
+  const mode = (task.mode || "").toLowerCase();
+  const status = (task.status || "").toLowerCase();
+  const title = (task.title || "").toLowerCase();
+
+  // Suppress draft tasks
+  if (status === "draft") {
+    return { should_notify: false, reason: "draft task suppressed" };
+  }
+
+  // Suppress tasks not assigned to Codex
+  if ((task.assignee || "").toLowerCase() !== "codex") {
+    return { should_notify: false, reason: "task not assigned to Codex" };
+  }
+
+  // Suppress readonly tasks by default
+  if (mode === "readonly" && !notifyReadonly) {
+    return { should_notify: false, reason: "readonly task suppressed by policy" };
+  }
+
+  // Suppress internal tasks by default
+  if (mode === "internal" && !notifyInternal) {
+    return { should_notify: false, reason: "internal task suppressed by policy" };
+  }
+
+  // Suppress test mode tasks by default
+  if (mode === "test" && !notifyTests) {
+    return { should_notify: false, reason: "test task suppressed by policy" };
+  }
+
+  // Suppress Codex session inventory tasks
+  if (title.includes("codex session inventory") && !notifyInternal) {
+    return { should_notify: false, reason: "session inventory suppressed by policy" };
+  }
+
+  return { should_notify: true, reason: "created notification allowed" };
+}
+
+//
 // ================================================================
 // Notification formatters
 // ================================================================
@@ -565,3 +647,44 @@ export function formatManualTestNotification() {
   ].join("\n");
   return { title, body };
 }
+
+/**
+ * Format a Bark notification for task creation.
+ *
+ * @param {object} task   Task object
+ * @returns {{ title: string, body: string }}
+ */
+export function formatCreatedNotification(task) {
+  const shortTitle = (task.title || "(no title)").slice(0, 80);
+  const emoji = "\uD83C\uDD95";
+  const title = `${emoji} GPTWork task created: ${shortTitle}`;
+
+  let body = `Task: ${shortTitle}\n`;
+  body += `Status: ${task.status || "unknown"}\n`;
+
+  const mode = task.mode || "";
+  const ws = task.workspace_id || "";
+  if (mode || ws) {
+    if (mode) body += `Mode: ${mode}`;
+    if (mode && ws) body += " | ";
+    if (ws) body += `Workspace: ${ws}`;
+    body += "\n";
+  }
+
+  if (task.id) {
+    body += `ID: ${task.id}\n`;
+  }
+
+  if (task.goal_id) {
+    body += `Goal: ${task.goal_id}\n`;
+  }
+
+  if (task.created_at) {
+    body += `Created: ${task.created_at}\n`;
+  }
+
+  if (body.length > 4000) body = body.slice(0, 3997) + "...";
+
+  return { title, body };
+}
+
