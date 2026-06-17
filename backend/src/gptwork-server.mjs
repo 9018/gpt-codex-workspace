@@ -628,7 +628,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       const repoDir = resolveRepoDir();
       const registryData = { entries: [], count: 0, hasCanonical: false };
       try {
-        const allRepos = await registry.listRepositories();
+        const allRepos = registry.list();
         registryData.entries = allRepos;
         registryData.count = allRepos.length;
         registryData.hasCanonical = allRepos.some(r => r.canonical_path === config.defaultRepoPath);
