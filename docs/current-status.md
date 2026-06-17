@@ -241,21 +241,6 @@ When `task_id` is provided, the output also includes:
 
 Use preview_codex_context when you need the full execution preview. Use project_context_status or context_status when you need a quick health check.
 
-A new `preview_codex_context(task_id)` tool shows what Codex will see before execution. Use this before large Codex runs to verify the execution environment.
-
-Preview fields:
-- Task title, status, mode
-- Linked goal ID
-- Workspace root and type
-- Canonical repo path
-- Runtime/state paths
-- Project context files discovered (.gptwork/project.md, .gptwork/project.env)
-- Included transcript/memory counts
-- Acceptance criteria / constraints summary
-- Approximate size metrics
-- Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
-
-### MCP Tool: context_prepare
 
 A new `context_prepare(task_id?, mode?)` tool provides safe, non-secret context hygiene fixes after `project_context_status` detects issues.
 
@@ -325,10 +310,10 @@ Override with:
 GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
 ```
 
-Codex execution timeout defaults to 300 seconds. Override with:
+Codex execution timeout defaults to 2400 seconds. Override with:
 
 ```bash
-GPTWORK_CODEX_EXEC_TIMEOUT=300
+GPTWORK_CODEX_EXEC_TIMEOUT=2400
 ```
 
 Zip operations use Python. Override if needed:

@@ -115,7 +115,7 @@ The primary repository is registered as:
   "repo_id": "github.com/9018/gpt-codex-workspace",
   "remote_url": "git@github.com:9018/gpt-codex-workspace.git",
   "default_branch": "main",
-  "canonical_path": "/home/a9017/mcp/gpt-codex-workspace"
+  "canonical_path": "/home/a9017/mcp/workspace/gpt-codex-workspace"
 }
 ```
 

@@ -95,17 +95,10 @@ codex plugin marketplace add 9018/gpt-codex-workspace --ref main
 codex plugin marketplace upgrade
 ```
 
-### 2. Codex Plugin (install from marketplace)
-
-```bash
-codex plugin marketplace add 9018/gpt-codex-workspace --ref main
-codex plugin marketplace upgrade
-```
-
 Enable `gpt-codex-workspace` in the Codex plugin UI. Set env vars:
-```powershell
-$env:GPTWORK_API_TOKEN="dev-token"
-$env:GPTWORK_MCP_URL="http://10.0.1.103:8787/mcp"
+```bash
+export GPTWORK_API_TOKEN="dev-token"
+export GPTWORK_MCP_URL="http://10.0.1.103:8787/mcp"
 ```
 
 ### 3. ChatGPT App
@@ -236,13 +229,13 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 ### Workspace Files (hosted + SSH)
 - `list_dir`, `stat_path`, `read_text_file`, `write_text_file`
 - `upload_base64_file`, `download_file_base64`, `upload_bundle_base64`, `download_bundle_base64`, `upload_from_url`
-- `mkdir`, `delete_path`, `move_path`, `copy_path`
+- `mkdir`, `delete_path` (permanent — no recycle/trash), `move_path`, `copy_path`
 - `search_files`, `sha256_file`
 - `create_zip_archive`, `extract_zip_archive`
 
 ### Execution
 - `shell_exec` — Run a command in a workspace (requires `shell:exec` scope)
-- Stable browser tools — Lightweight HTTP browser sessions (`browser_new_session`, `browser_goto`, `browser_get_text`, etc.)
+- Stable browser tools — Lightweight HTTP browser sessions (HTTP/HTML extraction only, no JS execution) (`browser_new_session`, `browser_goto`, `browser_get_text`, etc.)
 - Experimental browser tools — Hidden by default; enable via `GPTWORK_EXPOSE_PLACEHOLDER_TOOLS=true` or `GPTWORK_EXPERIMENTAL_BROWSER_TOOLS=true` (`browser_screenshot`, `browser_set_input_files`, `browser_click_and_download`, `browser_evaluate`)
 
 ### GitHub Sync (no reverse proxy flow)
@@ -406,6 +399,118 @@ GPTWork uses two levels of environment configuration:
 
 See `docs/current-status.md` for the latest operational state.
 
+
+
+## Bark Notifications
+
+Bark push notifications are sent for task lifecycle events. All events are policy-gated via env vars. Notifications are optional — Bark is not required for GPTWork operation.
+
+### Lifecycle Events
+
+| Event | Default | Description |
+|---|---|---|
+| created | enabled | Task intentionally assigned to Codex (🆕 GPTWork task created) |
+| completed | enabled | Task completed successfully (✅ GPTWork completed) |
+| failed | enabled | Task failed or codex_error (❌ GPTWork failed) |
+| timed_out | enabled | Task timed out (⏱️ GPTWork timed out) |
+| waiting_for_review | enabled | Task reached human-review state (👀 GPTWork waiting for review) |
+| started | disabled | Task started (not sent by default) |
+| lock-blocked | disabled | Repo-lock waiting states (not sent by default) |
+
+### Created Notifications
+
+Sent user-visible task assigned to Codex via `create_goal`, `create_encoded_goal`, `create_task`, or `assign_task_to_codex`. Not sent for draft tasks, readonly session inventory tasks, or internal/test mode tasks by default.
+
+### Terminal Notifications
+
+Sent for task transitions to completed, failed, timed_out, or waiting_for_review. Title and body include: task id, status, mode, workspace, tests, commit, remote head, summary, changed files, duration.
+
+### Noise Suppression
+
+Repo-lock waiting states never trigger a notification directly. If a lock issue later causes a terminal failure, that notification reflects the actual resolution.
+
+### Deduplication
+
+One notification per task/event/status/channel. Created notification is flagged once; terminal events are flagged once per status.
+
+### Diagnostics
+
+Use `notification_status` tool for safe diagnostic metadata: last attempt/success/failure timestamps, last task id, status, event. Destination and credentials are never exposed.
+
+### Policy Env Vars
+
+| Variable | Default | Effect |
+|---|---|---|
+| `GPTWORK_BARK_NOTIFY_TASKS` | true | Global notification toggle |
+| `GPTWORK_BARK_NOTIFY_CREATED` | true | Notify on task creation |
+| `GPTWORK_BARK_NOTIFY_STARTED` | false | Notify on task started |
+| `GPTWORK_BARK_NOTIFY_COMPLETED` | true | Notify on completions |
+| `GPTWORK_BARK_NOTIFY_FAILURES` | true | Notify on failures |
+| `GPTWORK_BARK_NOTIFY_TIMEOUTS` | true | Notify on timeouts |
+| `GPTWORK_BARK_NOTIFY_WAITING_REVIEW` | true | Notify on waiting_for_review |
+| `GPTWORK_BARK_NOTIFY_LOCK_BLOCKED` | false | Notify on lock-blocked states |
+| `GPTWORK_BARK_NOTIFY_READONLY` | false | Notify on readonly tasks |
+| `GPTWORK_BARK_NOTIFY_INTERNAL` | false | Notify on internal tasks |
+| `GPTWORK_BARK_NOTIFY_TESTS` | false | Notify on test mode tasks |
+| `GPTWORK_BARK_NOTIFY_CANCELLED` | false | Notify on cancelled tasks |
+
+## Verification
+
+> The `running_commit` shown in diagnostics (e.g. `runtime_status`) is the git HEAD at verification time. It represents the current filesystem state, not necessarily what the running process loaded at startup. After a deploy task, verify actual service health via `health_check` in addition to commit matching.
+
+## Environment Quick Reference
+
+Key env vars and their defaults:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `GPTWORK_HOST` | `127.0.0.1` | Server bind address |
+| `GPTWORK_PORT` | `8787` | Server port |
+| `GPTWORK_WORKSPACE_ROOT` | `./data/workspaces/default` | Root for hosted workspaces |
+| `GPTWORK_STATE_PATH` | `<workspace>/.gptwork/state.json` | Server state file |
+| `GPTWORK_CODEX_EXEC_TIMEOUT` | `2400` | Codex execution timeout (seconds) |
+| `GPTWORK_CODEX_EXEC_ARGS` | `--yolo --skip-git-repo-check` | Args passed to codex exec |
+| `GPTWORK_DEFAULT_REPO` | (empty) | Default owner/repo |
+| `GPTWORK_DEFAULT_BRANCH` | `main` | Default git branch |
+| `GPTWORK_DEFAULT_REMOTE` | `origin` | Default git remote |
+| `GPTWORK_DEFAULT_REPO_PATH` | (empty) | Default local repo path |
+| `GPTWORK_BARK_ENABLED` | (auto) | Enable Bark notifications |
+| `GPTWORK_BARK_KEY` | (empty) | Bark API key |
+| `GPTWORK_BARK_URL` | (empty) | Alternative Bark endpoint URL |
+| `GPTWORK_BARK_GROUP` | `gptwork` | Notification group |
+| `GPTWORK_GITHUB_ENABLED` | `false` | Enable GitHub Issues sync |
+| `GPTWORK_GITHUB_REPO` | (empty) | `owner/repo` for issue sync |
+| `GPTWORK_SHELL_TIMEOUT` | `60` | Shell command timeout (seconds) |
+| `GPTWORK_MAX_OUTPUT_BYTES` | `200000` | Max shell/file output bytes |
+| `GPTWORK_CODEX_HOME` | `/home/a9017` | Codex user home |
+| `GPTWORK_REQUIRE_AUTH` | `true` | Require API token auth |
+| `GPTWORK_TOKENS` | `dev-token,test` | Comma-separated API tokens |
+| `GPTWORK_SSH_SOCKS_PROXY` | `10.0.1.105:20177` | SOCKS proxy for SSH workspaces |
+
+**Secrets** (`GPTWORK_BARK_KEY`, `GPTWORK_GITHUB_TOKEN`, `GPTWORK_TOKENS`) must never be committed to version control. Use `.gptwork/runtime.env` which is gitignored.
+
+## Operator Checklist
+
+First diagnostic checks after starting the service:
+
+1. **`runtime_status`** — Check process pid, running commit, workspace root, env loading, git state, and restart markers summary (`restart_markers`)
+2. **`notification_status`** — Check Bark notification config and connectivity (no secrets exposed)
+3. **`git_remote_status`** — Check remote tracking refs and dirty worktree
+4. **`gptwork_doctor`** — Comprehensive single-call diagnostics with suggested next actions
+5. **`project_context_status`** — Verify project-level context health (project.md, project.env)
+
+Key verification values after a healthy deployment:
+
+```
+defaultWorkspaceRoot=/home/a9017/mcp/workspace
+codex_exec_timeout=2400
+default_repo=9018/gpt-codex-workspace
+default_repo_path=/home/a9017/mcp/workspace/gpt-codex-workspace
+runtime_env_loaded=true
+github.api_sync_enabled=false
+direct_git_reader_available=true
+worktree_dirty=false
+```
 
 ## License
 
