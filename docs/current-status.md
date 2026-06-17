@@ -235,3 +235,78 @@ SSH workspaces prefer key authentication. For hosts outside `10.0.0.0/8`, the de
 | `plugins/gpt-codex-workspace/skills/workspace-coordination/SKILL.md` | Codex workflow skill |
 
 Removed/obsolete docs should not describe base64 as a way to hide unsafe intent.
+
+## Codex Stuck-Task Diagnostics & Recovery
+
+### Problem Addressed
+
+Tasks can stay `running` indefinitely with logs ending at `[worker] codex exec started`. Codex may modify files but fail to commit/push/complete the task. Previously there was no task heartbeat, run id, child pid, stdout/stderr artifact, last progress time, or recovery tool.
+
+### New Tools
+
+Three MCP tools added for diagnostics and recovery:
+
+| Tool | Description |
+|---|---|
+| `diagnose_task(task_id)` | Returns structured diagnostics: status, age, last heartbeat, active process, repo dirty state, changed files, run log paths, result.json presence, likely cause, and suggested recovery actions |
+| `list_stuck_tasks()` | Lists all running/stalled tasks with stale heartbeat, missing process, or no progress |
+| `recover_stuck_task(task_id, action)` | Perform recovery: inspect_only, mark_waiting_review, mark_failed, reset_to_assigned, finalize_if_result_json, kill_process_if_alive |
+
+### Recovery Workflow
+
+When a task appears stuck:
+
+1. **Diagnose**: `diagnose_task("<task_id>")` — returns structured diagnostics with likely cause and suggested actions.
+2. **List all stuck**: `list_stuck_tasks()` — see all running tasks with stale heartbeats.
+3. **Recover**:
+   - If repo is dirty (Codex made changes but didn't commit): `recover_stuck_task("<task_id>", "mark_waiting_review")`
+   - If repo is clean and task should be retried: `recover_stuck_task("<task_id>", "reset_to_assigned")`
+   - If result.json exists: `recover_stuck_task("<task_id>", "finalize_if_result_json")`
+   - If the Codex process is still alive but hung: `recover_stuck_task("<task_id>", "kill_process_if_alive")`
+   - Safe inspection without changes: `recover_stuck_task("<task_id>", "inspect_only")`
+
+### Run Metadata
+
+Each Codex execution creates run metadata at:
+
+```text
+.gptwork/runs/<task_id>/<run_id>/run.json
+```
+
+Each run records:
+- `run_id`, `task_id`, `started_at`, `last_heartbeat_at`, `phase`
+- `codex_child_pid` when available
+- `stdout_log_path`, `stderr_log_path` — durable log files
+- `result_json_path` if result.json is found
+
+Phases: `preparing`, `running_codex`, `parsing_result`, `completed`, `failed`, `stalled`
+
+### Run Logs
+
+Full Codex stdout/stderr captured per run:
+
+```text
+.gptwork/runs/<task_id>/<run_id>/stdout.log
+.gptwork/runs/<task_id>/<run_id>/stderr.log
+```
+
+### Startup Reconciliation
+
+When the service starts, tasks in `running` status with stale heartbeats and no active process are automatically marked `waiting_for_review` with `result.kind=codex_stalled`. Uncommitted repo changes are preserved — never reverted automatically.
+
+### What To Do When Repo Is Dirty After Codex Stalls
+
+1. `diagnose_task("<task_id>")` — confirm the repo is dirty and see changed files.
+2. Review the changed files manually or via `git diff`.
+3. Either:
+   - `recover_stuck_task("<task_id>", "mark_waiting_review")` — mark for human review.
+   - Keep the changes and create a new task to continue from where Codex left off.
+   - Manually commit the changes if they are correct and desired.
+4. Do NOT use `mark_failed` or `reset_to_assigned` without checking the dirty state first.
+
+### Configuration
+
+| Env Var | Default | Description |
+|---|---|---|
+| `GPTWORK_CODEX_STALL_THRESHOLD_SECONDS` | `600` | Seconds without heartbeat before a running task is considered stalled |
+

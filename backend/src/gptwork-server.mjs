@@ -27,6 +27,7 @@ import { buildCodexContext, loadProjectEnv, loadProjectMd } from "./codex-contex
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
+import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, diagnoseTask, findStuckTasks, recoverTask, startupReconciliation, listRuns, getLatestRun, isProcessAlive, isRepoDirty } from "./codex-run-metadata.mjs";
 
 let barkNotifier = null;
 
@@ -79,6 +80,7 @@ export async function createGptWorkServer(options = {}) {
     codexExecArgs: options.codexExecArgs || rcc.codexExecArgs,
     codexExecTimeout: Number(options.codexExecTimeout || rcc.codexExecTimeout),
     pythonCommand: options.pythonCommand || rcc.python,
+    codexStallThreshold: Number(options.codexStallThreshold || rcc.codexStallThreshold),
     maxReadBytes: rcc.maxReadBytes,
     maxShellOutputBytes: rcc.maxShellOutputBytes,
     barkEnabled: options.barkEnabled ?? rcc.barkEnabled,
@@ -110,6 +112,7 @@ export async function createGptWorkServer(options = {}) {
       ['codexHome', 'codexHome'],
       ['codexExecArgs', 'codexExecArgs'],
       ['codexExecTimeout', 'codexExecTimeout'],
+      ['codexStallThreshold', 'codexStallThreshold'],
       ['maxReadBytes', 'maxReadBytes'],
       ['maxShellOutputBytes', 'maxShellOutputBytes'],
       ['barkEnabled', 'barkEnabled'],
@@ -159,6 +162,24 @@ export async function createGptWorkServer(options = {}) {
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
       return runAssignedCodexTasks(store, config, github, args, context);
+    },
+
+    async reconcileStaleTasks(context = defaultTokenContext("worker")) {
+      try {
+        const state = await store.load();
+        const reconciled = await startupReconciliation(state, store, config.defaultWorkspaceRoot, config.codexStallThreshold || 600);
+        const _lp = process.env.GPTWORK_LOG_PATH;
+        if (reconciled.length > 0 && _lp) {
+          appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${reconciled.length} stale tasks marked waiting_for_review
+`);
+        }
+        return { ok: true, reconciled: reconciled.length, details: reconciled };
+      } catch (error) {
+        const _lp = process.env.GPTWORK_LOG_PATH;
+        if (_lp) appendFileSync(_lp, `[gptwork-worker] reconciliation error: ${error.message}
+`);
+        return { ok: false, error: error.message };
+      }
     },
 
     async handleRpc(message, headers = {}, emitProgress = () => {}) {
@@ -239,7 +260,22 @@ export function startCodexWorker(server, {
     }
   }
 
-  tick();
+  // Run startup reconciliation once before the first tick
+  (async () => {
+    try {
+      const result = await server.reconcileStaleTasks();
+      if (result.ok && result.reconciled > 0) {
+        const _lp = process.env.GPTWORK_LOG_PATH;
+        if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciled ${result.reconciled} stale tasks
+`);
+      }
+    } catch (e) {
+      // Non-fatal: reconciliation errors should not prevent normal operation
+    }
+    // Start regular tick cycle
+    if (!stopped) tick();
+  })();
+
   return {
     stop() {
       stopped = true;
@@ -398,6 +434,20 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return result;
     }),
     request_human_review: tool("Mark a task as waiting for human review.", schema({ task_id: "string", message: "string" }, ["task_id"]), async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; })),
+    diagnose_task: tool("Diagnose a stuck or stalled Codex task. Returns structured diagnostic info: task status, age, last heartbeat, active process presence, repo dirty state, changed files, run log paths, result.json presence, likely cause, and suggested recovery actions.", schema({ task_id: "string" }, ["task_id"]), async ({ task_id }, context) => {
+      requireScope(context, "task:read");
+      const state = await store.load();
+      return await diagnoseTask(state, config.defaultWorkspaceRoot, task_id, config.codexStallThreshold || 600);
+    }),
+    list_stuck_tasks: tool("List all running or stalled Codex tasks with stale heartbeat, missing process, or no progress.", schema({}), async (_args, context) => {
+      requireScope(context, "task:read");
+      const state = await store.load();
+      const stuck = await findStuckTasks(state, config.defaultWorkspaceRoot, config.codexStallThreshold || 600);
+      return { count: stuck.length, stuck_tasks: stuck.map((s) => s.diagnostics) };
+    }),
+    recover_stuck_task: tool("Recover a stuck Codex task. Supported actions: inspect_only, mark_waiting_review, mark_failed, reset_to_assigned, finalize_if_result_json, kill_process_if_alive. Safe defaults: does not discard uncommitted repo changes.", schema({ task_id: "string", action: "string" }, ["task_id", "action"]), async ({ task_id, action }) => {
+      return await recoverTask(store, config, task_id, action);
+    }),
     create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string" }, ["title", "prompt"]), async (args) => {
       const result = await createChatGptRequest(store, args);
       github.syncChatGptRequest(result.request).catch(() => {});
@@ -1913,9 +1963,44 @@ ${separator}`;
   let summary = "";
   let parsedResult = null;
   let cr = null;
+  
+  // Initialize run metadata for diagnostics
+  let runFilePath = null;
+  let runId = null;
+  try {
+    const initResult = await initRun({
+      workspaceRoot: config.defaultWorkspaceRoot,
+      taskId: task.id,
+      workspaceId: task.workspace_id,
+      repoPath: config.defaultRepoPath,
+      promptPath: promptFile
+    });
+    runFilePath = initResult.runFilePath;
+    runId = initResult.runId;
+    fireHeartbeat(runFilePath, "running_codex");
+  } catch (e) {
+    // Non-fatal: run metadata setup failed
+  }
+  
   try {
     const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
-    cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000);
+    cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000, (pid) => {
+      updateRunHeartbeat(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
+    });
+    
+    // Write stdout/stderr to durable log files
+    if (cr && runId) {
+      writeRunLogs({ workspaceRoot: config.defaultWorkspaceRoot, taskId: task.id, runId, stdout: cr.stdout, stderr: cr.stderr }).catch(() => {});
+    }
+    
+    // Heartbeat after Codex exits
+    if (runFilePath) {
+      fireHeartbeat(runFilePath, "parsing_result", {
+        exit_code: cr?.returncode ?? -1,
+        timed_out: cr?.timed_out || false
+      });
+    }
+    
     const out = (cr.stdout || "").trim();
     // Try result.json first, fall back to stdout parsing
     const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
@@ -1953,6 +2038,16 @@ ${separator}`;
   const taskStatus = taskResult.kind === "codex_executed" ? "completed"
     : taskResult.kind === "codex_timeout" ? "timed_out"
     : "failed";
+
+  // Update run metadata with final phase
+  if (runFilePath) {
+    const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
+    fireHeartbeat(runFilePath, taskStatus === "completed" ? "completed" : "failed", {
+      result_json_path: resultJsonPath,
+      exit_code: cr?.returncode ?? -1,
+      timed_out: cr?.timed_out || false
+    });
+  }
 
   const result = await updateTask(store, task.id, (item) => {
     item.status = taskStatus;
@@ -2378,7 +2473,7 @@ async function runZipCommand(mode, sourcePath, zipPath, pythonCommand = process.
   return result;
 }
 
-function runLocalShell(command, cwd, timeout, maxOutputBytes) {
+function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
   return new Promise((resolve) => {
     const started = Date.now();
     const shell = process.platform === "win32" ? "cmd" : "/bin/sh";
@@ -2391,6 +2486,10 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes) {
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: maxBuf
     });
+
+    if (onChildSpawned) {
+      onChildSpawned(child.pid);
+    }
 
     let stdout = "";
     let stderr = "";

@@ -81,6 +81,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 2400),
     codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
     codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),
+    codexStallThreshold: _getNum("GPTWORK_CODEX_STALL_THRESHOLD_SECONDS", 600),
 
     // Git defaults
     defaultRepo: _get("GPTWORK_DEFAULT_REPO", ""),
@@ -132,6 +133,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
     codexExecArgs: "GPTWORK_CODEX_EXEC_ARGS",
     codexConcurrency: "GPTWORK_CODEX_CONCURRENCY",
+    codexStallThreshold: "GPTWORK_CODEX_STALL_THRESHOLD_SECONDS",
     defaultRepo: "GPTWORK_DEFAULT_REPO",
     defaultBranch: "GPTWORK_DEFAULT_BRANCH",
     defaultRepoPath: "GPTWORK_DEFAULT_REPO_PATH",

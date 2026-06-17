@@ -339,6 +339,51 @@ Codex workers now prefer reading a structured `result.json` file over parsing st
 
 The server reads `result.json` first when present, falling back to the existing stdout parser.
 
+## Codex Stuck-Task Diagnostics & Recovery
+
+### Problem
+
+Tasks can stay `running` indefinitely with logs ending at `[worker] codex exec started`.
+Codex may modify files but fail to commit/push/complete the task.
+
+### New Tools
+
+| Tool | Description |
+|---|---|
+| `diagnose_task(task_id)` | Returns structured diagnostics: status, age, last heartbeat, active process, repo dirty state, changed files, run log paths, result.json presence, likely cause, and suggested recovery actions |
+| `list_stuck_tasks()` | Lists all running/stalled tasks with stale heartbeat, missing process, or no progress |
+| `recover_stuck_task(task_id, action)` | Perform recovery: inspect_only, mark_waiting_review, mark_failed, reset_to_assigned, finalize_if_result_json, kill_process_if_alive |
+
+### Recovery Workflow
+
+1. **Diagnose**: `diagnose_task("<task_id>")` — returns structured diagnostics with likely cause and suggested actions.
+2. **List all stuck**: `list_stuck_tasks()` — see all running tasks with stale heartbeats.
+3. **Recover**:
+   - If repo dirty (Codex made changes but didn't commit): `recover_stuck_task("<task_id>", "mark_waiting_review")`
+   - If repo clean and task should be retried: `recover_stuck_task("<task_id>", "reset_to_assigned")`
+   - If result.json exists: `recover_stuck_task("<task_id>", "finalize_if_result_json")`
+
+### Run Logs
+
+Full Codex stdout/stderr per run:
+
+```text
+.gptwork/runs/<task_id>/<run_id>/stdout.log
+.gptwork/runs/<task_id>/<run_id>/stderr.log
+.gptwork/runs/<task_id>/<run_id>/run.json
+```
+
+### Startup Reconciliation
+
+On service start, tasks in `running` status with stale heartbeats and no active process are automatically marked `waiting_for_review`.
+Uncommitted repo changes are preserved — never reverted automatically.
+
+### Configuration
+
+| Env Var | Default | Description |
+|---|---|---|
+| `GPTWORK_CODEX_STALL_THRESHOLD_SECONDS` | `600` | Seconds without heartbeat before a running task is considered stalled |
+
 ## Environment Configuration
 
 GPTWork uses two levels of environment configuration:
