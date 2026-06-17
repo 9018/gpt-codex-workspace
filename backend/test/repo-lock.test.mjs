@@ -351,6 +351,81 @@ test("list_repo_locks returns empty when no locks exist", async () => {
 });
 
 // ================================================================
+// 7b. Integration: repo_lock_status alias
+// ================================================================
+
+test("repo_lock_status is exposed in tools/list", async () => {
+  const server = await makeServer();
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {}
+  }, { authorization: "Bearer test-token" });
+
+  const toolNames = response.result.tools.map(t => t.name);
+  assert.ok(toolNames.includes("list_repo_locks"),
+    "list_repo_locks should appear in tools/list. Got: " + JSON.stringify(toolNames));
+  assert.ok(toolNames.includes("repo_lock_status"),
+    "repo_lock_status should appear in tools/list. Got: " + JSON.stringify(toolNames));
+});
+
+test("repo_lock_status returns same shape as list_repo_locks", async () => {
+  const server = await makeServer();
+  const locksResult = await callTool(server, "list_repo_locks", {});
+  const statusResult = await callTool(server, "repo_lock_status", {});
+  assert.equal(typeof statusResult.active_repo_locks, typeof locksResult.active_repo_locks);
+  assert.equal(typeof statusResult.stale_repo_locks, typeof locksResult.stale_repo_locks);
+  assert.ok(Array.isArray(statusResult.locks));
+  assert.equal(statusResult.active_repo_locks, locksResult.active_repo_locks);
+  assert.equal(statusResult.stale_repo_locks, locksResult.stale_repo_locks);
+  assert.deepEqual(statusResult.locks, locksResult.locks);
+});
+
+test("repo_lock_status is callable with empty args", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "repo_lock_status", {});
+  assert.equal(result.active_repo_locks, 0);
+  assert.equal(result.stale_repo_locks, 0);
+  assert.ok(Array.isArray(result.locks));
+  assert.equal(result.locks.length, 0);
+});
+
+test("gptwork_doctor suggests repo_lock_status when locks exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-doctor-locks-"));
+  const workspaceRoot = join(root, "workspace");
+ await mkdir(join(workspaceRoot, ".gptwork", "locks"), { recursive: true });
+  // Use acquireRepoLock to create a proper lock file with correct format
+  const acquireResult = await acquireRepoLock(workspaceRoot, "/tmp/test-repo", { taskId: "test-task-123", mode: "builder" });
+  assert.ok(acquireResult.acquired, "should acquire lock successfully");
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+  const doctor = await callTool(server, "gptwork_doctor", {});
+  assert.ok(doctor.suggested_next_actions.length > 0,
+    "should have suggestions when locks exist. Got: " + JSON.stringify(doctor.suggested_next_actions));
+  const lockSuggestions = doctor.suggested_next_actions.filter(s =>
+    s.includes("repo_lock_status") || s.includes("list_repo_locks")
+  );
+  assert.ok(lockSuggestions.length > 0,
+    "gptwork_doctor should suggest repo_lock_status/list_repo_locks when locks exist. Got: " + JSON.stringify(doctor.suggested_next_actions));
+});
+
+test("gptwork_doctor does not suggest repo_lock_status when no locks exist", async () => {
+  const server = await makeServer();
+  const doctor = await callTool(server, "gptwork_doctor", {});
+  const lockSuggestions = doctor.suggested_next_actions.filter(s =>
+    s.includes("repo_lock_status") || s.includes("list_repo_locks")
+  );
+  assert.equal(lockSuggestions.length, 0,
+    "gptwork_doctor should NOT suggest repo_lock_status when no locks exist. Got: " + JSON.stringify(doctor.suggested_next_actions));
+});
+
 // 8. Integration: runtime_status and gptwork_doctor contain repo_locks
 // ================================================================
 

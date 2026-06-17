@@ -1281,7 +1281,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
 
     context_status: tool("Provide context source health and precedence diagnostics: canonical repo, workspace root, project context files (project.md, project.env), context source precedence summary, and optionally task-linked diagnostics (task status, linked goal, preview availability, warnings). Natural alias for project_context_status, responds to queries like 上下文状态. Does not expose secret values from project.env.", schema({ task_id: "string" }, []), contextStatusHandler),
 
-    context_prepare: tool("Prepare safe context hygiene fixes after project_context_status detects issues. Defaults to check-only (dry-run). In fix_safe mode, creates missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing.", schema({ task_id: "string", mode: "string" }, []), contextPrepareHandler),
+    context_prepare: tool("Prepare safe context hygiene fixes after project_context_status detects issues. Defaults to check-only (dry-run). In fix_safe mode, creates missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing. (上下文健康检查和自动修复)", schema({ task_id: "string", mode: "string" }, []), contextPrepareHandler),
 
 
 
@@ -1310,6 +1310,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         } catch (e) {}
       }
       const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
+      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
       return {
         pid: process.pid,
         started_at: PROCESS_STARTED_AT.toISOString(),
@@ -1372,14 +1373,31 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
                 }
               }
             } catch (e) {}
+         })();
+
+          // Suggest repo_lock_status/list_repo_locks when active or stale locks exist
+          (() => {
+            try {
+              if (_lockSummary.active_repo_locks > 0 || _lockSummary.stale_repo_locks > 0) {
+                const parts = [];
+                if (_lockSummary.active_repo_locks > 0) parts.push(_lockSummary.active_repo_locks + ' active');
+                if (_lockSummary.stale_repo_locks > 0) parts.push(_lockSummary.stale_repo_locks + ' stale');
+                actions.push('Run repo_lock_status / list_repo_locks to inspect ' + parts.join(' and ') + ' repo lock(s) — concurrent Codex execution may be blocked');
+              }
+            } catch (e) {}
           })();
 
-          return actions;
+         return actions;
         })(),
-        repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
+        repo_locks: _lockSummary,
       };
     }),
-    list_repo_locks: tool("List repo execution locks with safe diagnostics. Returns active and stale locks with task ids and repo identifiers. No secrets exposed.", schema({}), async () => {
+    list_repo_locks: tool("List repo execution locks with safe diagnostics. Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)", schema({}), async () => {
+      const _lockList = await listRepoLocks(config.defaultWorkspaceRoot);
+      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+     return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
+   }),
+    repo_lock_status: tool("List repo execution locks with safe diagnostics (alias for list_repo_locks). Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)", schema({}), async () => {
       const _lockList = await listRepoLocks(config.defaultWorkspaceRoot);
       const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
       return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
