@@ -893,7 +893,7 @@ function defaultTokenContext(token) {
 }
 
 function defaultScopes() {
-  return ["project:read", "project:admin", "task:create", "task:update", "task:assign_codex", "workspace:read", "workspace:write", "files:upload", "files:download", "shell:exec", "ssh:use", "browser:use", "audit:read"];
+  return ["project:read", "project:admin", "task:create", "task:read", "task:update", "task:assign_codex", "workspace:read", "workspace:write", "files:upload", "files:download", "shell:exec", "ssh:use", "browser:use", "audit:read"];
 }
 
 function normalizeList(value, fallback) {
