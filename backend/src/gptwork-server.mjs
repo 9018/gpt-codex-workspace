@@ -28,7 +28,7 @@ import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
 import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
-import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart } from "./safe-restart.mjs";
+import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
 
 let barkNotifier = null;
 
@@ -754,6 +754,20 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         } catch (e) {}
       }
 
+      // Safe restart markers status (computed from marker files, no secrets)
+      let restartMarkerData = { pending_count: 0, statuses: { pending: 0, scheduled: 0, restarted: 0, verified: 0, failed: 0 }, marker_dir_exists: false };
+      try {
+        const markerDir = getPendingRestartsDir(config.defaultWorkspaceRoot);
+        restartMarkerData.marker_dir_exists = existsSync(markerDir);
+        const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
+        restartMarkerData.pending_count = markers.length;
+        for (const m of markers) {
+          if (m.status && restartMarkerData.statuses[m.status] !== undefined) {
+            restartMarkerData.statuses[m.status]++;
+          }
+        }
+      } catch (e) { /* non-fatal */ }
+
       return {
         pid: process.pid,
         started_at: PROCESS_STARTED_AT.toISOString(),
@@ -778,6 +792,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         state_path_inside_repo: statePathInsideRepo,
         worktree_dirty,
         dirty_paths,
+        restart_markers: restartMarkerData,
         // Config sources for key operational values
         config_sources: {
           codex_exec_timeout: sources.codexExecTimeout,

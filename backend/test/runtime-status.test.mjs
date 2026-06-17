@@ -2,10 +2,11 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
-import { join, dirname } from "node:path";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import { createBarkNotifier } from "../src/bark-notifier.mjs";
+import { writePendingRestartMarker, updateRestartMarkerStatus, getPendingRestartsDir } from "../src/safe-restart.mjs";
 import { loadRuntimeEnv } from "../src/runtime-env.mjs";
 
 async function makeServer(customConfig = {}) {
@@ -298,4 +299,101 @@ test("gptwork_doctor does not expose secrets", async () => {
   assert.ok(!str.includes("barkKey"), "should not contain barkKey");
   assert.ok(!str.includes("github_token"), "should not contain github_token");
   assert.ok(!str.match(/ghp_\w+/), "should not contain token values");
+});
+
+// ================================================================
+// restart_markers in runtime_status tests
+// ================================================================
+
+test("runtime_status includes restart_markers object", async () => {
+  const server = await makeServer();
+  const status = await callTool(server, "runtime_status");
+  assert.ok(status.restart_markers, "restart_markers should be present");
+  assert.equal(typeof status.restart_markers, "object");
+  assert.equal(typeof status.restart_markers.pending_count, "number");
+  assert.equal(typeof status.restart_markers.marker_dir_exists, "boolean");
+  assert.ok(status.restart_markers.statuses, "statuses should be present");
+  assert.equal(typeof status.restart_markers.statuses.pending, "number");
+  assert.equal(typeof status.restart_markers.statuses.scheduled, "number");
+  assert.equal(typeof status.restart_markers.statuses.restarted, "number");
+  assert.equal(typeof status.restart_markers.statuses.verified, "number");
+  assert.equal(typeof status.restart_markers.statuses.failed, "number");
+});
+
+test("restart_markers empty marker dir returns pending_count 0", async () => {
+  const server = await makeServer();
+  const status = await callTool(server, "runtime_status");
+  assert.equal(status.restart_markers.pending_count, 0);
+  assert.equal(status.restart_markers.statuses.pending, 0);
+  assert.equal(status.restart_markers.statuses.scheduled, 0);
+  assert.equal(status.restart_markers.statuses.restarted, 0);
+  assert.equal(status.restart_markers.statuses.verified, 0);
+  assert.equal(status.restart_markers.statuses.failed, 0);
+  // marker_dir_exists can be true or false depending on whether
+  // other tests left the dir behind; just check it's boolean
+  assert.equal(typeof status.restart_markers.marker_dir_exists, "boolean");
+});
+
+test("restart_markers synthetic marker files produce correct status counts", async () => {
+  const server = await makeServer();
+  const status = await callTool(server, "runtime_status");
+  const workspaceRoot = status.defaultWorkspaceRoot;
+
+  // Create synthetic marker files with various statuses
+  const markerDir = getPendingRestartsDir(workspaceRoot);
+  await mkdir(markerDir, { recursive: true });
+
+  const statuses = ["pending", "pending", "scheduled", "restarted", "verified", "failed", "pending"];
+  for (let i = 0; i < statuses.length; i++) {
+    const taskId = `test-marker-${i + 1}`;
+    await writePendingRestartMarker(workspaceRoot, taskId, {
+      requested_by: "test",
+      expected_commit: `abc${i}`,
+      expected_remote_head: `def${i}`,
+    });
+    // Override status by rewriting the file
+    await updateRestartMarkerStatus(workspaceRoot, taskId, statuses[i]);
+  }
+
+  // Re-call runtime_status to get updated markers
+  const updatedStatus = await callTool(server, "runtime_status");
+  assert.equal(updatedStatus.restart_markers.pending_count, 7);
+  assert.equal(updatedStatus.restart_markers.statuses.pending, 3);
+  assert.equal(updatedStatus.restart_markers.statuses.scheduled, 1);
+  assert.equal(updatedStatus.restart_markers.statuses.restarted, 1);
+  assert.equal(updatedStatus.restart_markers.statuses.verified, 1);
+  assert.equal(updatedStatus.restart_markers.statuses.failed, 1);
+  assert.equal(updatedStatus.restart_markers.marker_dir_exists, true);
+});
+
+test("restart_markers does not expose secret values", async () => {
+  const server = await makeServer();
+  // Create a synthetic marker with a realistic task_id
+  const statusBefore = await callTool(server, "runtime_status");
+  const workspaceRoot = statusBefore.defaultWorkspaceRoot;
+  const markerDir = getPendingRestartsDir(workspaceRoot);
+  await mkdir(markerDir, { recursive: true });
+
+  // Write a marker with task descriptions, command values etc.
+  await writePendingRestartMarker(workspaceRoot, "test-secret-check", {
+    requested_by: "codex",
+    expected_commit: "abc123def456abc123def456abc123def456abc1",
+    expected_remote_head: "def789abc012def789abc012def789abc012def7",
+  });
+
+  const status = await callTool(server, "runtime_status");
+  const rm = status.restart_markers;
+  // The restart_markers object should only contain safe summary fields
+  assert.equal(typeof rm.pending_count, "number");
+  assert.equal(typeof rm.marker_dir_exists, "boolean");
+  assert.ok(rm.statuses);
+  // Verify no marker file contents leak through
+  const rmStr = JSON.stringify(rm);
+  assert.ok(!rmStr.includes("abc123"), "should not leak expected_commit values");
+  assert.ok(!rmStr.includes("def789"), "should not leak expected_remote_head values");
+  assert.ok(!rmStr.includes("codex"), "should not leak requested_by values");
+  assert.ok(!rmStr.includes("test-secret"), "should not leak task_id values");
+  assert.ok(!rmStr.includes("logs"), "should not leak marker logs");
+  assert.ok(!rmStr.includes("task_description"), "should not leak descriptions");
+  assert.ok(!rmStr.includes("secret"), "should not contain secret");
 });

@@ -106,7 +106,7 @@ Available bundle tools:
 
 After starting the service, verify with these MCP tools (in order):
 
-1. `runtime_status` — Check process pid, running commit, workspace root, env loading, git state
+1. `runtime_status` — Check process pid, running commit, workspace root, env loading, git state, and safe restart markers summary (`restart_markers`)
 2. `notification_status` — Check Bark notification config and connectivity
 3. `git_remote_status` — Check remote tracking refs and dirty worktree
 4. `gptwork_doctor` — Comprehensive single-call diagnostics with suggested next actions
@@ -261,6 +261,7 @@ Self-restarts now use a durable two-phase marker flow:
 
 | Tool | Description |
 |---|---|
+| `runtime_status` (restart_markers field) | Safe summary of pending restart markers: pending_count, statuses breakdown, marker_dir_exists |
 | `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached restart. |
 | `list_pending_restarts()` | Lists pending restart markers awaiting startup verification. |
 
