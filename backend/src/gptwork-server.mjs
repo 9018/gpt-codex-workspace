@@ -28,7 +28,7 @@ import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
 import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
-import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
+import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
 
 let barkNotifier = null;
 
@@ -757,12 +757,13 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       }
 
       // Safe restart markers status (computed from marker files, no secrets)
-      let restartMarkerData = { pending_count: 0, statuses: { pending: 0, scheduled: 0, restarted: 0, verified: 0, failed: 0 }, marker_dir_exists: false };
+      let restartMarkerData = { total_count: 0, active_count: 0, statuses: { pending: 0, scheduled: 0, restarted: 0, verified: 0, failed: 0 }, marker_dir_exists: false };
       try {
         const markerDir = getPendingRestartsDir(config.defaultWorkspaceRoot);
         restartMarkerData.marker_dir_exists = existsSync(markerDir);
         const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
-        restartMarkerData.pending_count = markers.length;
+        restartMarkerData.total_count = markers.length;
+    restartMarkerData.active_count = markers.filter(m => ["pending", "scheduled", "restarted"].includes(m.status)).length;
         for (const m of markers) {
           if (m.status && restartMarkerData.statuses[m.status] !== undefined) {
             restartMarkerData.statuses[m.status]++;
@@ -910,6 +911,16 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
           if (staleCloneCount > 0) actions.push('Clean up ' + staleCloneCount + ' stale clone(s) (rm -rf .tmp-* in workspace root)');
           if (worktreeDirty) actions.push('Commit or stash dirty worktree changes');
           if (config.defaultRepo !== '9018/gpt-codex-workspace') actions.push('Set GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace for canonical repo resolution');
+          // Check restart markers: only active (pending/scheduled/restarted) ones need action; verified/failed are historical
+          (() => {
+            try {
+              const markers = scanPendingRestartMarkersSync(config.defaultWorkspaceRoot);
+              const active = markers.filter(m => ['pending','scheduled','restarted'].includes(m.status));
+              if (active.length > 0) {
+                actions.push(active.length + ' active restart marker(s) (' + active.map(m => m.task_id.slice(0,12) + ':' + m.status).join(', ') + ') — complete or verify via schedule_service_restart');
+              }
+            } catch(e) {}
+          })();
           if (actions.length === 0) actions.push('All systems nominal');
           return actions;
         })(),
@@ -2286,48 +2297,9 @@ async function updateTask(store, task_id, updater) {
   task.updated_at = new Date().toISOString();
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
   
-  // Send Bark notification for terminal task states with policy check.
-  // Deduplicate per task id + status + channel (bark).
-  if (barkNotifier && barkNotifier.isEnabled()) {
-    const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout", "waiting_for_review", "waiting_review"];
-    const chKey = `notified:bark:${task.status}`;
-    if (terminal.includes(task.status) && !task[chKey]) {
-      // Policy check before sending
-      const classification = classifyNotification(task);
-      if (!classification.should_notify) {
-        task.last_notification_policy = classification.reason;
-      } else {
-        try {
-          const { title, body } = formatNotification(task, task.status);
-          const nres = await barkNotifier.send(title, body, `task-${task.status}`);
-          if (nres.ok) {
-            task[chKey] = true;
-            task.notified_at = new Date().toISOString();
-          }
-          // Persist notification diagnostics safely (no endpoint/key values)
-          task.notifications ||= [];
-          task.notifications.push({
-            channel: "bark",
-            event: nres.ok ? "sent" : "failed",
-            attempted_at: new Date().toISOString(),
-            ok: nres.ok,
-            response_code: nres.ok ? 200 : null,
-            response_message: nres.ok ? (nres.bark_id || "ok") : null,
-            error_short: nres.ok ? null : (nres.reason || nres.error || null),
-            source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
-            group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
-            endpoint_kind: (() => {
-              const s = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
-              return s.url_set ? "url" : s.key_set ? "key" : "none";
-            })(),
-            icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
-            url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
-          });
-        } catch (e) { /* notification failure is non-critical */ }
-      }
-    }
-  }
-  await store.save();
+    // Use shared notification helper for terminal task states (deduplicated per task/status/channel)
+  await notifyTerminalTaskIfNeeded(task);
+await store.save();
   return { task };
 }
 

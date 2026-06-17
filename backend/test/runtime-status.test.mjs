@@ -310,7 +310,8 @@ test("runtime_status includes restart_markers object", async () => {
   const status = await callTool(server, "runtime_status");
   assert.ok(status.restart_markers, "restart_markers should be present");
   assert.equal(typeof status.restart_markers, "object");
-  assert.equal(typeof status.restart_markers.pending_count, "number");
+  assert.equal(typeof status.restart_markers.total_count, "number");
+  assert.equal(typeof status.restart_markers.active_count, "number");
   assert.equal(typeof status.restart_markers.marker_dir_exists, "boolean");
   assert.ok(status.restart_markers.statuses, "statuses should be present");
   assert.equal(typeof status.restart_markers.statuses.pending, "number");
@@ -320,10 +321,11 @@ test("runtime_status includes restart_markers object", async () => {
   assert.equal(typeof status.restart_markers.statuses.failed, "number");
 });
 
-test("restart_markers empty marker dir returns pending_count 0", async () => {
+test("restart_markers empty marker dir returns total_count 0", async () => {
   const server = await makeServer();
   const status = await callTool(server, "runtime_status");
-  assert.equal(status.restart_markers.pending_count, 0);
+  assert.equal(status.restart_markers.total_count, 0);
+  assert.equal(status.restart_markers.active_count, 0);
   assert.equal(status.restart_markers.statuses.pending, 0);
   assert.equal(status.restart_markers.statuses.scheduled, 0);
   assert.equal(status.restart_markers.statuses.restarted, 0);
@@ -357,7 +359,8 @@ test("restart_markers synthetic marker files produce correct status counts", asy
 
   // Re-call runtime_status to get updated markers
   const updatedStatus = await callTool(server, "runtime_status");
-  assert.equal(updatedStatus.restart_markers.pending_count, 7);
+  assert.equal(updatedStatus.restart_markers.total_count, 7);
+  assert.equal(updatedStatus.restart_markers.active_count, 5);  // 3 pending + 1 scheduled + 1 restarted
   assert.equal(updatedStatus.restart_markers.statuses.pending, 3);
   assert.equal(updatedStatus.restart_markers.statuses.scheduled, 1);
   assert.equal(updatedStatus.restart_markers.statuses.restarted, 1);
@@ -384,7 +387,8 @@ test("restart_markers does not expose secret values", async () => {
   const status = await callTool(server, "runtime_status");
   const rm = status.restart_markers;
   // The restart_markers object should only contain safe summary fields
-  assert.equal(typeof rm.pending_count, "number");
+  assert.equal(typeof rm.total_count, "number");
+  assert.equal(typeof rm.active_count, "number");
   assert.equal(typeof rm.marker_dir_exists, "boolean");
   assert.ok(rm.statuses);
   // Verify no marker file contents leak through

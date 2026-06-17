@@ -475,6 +475,58 @@ test("terminal notification for timed_out status", async (t) => {
   assert.ok(fetchCount >= 1, "Should notify on timed_out");
 });
 
+test("terminal notification for waiting_for_review via update_task_status", async (t) => {
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async (url) => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", { title: "Waiting review test" });
+  await callTool(server, "update_task_status", { task_id: created.task.id, status: "waiting_for_review" });
+
+  assert.ok(fetchCount >= 1, "Should notify on waiting_for_review via update_task_status");
+});
+
+test("duplicate waiting_for_review update does not resend notification", async (t) => {
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", { title: "Dedup waiting review" });
+
+  // First update to waiting_for_review triggers notification
+  await callTool(server, "update_task_status", { task_id: created.task.id, status: "waiting_for_review" });
+  const firstFetchCount = fetchCount;
+
+  // Second update with same status should not re-notify
+  await callTool(server, "update_task_status", { task_id: created.task.id, status: "waiting_for_review" });
+
+  assert.equal(fetchCount, firstFetchCount, "Should not resend notification for same waiting_for_review status");
+});
+
+test("Phase C completed sends completed notification via update_task", async (t) => {
+  // This simulates the Phase C startup verification path: calling updateTask
+  // with a completed status change. Phase C calls notifyTerminalTaskIfNeeded
+  // on the task object after modifying it, which is now the same path as
+  // update_task_status -> updateTask --> notifyTerminalTaskIfNeeded.
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", { title: "Phase C notification test" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "Phase C sim" });
+
+  assert.ok(fetchCount >= 1, "Phase C equivalent path should notify on completed");
+});
+
 test("notification body includes task title, id, status, and summary", async (t) => {
   let lastUrl = "";
   t.mock.method(globalThis, "fetch", async (url) => {

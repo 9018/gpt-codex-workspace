@@ -17,7 +17,7 @@
  */
 
 import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { dirname, join } from "node:path";
 
@@ -184,6 +184,37 @@ export async function scanPendingRestartMarkers(workspaceRoot) {
     }
 
     // Sort by requested_at descending
+    markers.sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime());
+    return markers;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Synchronous version of scanPendingRestartMarkers for use in synchronous contexts
+ * (e.g., gptwork_doctor suggested_next_actions).
+ * Uses readdirSync / readFileSync instead of async variants.
+ *
+ * @param {string} workspaceRoot
+ * @returns {object[]} array of marker objects
+ */
+export function scanPendingRestartMarkersSync(workspaceRoot) {
+  const dir = getPendingRestartsDir(workspaceRoot);
+  try {
+    const entries = readdirSync(dir, { withFileTypes: true });
+    const markers = [];
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const taskId = entry.name.slice(0, -5);
+      try {
+        const markerPath = getRestartMarkerPath(workspaceRoot, taskId);
+        const data = readFileSync(markerPath, "utf8");
+        markers.push(JSON.parse(data));
+      } catch {
+        // skip unreadable markers
+      }
+    }
     markers.sort((a, b) => new Date(b.requested_at).getTime() - new Date(a.requested_at).getTime());
     return markers;
   } catch {

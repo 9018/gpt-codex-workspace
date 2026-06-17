@@ -261,9 +261,20 @@ Self-restarts now use a durable two-phase marker flow:
 
 | Tool | Description |
 |---|---|
-| `runtime_status` (restart_markers field) | Safe summary of pending restart markers: pending_count, statuses breakdown, marker_dir_exists |
+| `runtime_status` (restart_markers field) | Safe summary of restart markers: total_count (all marker files), active_count (active: pending/scheduled/restarted only), statuses breakdown (pending/scheduled/restarted/verified/failed), marker_dir_exists. Verified/failed markers are historical and do not require action. |
 | `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached restart. |
 | `list_pending_restarts()` | Lists pending restart markers awaiting startup verification. |
+
+### Active vs Historical Markers
+
+The `restart_markers` field distinguishes between active and historical markers:
+
+- **total_count**: Number of all marker files found in the restart marker directory.
+- **active_count**: Count of markers with status `pending`, `scheduled`, or `restarted`. These represent in-progress or incomplete restarts that may need attention.
+- **statuses**: Breakdown counts by individual status (pending/scheduled/restarted/verified/failed).
+- **marker_dir_exists**: Whether the marker directory exists at all.
+
+Markers with status `verified` or `failed` are historical — the restart protocol has already completed or ended for those tasks. The `total_count` includes all markers (active + historical), while `active_count` only includes markers that still need action. Verified historical markers do not generate warnings in `gptwork_doctor suggested_next_actions`.
 
 ### Marker Path
 
