@@ -26,14 +26,18 @@ export class StateStore {
 
   async save() {
     await mkdir(dirname(this.statePath), { recursive: true });
-    // Serialize concurrent saves to prevent interleaving.
+    // Serialize concurrent saves with an internal promise chain.
     // Use temp-file + atomic rename to avoid partial writes on crash.
-    this._saveLock = (this._saveLock || Promise.resolve()).then(async () => {
+    // If a single save fails, we reset the chain so future saves are not
+    // permanently blocked (chain.catch(() => {}) resolves on failure).
+    const chain = (this._saveLock || Promise.resolve()).then(async () => {
       const tmpPath = this.statePath + "." + randomUUID() + ".tmp";
       await writeFile(tmpPath, JSON.stringify(this.state, null, 2), "utf8");
       await rename(tmpPath, this.statePath);
     });
-    return this._saveLock;
+    // Reset on failure so subsequent saves still execute
+    this._saveLock = chain.catch(() => {});
+    return chain;
   }
 
   async _migrateIfNeeded() {

@@ -566,6 +566,10 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
             approximateContextBytes += (task.description || "").length;
             approximateContextBytes += (goal.goal_prompt || "").length;
             if (projectMd.ok) approximateContextBytes += projectMd.size;
+            // Warn when task workspace type is SSH (Codex execution requires hosted workspace)
+            if (workspace.type === "ssh") {
+              warnings.push({ severity: "warning", code: "ssh_workspace", message: "SSH workspaces support file/shell tools only. Codex worker execution requires hosted workspace." });
+            }
           }
 
           if (!task.goal_id) {

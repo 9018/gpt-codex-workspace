@@ -334,3 +334,88 @@ test("StateStore concurrent saves are serialized and use atomic write", async ()
   const tmpFiles = dir.filter((f) => f.endsWith(".tmp"));
   assert.equal(tmpFiles.length, 0, "no temp files should remain after save: " + JSON.stringify(tmpFiles));
 });
+
+// -----------------------------------------------------------------------
+// P0-2: StateStore save chain is resilient to individual failures
+// -----------------------------------------------------------------------
+
+test("StateStore save chain recovers after simulated failure", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-blocked-"));
+  const statePath = join(root, "state.json");
+  const store = new StateStore({ statePath, defaultWorkspaceRoot: join(root, "workspace") });
+
+  await store.load();
+
+  // First save works
+  store.state.phase = "first";
+  await store.save();
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).phase, "first");
+
+  // Simulate a failed save by corrupting the internal lock
+  store._saveLock = Promise.reject(new Error("simulated chain failure"));
+  // Prevent unhandled rejection warning
+  store._saveLock.catch(() => {});
+
+  // This save should reject because the chain is broken
+  store.state.phase = "second";
+  await assert.rejects(
+    () => store.save(),
+    /simulated chain failure/,
+    "save should reject when internal chain is broken"
+  );
+
+  // The internal _saveLock was reset (caught), so the next save works
+  store.state.phase = "third";
+  await store.save();
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).phase, "third",
+    "save should work after recovery from broken chain");
+
+  // No temp files remain after recovery
+  const files = await readdir(dirname(statePath));
+  assert.equal(files.filter(f => f.endsWith(".tmp")).length, 0);
+});
+
+test("StateStore failed write does not corrupt existing state file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-nocorrupt-"));
+  const statePath = join(root, "state.json");
+  const dirPath = dirname(statePath);
+  const { chmod } = await import("node:fs/promises");
+
+  const store = new StateStore({ statePath, defaultWorkspaceRoot: join(root, "workspace") });
+
+  // Load (creates initial state) and add some data
+  await store.load();
+  store.state.counter = 42;
+  await store.save();
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).counter, 42);
+
+  // Make directory read-only to force a write failure
+  await chmod(dirPath, 0o444);
+
+  try {
+    store.state.counter = 99;
+    await assert.rejects(
+      () => store.save(),
+      /EACCES|EPERM|EISDIR|EINVAL/,
+      "save should reject when directory is read-only"
+    );
+  } finally {
+    // MUST restore permissions for cleanup and subsequent tests
+    await chmod(dirPath, 0o755).catch(() => {});
+  }
+
+  // The original state file should still be intact and valid
+  const content = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(content.counter, 42,
+    "state file should retain original data after failed write");
+  assert.equal(content.users[0].id, "user_default",
+    "state structure should be intact after failed write");
+
+  // After recovery (dir is writable again), save works
+  store.state.counter = 100;
+  await store.save();
+  assert.equal(JSON.parse(await readFile(statePath, "utf8")).counter, 100,
+    "save should recover after directory becomes writable again");
+});
+
+console.log("state-store.test.mjs loaded");

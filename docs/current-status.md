@@ -523,3 +523,14 @@ Available via:
 | `runtime_status` (repo_locks field) | Active/stale repo lock counts and lock entries |
 | `gptwork_doctor` (repo_locks field) | Same repo lock summary integrated into doctor diagnostics |
 | `list_repo_locks` | Standalone tool listing repo execution locks with safe diagnostics |
+
+## SSH Workspace Diagnostics
+
+SSH workspaces support file and shell operations but Codex worker execution (`processGeneralTask`) currently requires a hosted workspace. This behavior is explicit and intentional:
+
+- `preview_codex_context` shows a warning when the task workspace type is SSH.
+- `project_context_status` / `context_status` shows a warning when the task workspace type is SSH.
+- `processGeneralTask` skips SSH workspaces with a clear log message: "unsupported workspace type: ssh".
+- SSH file/shell tools (list_dir, read_text_file, write_text_file, shell_exec, etc.) work normally.
+
+To use Codex execution, assign tasks to a hosted workspace.

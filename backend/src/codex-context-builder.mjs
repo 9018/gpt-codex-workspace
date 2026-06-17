@@ -117,7 +117,7 @@ export function countMemories(contextJson) {
 
 const HUGE_TRANSCRIPT_BYTES = 100 * 1024; // 100 KB
 
-export function generateWarnings(task, goal, contextJson, repoStatus, transcriptInfo, repoRecord) {
+export function generateWarnings(task, goal, contextJson, repoStatus, transcriptInfo, repoRecord, workspace) {
   const warnings = [];
 
   if (!repoRecord) {
@@ -139,6 +139,11 @@ export function generateWarnings(task, goal, contextJson, repoStatus, transcript
     warnings.push({ severity: "warning", code: "huge_transcript", message: `Transcript is ${transcriptInfo.size_label}. Codex may struggle with large context.` });
   }
 
+
+  // Warn when workspace type is SSH (Codex execution not supported for SSH)
+  if (workspace && workspace.type === "ssh") {
+    warnings.push({ severity: "warning", code: "ssh_workspace", message: "SSH workspaces support file/shell tools only. Codex worker execution requires hosted workspace." });
+  }
   return warnings;
 }
 
@@ -198,7 +203,7 @@ export async function buildCodexContext(options = {}) {
 
   // Warnings
   const warnings = generateWarnings(
-    task, goal, contextJson, repoStatus, transcriptInfo, repoRecord
+    task, goal, contextJson, repoStatus, transcriptInfo, repoRecord, workspace
   );
 
   // Size metrics

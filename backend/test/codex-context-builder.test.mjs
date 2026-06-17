@@ -417,3 +417,76 @@ test("preview includes size metrics when present", async () => {
 });
 
 console.log("codex-context-builder.test.mjs loaded");
+
+// ---------------------------------------------------------------------------
+// SSH workspace warning (P0-2)
+// ---------------------------------------------------------------------------
+
+test("generateWarnings warns for SSH workspace type", () => {
+  const warnings = generateWarnings(
+    { id: "task_ssh" },
+    { id: "goal_ssh" },
+    null,
+    null,
+    { exists: false, size: 0, size_label: "0 B" },
+    { repo_id: "test/repo" },
+    { id: "ssh-ws", type: "ssh", root: "/home/remote/project" }
+  );
+  const sshWarn = warnings.find(w => w.code === "ssh_workspace");
+  assert.ok(sshWarn, "should have SSH workspace warning");
+  assert.match(sshWarn.message, /SSH workspaces/);
+  assert.match(sshWarn.message, /hosted workspace/);
+  assert.equal(sshWarn.severity, "warning");
+});
+
+test("generateWarnings does not warn for hosted workspace type", () => {
+  const warnings = generateWarnings(
+    { id: "task_hosted" },
+    { id: "goal_hosted" },
+    null,
+    null,
+    { exists: false, size: 0, size_label: "0 B" },
+    { repo_id: "test/repo" },
+    { id: "hosted-ws", type: "hosted", root: "/tmp/ws" }
+  );
+  const sshWarn = warnings.find(w => w.code === "ssh_workspace");
+  assert.equal(sshWarn, undefined, "should NOT have SSH workspace warning for hosted workspace");
+});
+
+test("generateWarnings does not warn when workspace is undefined", () => {
+  const warnings = generateWarnings(
+    { id: "task_no_ws" },
+    { id: "goal_no_ws" },
+    null,
+    null,
+    { exists: false, size: 0, size_label: "0 B" },
+    { repo_id: "test/repo" }
+  );
+  const sshWarn = warnings.find(w => w.code === "ssh_workspace");
+  assert.equal(sshWarn, undefined, "should NOT have SSH warning when workspace is undefined");
+});
+
+test("buildCodexContext includes SSH warning in warnings array", async () => {
+  const { context } = await buildCodexContext({
+    taskId: "task_ssh_ctx",
+    task: { id: "task_ssh_ctx", title: "SSH task", status: "assigned", mode: "builder", assignee: "codex", workspace_id: "ssh-workspace" },
+    workspace: { id: "ssh-workspace", root: "/home/remote/project", type: "ssh" },
+    repoRecord: { repo_id: "test/repo", remote_url: "git@github.com:test/repo.git", default_branch: "main", owner: "test", repo_name: "repo", host: "github.com" },
+  });
+
+  const sshWarn = context.warnings.find(w => w.code === "ssh_workspace");
+  assert.ok(sshWarn, "buildCodexContext should include SSH workspace warning");
+  assert.match(sshWarn.message, /SSH workspaces/);
+});
+
+test("buildCodexContext preview contains SSH workspace notice", async () => {
+  const { preview } = await buildCodexContext({
+    taskId: "task_ssh_preview",
+    task: { id: "task_ssh_preview", title: "SSH preview", status: "assigned", mode: "builder", assignee: "codex", workspace_id: "ssh-ws" },
+    workspace: { id: "ssh-ws", root: "/home/remote/project", type: "ssh" },
+  });
+
+  assert.ok(preview.includes("SSH"), "preview should mention SSH");
+});
+
+console.log("codex-context-builder.test.mjs loaded");
