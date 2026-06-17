@@ -236,73 +236,50 @@ SSH workspaces prefer key authentication. For hosts outside `10.0.0.0/8`, the de
 
 Removed/obsolete docs should not describe base64 as a way to hide unsafe intent.
 
-## Codex Stuck-Task Diagnostics & Recovery
+## GPTWork Safe Self-Restart Protocol
 
-### Problem Addressed
+### Root Cause Addressed
 
-Tasks can stay `running` indefinitely with logs ending at `[worker] codex exec started`. Codex may modify files but fail to commit/push/complete the task. Previously there was no task heartbeat, run id, child pid, stdout/stderr artifact, last progress time, or recovery tool.
+The recurring stuck-task issue was caused by a task restarting `gptwork-mcp.service` while
+that same service was running the worker. The restart killed the worker before it could
+write a final task result or complete the task. The new backend process cannot resume the
+old in-memory execution chain.
 
-### New Tools
+### Focused Protocol
 
-Three MCP tools added for diagnostics and recovery:
+Self-restarts now use a durable two-phase marker flow:
+
+1. Finish code/test/commit/push work.
+2. Write `result.json`.
+3. Call `schedule_service_restart(task_id, expected_commit, expected_remote_head)`.
+4. GPTWork writes `.gptwork/pending-restarts/<task_id>.json` before scheduling restart.
+5. The restart is detached from the current worker request.
+6. On startup, GPTWork scans pending restart markers, verifies running/local/remote commit,
+   and finalizes or marks the task for review.
+
+### MCP Tools
 
 | Tool | Description |
 |---|---|
-| `diagnose_task(task_id)` | Returns structured diagnostics: status, age, last heartbeat, active process, repo dirty state, changed files, run log paths, result.json presence, likely cause, and suggested recovery actions |
-| `list_stuck_tasks()` | Lists all running/stalled tasks with stale heartbeat, missing process, or no progress |
-| `recover_stuck_task(task_id, action)` | Perform recovery: inspect_only, mark_waiting_review, mark_failed, reset_to_assigned, finalize_if_result_json, kill_process_if_alive |
+| `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached restart. |
+| `list_pending_restarts()` | Lists pending restart markers awaiting startup verification. |
 
-### Recovery Workflow
-
-When a task appears stuck:
-
-1. **Diagnose**: `diagnose_task("<task_id>")` — returns structured diagnostics with likely cause and suggested actions.
-2. **List all stuck**: `list_stuck_tasks()` — see all running tasks with stale heartbeats.
-3. **Recover**:
-   - If repo is dirty (Codex made changes but didn't commit): `recover_stuck_task("<task_id>", "mark_waiting_review")`
-   - If repo is clean and task should be retried: `recover_stuck_task("<task_id>", "reset_to_assigned")`
-   - If result.json exists: `recover_stuck_task("<task_id>", "finalize_if_result_json")`
-   - If the Codex process is still alive but hung: `recover_stuck_task("<task_id>", "kill_process_if_alive")`
-   - Safe inspection without changes: `recover_stuck_task("<task_id>", "inspect_only")`
-
-### Run Metadata
-
-Each Codex execution creates run metadata at:
+### Marker Path
 
 ```text
-.gptwork/runs/<task_id>/<run_id>/run.json
+.gptwork/pending-restarts/<task_id>.json
 ```
 
-Each run records:
-- `run_id`, `task_id`, `started_at`, `last_heartbeat_at`, `phase`
-- `codex_child_pid` when available
-- `stdout_log_path`, `stderr_log_path` — durable log files
-- `result_json_path` if result.json is found
+Marker fields include `task_id`, `requested_at`, `requested_by`, `service_name`,
+`expected_commit`, `expected_remote_head`, `repo_path`, `restart_kind`, `status`, `logs`,
+and `attempts`.
 
-Phases: `preparing`, `running_codex`, `parsing_result`, `completed`, `failed`, `stalled`
+### Minimal Fallback Reconciliation
 
-### Run Logs
-
-Full Codex stdout/stderr captured per run:
-
-```text
-.gptwork/runs/<task_id>/<run_id>/stdout.log
-.gptwork/runs/<task_id>/<run_id>/stderr.log
-```
-
-### Startup Reconciliation
-
-When the service starts, tasks in `running` status with stale heartbeats and no active process are automatically marked `waiting_for_review` with `result.kind=codex_stalled`. Uncommitted repo changes are preserved — never reverted automatically.
-
-### What To Do When Repo Is Dirty After Codex Stalls
-
-1. `diagnose_task("<task_id>")` — confirm the repo is dirty and see changed files.
-2. Review the changed files manually or via `git diff`.
-3. Either:
-   - `recover_stuck_task("<task_id>", "mark_waiting_review")` — mark for human review.
-   - Keep the changes and create a new task to continue from where Codex left off.
-   - Manually commit the changes if they are correct and desired.
-4. Do NOT use `mark_failed` or `reset_to_assigned` without checking the dirty state first.
+Run metadata remains under `.gptwork/runs/<task_id>/<run_id>/` as a fallback. On startup,
+if a task is still `running`, has no pending restart marker, has stale heartbeat, and has no
+active Codex process, GPTWork marks it `waiting_for_review` with
+`result.kind=codex_stalled`. Repo changes are never discarded automatically.
 
 ### Configuration
 

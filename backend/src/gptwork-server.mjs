@@ -27,7 +27,8 @@ import { buildCodexContext, loadProjectEnv, loadProjectMd } from "./codex-contex
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
-import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, diagnoseTask, findStuckTasks, recoverTask, startupReconciliation, listRuns, getLatestRun, isProcessAlive, isRepoDirty } from "./codex-run-metadata.mjs";
+import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
+import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart } from "./safe-restart.mjs";
 
 let barkNotifier = null;
 
@@ -167,13 +168,134 @@ export async function createGptWorkServer(options = {}) {
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {
       try {
         const state = await store.load();
-        const reconciled = await startupReconciliation(state, store, config.defaultWorkspaceRoot, config.codexStallThreshold || 600);
+        const now = Date.now();
         const _lp = process.env.GPTWORK_LOG_PATH;
-        if (reconciled.length > 0 && _lp) {
-          appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${reconciled.length} stale tasks marked waiting_for_review
+        const stallThreshold = (config.codexStallThreshold || 600) * 1000; // ms
+
+        // Phase A: Simple startup reconciliation
+        const reconciled = [];
+        for (const task of (state.tasks || [])) {
+          if (task.status !== "running") continue;
+          try {
+            const marker = await loadRestartMarker(config.defaultWorkspaceRoot, task.id);
+            if (marker && (marker.status === "pending" || marker.status === "scheduled" || marker.status === "restarted")) continue;
+          } catch {}
+          let shouldMark = false;
+          let message = "";
+          const run = await getLatestRun(config.defaultWorkspaceRoot, task.id);
+          if (!run) {
+            shouldMark = true;
+            message = "Startup reconciliation: task was in running state with no run metadata or restart marker. Marked as waiting_for_review/codex_stalled.";
+          } else {
+            const ageMs = now - new Date(run.last_heartbeat_at).getTime();
+            let processAlive = false;
+            if (run.codex_child_pid && typeof run.codex_child_pid === "number" && run.codex_child_pid > 0) {
+              try { process.kill(run.codex_child_pid, 0); processAlive = true; } catch {}
+            }
+            if (!processAlive && ageMs > stallThreshold) {
+              shouldMark = true;
+              message = "Startup reconciliation: Codex process not found and heartbeat is stale. Marked as waiting_for_review/codex_stalled.";
+            }
+          }
+          if (shouldMark) {
+            const prevStatus = task.status;
+            task.status = "waiting_for_review";
+            task.result = task.result || {};
+            task.result.kind = "codex_stalled";
+            task.result.reconciliation_message = message;
+            task.result.reconciled_at = new Date().toISOString();
+            task.logs = task.logs || [];
+            task.logs.push({ time: new Date().toISOString(), message });
+            reconciled.push({ task_id: task.id, previous_status: prevStatus, new_status: "waiting_for_review", message });
+            if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} -> waiting_for_review (${message})
+`);
+          }
+        }
+        if (reconciled.length > 0) {
+          await store.save();
+          if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${reconciled.length} stale tasks marked waiting_for_review
 `);
         }
-        return { ok: true, reconciled: reconciled.length, details: reconciled };
+
+        // Phase C: Scan pending restart markers and verify after service startup
+        const restartVerifications = [];
+        try {
+          const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
+          for (const marker of markers) {
+            if (marker.status === "scheduled" || marker.status === "restarted") {
+              const { verified, diagnostics } = await verifyRestartMarker(marker, {
+                defaultRepoPath: config.defaultRepoPath,
+                defaultRemote: config.defaultRemote,
+                defaultBranch: config.defaultBranch,
+              });
+              if (verified) {
+                await updateRestartMarkerStatus(config.defaultWorkspaceRoot, marker.task_id, "verified", {
+                  verified_at: new Date().toISOString(),
+                  running_commit: diagnostics.running_commit,
+                });
+                const taskObj = (state.tasks || []).find(function(t) { return t.id === marker.task_id; });
+                if (taskObj) {
+                  const goalId = taskObj.goal_id;
+                  let resultJsonPath = null;
+                  if (goalId) resultJsonPath = join(config.defaultWorkspaceRoot, ".gptwork/goals", goalId, "result.json");
+                  let resultData = null;
+                  if (resultJsonPath) { try { resultData = await parseResultJson(resultJsonPath); } catch {} }
+                  if (resultData && resultData.status === "completed") {
+                    taskObj.status = "completed";
+                    taskObj.result = taskObj.result || {};
+                    taskObj.result.kind = "codex_executed";
+                    taskObj.result.summary = resultData.summary || "Restart verified: deployment successful";
+                    taskObj.result.restart_state = "verified";
+                    taskObj.result.restart_verified_at = new Date().toISOString();
+                    taskObj.result.commit = resultData.commit;
+                    taskObj.result.remote_head = resultData.remote_head;
+                    taskObj.logs = taskObj.logs || [];
+                    taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Restart verified and task finalized via Phase C startup verification. Running commit: ${diagnostics.running_commit || "unknown"}` });
+                    taskObj.updated_at = new Date().toISOString();
+                    restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
+                    if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} completed after restart verification
+`);
+                  } else {
+                    taskObj.result = taskObj.result || {};
+                    taskObj.result.restart_state = "verified";
+                    taskObj.result.restart_comment = "Restart marker verified but no result.json found";
+                    taskObj.logs = taskObj.logs || [];
+                    taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Restart marker verified via Phase C startup verification (no result.json)" });
+                    taskObj.updated_at = new Date().toISOString();
+                    restartVerifications.push({ task_id: marker.task_id, status: "marker_verified", verified: true });
+                    if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: marker ${marker.task_id} verified
+`);
+                  }
+                }
+              } else {
+                await updateRestartMarkerStatus(config.defaultWorkspaceRoot, marker.task_id, "failed", {
+                  failed_at: new Date().toISOString(),
+                  failure_reason: (diagnostics.failures || []).join("; ") || diagnostics.error || "unknown",
+                });
+                const taskObj = (state.tasks || []).find(function(t) { return t.id === marker.task_id; });
+                if (taskObj) {
+                  taskObj.status = "waiting_for_review";
+                  taskObj.result = taskObj.result || {};
+                  taskObj.result.kind = "restart_failed";
+                  taskObj.result.restart_state = "failed";
+                  taskObj.result.restart_failure = diagnostics.failures || diagnostics.error || "verification failed";
+                  taskObj.logs = taskObj.logs || [];
+                  taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Restart verification failed: " + (((diagnostics.failures || []).join("; ")) || diagnostics.error || "unknown") });
+                  taskObj.updated_at = new Date().toISOString();
+                  restartVerifications.push({ task_id: marker.task_id, status: "failed", verified: false });
+                  if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} restart verification failed
+`);
+                }
+              }
+            }
+          }
+          if (markers.length > 0 || restartVerifications.length > 0) await store.save();
+        } catch (phaseErr) {
+          if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C error: ${phaseErr.message}
+`);
+        }
+        await store.save();
+        return { ok: true, reconciled: reconciled.length, details: reconciled, restart_verifications: restartVerifications };
       } catch (error) {
         const _lp = process.env.GPTWORK_LOG_PATH;
         if (_lp) appendFileSync(_lp, `[gptwork-worker] reconciliation error: ${error.message}
@@ -434,20 +556,24 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return result;
     }),
     request_human_review: tool("Mark a task as waiting for human review.", schema({ task_id: "string", message: "string" }, ["task_id"]), async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; })),
-    diagnose_task: tool("Diagnose a stuck or stalled Codex task. Returns structured diagnostic info: task status, age, last heartbeat, active process presence, repo dirty state, changed files, run log paths, result.json presence, likely cause, and suggested recovery actions.", schema({ task_id: "string" }, ["task_id"]), async ({ task_id }, context) => {
-      requireScope(context, "task:read");
-      const state = await store.load();
-      return await diagnoseTask(state, config.defaultWorkspaceRoot, task_id, config.codexStallThreshold || 600);
+    schedule_service_restart: tool("Schedule a safe two-phase service restart. Writes a pending restart marker and schedules a detached systemd service restart. Use when the worker needs to restart itself after completing its work.", schema({ task_id: "string", expected_commit: "string", expected_remote_head: "string" }, ["task_id"]), async ({ task_id, expected_commit = null, expected_remote_head = null }) => {
+      const result = await scheduleServiceRestart({
+        workspaceRoot: config.defaultWorkspaceRoot,
+        taskId: task_id,
+        requestedBy: "codex",
+        serviceName: "gptwork-mcp.service",
+        expectedCommit: expected_commit,
+        expectedRemoteHead: expected_remote_head,
+        repoPath: config.defaultRepoPath,
+        store,
+      });
+      return result;
     }),
-    list_stuck_tasks: tool("List all running or stalled Codex tasks with stale heartbeat, missing process, or no progress.", schema({}), async (_args, context) => {
-      requireScope(context, "task:read");
-      const state = await store.load();
-      const stuck = await findStuckTasks(state, config.defaultWorkspaceRoot, config.codexStallThreshold || 600);
-      return { count: stuck.length, stuck_tasks: stuck.map((s) => s.diagnostics) };
+    list_pending_restarts: tool("List all pending restart markers waiting for service restart and Phase C startup verification.", schema({}), async () => {
+      const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
+      return { count: markers.length, markers };
     }),
-    recover_stuck_task: tool("Recover a stuck Codex task. Supported actions: inspect_only, mark_waiting_review, mark_failed, reset_to_assigned, finalize_if_result_json, kill_process_if_alive. Safe defaults: does not discard uncommitted repo changes.", schema({ task_id: "string", action: "string" }, ["task_id", "action"]), async ({ task_id, action }) => {
-      return await recoverTask(store, config, task_id, action);
-    }),
+
     create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string" }, ["title", "prompt"]), async (args) => {
       const result = await createChatGptRequest(store, args);
       github.syncChatGptRequest(result.request).catch(() => {});
@@ -1942,6 +2068,17 @@ When complete, write a concise structured report in TWO formats:
    REMOTE_HEAD=<sha or none>
 
 GPTWork will read result.json first when available, falling back to the stdout report.` : ""}
+${separator}
+${separator}
+## Safe Restart Rule
+If you need to restart the gptwork-mcp.service (the service running this worker), you MUST NOT run "systemctl --user restart gptwork-mcp.service" directly inline for a self-restart. Doing so will kill the worker before the task can complete, causing the task to get stuck.
+Instead:
+1. Write result.json with your final result first.
+2. Call schedule_service_restart with your task_id, expected_commit (the HEAD you committed/pushed), and optional expected_remote_head.
+3. The tool safely writes a pending restart marker and schedules the restart detached from the current request.
+4. The actual service restart happens ~2 seconds later, giving time for the current response to return cleanly.
+5. After restart, GPTWork detects the marker, verifies the running commit equals the expected_commit, and finalizes your task.
+
 
 ${separator}
 Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
