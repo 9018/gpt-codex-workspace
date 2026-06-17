@@ -251,6 +251,7 @@ export async function createGptWorkServer(options = {}) {
                     taskObj.result.remote_head = resultData.remote_head;
                     taskObj.logs = taskObj.logs || [];
                     taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Restart verified and task finalized via Phase C startup verification. Running commit: ${diagnostics.running_commit || "unknown"}` });
+                    await notifyTerminalTaskIfNeeded(taskObj);
                     taskObj.updated_at = new Date().toISOString();
                     restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
                     if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} completed after restart verification
@@ -281,6 +282,7 @@ export async function createGptWorkServer(options = {}) {
                   taskObj.result.restart_failure = diagnostics.failures || diagnostics.error || "verification failed";
                   taskObj.logs = taskObj.logs || [];
                   taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Restart verification failed: " + (((diagnostics.failures || []).join("; ")) || diagnostics.error || "unknown") });
+                  await notifyTerminalTaskIfNeeded(taskObj);
                   taskObj.updated_at = new Date().toISOString();
                   restartVerifications.push({ task_id: marker.task_id, status: "failed", verified: false });
                   if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} restart verification failed
@@ -2327,6 +2329,49 @@ async function updateTask(store, task_id, updater) {
   }
   await store.save();
   return { task };
+}
+
+
+async function notifyTerminalTaskIfNeeded(task) {
+  if (!barkNotifier || !barkNotifier.isEnabled()) return;
+  const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout", "waiting_for_review", "waiting_review"];
+  const channelKey = `notified:bark:${task.status}`;
+  if (!terminal.includes(task.status) || task[channelKey]) return;
+
+  const classification = classifyNotification(task);
+  if (!classification.should_notify) {
+    task.last_notification_policy = classification.reason;
+    return;
+  }
+
+  try {
+    const { title, body } = formatNotification(task, task.status);
+    const nres = await barkNotifier.send(title, body, `task-${task.status}`);
+    if (nres.ok) {
+      task[channelKey] = true;
+      task.notified_at = new Date().toISOString();
+    }
+    task.notifications ||= [];
+    task.notifications.push({
+      channel: "bark",
+      event: nres.ok ? "sent" : "failed",
+      attempted_at: new Date().toISOString(),
+      ok: nres.ok,
+      response_code: nres.ok ? 200 : null,
+      response_message: nres.ok ? (nres.bark_id || "ok") : null,
+      error_short: nres.ok ? null : (nres.reason || nres.error || null),
+      source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
+      group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
+      endpoint_kind: (() => {
+        const st = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
+        return st.url_set ? "url" : st.key_set ? "key" : "none";
+      })(),
+      icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
+      url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
+    });
+  } catch {
+    // notification failure is non-critical
+  }
 }
 
 async function createChatGptRequest(store, args) {
