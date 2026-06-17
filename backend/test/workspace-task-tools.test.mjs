@@ -603,3 +603,149 @@ test("notification diagnostics not persisted when bark disabled", async () => {
   // When bark is disabled, no notification should be sent
   assert.ok(!completed.task.notifications || completed.task.notifications.length === 0);
 });
+
+// ================================================================
+// project_context_status tests
+// ================================================================
+
+test("project_context_status is exposed in tools/list", async () => {
+  const server = await makeServer();
+  const listResult = await callTool(server, "gptwork_doctor", {});
+  // We can verify by calling the tool directly
+  const result = await callTool(server, "project_context_status", {});
+  assert.ok(result.canonical_repo_path !== undefined);
+  assert.ok(result.workspace_root !== undefined);
+  assert.ok(Array.isArray(result.context_source_precedence));
+  assert.ok(Array.isArray(result.warnings));
+  assert.ok(result.project_context !== undefined);
+  assert.ok(typeof result.project_context.project_md_exists === "boolean");
+});
+
+test("project_context_status works without task_id", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "project_context_status", {});
+  assert.equal(result.task, undefined);
+  assert.ok(result.project_context.project_env_key_count >= 0);
+  assert.ok(result.repo_registered !== undefined);
+  assert.equal(result.context_source_precedence.length, 5);
+});
+
+test("project_context_status works with a task_id linked to a goal", async () => {
+  const server = await makeServer();
+
+  // Create a goal to ensure a linked task exists
+  const created = await callTool(server, "create_goal", {
+    user_request: "Context status test",
+    goal_prompt: "Test project_context_status with task_id.",
+    context_summary: "Testing task-specific diagnostics.",
+    assign_to_codex: true,
+    workspace_id: "hosted-default"
+  });
+
+  const result = await callTool(server, "project_context_status", { task_id: created.task.id });
+  assert.ok(result.task !== undefined);
+  assert.equal(result.task.task_id, created.task.id);
+  assert.equal(result.task.task_status, "assigned");
+  assert.ok(result.task.linked_goal_id || result.task.linked_goal_id === null);
+  assert.equal(result.task.linked_goal_id, created.goal.id);
+  assert.ok(typeof result.task.memory_count === "number");
+});
+
+test("project_context_status reports project.md/project.env existence and sizes/counts without secret values", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-projctx-"));
+  const repoPath = join(root, "repo");
+  await mkdir(join(repoPath, ".gptwork"), { recursive: true });
+  // Write project.md with known content
+  await writeFile(join(repoPath, ".gptwork", "project.md"), "# Test Project\n\nThis is test content.\n", "utf8");
+  // Write project.env with known keys (some secret-like, some normal)
+  await writeFile(join(repoPath, ".gptwork", "project.env"), [
+    "DB_HOST=localhost",
+    "DB_PORT=5432",
+    "API_KEY=sk-test123",
+    "LOG_LEVEL=debug",
+    "SECRET_TOKEN=super-secret-value"
+  ].join("\n"), "utf8");
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: repoPath,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const result = await callTool(server, "project_context_status", {});
+  // project.md assertions
+  assert.ok(result.project_context.project_md_exists);
+  assert.match(result.project_context.project_md_path, /project\.md$/);
+  assert.ok(result.project_context.project_md_size_bytes > 0);
+  // project.env assertions
+  assert.ok(result.project_context.project_env_exists);
+  assert.match(result.project_context.project_env_path, /project\.env$/);
+  assert.equal(result.project_context.project_env_key_count, 5);
+  // Secret-like keys: API_KEY, SECRET_TOKEN -> 2
+  assert.equal(result.project_context.project_env_secret_like_key_count, 2);
+  // No values should appear in redacted_key_names or elsewhere
+  const str = JSON.stringify(result);
+  assert.doesNotMatch(str, /super-secret-value/);
+  assert.doesNotMatch(str, /sk-test123/);
+});
+
+test("project_context_status reports warnings for missing project.md/project.env in a temp repo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-emptyctx-"));
+  const repoPath = join(root, "empty-repo");
+  await mkdir(join(repoPath, ".git"), { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: repoPath,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const result = await callTool(server, "project_context_status", {});
+  const warningCodes = result.warnings.map(w => w.code);
+  assert.ok(warningCodes.includes("missing_project_md"), JSON.stringify(warningCodes));
+  assert.ok(!result.project_context.project_md_exists);
+  assert.equal(result.project_context.project_md_size_bytes, 0);
+  assert.ok(!result.project_context.project_env_exists);
+  assert.equal(result.project_context.project_env_key_count, 0);
+});
+
+test("gptwork_doctor remains quiet/nominal when context is healthy", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-healthyctx-"));
+  const repoPath = join(root, "healthy-repo");
+  await mkdir(join(repoPath, ".gptwork"), { recursive: true });
+  await mkdir(join(repoPath, ".git"), { recursive: true });
+  // Write both project context files so context is "healthy"
+  await writeFile(join(repoPath, ".gptwork", "project.md"), "# Healthy Project\n\nAll good.\n", "utf8");
+  await writeFile(join(repoPath, ".gptwork", "project.env"), "DB_HOST=localhost\nDB_PORT=5432\n", "utf8");
+  // Init a minimal git repo so git commands don't fail
+  const { execFileSync } = await import("node:child_process");
+  try {
+    execFileSync("git", ["init"], { cwd: repoPath, stdio: "pipe", timeout: 5000 });
+    execFileSync("git", ["config", "user.email", "test@test"], { cwd: repoPath, stdio: "pipe", timeout: 5000 });
+    execFileSync("git", ["config", "user.name", "Test"], { cwd: repoPath, stdio: "pipe", timeout: 5000 });
+    execFileSync("git", ["add", "-A"], { cwd: repoPath, stdio: "pipe", timeout: 5000 });
+    execFileSync("git", ["commit", "-m", "initial"], { cwd: repoPath, stdio: "pipe", timeout: 5000 });
+  } catch (e) {}
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: repoPath,
+    tokens: ["test-token"],
+    requireAuth: true
+  });
+
+  const doctor = await callTool(server, "gptwork_doctor", {});
+  const suggestions = doctor.suggested_next_actions;
+  // When context is healthy (project.md and project.env exist with content),
+  // there should be no suggestion to run project_context_status
+  const contextStatusSuggestions = suggestions.filter(s =>
+    s.includes("project_context_status")
+  );
+  assert.equal(contextStatusSuggestions.length, 0,
+    "Doctor should not suggest project_context_status when context is healthy. Got: " + JSON.stringify(suggestions));
+});

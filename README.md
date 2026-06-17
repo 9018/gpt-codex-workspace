@@ -308,7 +308,8 @@ curl http://127.0.0.1:8787/health
 
 Before executing large Codex tasks, use the MCP tool:
 
-- `preview_codex_context(task_id)` — Show what Codex will see before execution
+- `preview_codex_context(task_id)` — Full execution preview: shows what Codex will see before executing a task
+- `project_context_status(task_id?)` — Concise context health and source precedence diagnostic: checks canonical repo registration, project.md/project.env existence and sizes/key counts (without secrets), context source precedence (5 layers), and optionally task-specific diagnostics (status, goal, transcript/memory counts). Lightweight alternative when you do not need the full preview.
 
 The preview includes:
 - Task title, status, mode

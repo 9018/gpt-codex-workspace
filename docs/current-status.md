@@ -143,6 +143,43 @@ Preview fields:
 - Approximate size metrics
 - Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
 
+### MCP Tool: project_context_status
+
+A new `project_context_status(task_id?)` tool returns a concise context health and source precedence diagnostic. Use this before large Codex runs to verify project-level context is configured and understand what sources contribute to the Codex prompt.
+
+Output fields (base diagnostic, no task_id required):
+- `canonical_repo_path` — Absolute path to the canonical repo
+- `repo_registered` — Whether the repo is registered in the repo registry
+- `workspace_root` — Workspace root directory
+- `project_context` — Object with project.md and project.env existence, path, size, key counts (without exposing secret values)
+- `context_source_precedence` — Ordered array explaining the 5-layer context precedence:
+  1. task.description / task fields
+  2. linked goal prompt/context files
+  3. project.md / project.env (project-level)
+  4. durable goal transcript/memories
+  5. runtime defaults / repo registry
+- `warnings` — Array of warnings for missing canonical repo, dirty worktree, missing project.md, empty project.env, stale clones, etc.
+
+When `task_id` is provided, the output also includes:
+- `task` — Object with task_id, task_status, linked_goal_id, preview_available, transcript_count, memory_count, approximate_context_bytes
+- Additional warnings for task_no_linked_goal, huge_context
+
+Use preview_codex_context when you need the full execution preview. Use project_context_status when you need a quick health check.
+
+A new `preview_codex_context(task_id)` tool shows what Codex will see before execution. Use this before large Codex runs to verify the execution environment.
+
+Preview fields:
+- Task title, status, mode
+- Linked goal ID
+- Workspace root and type
+- Canonical repo path
+- Runtime/state paths
+- Project context files discovered (.gptwork/project.md, .gptwork/project.env)
+- Included transcript/memory counts
+- Acceptance criteria / constraints summary
+- Approximate size metrics
+- Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
+
 ### Project-Level Context Files
 
 Project-level configuration is now supported under the canonical repo:
