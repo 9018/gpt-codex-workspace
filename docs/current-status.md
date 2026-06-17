@@ -1,6 +1,6 @@
 # GPTWork Current Status
-
 Date: 2026-06-17
+Status: P1 cleanup complete: zero-byte test files replaced with minimal smoke tests, chunk-upload placeholder tools removed, browser placeholder tools tagged as [EXPERIMENTAL] and gated behind feature flags, docs clarified for stable vs experimental tool separation.
 Status: encoded goal workflow is implemented and tuned for GPTChat -> Codex execution on 10.0.1.103. All P0 UX items resolved: placeholder tools gated by default, gptwork_doctor diagnostic tool added, workspace/repo registration validated.
 
 ## What This Project Is

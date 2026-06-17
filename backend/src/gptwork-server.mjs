@@ -1024,10 +1024,6 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     upload_bundle_base64: tool("Upload a ZIP bundle encoded as base64. Optionally extract it in the workspace after upload.", schema({ path: "string", zip_base64: "string", overwrite: "boolean", extract: "boolean", target_dir: "string", sha256_expected: "string", workspace_id: "string" }, ["path", "zip_base64"]), async (args, context) => workspaceUploadBundleBase64(store, config, args, context)),
     download_bundle_base64: tool("Create a ZIP bundle from a workspace directory or selected paths and return it as base64 with a SHA256 digest.", schema({ source_dir: "string", paths: "array", workspace_id: "string" }, []), async (args, context) => workspaceDownloadBundleBase64(store, config, args, context)),
     upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
-    init_chunk_upload: tool("Initialize a chunk upload session.", schema({ path: "string", total_chunks: "integer" }, ["path", "total_chunks"]), async ({ path, total_chunks }) => ({ upload_id: randomUUID(), path, total_chunks })),
-    upload_file_chunk: tool("Accept a chunk upload placeholder.", schema({ upload_id: "string", chunk_index: "integer", chunk_base64: "string" }, ["upload_id", "chunk_index", "chunk_base64"]), async ({ upload_id, chunk_index }) => ({ ok: true, upload_id, chunk_index })),
-    finish_chunk_upload: tool("Finish a chunk upload placeholder.", schema({ upload_id: "string", path: "string", sha256_expected: "string" }, ["upload_id", "path", "sha256_expected"]), async ({ upload_id, path }) => ({ ok: false, upload_id, path, error: "chunk merge is not enabled in v1 lightweight backend" })),
-    abort_chunk_upload: tool("Abort a chunk upload placeholder.", schema({ upload_id: "string" }, ["upload_id"]), async ({ upload_id }) => ({ ok: true, upload_id })),
     mkdir: tool("Create a directory.", schema({ path: "string", workspace_id: "string" }, ["path"]), async (args, context) => workspaceMkdir(store, config, args, context)),
     delete_path: tool("归档或清理文件/目录。文件先移入回收位置，确认后可永久清除。", schema({ path: "string", recursive: "boolean", workspace_id: "string" }, ["path"]), async (args, context) => workspaceDelete(store, config, args, context)),
     move_path: tool("Move or rename a file/directory.", schema({ src: "string", dst: "string", overwrite: "boolean", workspace_id: "string" }, ["src", "dst"]), async (args, context) => workspaceMove(store, config, args, context)),
@@ -1135,10 +1131,10 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     browser_press: tool("Record key press.", schema({ session_id: "string", selector: "string", key: "string" }, ["session_id", "selector", "key"]), async ({ session_id, selector, key }) => browser.press(session_id, selector, key)),
     browser_wait_for_selector: tool("Wait for selector.", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.waitForSelector(session_id, selector)),
     browser_scroll: tool("Record scroll.", schema({ session_id: "string", x: "integer", y: "integer" }, ["session_id"]), async ({ session_id, x, y }) => browser.scroll(session_id, x, y)),
-    browser_screenshot: tool("Return screenshot placeholder metadata.", schema({ session_id: "string", path: "string" }, ["session_id"]), async ({ session_id, path = "" }) => ({ ok: false, session_id, path, error: "screenshots require a Playwright-enabled browser adapter" })),
-    browser_set_input_files: tool("Return file upload placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
-    browser_click_and_download: tool("Return download placeholder metadata.", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
-    browser_evaluate: tool("Evaluate JavaScript placeholder.", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
+    browser_screenshot: tool("[EXPERIMENTAL] Take a browser screenshot. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", path: "string" }, ["session_id"]), async ({ session_id, path = "" }) => ({ ok: false, session_id, path, error: "screenshots require a Playwright-enabled browser adapter" })),
+    browser_set_input_files: tool("[EXPERIMENTAL] Upload files to a browser input. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
+    browser_click_and_download: tool("[EXPERIMENTAL] Click an element and download its target. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
+    browser_evaluate: tool("[EXPERIMENTAL] Evaluate JavaScript in the browser page. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
     runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
       const repoDir = resolveRepoDir();
       let repo_head = null, remote_head = null, running_commit = null;
@@ -1403,15 +1399,8 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
     }),
   };
-  // Gate placeholder/experimental tools behind env flags
+  // Gate experimental browser placeholder tools behind env flags (hidden by default unless GPTWORK_EXPOSE_PLACEHOLDER_TOOLS or GPTWORK_EXPERIMENTAL_BROWSER_TOOLS is set)
   const _exposePlaceholderTools = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
-
-  if (!_exposePlaceholderTools && process.env.GPTWORK_EXPERIMENTAL_CHUNK_UPLOAD !== 'true') {
-    delete tools.init_chunk_upload;
-    delete tools.upload_file_chunk;
-    delete tools.finish_chunk_upload;
-    delete tools.abort_chunk_upload;
-  }
   if (!_exposePlaceholderTools && process.env.GPTWORK_EXPERIMENTAL_BROWSER_TOOLS !== 'true') {
     delete tools.browser_screenshot;
     delete tools.browser_set_input_files;

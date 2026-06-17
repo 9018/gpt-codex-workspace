@@ -74,7 +74,7 @@ test("tools/list does not expose placeholder tools by default", async () => {
   }, { authorization: "Bearer test-token" });
 
   const names = response.result.tools.map((tool) => tool.name);
-  const hidden = ["init_chunk_upload", "upload_file_chunk", "finish_chunk_upload", "abort_chunk_upload",
+  const hidden = [
     "browser_screenshot", "browser_set_input_files", "browser_click_and_download", "browser_evaluate"];
   for (const h of hidden) {
     assert.equal(names.includes(h), false, "placeholder tool " + h + " should be hidden by default");
@@ -111,14 +111,10 @@ test("tools/list exposes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOLS
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;
   }
-  assert.ok(names.includes("init_chunk_upload"), "init_chunk_upload should be exposed when flag is set");
   assert.ok(names.includes("browser_screenshot"), "browser_screenshot should be exposed when flag is set");
   assert.ok(names.includes("browser_set_input_files"), "browser_set_input_files should be exposed when flag is set");
   assert.ok(names.includes("browser_click_and_download"), "browser_click_and_download should be exposed when flag is set");
   assert.ok(names.includes("browser_evaluate"), "browser_evaluate should be exposed when flag is set");
-  assert.ok(names.includes("upload_file_chunk"), "upload_file_chunk should be exposed when flag is set");
-  assert.ok(names.includes("finish_chunk_upload"), "finish_chunk_upload should be exposed when flag is set");
-  assert.ok(names.includes("abort_chunk_upload"), "abort_chunk_upload should be exposed when flag is set");
 });
 
 

@@ -242,7 +242,8 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 
 ### Execution
 - `shell_exec` — Run a command in a workspace (requires `shell:exec` scope)
-- Browser tools — Lightweight HTTP browser sessions
+- Stable browser tools — Lightweight HTTP browser sessions (`browser_new_session`, `browser_goto`, `browser_get_text`, etc.)
+- Experimental browser tools — Hidden by default; enable via `GPTWORK_EXPOSE_PLACEHOLDER_TOOLS=true` or `GPTWORK_EXPERIMENTAL_BROWSER_TOOLS=true` (`browser_screenshot`, `browser_set_input_files`, `browser_click_and_download`, `browser_evaluate`)
 
 ### GitHub Sync (no reverse proxy flow)
 - `sync_to_github` — Push open tasks and requests to GitHub Issues
