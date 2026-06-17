@@ -29,6 +29,7 @@ import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
 import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
 import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
+import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
 
 let barkNotifier = null;
 
@@ -217,6 +218,22 @@ export async function createGptWorkServer(options = {}) {
 `);
         }
 
+        // Phase B: Reconcile stale repo locks
+        try {
+          const _lockRec = await reconcileRepoLocks(config.defaultWorkspaceRoot);
+          if (_lockRec.reconciled > 0) {
+            if (_lp) appendFileSync(_lp, `[gptwork-worker] repo lock reconciliation: ${_lockRec.reconciled} stale lock(s) marked stale
+`);
+            for (const _d of _lockRec.details) {
+              if (_lp) appendFileSync(_lp, `[gptwork-worker]   lock ${_d.safe_repo_id} (task ${_d.task_id}): ${_d.reason}
+`);
+            }
+          }
+        } catch (_lockRecErr) {
+          if (_lp) appendFileSync(_lp, `[gptwork-worker] repo lock reconciliation error: ${_lockRecErr.message}
+`);
+        }
+
         // Phase C: Scan pending restart markers and verify after service startup
         const restartVerifications = [];
         try {
@@ -254,6 +271,8 @@ export async function createGptWorkServer(options = {}) {
                     await notifyTerminalTaskIfNeeded(taskObj);
                     taskObj.updated_at = new Date().toISOString();
                     restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
+                    // Release repo lock after restart verification
+                    await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
                     if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} completed after restart verification
 `);
                   } else {
@@ -264,6 +283,8 @@ export async function createGptWorkServer(options = {}) {
                     taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Restart marker verified via Phase C startup verification (no result.json)" });
                     taskObj.updated_at = new Date().toISOString();
                     restartVerifications.push({ task_id: marker.task_id, status: "marker_verified", verified: true });
+                    // Release repo lock after restart verification
+                    await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
                     if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: marker ${marker.task_id} verified
 `);
                   }
@@ -284,6 +305,8 @@ export async function createGptWorkServer(options = {}) {
                   taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Restart verification failed: " + (((diagnostics.failures || []).join("; ")) || diagnostics.error || "unknown") });
                   await notifyTerminalTaskIfNeeded(taskObj);
                   taskObj.updated_at = new Date().toISOString();
+                    // Release repo lock after restart verification (even on failure)
+                    await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
                   restartVerifications.push({ task_id: marker.task_id, status: "failed", verified: false });
                   if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} restart verification failed
 `);
@@ -1229,6 +1252,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
           direct_git_available: true,
           direct_git_reader_available: true,
         },
+        repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
       };
     }),
     notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null })),
@@ -1350,10 +1374,15 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
             } catch (e) {}
           })();
 
-                    if (actions.length === 0) actions.push('All systems nominal');
           return actions;
         })(),
+        repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
       };
+    }),
+    list_repo_locks: tool("List repo execution locks with safe diagnostics. Returns active and stale locks with task ids and repo identifiers. No secrets exposed.", schema({}), async () => {
+      const _lockList = await listRepoLocks(config.defaultWorkspaceRoot);
+      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+      return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
     }),
   };
   // Gate placeholder/experimental tools behind env flags
@@ -2474,6 +2503,30 @@ async function processGeneralTask(store, config, task, context) {
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
+  // Acquire repo lock to prevent concurrent same-repo Codex execution
+  const _repoLockPath = config.defaultRepoPath;
+  if (_repoLockPath) {
+    const _lockResult = await acquireRepoLock(config.defaultWorkspaceRoot, _repoLockPath, {
+      taskId: task.id,
+      runId: null,
+      mode: task.mode || "builder"
+    });
+    if (!_lockResult.acquired) {
+      const _lockMsg = "[worker] repo locked by task " + _lockResult.heldByTask + ", retry after completion. Skipping.";
+      await updateTask(store, task.id, function(item) {
+        item.status = "waiting_for_review";
+        item.logs.push({ time: new Date().toISOString(), message: _lockMsg });
+      });
+      if (goal) {
+        await appendGoalMessage(store, config, {
+          goal_id: goal.id,
+          role: "codex",
+          content: _lockMsg
+        }, context);
+      }
+      return { task_id: task.id, status: "waiting_for_review", skipped: true, reason: _lockMsg };
+    }
+  }
   // Mark as running to prevent duplicate processing by subsequent ticks
   await updateTask(store, task.id, (item) => {
     item.status = "running";
@@ -2650,6 +2703,24 @@ ${separator}`;
       ? "[worker] timed out after " + config.codexExecTimeout + "s"
       : "[worker] completed: task processed by Codex CLI" });
   });
+
+  // Release repo lock after Codex execution completes
+  if (_repoLockPath) {
+    // Check if task scheduled a safe-restart — keep lock during restart window
+    let _keptForRestart = false;
+    try {
+      const _rm = await loadRestartMarker(config.defaultWorkspaceRoot, task.id);
+      if (_rm && ["pending", "scheduled", "restarted"].includes(_rm.status)) {
+        await releaseRepoLock(config.defaultWorkspaceRoot, _repoLockPath, task.id, {
+          restartState: "scheduled"
+        });
+        _keptForRestart = true;
+      }
+    } catch {}
+    if (!_keptForRestart) {
+      await releaseRepoLock(config.defaultWorkspaceRoot, _repoLockPath, task.id);
+    }
+  }
   if (goal) {
     const goalStatus = taskStatus === "timed_out" ? "failed" : taskStatus;
     await updateGoalStatus(store, goal.id, goalStatus, doneAt);

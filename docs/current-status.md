@@ -371,3 +371,92 @@ active Codex process, GPTWork marks it `waiting_for_review` with
 |---|---|---|
 | `GPTWORK_CODEX_STALL_THRESHOLD_SECONDS` | `600` | Seconds without heartbeat before a running task is considered stalled |
 
+
+## Per-Repository Codex Execution Lock
+
+GPTWork serializes Codex builder/deploy/admin tasks per canonical repository to prevent concurrent edits that could corrupt the worktree.
+
+### Lock File
+
+```
+.gptwork/locks/repos/<safe-repo-id>.json
+```
+
+The `<safe-repo-id>` is a filesystem-safe identifier derived from the canonical repo path using a SHA-256 hash prefix and a cleaned path:
+
+```
+<12-char-hex>-<cleaned-path>
+```
+
+Example for `/home/a9017/mcp/workspace/gpt-codex-workspace`:
+
+```json
+{
+  "canonical_repo_path": "/home/a9017/mcp/workspace/gpt-codex-workspace",
+  "safe_repo_id": "0eb1aa94d0b6-home--a9017--mcp--workspace--gpt-codex-workspace",
+  "task_id": "task_xxx",
+  "run_id": "uuid-here",
+  "pid": 12345,
+  "acquired_at": "2026-06-17T12:00:00.000Z",
+  "last_heartbeat_at": "2026-06-17T12:00:00.000Z",
+  "mode": "deploy",
+  "restart_state": null,
+  "status": "held"
+}
+```
+
+### Lock Acquisition
+
+Before spawning Codex for a builder/deploy/admin task, `processGeneralTask` acquires a repo lock keyed by the canonical repo path (`config.defaultRepoPath`):
+
+1. If no lock exists for that repo, a new lock file is created with `status: "held"`.
+2. If a lock exists with `status: "released"`, it can be overwritten.
+3. If a lock is held by **the same task** (re-entrant), the heartbeat is updated and acquisition succeeds.
+4. If a lock is held by **a different task**, acquisition returns `{ acquired: false, heldByTask }` — the task is marked `waiting_for_review` with a log message and Codex is not spawned.
+
+### Lock Release
+
+The lock is released after Codex execution completes (regardless of result: completed, failed, or timed out) unless:
+
+- **Safe-restart scheduled**: If the task has an active restart marker (pending/scheduled/restarted), the lock stays held with `restart_state: "scheduled"` during the restart window. The lock is released after Phase C verification finalizes the task.
+
+### How Same-Repo Concurrency Is Blocked
+
+The `runAssignedCodexTasks` tool processes assigned tasks with bounded concurrency (default: 4). For each builder/deploy/admin task, it calls `processGeneralTask` which:
+
+1. Checks if the task has a canonical repo path
+2. Calls `acquireRepoLock` — if another task holds the lock, the current task is marked `waiting_for_review` with log: `"repo locked by task X, retry after completion. Skipping."`
+3. If lock acquired, proceeds to spawn Codex normally
+
+Since lock acquisition happens early in `processGeneralTask` (before marking `running`), two concurrent worker ticks cannot both spawn Codex for the same repo.
+
+### Stale Lock Reconciliation
+
+The `reconcileStaleTasks` method (called on worker startup) includes Phase B that reconciles repo locks:
+
+- If lock heartbeat is older than 15 minutes and the lock owner's child process is dead, the lock is marked `stale`.
+- If the lock has `restart_state` and the restart marker is still active, the lock is kept.
+- If the lock has `restart_state` but no restart marker exists, the lock is marked `stale`.
+- Worktree changes are never discarded automatically.
+
+### What to Do If Repo Lock Is Stale
+
+1. Check `list_repo_locks` or `runtime_status.repo_locks` for active/stale counts.
+2. If a lock is stale (owner task completed or crashed), it will be reconciled automatically on the next worker tick or service restart.
+3. For manual release, the lock file can be edited to set `"status": "released"` or deleted.
+4. The `forceReleaseRepoLock` function in the module provides programmatic release.
+
+### Diagnostics
+
+Available via:
+- `runtime_status.repo_locks` — `{ active_repo_locks, stale_repo_locks, locks[] }`
+- `gptwork_doctor.repo_locks` — Same summary, integrated into doctor output
+- `list_repo_locks` — Standalone tool with safe fields (no secrets)
+
+### MCP Tools
+
+| Tool | Description |
+|---|---|
+| `runtime_status` (repo_locks field) | Active/stale repo lock counts and lock entries |
+| `gptwork_doctor` (repo_locks field) | Same repo lock summary integrated into doctor diagnostics |
+| `list_repo_locks` | Standalone tool listing repo execution locks with safe diagnostics |
