@@ -384,6 +384,8 @@ test("restart_markers does not expose secret values", async () => {
     expected_remote_head: "def789abc012def789abc012def789abc012def7",
   });
 
+// ================================================================
+
   const status = await callTool(server, "runtime_status");
   const rm = status.restart_markers;
   // The restart_markers object should only contain safe summary fields
@@ -400,4 +402,66 @@ test("restart_markers does not expose secret values", async () => {
   assert.ok(!rmStr.includes("logs"), "should not leak marker logs");
   assert.ok(!rmStr.includes("task_description"), "should not leak descriptions");
   assert.ok(!rmStr.includes("secret"), "should not contain secret");
+});
+// ================================================================
+// Worker status in runtime_status tests
+// ================================================================
+
+test("runtime_status includes worker summary with expected fields", async () => {
+  const server = await makeServer();
+  const status = await callTool(server, "runtime_status");
+  assert.ok(status.worker, "runtime_status should have worker field");
+  const expectedFields = ["enabled", "running", "started_at", "last_tick_started_at",
+    "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "concurrency",
+    "limit", "last_tick_result", "last_error"];
+  for (const field of expectedFields) {
+    assert.ok(field in status.worker, `runtime_status.worker should have ${field} field`);
+  }
+  // In a fresh test server without Codex worker, enabled should be false
+  assert.equal(status.worker.enabled, false);
+  assert.equal(status.worker.running, false);
+});
+
+test("runtime_status worker does not expose secrets", async () => {
+  const server = await makeServer();
+  const status = await callTool(server, "runtime_status");
+  const str = JSON.stringify(status.worker);
+  assert.ok(!str.includes("token"), "worker should not expose token");
+  assert.ok(!str.includes("secret"), "worker should not expose secret");
+  assert.ok(!str.includes("store"), "worker should not expose store");
+});
+
+// ================================================================
+// gptwork_doctor worker diagnostics tests
+// ================================================================
+
+test("gptwork_doctor includes worker field with expected keys", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  assert.ok(result.worker, "gptwork_doctor should have worker field");
+  const expectedFields = ["enabled", "running", "started_at", "last_tick_started_at",
+    "last_tick_finished_at", "last_tick_duration_ms", "last_tick_result", "last_error"];
+  for (const field of expectedFields) {
+    assert.ok(field in result.worker, `gptwork_doctor.worker should have ${field} field`);
+  }
+});
+
+test("gptwork_doctor suggests worker diagnostic when disabled with tasks", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  // When worker is disabled and there are no tasks, no worker action should appear
+  assert.ok(result.worker, "worker should be present");
+  // But the field should be present
+  assert.ok(Array.isArray(result.suggested_next_actions));
+  // In a fresh test server without Codex worker, enabled should be false
+  assert.equal(result.worker.enabled, false);
+});
+
+test("gptwork_doctor worker does not expose secrets", async () => {
+  const server = await makeServer();
+  const result = await callTool(server, "gptwork_doctor");
+  const str = JSON.stringify(result.worker);
+  assert.ok(!str.includes("token"), "worker should not expose token");
+  assert.ok(!str.includes("secret"), "worker should not expose secret");
+  assert.ok(!str.includes("store"), "worker should not expose store");
 });

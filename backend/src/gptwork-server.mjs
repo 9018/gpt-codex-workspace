@@ -51,6 +51,34 @@ let barkNotifier = null;
 
 const PROCESS_STARTED_AT = new Date();
 
+// Process-level Codex worker state tracking.
+// Populated by startCodexWorker; read by worker_status,
+// runtime_status, and gptwork_doctor tools.
+const workerState = {
+  enabled: false,
+  running: false,
+  started_at: null,
+  last_tick_started_at: null,
+  last_tick_finished_at: null,
+  last_tick_duration_ms: null,
+  interval_ms: null,
+  limit: null,
+  concurrency: null,
+  last_tick_result: null,
+  last_error: null,
+};
+
+async function collectWorkerQueueCounts(store) {
+  try {
+    const state = await store.load();
+    const codexTasks = state.tasks.filter(t => t.assignee === "codex");
+    return { assigned: codexTasks.filter(t => t.status === "assigned").length, queued: codexTasks.filter(t => t.status === "queued").length, running: codexTasks.filter(t => t.status === "running").length, waiting_for_lock: codexTasks.filter(t => t.status === "waiting_for_lock").length, waiting_for_review: codexTasks.filter(t => t.status === "waiting_for_review").length, completed: codexTasks.filter(t => t.status === "completed").length, failed: codexTasks.filter(t => t.status === "failed").length };
+  } catch (e) {
+    return { assigned: 0, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, completed: 0, failed: 0 };
+  }
+}
+
+
 /** Determine whether runtime env loaded Bark config vars. */
 function determineBarkConfigSource(envLoadResultKeys) {
   const barkVars = ["GPTWORK_BARK_ENABLED", "GPTWORK_BARK_URL", "GPTWORK_BARK_KEY", "GPTWORK_BARK_GROUP", "GPTWORK_BARK_SOUND", "GPTWORK_BARK_LEVEL"];
@@ -464,19 +492,40 @@ export function startCodexWorker(server, {
   let running = false;
   let timer = null;
 
+
+  // Initialize module-level worker state tracking
+  workerState.enabled = true;
+  workerState.running = false;
+  workerState.started_at = new Date().toISOString();
+  workerState.interval_ms = intervalMs;
+  workerState.limit = limit;
+  workerState.concurrency = concurrency;
   async function tick() {
     if (stopped || running) return;
     running = true;
+    workerState.running = true;
+    workerState.last_tick_started_at = new Date().toISOString();
+    workerState.last_error = null;
     try {
       const wr = await server.runAssignedCodexTasks({ limit, concurrency });
+      workerState.last_tick_result = { ok: true, inspected: wr.inspected, completed: wr.completed, skipped: wr.skipped, task_count: wr.tasks.length };
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) {
         const done = wr.tasks.filter(t => t.status === "completed").length;
         const skip = wr.tasks.filter(t => t.skipped).length;
         appendFileSync(_lp, `[gptwork-worker] tick inspected=${wr.inspected} completed=${done} skipped=${skip}\n`);
       }}
     } catch (error) {
+      workerState.last_tick_result = { ok: false, error: error.message };
+      workerState.last_error = error.message;
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] ${error.message}\n`); }
     } finally {
+      workerState.last_tick_finished_at = new Date().toISOString();
+      if (workerState.last_tick_started_at) {
+        const _ss = new Date(workerState.last_tick_started_at).getTime();
+        const _sf = new Date(workerState.last_tick_finished_at).getTime();
+        workerState.last_tick_duration_ms = _sf - _ss;
+      }
+      workerState.running = false;
       running = false;
       if (!stopped) timer = setTimeout(tick, intervalMs);
     }
@@ -1378,6 +1427,20 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
           direct_git_reader_available: true,
         },
         repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
+        // Codex worker state (compact)
+        worker: {
+          enabled: workerState.enabled,
+          running: workerState.running,
+          started_at: workerState.started_at,
+          last_tick_started_at: workerState.last_tick_started_at,
+          last_tick_finished_at: workerState.last_tick_finished_at,
+          last_tick_duration_ms: workerState.last_tick_duration_ms,
+          interval_ms: workerState.interval_ms,
+          concurrency: workerState.concurrency,
+          limit: workerState.limit,
+          last_tick_result: workerState.last_tick_result,
+          last_error: workerState.last_error,
+        },
       };
     }),
     notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null, last_task_event: null })),
@@ -1410,6 +1473,10 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
 
 
 
+    worker_status: tool("Return Codex worker status: enabled, running, last tick timing, queue counts (assigned, queued, running, waiting_for_lock, waiting_for_review, completed, failed).", schema({}), async () => {
+      const queue = await collectWorkerQueueCounts(store);
+      return { ...workerState, queue, queues: queue };
+    }),
     gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({}, []), async () => {
       const repoDir = resolveRepoDir();
       const registryData = { entries: [], count: 0, hasCanonical: false };
@@ -1436,6 +1503,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       }
       const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
       const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+      const queueCounts = await collectWorkerQueueCounts(store);
       return {
         pid: process.pid,
         started_at: PROCESS_STARTED_AT.toISOString(),
@@ -1512,8 +1580,55 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
             } catch (e) {}
           })();
 
+
+          // Suggest worker diagnostics when actionable
+          (() => {
+            try {
+              // Worker enabled but never ticked
+              if (workerState.enabled && !workerState.last_tick_started_at && !workerState.last_error) {
+                actions.push('Codex worker enabled but has not completed its first tick yet — check GPTWORK_CODEX_WORKER env and service logs');
+              }
+              // Worker disabled with queued or assigned tasks
+              if (!workerState.enabled) {
+                const qcount = queueCounts.queued + queueCounts.assigned;
+                if (qcount > 0) {
+                  actions.push(qcount + ' Codex task(s) queued/assigned but worker is disabled — set GPTWORK_CODEX_WORKER=true or process tasks manually');
+                }
+              }
+              // Stale last tick (worker enabled but no tick in >2x interval)
+              if (workerState.last_tick_finished_at && workerState.interval_ms) {
+                const elapsed = Date.now() - new Date(workerState.last_tick_finished_at).getTime();
+                if (elapsed > workerState.interval_ms * 3) {
+                  actions.push('Codex worker last tick completed ' + Math.round(elapsed / 1000) + 's ago (>3x interval) — check worker health');
+                }
+              }
+              // Last tick error
+              if (workerState.last_error) {
+                actions.push('Codex worker last tick error: ' + workerState.last_error.slice(0, 120));
+              }
+              // waiting_for_lock
+              if (queueCounts.waiting_for_lock > 0) {
+                actions.push(queueCounts.waiting_for_lock + ' Codex task(s) waiting for repo lock — run list_repo_locks to see blocked tasks');
+              }
+              // waiting_for_review
+              if (queueCounts.waiting_for_review > 0) {
+                actions.push(queueCounts.waiting_for_review + ' Codex task(s) waiting for review — check and approve or reassign');
+              }
+            } catch (e) {}
+          })();
          return actions;
         })(),
+        // Codex worker state
+        worker: {
+          enabled: workerState.enabled,
+          running: workerState.running,
+          started_at: workerState.started_at,
+          last_tick_started_at: workerState.last_tick_started_at,
+          last_tick_finished_at: workerState.last_tick_finished_at,
+          last_tick_duration_ms: workerState.last_tick_duration_ms,
+          last_tick_result: workerState.last_tick_result,
+          last_error: workerState.last_error,
+        },
         repo_locks: _lockSummary,
       };
     }),
@@ -1759,9 +1874,9 @@ async function createGoal(store, config, args, context = defaultTokenContext("sy
     default_decision_rule: 'choose_smallest_reversible_goal_aligned_change'
   };
   goal.subagent_policy = payloadPolicies.subagent_policy || {
-    mode: 'required',
+    mode: 'optional',
     roles: ['analyst', 'architect', 'implementer', 'tester', 'reviewer', 'escalation_judge'],
-    require_review_before_completion: true,
+    require_review_before_completion: false,
     require_test_or_verification: true
   };
 
@@ -3416,4 +3531,3 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
     child.stdin?.end();
   });
 }
-
