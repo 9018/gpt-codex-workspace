@@ -28,7 +28,7 @@ import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
 import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
-import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
+import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir, validateWorkspaceRoot, scanMisplacedMarkersSync, migrateMisplacedMarker, getMisplacedMarkerDiagnostic, removeMisplacedMarker } from "./safe-restart.mjs";
 import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
 import {
   MCP_PROTOCOL_VERSION,
@@ -251,6 +251,33 @@ export async function createGptWorkServer(options = {}) {
         // Phase C: Scan pending restart markers and verify after service startup
         const restartVerifications = [];
         try {
+          // Phase C.0: Check for misplaced repo-local restart markers
+          try {
+            const _misplacedRepoPaths = [config.defaultRepoPath].filter(Boolean);
+            if (_misplacedRepoPaths.length > 0) {
+              const _misplaced = scanMisplacedMarkersSync(_misplacedRepoPaths);
+              for (const _mp of _misplaced) {
+                const _canonicalMarker = await loadRestartMarker(config.defaultWorkspaceRoot, _mp.taskId);
+                if (!_canonicalMarker) {
+                  const _migrateResult = await migrateMisplacedMarker(config.defaultWorkspaceRoot, _mp.repoPath, _mp.taskId);
+                  if (_migrateResult.migrated) {
+                    if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: migrated misplaced restart marker for task ${_mp.taskId} from ${_mp.repoPath}/.gptwork/pending-restarts to canonical path
+`);
+                  } else {
+                    if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: ${_migrateResult.diagnostic}
+`);
+                  }
+                } else {
+                  await removeMisplacedMarker(_mp.repoPath, _mp.taskId);
+                  if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: removed duplicate misplaced restart marker for task ${_mp.taskId}
+`);
+                }
+              }
+            }
+          } catch (_misplacedErr) {
+            if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C misplaced marker scan error: ${_misplacedErr.message}
+`);
+          }
           const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
           for (const marker of markers) {
             if (marker.status === "scheduled" || marker.status === "restarted") {
@@ -1063,6 +1090,12 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     }),
     request_human_review: tool("Mark a task as waiting for human review.", schema({ task_id: "string", message: "string" }, ["task_id"]), async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; })),
     schedule_service_restart: tool("Schedule a safe two-phase service restart. Writes a pending restart marker and schedules a detached systemd service restart. Use when the worker needs to restart itself after completing its work.", schema({ task_id: "string", expected_commit: "string", expected_remote_head: "string" }, ["task_id"]), async ({ task_id, expected_commit = null, expected_remote_head = null }) => {
+      // P0: Validate workspace root is not a repo path
+      const _wsValidation = validateWorkspaceRoot(config.defaultWorkspaceRoot);
+      if (!_wsValidation.valid) {
+        return { ok: false, error: _wsValidation.reason };
+      }
+
       const result = await scheduleServiceRestart({
         workspaceRoot: config.defaultWorkspaceRoot,
         taskId: task_id,

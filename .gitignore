@@ -12,16 +12,12 @@ dist/
 !.gptwork/*.env.example
 .gptwork/runtime.env
 
-# Runtime state files
+# Runtime state files (never commit these)
 data/state.json
 .gptwork/state.json
 .gptwork/*.state.json
-# Runtime data created when running from backend/ directory
-backend/data/
-
-
-# Runtime backup files
+.gptwork/pending-restarts/
+.gptwork/locks/
 data/*.bak-*
-
-# Accidental deployment/test copies
 backend/tmp-deploy/
+backend/data/

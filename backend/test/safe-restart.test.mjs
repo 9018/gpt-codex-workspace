@@ -29,7 +29,13 @@ import {
   scheduleServiceRestart,
   getPendingRestartsDir,
   getRestartMarkerPath,
-  scheduleDetachedRestart
+  scheduleDetachedRestart,
+  validateWorkspaceRoot,
+  MISPLACED_MARKER_DIAGNOSTIC,
+  scanMisplacedMarkersSync,
+  migrateMisplacedMarker,
+  getMisplacedMarkerDiagnostic,
+  removeMisplacedMarker
 } from "../src/safe-restart.mjs";
 
 // ---------------------------------------------------------------------------
@@ -675,3 +681,217 @@ test("restart marker round-trips through JSON", async () => {
   assert.ok(loaded.logs[0].time);
   assert.ok(loaded.logs[0].message);
 });
+
+// ================================================================
+// P0 Hotfix: Misplaced marker detection and migration
+// ================================================================
+
+test("validateWorkspaceRoot rejects git repo path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-vwr-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  // Non-repo path should be valid
+  const valid = validateWorkspaceRoot(workspaceRoot);
+  assert.equal(valid.valid, true);
+
+  // Create a .git directory to simulate repo path
+  const repoPath = join(root, "repo");
+  await mkdir(join(repoPath, ".git"), { recursive: true });
+  const invalid = validateWorkspaceRoot(repoPath);
+  assert.equal(invalid.valid, false);
+  assert.match(invalid.reason, /git repository/);
+
+  // Empty/null should be invalid
+  const empty = validateWorkspaceRoot("");
+  assert.equal(empty.valid, false);
+  assert.equal(empty.reason, "workspaceRoot is required");
+
+  const nil = validateWorkspaceRoot(null);
+  assert.equal(nil.valid, false);
+});
+
+test("scanMisplacedMarkersSync returns markers from repo path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sms-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(join(repoPath, ".gptwork", "pending-restarts"), { recursive: true });
+
+  // Write a misplaced marker file in repo path
+  const markerContent = JSON.stringify({
+    task_id: "task_misplaced_1",
+    requested_at: new Date().toISOString(),
+    requested_by: "codex",
+    status: "scheduled",
+    expected_commit: "abc123",
+    repo_path: repoPath,
+  });
+  await writeFile(join(repoPath, ".gptwork", "pending-restarts", "task_misplaced_1.json"), markerContent);
+
+  // Scan for misplaced markers
+  const results = scanMisplacedMarkersSync([repoPath]);
+  assert.equal(results.length, 1);
+  assert.equal(results[0].taskId, "task_misplaced_1");
+  assert.equal(results[0].repoPath, repoPath);
+  assert.equal(results[0].marker.status, "scheduled");
+});
+
+test("scanMisplacedMarkersSync skips non-existent repo paths", async () => {
+  const results = scanMisplacedMarkersSync(["/nonexistent/path"]);
+  assert.equal(results.length, 0);
+});
+
+test("scanMisplacedMarkersSync handles empty/null input", async () => {
+  assert.equal(scanMisplacedMarkersSync([]).length, 0);
+  assert.equal(scanMisplacedMarkersSync(null).length, 0);
+  assert.equal(scanMisplacedMarkersSync(undefined).length, 0);
+});
+
+test("migrateMisplacedMarker migrates marker to canonical path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-mmm-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(join(repoPath, ".gptwork", "pending-restarts"), { recursive: true });
+
+  const taskId = "task_migrate_1";
+  const markerContent = JSON.stringify({
+    task_id: taskId,
+    requested_at: new Date().toISOString(),
+    requested_by: "codex",
+    status: "scheduled",
+    expected_commit: "def789",
+    expected_remote_head: "ghi012",
+    repo_path: repoPath,
+  });
+  await writeFile(join(repoPath, ".gptwork", "pending-restarts", taskId + ".json"), markerContent);
+
+  // Migrate
+  const result = await migrateMisplacedMarker(workspaceRoot, repoPath, taskId);
+  assert.equal(result.migrated, true, "should be migrated");
+
+  // Canonical marker should exist
+  const canonical = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(canonical, "canonical marker should exist");
+  assert.equal(canonical.expected_commit, "def789");
+
+  // Source file should be removed
+  const sourcePath = join(repoPath, ".gptwork", "pending-restarts", taskId + ".json");
+  assert.equal(existsSync(sourcePath), false, "source misplaced marker should be removed");
+});
+
+test("migrateMisplacedMarker preserves status from source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-mmm2-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(join(repoPath, ".gptwork", "pending-restarts"), { recursive: true });
+
+  const taskId = "task_migrate_status_1";
+  const markerContent = JSON.stringify({
+    task_id: taskId,
+    requested_at: new Date().toISOString(),
+    requested_by: "codex",
+    status: "scheduled",
+    expected_commit: "abc456",
+    restart_method: "systemd-run",
+    scheduled_at: new Date().toISOString(),
+    repo_path: repoPath,
+  });
+  await writeFile(join(repoPath, ".gptwork", "pending-restarts", taskId + ".json"), markerContent);
+
+  await migrateMisplacedMarker(workspaceRoot, repoPath, taskId);
+
+  const canonical = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(canonical);
+  assert.equal(canonical.status, "scheduled", "status should be preserved");
+});
+
+test("migrateMisplacedMarker handles nonexistent source", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-mmm3-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const result = await migrateMisplacedMarker(workspaceRoot, repoPath, "nonexistent_task");
+  assert.equal(result.migrated, false);
+  assert.match(result.diagnostic, /misplaced_safe_restart_marker/);
+});
+
+test("migrateMisplacedMarker skips if canonical already exists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-mmm4-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(join(repoPath, ".gptwork", "pending-restarts"), { recursive: true });
+
+  const taskId = "task_migrate_dup_1";
+
+  // Create canonical marker first
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: "existing",
+  });
+
+  // Create misplaced marker too
+  const markerContent = JSON.stringify({
+    task_id: taskId,
+    status: "scheduled",
+    repo_path: repoPath,
+  });
+  await writeFile(join(repoPath, ".gptwork", "pending-restarts", taskId + ".json"), markerContent);
+
+  // Both exist — migrate should detect canonical already present
+  const result = await migrateMisplacedMarker(workspaceRoot, repoPath, taskId);
+  assert.equal(result.migrated, false);
+  assert.match(result.diagnostic, /already exists/);
+
+  // Canonical should still be the original
+  const canonical = await loadRestartMarker(workspaceRoot, taskId);
+  assert.equal(canonical.expected_commit, "existing");
+});
+
+test("getMisplacedMarkerDiagnostic produces expected format", () => {
+  const diag = getMisplacedMarkerDiagnostic({
+    repoPath: "/tmp/repo",
+    taskId: "task_test_1",
+    marker: { status: "scheduled", expected_commit: "abc123" },
+  });
+  assert.match(diag, /misplaced_safe_restart_marker/);
+  assert.match(diag, /task=task_test_1/);
+  assert.match(diag, /status=scheduled/);
+  assert.match(diag, /expected_commit=abc123/);
+  assert.match(diag, /repo_path=\/tmp\/repo/);
+
+  // Missing data
+  const emptyDiag = getMisplacedMarkerDiagnostic({});
+  assert.match(emptyDiag, /insufficient data/);
+});
+
+test("removeMisplacedMarker removes marker file", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-rmm-"));
+  const repoPath = join(root, "repo");
+  await mkdir(join(repoPath, ".gptwork", "pending-restarts"), { recursive: true });
+
+  const taskId = "task_remove_mp_1";
+  const markerPath = join(repoPath, ".gptwork", "pending-restarts", taskId + ".json");
+  await writeFile(markerPath, "{}");
+  assert.ok(existsSync(markerPath));
+
+  const removed = await removeMisplacedMarker(repoPath, taskId);
+  assert.equal(removed, true);
+  assert.equal(existsSync(markerPath), false);
+});
+
+// ================================================================
+// MISPLACED_MARKER_DIAGNOSTIC constant
+// ================================================================
+
+test("MISPLACED_MARKER_DIAGNOSTIC constant is correct", () => {
+  assert.equal(MISPLACED_MARKER_DIAGNOSTIC, "misplaced_safe_restart_marker");
+});
+
+// ================================================================
+// New exports check
+// ================================================================
+
