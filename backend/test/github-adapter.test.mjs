@@ -86,3 +86,52 @@ test("buildResultComment produces correct output", async () => {
   assert.ok(comment.includes("pass"), "should include test result");
   assert.ok(comment.includes("task_123"), "should include task ID");
 });
+
+// ---------------------------------------------------------------------------
+// P1.2 GitHub sync config consistency tests
+// ---------------------------------------------------------------------------
+
+test("createGithubSync uses config.githubEnabled for enabled state", () => {
+  // With githubEnabled: true but no repo/token, should be disabled
+  const config1 = { githubEnabled: true, githubRepo: "", githubToken: "" };
+  const sync1 = createGithubSync(config1);
+  assert.equal(sync1.enabled, false, "needs repo and token");
+
+  // With githubEnabled: false but repo and token set, should be disabled
+  const config2 = { githubEnabled: false, githubRepo: "owner/repo", githubToken: "ghp_token123" };
+  const sync2 = createGithubSync(config2);
+  assert.equal(sync2.enabled, false, "explicit false should disable");
+
+  // With githubEnabled: true and repo/token, should be enabled
+  const config3 = { githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" };
+  const sync3 = createGithubSync(config3);
+  assert.equal(sync3.enabled, true, "all three set should enable");
+});
+
+test("status() returns consistent values matching resolved config", () => {
+  const config = { githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" };
+  const sync = createGithubSync(config);
+  const status = sync.status();
+
+  assert.equal(status.api_sync_enabled, true);
+  assert.equal(status.api_repo, "owner/repo");
+  assert.equal(status.api_token_set, true);
+});
+
+test("status() shows disabled when only repo/token are set without enabled flag", () => {
+  // config.githubEnabled defaults to false/undefined when not set
+  const config = { githubRepo: "owner/repo", githubToken: "ghp_token123" };
+  const sync = createGithubSync(config);
+  const status = sync.status();
+
+  assert.equal(status.api_sync_enabled, false, "should be disabled without explicit githubEnabled");
+  assert.equal(status.api_repo, "owner/repo");
+  assert.equal(status.api_token_set, true);
+});
+
+test("syncTask returns not-configured when explicitly disabled", async () => {
+  const config = { githubEnabled: false, githubRepo: "owner/repo", githubToken: "ghp_token123" };
+  const sync = createGithubSync(config);
+  const result = await sync.syncTask({ id: "test-1", title: "test", status: "open" });
+  assert.deepEqual(result, { ok: false, reason: "github not configured" });
+});

@@ -479,6 +479,7 @@ export async function getRepoStatus(repoRecord, workspaceRoot, registryInstance 
     ? relative(workspaceRoot, repoRecord.canonical_path)
     : deriveCanonicalRelPath(repoRecord.repo_id);
 
+  const repoDirExists = repoDir && existsSync(join(repoDir, ".git"));
   return {
     repo_id: repoRecord.repo_id,
     remote_url: repoRecord.remote_url,
@@ -491,9 +492,13 @@ export async function getRepoStatus(repoRecord, workspaceRoot, registryInstance 
     ahead,
     behind,
     has_uncommitted: hasUncommitted,
-    is_canonical: repoRecord.canonical_path
+    is_canonical: !!repoRecord.canonical_path && repoDirExists,
+    canonical_at_standard_location: repoRecord.canonical_path
       ? isCanonicalPath(repoRecord.canonical_path, workspaceRoot)
       : false,
+    effective_path: repoDir,
+    registry_path: repoRecord.canonical_path,
+    repo_dir_exists: repoDirExists,
     stale_temp_copies: staleTempCopies.filter((c) => c.is_repo),
   };
 }

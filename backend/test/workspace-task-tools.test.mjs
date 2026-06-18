@@ -96,7 +96,8 @@ test("task tools create, list, update, and complete tasks", async () => {
 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id,
-    summary: "Done"
+    summary: "Done",
+    admin_override: true
   });
   assert.equal(completed.task.status, "completed");
   assert.equal(completed.task.result.summary, "Done");
@@ -350,7 +351,7 @@ test("general Codex worker completes linked goals and writes concise results", a
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
-    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'implementer',status:'completed',summary:'mock implementation'}]) + '\\nGPT_QUESTIONS_USED=0')"`,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true
@@ -528,7 +529,8 @@ test("notification diagnostics persisted after completed task", async (t) => {
 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id,
-    summary: "Persistence test complete"
+    summary: "Persistence test complete",
+    admin_override: true
   });
 
   assert.ok(Array.isArray(completed.task.notifications), "task should have notifications array");
@@ -569,7 +571,8 @@ test("notification diagnostics show failure on network error", async (t) => {
 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id,
-    summary: "done"
+    summary: "done",
+    admin_override: true
   });
 
   assert.ok(Array.isArray(completed.task.notifications));
@@ -598,7 +601,8 @@ test("notification diagnostics not persisted when bark disabled", async () => {
 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id,
-    summary: "done"
+    summary: "done",
+    admin_override: true
   });
 
   // When bark is disabled, no notification should be sent
@@ -1151,4 +1155,97 @@ test("context_prepare check mode plans fixes for missing files", async () => {
   assert.equal(result.actions_applied.length, 0, "check mode should not apply any actions");
   // Verify no files created
   assert.equal(fs.existsSync(join(repoPath, ".gptwork")), false, "check mode should not create files");
+});
+
+
+// ---------------------------------------------------------------------------
+// P0.2 complete_task admin_override tests
+// ---------------------------------------------------------------------------
+
+test("complete_task without admin_override marks waiting_for_review when goal has required subagent policy", async () => {
+  const server = await makeServer();
+
+  // create_goal with assign_to_codex:true (default) creates a task with required policy
+  const created = await callTool(server, "create_goal", {
+    user_request: "Policy gate test",
+    goal_prompt: "Test policy gate",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  // Verify the goal has required subagent policy
+  assert.equal(created.goal.subagent_policy.mode, "required");
+  assert.ok(created.task, "task should be created with default assign_to_codex");
+  assert.ok(created.task.id, "task should have an id");
+
+  // Try to complete the task without admin_override
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Try to bypass"
+  });
+
+  // Should be waiting_for_review, not completed
+  assert.equal(completed.task.status, "waiting_for_review");
+  assert.ok(completed.task.result.policy_override_required, "policy_override_required should be present");
+  assert.ok(completed.task.result.review_message, "review_message should be present");
+});
+
+test("complete_task with admin_override completes the task", async () => {
+  const server = await makeServer();
+
+  const created = await callTool(server, "create_goal", {
+    user_request: "Admin override test",
+    goal_prompt: "Test admin override",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  // Complete with admin_override=true
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Admin bypass",
+    admin_override: true
+  });
+
+  // Should be completed with admin_override_used flag
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.result.admin_override_used, true);
+  assert.equal(completed.task.result.summary, "Admin bypass");
+});
+
+test("complete_task with admin_override bypasses policy gate for any linked task", async () => {
+  const server = await makeServer();
+
+  // create_task also creates a goal with required subagent policy via ensureTaskGoal
+  const created = await callTool(server, "create_task", {
+    title: "Task with linked goal"
+  });
+
+  // Complete with admin_override=true bypasses the policy gate
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Admin bypass via create_task",
+    admin_override: true
+  });
+
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.result.summary, "Admin bypass via create_task");
+  assert.equal(completed.task.result.admin_override_used, true);
+});
+
+test("complete_task with admin_override=true on unlinked task still works", async () => {
+  const server = await makeServer();
+
+  const created = await callTool(server, "create_task", {
+    title: "Unlinked task"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Admin override unlinked",
+    admin_override: true
+  });
+
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.result.admin_override_used, true);
 });

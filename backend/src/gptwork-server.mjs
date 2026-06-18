@@ -1011,8 +1011,39 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       });
       return { context: ctx, preview, preview_text: preview };
     }),
-    complete_task: tool("Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.", schema({ task_id: "string", summary: "string" }, ["task_id"]), async ({ task_id, summary = "" }) => {
-      const result = await updateTask(store, task_id, (task) => { task.status = "completed"; task.result = { summary, completed_at: new Date().toISOString() }; });
+    complete_task: tool("Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.", schema({ task_id: "string", summary: "string", admin_override: "boolean" }, ["task_id"]), async ({ task_id, summary = "", admin_override = false }) => {
+      // Check for linked goal with required subagent policy (P0.2)
+      let targetStatus = "completed";
+      let resultFields = { summary, completed_at: new Date().toISOString() };
+
+      if (!admin_override) {
+        try {
+          const state = await store.load();
+          const existingTask = state.tasks.find(t => t.id === task_id);
+          if (existingTask?.goal_id) {
+            const linkedGoal = (state.goals || []).find(g => g.id === existingTask.goal_id);
+            const subagent = linkedGoal?.subagent_policy || {};
+            if (subagent.mode === 'required') {
+              targetStatus = "waiting_for_review";
+              resultFields = {
+                summary: summary || "Task requires policy validation before completion",
+                completed_at: new Date().toISOString(),
+                policy_override_required: true,
+                review_message: "This task has a goal with required subagent policy. Use admin_override=true to bypass, or wait for Codex execution to validate autonomously."
+              };
+            }
+          }
+        } catch (e) { /* non-fatal: proceed with normal completion */ }
+      }
+
+      if (admin_override) {
+        resultFields.admin_override_used = true;
+      }
+
+      const result = await updateTask(store, task_id, (task) => {
+        task.status = targetStatus;
+        task.result = resultFields;
+      });
       github.syncTask(result.task).catch(() => {});
       return result;
     }),
@@ -1098,9 +1129,11 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     }),
     github_status: tool("Return GitHub sync configuration and known issue count.", schema({}), async () => ({
       enabled: github.enabled,
-      repo: process.env.GPTWORK_GITHUB_REPO || '',
+      repo: github.status().api_repo || '',
       known_issues: github.getKnownIssues().length,
-      env_vars_set: { repo: !!process.env.GPTWORK_GITHUB_REPO, token: !!process.env.GPTWORK_GITHUB_TOKEN }
+      config_source: sources.githubEnabled,
+      repo_configured: !!config.githubRepo,
+      token_configured: !!config.githubToken,
     })),
     register_repository: tool("Register a repository in the workspace registry so Codex can find it via canonical path instead of stale temporary clones.", schema({ remote_url: "string", canonical_path: "string", default_branch: "string", roles: "string", tags: "string", status: "string" }, ["remote_url"]), async (args) => {
       const info = {
@@ -1290,9 +1323,9 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         } : { enabled: false, configured: false, source: "none" },
         // GitHub sync status (safe, no secrets)
         github: {
-          api_sync_enabled: (process.env.GPTWORK_GITHUB_ENABLED === "true" || process.env.GPTWORK_GITHUB_ENABLED === "1") && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
-          api_repo_set: !!process.env.GPTWORK_GITHUB_REPO,
-          api_token_set: !!process.env.GPTWORK_GITHUB_TOKEN,
+          api_sync_enabled: github.enabled,
+          api_repo_set: !!config.githubRepo,
+          api_token_set: !!config.githubToken,
           source: sources.githubEnabled,
           direct_git_available: true,
           direct_git_reader_available: true,
@@ -1373,7 +1406,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         worktree_dirty: worktreeDirty,
         dirty_paths: dirtyPaths,
         codex_exec_timeout: config.codexExecTimeout,
-        github_api_sync_enabled: (process.env.GPTWORK_GITHUB_ENABLED === 'true' || process.env.GPTWORK_GITHUB_ENABLED === '1') && !!(process.env.GPTWORK_GITHUB_REPO && process.env.GPTWORK_GITHUB_TOKEN),
+        github_api_sync_enabled: github.enabled,
         direct_git_reader_available: true,
         bark_configured: bark ? (bark.getStatus ? bark.getStatus().configured : false) : false,
         bark_enabled: bark ? (bark.isEnabled ? bark.isEnabled() : false) : false,

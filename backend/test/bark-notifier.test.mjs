@@ -336,7 +336,8 @@ test("complete_task triggers bark notification for completed task", async (t) =>
 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id,
-    summary: "Task completed for Bark test"
+    summary: "Task completed for Bark test",
+    admin_override: true
   });
 
   assert.ok(fetchCount >= 1, "Bark API should have been called");
@@ -352,7 +353,9 @@ test("complete_task does not notify bark without key", async (t) => {
   const server = await makeServer({ /* no bark config - barkEnabled is false by default */ });
 
   const created = await callTool(server, "create_task", { title: "No key test" });
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done",
+    admin_override: true
+  });
 
   assert.equal(fetchCount, 0, "No Bark API call when not configured");
 });
@@ -366,7 +369,9 @@ test("complete_task does not notify bark when explicitly disabled", async (t) =>
   const server = await makeServer({ barkKey: "key", barkEnabled: false });
 
   const created = await callTool(server, "create_task", { title: "Disabled test" });
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done",
+    admin_override: true
+  });
 
   assert.equal(fetchCount, 0, "No Bark API call when disabled");
 });
@@ -409,12 +414,16 @@ test("task does not get duplicate notifications for same status", async (t) => {
   const created = await callTool(server, "create_task", { title: "Dedup test" });
 
   // Complete the task (first notification)
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "first" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "first",
+    admin_override: true
+  });
 
   const initialFetches = fetchCount;
 
   // Try to complete again (should be idempotent, no second notification)
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "second" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "second",
+    admin_override: true
+  });
 
   // The second call should not trigger additional notifications
   assert.equal(fetchCount, initialFetches, "Should not send duplicate notifications for same status");
@@ -427,7 +436,9 @@ test("notification failure does not change task result", async (t) => {
   const server = await makeServer({ barkKey: "integration-key" });
 
   const created = await callTool(server, "create_task", { title: "Notification failure test" });
-  const completed = await callTool(server, "complete_task", { task_id: created.task.id, summary: "Task done despite notification failure" });
+  const completed = await callTool(server, "complete_task", { task_id: created.task.id, summary: "Task done despite notification failure",
+    admin_override: true
+  });
 
   assert.equal(completed.task.status, "completed");
   assert.equal(completed.task.result.summary, "Task done despite notification failure");
@@ -442,7 +453,9 @@ test("terminal notification for completed status", async (t) => {
   const server = await makeServer({ barkKey: "integration-key" });
 
   const created = await callTool(server, "create_task", { title: "Terminal test completed" });
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done well" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "done well",
+    admin_override: true
+  });
 
   assert.ok(fetchCount >= 1, "Should notify on completed");
 });
@@ -522,7 +535,9 @@ test("Phase C completed sends completed notification via update_task", async (t)
   const server = await makeServer({ barkKey: "integration-key" });
 
   const created = await callTool(server, "create_task", { title: "Phase C notification test" });
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "Phase C sim" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "Phase C sim",
+    admin_override: true
+  });
 
   assert.ok(fetchCount >= 1, "Phase C equivalent path should notify on completed");
 });
@@ -536,7 +551,9 @@ test("notification body includes task title, id, status, and summary", async (t)
   const server = await makeServer({ barkKey: "integration-key" });
 
   const created = await callTool(server, "create_task", { title: "Summary In Body" });
-  await callTool(server, "complete_task", { task_id: created.task.id, summary: "First line of results" });
+  await callTool(server, "complete_task", { task_id: created.task.id, summary: "First line of results",
+    admin_override: true
+  });
 
   // The URL-encoded body should contain the task title
   assert.ok(lastUrl.includes("Summary%20In%20Body"), "URL should contain task title");

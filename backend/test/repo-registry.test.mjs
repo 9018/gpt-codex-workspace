@@ -525,7 +525,12 @@ test("getRepoStatus reports correct state for a git repo", async () => {
   assert.equal(status.current_branch, "main");
   assert.equal(status.ahead, 0);
   assert.equal(status.behind, 0);
-  assert.equal(status.is_canonical, false); // not under wsRoot/repos/
+  assert.equal(status.is_canonical, true); // registered canonical path that exists on disk
+  // P1.1: Verify new diagnostic fields
+  assert.equal(status.repo_dir_exists, true);
+  assert.equal(status.effective_path, repoDir);
+  assert.equal(status.registry_path, repoDir);
+  assert.equal(status.canonical_at_standard_location, false); // not under wsRoot/repos/
 
   await rm(tmpDir, { recursive: true, force: true });
 });

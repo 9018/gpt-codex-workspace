@@ -107,6 +107,238 @@ test("validateAutonomyResult: fails when GPT question budget exceeded", () => {
   assert.equal(validation.reason, "gpt_question_budget_exceeded");
 });
 
+
+// ---------------------------------------------------------------------------
+// P0.1 Strict subagent policy validation tests
+// ---------------------------------------------------------------------------
+
+const fullPolicyGoal = {
+  subagent_policy: {
+    mode: "required",
+    roles: ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"],
+    require_review_before_completion: true,
+    require_test_or_verification: true
+  },
+  autonomy_policy: { gpt_question_budget: 0 }
+};
+
+const fullValidResult = {
+  status: "completed",
+  subagents_used: true,
+  subagents: [
+    { role: "analyst", status: "completed", summary: "Analysis done" },
+    { role: "architect", status: "completed", summary: "Architecture done" },
+    { role: "implementer", status: "completed", summary: "Implementation done" },
+    { role: "tester", status: "completed", summary: "Testing done" },
+    { role: "reviewer", status: "completed", summary: "Review done" },
+    { role: "escalation_judge", status: "completed", summary: "Escalation judged" }
+  ],
+  gpt_questions_used: 0,
+  verification: { commands: ["npm test"], passed: true }
+};
+
+test("validateAutonomyResult: fails with empty subagents", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [],
+    gpt_questions_used: 0
+  };
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.reason, "empty_subagents");
+});
+
+test("validateAutonomyResult: fails with malformed subagent entry (missing role)", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [{ status: "completed", summary: "..." }],
+    gpt_questions_used: 0
+  };
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.reason.startsWith("subagent_missing_role_at_"));
+});
+
+test("validateAutonomyResult: fails with malformed subagent entry (missing summary)", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [{ role: "analyst", status: "completed", summary: "" }],
+    gpt_questions_used: 0
+  };
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.reason.startsWith("subagent_missing_summary_at_"));
+});
+
+test("validateAutonomyResult: fails when subagent not completed", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [{ role: "analyst", status: "failed", summary: "Something went wrong" }],
+    gpt_questions_used: 0
+  };
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.reason.startsWith("subagent_not_completed_"));
+});
+
+test("validateAutonomyResult: fails with missing required role", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "implementer", status: "completed", summary: "Impl done" },
+      { role: "tester", status: "completed", summary: "Test done" },
+      { role: "reviewer", status: "completed", summary: "Review done" }
+    ],
+    gpt_questions_used: 0
+  };
+  // Goal has 6 required roles but only 4 provided
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, false);
+  assert.ok(validation.reason.startsWith("missing_required_role_"));
+});
+
+test("validateAutonomyResult: fails with missing review subagent", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "implementer", status: "completed", summary: "Impl done" }
+    ],
+    gpt_questions_used: 0
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      require_review_before_completion: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.reason, "missing_review_subagent");
+});
+
+test("validateAutonomyResult: fails with missing test/verification", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "implementer", status: "completed", summary: "Impl done" },
+      { role: "reviewer", status: "completed", summary: "Review done" }
+    ],
+    gpt_questions_used: 0,
+    verification: { commands: [], passed: false }
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      require_test_or_verification: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.reason, "missing_test_or_verification");
+});
+
+test("validateAutonomyResult: passes with all required roles and review/test", () => {
+  const result = { ...fullValidResult };
+  const validation = validateAutonomyResult(result, fullPolicyGoal);
+  assert.equal(validation.valid, true);
+});
+
+test("validateAutonomyResult: passes with role equivalence mapping in decision_log", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "engineer", status: "completed", summary: "Engineering done" },
+      { role: "qa", status: "completed", summary: "QA done" },
+      { role: "code_reviewer", status: "completed", summary: "Code review done" }
+    ],
+    gpt_questions_used: 0,
+    decision_log: [
+      {
+        step: "role_mapping",
+        mapped_roles: [
+          { policy_role: "architect", provided_role: "engineer" },
+          { policy_role: "implementer", provided_role: "engineer" },
+          { policy_role: "tester", provided_role: "qa" },
+          { policy_role: "reviewer", provided_role: "code_reviewer" },
+          { policy_role: "escalation_judge", provided_role: "analyst" }
+        ]
+      }
+    ],
+    verification: { commands: ["npm test"], passed: true }
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      roles: ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"],
+      require_review_before_completion: true,
+      require_test_or_verification: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, true);
+});
+
+test("validateAutonomyResult: passes with verification.passed and all roles covered", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "architect", status: "completed", summary: "Architecture done" },
+      { role: "implementer", status: "completed", summary: "Impl done" },
+      { role: "reviewer", status: "completed", summary: "Review done" },
+      { role: "escalation_judge", status: "completed", summary: "Escalation done" }
+    ],
+    gpt_questions_used: 0,
+    decision_log: [{ step: "1", all_roles_covered: true }],
+    verification: { commands: ["npm test"], passed: true }
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      roles: ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"],
+      require_review_before_completion: true,
+      require_test_or_verification: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, true);
+});
+
+test("validateAutonomyResult: budget check still enforced before role validation", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis" },
+      { role: "reviewer", status: "completed", summary: "Review" }
+    ],
+    gpt_questions_used: 5
+  };
+  const goal = {
+    subagent_policy: { mode: "required", require_review_before_completion: true },
+    autonomy_policy: { gpt_question_budget: 1 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.reason, "gpt_question_budget_exceeded");
+});
 // ---------------------------------------------------------------------------
 // Default policy injection tests
 // ---------------------------------------------------------------------------
