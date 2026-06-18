@@ -30,6 +30,21 @@ import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleRe
 import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
 import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir } from "./safe-restart.mjs";
 import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
+import {
+  MCP_PROTOCOL_VERSION,
+  schema, toolList, initializeResult, jsonResult, jsonError,
+  endSse, setSseHeaders, writeSseMessage,
+  setCors, endJson, readRequest,
+  sha256, shellQuotee
+} from "./mcp-tooling.mjs";
+import {
+  headersWithPathToken, tokenFromMcpPath,
+  parseTokens, parseTokenContexts, normalizeTokenContexts,
+  defaultTokenContext, defaultScopes, normalizeList,
+  limits, assertAuthorized, selectWorkspace, findProject,
+  canAccessProject, canAccessWorkspace,
+  requireProjectAccess, requireWorkspaceAccess, requireScope
+} from "./auth-context.mjs";
 
 let barkNotifier = null;
 
@@ -44,7 +59,6 @@ function determineBarkConfigSource(envLoadResultKeys) {
   const anySet = barkVars.some(v => process.env[v] !== undefined);
   return anySet ? "process.env" : "disabled";
 }
-const MCP_PROTOCOL_VERSION = "2025-03-26";
 
 export async function createGptWorkServer(options = {}) {
   const tokenContexts = normalizeTokenContexts(
@@ -1519,185 +1533,6 @@ async function handleHttp(req, res, server) {
   }
 }
 
-function headersWithPathToken(req) {
-  if (req.headers.authorization) return req.headers;
-  const token = tokenFromMcpPath(req.url || "");
-  if (!token) return req.headers;
-  return { ...req.headers, authorization: `Bearer ${token}` };
-}
-
-function tokenFromMcpPath(url) {
-  const path = url.split("?", 1)[0];
-  const match = path.match(/^\/mcp\/([^/]+)\/?$/);
-  if (!match) return "";
-  try {
-    return decodeURIComponent(match[1]).trim();
-  } catch {
-    return "";
-  }
-}
-
-function endSse(res, body) {
-  setSseHeaders(res);
-  res.end(body);
-}
-
-function setSseHeaders(res) {
-  res.setHeader("Content-Type", "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache, no-transform");
-}
-
-function writeSseMessage(res, message) {
-  res.write(`event: message\ndata: ${JSON.stringify(message)}\n\n`);
-}
-
-function toolList(tools) {
-  return Object.entries(tools).map(([name, value]) => ({
-    name,
-    description: value.description,
-    inputSchema: value.inputSchema,
-    outputSchema: { type: "object", additionalProperties: true }
-  }));
-}
-
-function schema(properties, required = []) {
-  const mapped = {};
-  for (const [key, type] of Object.entries(properties)) mapped[key] = { type };
-  return { type: "object", properties: mapped, required, additionalProperties: false };
-}
-
-function initializeResult() {
-  return {
-    protocolVersion: MCP_PROTOCOL_VERSION,
-    capabilities: {
-      experimental: {},
-      logging: {},
-      prompts: { listChanged: true },
-      resources: { subscribe: false, listChanged: true },
-      tools: { listChanged: true },
-      extensions: { "io.modelcontextprotocol/ui": {} }
-    },
-    serverInfo: { name: "GPTWork MCP", version: "0.1.0" }
-  };
-}
-
-function assertAuthorized(headers, config) {
-  if (!config.requireAuth) return defaultTokenContext("anonymous");
-  const auth = headers.authorization || headers.Authorization || "";
-  const token = String(auth).replace(/^Bearer\s+/i, "").trim();
-  if (!token || !config.tokenContexts[token]) {
-    const error = new Error("Missing or invalid bearer token");
-    error.code = -32001;
-    throw error;
-  }
-  return config.tokenContexts[token];
-}
-
-function jsonResult(id, result) {
-  return { jsonrpc: "2.0", id, result };
-}
-
-function jsonError(id, code, message) {
-  return { jsonrpc: "2.0", id, error: { code, message } };
-}
-
-function parseTokens(value) {
-  return String(value).split(",").map((token) => token.trim()).filter(Boolean);
-}
-
-function parseTokenContexts(value) {
-  if (!value) return {};
-  try {
-    const parsed = JSON.parse(value);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch {
-    return {};
-  }
-}
-
-function normalizeTokenContexts(contexts, tokens) {
-  const normalized = {};
-  for (const token of tokens) normalized[token] = defaultTokenContext(token);
-  for (const [token, context] of Object.entries(contexts || {})) {
-    normalized[token] = {
-      ...defaultTokenContext(token),
-      ...context,
-      user_name: context.user_name || context.name || defaultTokenContext(token).user_name,
-      project_ids: normalizeList(context.project_ids, ["*"]),
-      workspace_ids: normalizeList(context.workspace_ids, ["*"]),
-      scopes: normalizeList(context.scopes, defaultScopes())
-    };
-  }
-  return normalized;
-}
-
-function defaultTokenContext(token) {
-  return {
-    token_label: token === "anonymous" ? "anonymous" : `token:${String(token).slice(0, 6)}`,
-    user_id: "user_default",
-    user_name: "Default User",
-    team_id: "team_default",
-    project_ids: ["*"],
-    workspace_ids: ["*"],
-    scopes: defaultScopes()
-  };
-}
-
-function defaultScopes() {
-  return ["project:read", "project:admin", "task:create", "task:read", "task:update", "task:assign_codex", "workspace:read", "workspace:write", "files:upload", "files:download", "shell:exec", "ssh:use", "browser:use", "audit:read"];
-}
-
-function normalizeList(value, fallback) {
-  if (Array.isArray(value)) return value.map(String);
-  if (typeof value === "string" && value.trim()) return value.split(",").map((item) => item.trim()).filter(Boolean);
-  return fallback;
-}
-
-function limits(config) {
-  return {
-    max_read_bytes: config.maxReadBytes,
-    max_shell_output_bytes: config.maxShellOutputBytes,
-    shell_timeout: config.shellTimeout,
-    codex_exec_timeout: config.codexExecTimeout
-  };
-}
-
-async function selectWorkspace(store, workspace_id, context = defaultTokenContext("system")) {
-  const state = await store.load();
-  const workspace = workspace_id
-    ? state.workspaces.find((item) => item.id === workspace_id)
-    : state.workspaces.find((item) => item.default) || state.workspaces[0];
-  if (!workspace) throw new Error(`workspace not found: ${workspace_id || "default"}`);
-  requireProjectAccess(context, workspace.project_id);
-  requireWorkspaceAccess(context, workspace.id);
-  return workspace;
-}
-
-function findProject(state, project_id) {
-  const project = state.projects.find((item) => item.id === project_id);
-  if (!project) throw new Error(`project not found: ${project_id}`);
-  return project;
-}
-
-function canAccessProject(context, projectId) {
-  return context.project_ids.includes("*") || context.project_ids.includes(projectId);
-}
-
-function canAccessWorkspace(context, workspaceId) {
-  return context.workspace_ids.includes("*") || context.workspace_ids.includes(workspaceId);
-}
-
-function requireProjectAccess(context, projectId) {
-  if (!canAccessProject(context, projectId)) throw new Error(`project access denied: ${projectId}`);
-}
-
-function requireWorkspaceAccess(context, workspaceId) {
-  if (!canAccessWorkspace(context, workspaceId)) throw new Error(`workspace access denied: ${workspaceId}`);
-}
-
-function requireScope(context, scope) {
-  if (!context.scopes.includes(scope)) throw new Error(`missing required scope: ${scope}`);
-}
 
 async function createWorkspace(store, config, args, context) {
   requireScope(context, "project:admin");
@@ -3528,29 +3363,3 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
   });
 }
 
-function sha256(bytes) {
-  return createHash("sha256").update(bytes).digest("hex");
-}
-
-function shellQuotee(value) {
-  if (process.platform === "win32") return `"${String(value).replaceAll('"', '\\"')}"`;
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
-}
-
-function setCors(res) {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization, mcp-session-id, Accept");
-  res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-}
-
-function endJson(res, status, body) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json");
-  res.end(status === 204 ? "" : JSON.stringify(body));
-}
-
-async function readRequest(req) {
-  const chunks = [];
-  for await (const chunk of req) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-}
