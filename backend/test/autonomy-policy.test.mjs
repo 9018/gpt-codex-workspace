@@ -5,7 +5,7 @@ import { mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
-import { validateAutonomyResult, parseResultJson, parseCodexResult } from "../src/codex-result-parser.mjs";
+import { validateAutonomyResult, parseResultJson, parseCodexResult, normalizeRoleName, detectRuntimeCodeChanges } from "../src/codex-result-parser.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -573,4 +573,141 @@ test("context.json includes autonomy_policy and subagent_policy in goal", async 
   assert.ok(context.goal.subagent_policy);
   assert.equal(context.goal.autonomy_policy.mode, "subagent_first");
   assert.equal(context.goal.subagent_policy.mode, "required");
+});
+
+
+// ---------------------------------------------------------------------------
+// P0 hotfix: Role alias normalization tests
+// ---------------------------------------------------------------------------
+
+test("normalizeRoleName returns canonical form for escalation_judgment alias", () => {
+  assert.equal(normalizeRoleName("escalation_judgment"), "escalation_judge");
+  assert.equal(normalizeRoleName("escalation-judge"), "escalation_judge");
+  assert.equal(normalizeRoleName("escalation-judgment"), "escalation_judge");
+});
+
+test("normalizeRoleName returns same name for unknown roles", () => {
+  assert.equal(normalizeRoleName("analyst"), "analyst");
+  assert.equal(normalizeRoleName("architect"), "architect");
+  assert.equal(normalizeRoleName("implementer"), "implementer");
+  assert.equal(normalizeRoleName("tester"), "tester");
+  assert.equal(normalizeRoleName("reviewer"), "reviewer");
+});
+
+test("normalizeRoleName handles null/undefined/non-string gracefully", () => {
+  assert.equal(normalizeRoleName(null), null);
+  assert.equal(normalizeRoleName(undefined), undefined);
+  assert.equal(normalizeRoleName(42), 42);
+  assert.equal(normalizeRoleName(""), "");
+});
+
+test("validateAutonomyResult: escalation_judgment alias satisfies required escalation_judge", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "architect", status: "completed", summary: "Architecture done" },
+      { role: "implementer", status: "completed", summary: "Implement done" },
+      { role: "tester", status: "completed", summary: "Test done" },
+      { role: "reviewer", status: "completed", summary: "Review done" },
+      { role: "escalation_judgment", status: "completed", summary: "Escalation judged" }
+    ],
+    gpt_questions_used: 0,
+    verification: { commands: ["npm test"], passed: true }
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      roles: ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"],
+      require_review_before_completion: true,
+      require_test_or_verification: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, true, "escalation_judgment should normalize to escalation_judge");
+});
+
+test("validateAutonomyResult: normalization only works for known aliases, unknown roles still fail", () => {
+  const result = {
+    status: "completed",
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "Analysis done" },
+      { role: "architect", status: "completed", summary: "Architecture done" },
+      { role: "implementer", status: "completed", summary: "Implement done" },
+      { role: "tester", status: "completed", summary: "Test done" },
+      { role: "reviewer", status: "completed", summary: "Review done" },
+      { role: "cat_herder", status: "completed", summary: "Unknown role" }
+    ],
+    gpt_questions_used: 0,
+    verification: { commands: ["npm test"], passed: true }
+  };
+  const goal = {
+    subagent_policy: {
+      mode: "required",
+      roles: ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"],
+      require_review_before_completion: true,
+      require_test_or_verification: true
+    },
+    autonomy_policy: { gpt_question_budget: 0 }
+  };
+  const validation = validateAutonomyResult(result, goal);
+  assert.equal(validation.valid, false);
+  assert.equal(validation.reason, "missing_required_role_escalation_judge");
+});
+
+// ---------------------------------------------------------------------------
+// P0 hotfix: Runtime code change detection tests
+// ---------------------------------------------------------------------------
+
+test("detectRuntimeCodeChanges detects backend/src/*.mjs files", () => {
+  const files = [
+    "backend/src/gptwork-server.mjs",
+    "backend/src/auth-context.mjs",
+    "backend/src/mcp-tooling.mjs",
+    "backend/src/safe-restart.mjs"
+  ];
+  for (const f of files) {
+    const result = detectRuntimeCodeChanges([f]);
+    assert.ok(result.hasRuntimeChanges, `Should detect: ${f}`);
+    assert.deepEqual(result.matchedFiles, [f]);
+  }
+});
+
+test("detectRuntimeCodeChanges ignores non-runtime files", () => {
+  const files = [
+    "backend/test/foo.test.mjs",
+    "frontend/src/App.jsx",
+    "docs/README.md",
+    "package.json",
+    "README.md"
+  ];
+  for (const f of files) {
+    const result = detectRuntimeCodeChanges([f]);
+    assert.equal(result.hasRuntimeChanges, false, `Should NOT detect: ${f}`);
+    assert.deepEqual(result.matchedFiles, []);
+  }
+});
+
+test("detectRuntimeCodeChanges handles empty/null/undefined input", () => {
+  assert.deepEqual(detectRuntimeCodeChanges([]), { hasRuntimeChanges: false, matchedFiles: [] });
+  assert.deepEqual(detectRuntimeCodeChanges(null), { hasRuntimeChanges: false, matchedFiles: [] });
+  assert.deepEqual(detectRuntimeCodeChanges(undefined), { hasRuntimeChanges: false, matchedFiles: [] });
+});
+
+test("detectRuntimeCodeChanges returns multiple matched files", () => {
+  const files = [
+    "backend/src/gptwork-server.mjs",
+    "backend/test/foo.test.mjs",
+    "README.md",
+    "backend/src/safe-restart.mjs"
+  ];
+  const result = detectRuntimeCodeChanges(files);
+  assert.equal(result.hasRuntimeChanges, true);
+  assert.deepEqual(result.matchedFiles, [
+    "backend/src/gptwork-server.mjs",
+    "backend/src/safe-restart.mjs"
+  ]);
 });

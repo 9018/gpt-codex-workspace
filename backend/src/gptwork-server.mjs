@@ -22,7 +22,7 @@ import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownlo
 import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "./bark-notifier.mjs";
-import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson, validateAutonomyResult } from "./codex-result-parser.mjs";
+import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson, validateAutonomyResult, detectRuntimeCodeChanges } from "./codex-result-parser.mjs";
 import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
@@ -2703,6 +2703,27 @@ ${separator}`;
       taskStatus = "waiting_for_review";
       taskResult.warnings = taskResult.warnings || [];
       taskResult.warnings.push("Autonomy policy validation failed: " + autonomyValidation.reason);
+    }
+  }
+
+  // P1.3: Runtime code change check for deploy-mode tasks
+  if (taskStatus === "completed" && mode === "deploy" && parsedResult) {
+    const runtimeCheck = detectRuntimeCodeChanges(parsedResult.changed_files || []);
+    if (runtimeCheck.hasRuntimeChanges) {
+      // Check if safe restart marker exists for this task
+      let _hasRestartMarker = false;
+      try {
+        const _rm = await loadRestartMarker(config.defaultWorkspaceRoot, task.id);
+        if (_rm && ["pending", "scheduled", "restarted"].includes(_rm.status)) {
+          _hasRestartMarker = true;
+        }
+      } catch {}
+      if (!_hasRestartMarker) {
+        taskStatus = "waiting_for_review";
+        taskResult.warnings = taskResult.warnings || [];
+        taskResult.warnings.push("runtime_code_changed_without_safe_restart: " +
+          runtimeCheck.matchedFiles.join(", "));
+      }
     }
   }
 

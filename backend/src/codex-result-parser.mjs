@@ -406,6 +406,71 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
 // ---------------------------------------------------------------------------
 
 /**
+}
+
+// ---------------------------------------------------------------------------
+// Role name normalization (P0 hotfix: role alias support)
+// ---------------------------------------------------------------------------
+
+/**
+ * Known role name aliases mapping non-canonical names to their canonical form.
+ * This allows flexibility in subagent reporting without weakening strict validation.
+ * Add aliases here when equivalent role names are encountered in practice.
+ */
+const ROLE_ALIASES = {
+  'escalation_judgment': 'escalation_judge',
+  'escalation-judge': 'escalation_judge',
+  'escalation-judgment': 'escalation_judge',
+};
+
+/**
+ * Normalize a role name to its canonical form if a known alias exists.
+ * Unknown roles pass through unchanged, preserving strict validation.
+ *
+ * @param {string} name - The role name to normalize
+ * @returns {string} The canonical role name, or the original if unknown
+ */
+export function normalizeRoleName(name) {
+  if (!name || typeof name !== 'string') return name;
+  const trimmed = name.trim().toLowerCase();
+  return ROLE_ALIASES[trimmed] || name;
+}
+
+// ---------------------------------------------------------------------------
+// Runtime code change detection (P0 hotfix: safe-restart gating)
+// ---------------------------------------------------------------------------
+
+/**
+ * Runtime server file patterns -- files loaded by the running gptwork-mcp.service.
+ * Changes to these files require a safe restart to take effect.
+ * Matches any .mjs file under backend/src/.
+ */
+const RUNTIME_SRC_PATTERNS = [
+  /^backend\/src\/.*\.mjs$/,
+];
+
+/**
+ * Check if a list of changed files contains any runtime server source files.
+ * This is used to gate deploy-mode tasks: if runtime code was changed,
+ * a safe restart must be scheduled before the task can complete.
+ *
+ * @param {string[]} changedFiles - Array of file paths from result.changed_files
+ * @returns {{ hasRuntimeChanges: boolean, matchedFiles: string[] }}
+ */
+export function detectRuntimeCodeChanges(changedFiles) {
+  if (!Array.isArray(changedFiles) || changedFiles.length === 0) {
+    return { hasRuntimeChanges: false, matchedFiles: [] };
+  }
+  const matchedFiles = changedFiles.filter(f =>
+    RUNTIME_SRC_PATTERNS.some(pattern => pattern.test(f))
+  );
+  return {
+    hasRuntimeChanges: matchedFiles.length > 0,
+    matchedFiles
+  };
+}
+
+/**
  * Validate that a Codex result.json satisfies the goal's autonomy/subagent policy.
  *
  * @param {object} result - Parsed result object from parseResultJson or parseCodexResult.
@@ -466,7 +531,7 @@ export function validateAutonomyResult(result, goal) {
 
   // 5. If subagent_policy.roles is a non-empty array, require all policy roles present
   if (Array.isArray(subagent.roles) && subagent.roles.length > 0) {
-    const providedRoles = new Set(result.subagents.map(s => s.role));
+    const providedRoles = new Set(result.subagents.map(s => normalizeRoleName(s.role)));
     const decisionLog = Array.isArray(result.decision_log) ? result.decision_log : [];
 
     for (const requiredRole of subagent.roles) {
@@ -477,11 +542,11 @@ export function validateAutonomyResult(result, goal) {
         e && typeof e === 'object' &&
         (
           (e.mapped_roles && Array.isArray(e.mapped_roles) &&
-           e.mapped_roles.some(m => m.policy_role === requiredRole && providedRoles.has(m.provided_role))) ||
+           e.mapped_roles.some(m => m.policy_role === requiredRole && (providedRoles.has(m.provided_role) || providedRoles.has(normalizeRoleName(m.provided_role))))) ||
           (e.role_equivalence && Array.isArray(e.role_equivalence) &&
-           e.role_equivalence.some(m => m.policy_role === requiredRole && providedRoles.has(m.provided_role))) ||
+           e.role_equivalence.some(m => m.policy_role === requiredRole && (providedRoles.has(m.provided_role) || providedRoles.has(normalizeRoleName(m.provided_role))))) ||
           (e.equivalent_roles && Array.isArray(e.equivalent_roles) &&
-           e.equivalent_roles.some(m => m.policy_role === requiredRole && providedRoles.has(m.provided_role)))
+           e.equivalent_roles.some(m => m.policy_role === requiredRole && (providedRoles.has(m.provided_role) || providedRoles.has(normalizeRoleName(m.provided_role)))))
         )
       );
       if (equivalenceEntry) continue;
