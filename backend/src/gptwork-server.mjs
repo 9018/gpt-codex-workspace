@@ -27,7 +27,7 @@ import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { handleResolveRepo, handleFetch, handleStatus, handleListFiles, handleReadFile, handleChangedFiles, handleDiff, handleShowCommit, handleCompareLocal } from "./git-remote-tools.mjs";
-import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun } from "./codex-run-metadata.mjs";
+import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun, getRunFilePath } from "./codex-run-metadata.mjs";
 import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir, validateWorkspaceRoot, scanMisplacedMarkersSync, migrateMisplacedMarker, getMisplacedMarkerDiagnostic, removeMisplacedMarker } from "./safe-restart.mjs";
 import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
 import {
@@ -241,17 +241,87 @@ export async function createGptWorkServer(options = {}) {
             }
           }
           if (shouldMark) {
-            const prevStatus = task.status;
-            task.status = "waiting_for_review";
-            task.result = task.result || {};
-            task.result.kind = "codex_stalled";
-            task.result.reconciliation_message = message;
-            task.result.reconciled_at = new Date().toISOString();
-            task.logs = task.logs || [];
-            task.logs.push({ time: new Date().toISOString(), message });
-            reconciled.push({ task_id: task.id, previous_status: prevStatus, new_status: "waiting_for_review", message });
-            if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} -> waiting_for_review (${message})
+            // Phase A.1: Try result.json recovery before codex_stalled
+            const goalId = task.goal_id;
+            const resultJsonPath = goalId
+              ? join(config.defaultWorkspaceRoot, ".gptwork/goals", goalId, "result.json")
+              : null;
+            let recovered = false;
+            if (resultJsonPath && existsSync(resultJsonPath)) {
+              try {
+                // Check if file contains valid JSON first
+                const rawContent = readFileSync(resultJsonPath, "utf8");
+                JSON.parse(rawContent);
+                // Use parseResultJson for full contract validation
+                const parsedResult = await parseResultJson(resultJsonPath);
+                if (parsedResult && parsedResult.status) {
+                  // Valid result.json found --- recover task
+                  const taskResult = buildTaskResult(parsedResult, {});
+                  const recoveredStatus = parsedResult.status === "completed" ? "completed"
+                    : parsedResult.status === "failed" ? "failed"
+                    : "waiting_for_review";
+                  const prevRecoveryStatus = task.status;
+                  task.status = recoveredStatus;
+                  task.result = { ...(task.result || {}), ...taskResult };
+                  task.result.reconciled_at = new Date().toISOString();
+                  task.result.recovered_from_result_json = true;
+                  task.logs = task.logs || [];
+                  task.logs.push({ time: new Date().toISOString(), message: "[worker] recovered completed result from existing result.json before codex_stalled" });
+                  // Update goal status
+                  try { await updateGoalStatus(store, goalId, recoveredStatus, new Date().toISOString()); } catch {}
+                  // Update run metadata if a run exists
+                  if (run && run.run_id) {
+                    try {
+                      const runFp = getRunFilePath(config.defaultWorkspaceRoot, task.id, run.run_id);
+                      if (existsSync(runFp)) {
+                        fireHeartbeat(runFp, "completed", { result_json_path: resultJsonPath, phase: "completed" });
+                      }
+                    } catch {}
+                  }
+                  // Release repo lock
+                  try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
+                  try { await notifyTerminalTaskIfNeeded(task); } catch {}
+                  reconciled.push({ task_id: task.id, previous_status: prevRecoveryStatus, new_status: recoveredStatus, message: "Recovered from existing result.json" });
+                  if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} recovered from result.json -> ${recoveredStatus}
 `);
+                  recovered = true;
+                } else {
+                  // File exists but contract validation failed
+                  throw new Error("result.json at " + resultJsonPath + " exists but does not match expected contract (missing or invalid status field)");
+                }
+              } catch (parseErr) {
+                // Malformed result.json
+                const prevParseStatus = task.status;
+                task.status = "waiting_for_review";
+                task.result = task.result || {};
+                task.result.kind = "result_json_parse_failed";
+                task.result.reconciliation_message = "result.json found at " + resultJsonPath + " but parse failed: " + parseErr.message;
+                task.result.reconciled_at = new Date().toISOString();
+                task.logs = task.logs || [];
+                task.logs.push({ time: new Date().toISOString(), message: "[worker] result.json parse failed for reconciliation: " + parseErr.message });
+                // Release lock since process is gone
+                try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
+                try { await notifyTerminalTaskIfNeeded(task); } catch {}
+                reconciled.push({ task_id: task.id, previous_status: prevParseStatus, new_status: "waiting_for_review", message: "result.json parse failed: " + parseErr.message });
+                if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} result.json parse failed -> waiting_for_review
+`);
+                recovered = true;
+              }
+            }
+            if (!recovered) {
+              // Fall through to existing codex_stalled behavior
+              const prevStatus = task.status;
+              task.status = "waiting_for_review";
+              task.result = task.result || {};
+              task.result.kind = "codex_stalled";
+              task.result.reconciliation_message = message;
+              task.result.reconciled_at = new Date().toISOString();
+              task.logs = task.logs || [];
+              task.logs.push({ time: new Date().toISOString(), message });
+              reconciled.push({ task_id: task.id, previous_status: prevStatus, new_status: "waiting_for_review", message });
+              if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} -> waiting_for_review (${message})
+`);
+            }
           }
         }
         if (reconciled.length > 0) {
