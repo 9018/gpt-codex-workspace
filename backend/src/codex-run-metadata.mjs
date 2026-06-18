@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
 
 const RUNS_DIR = ".gptwork/runs";
+const heartbeatWriteQueues = new Map();
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -101,12 +102,29 @@ export async function initRun(opts = {}) {
  * @returns {Promise<object>} updated run data
  */
 export async function updateRunHeartbeat(runFilePath, phase, fields = {}) {
-  let runData;
-  try {
-    runData = JSON.parse(await readFile(runFilePath, "utf8"));
-  } catch {
-    // If run.json can't be read, start fresh with basic data
-    runData = { run_id: "unknown", phase: "unknown" };
+  const previous = heartbeatWriteQueues.get(runFilePath) || Promise.resolve();
+  const next = previous.catch(() => {}).then(() => updateRunHeartbeatUnlocked(runFilePath, phase, fields));
+  const cleanup = next.finally(() => {
+    if (heartbeatWriteQueues.get(runFilePath) === cleanup) heartbeatWriteQueues.delete(runFilePath);
+  });
+  heartbeatWriteQueues.set(runFilePath, cleanup);
+  return next;
+}
+
+async function updateRunHeartbeatUnlocked(runFilePath, phase, fields = {}) {
+  let runData = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      runData = JSON.parse(await readFile(runFilePath, "utf8"));
+      break;
+    } catch {
+      if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+  if (!runData) {
+    // Avoid overwriting a transiently unreadable/half-written run.json with
+    // incomplete metadata. Fire-and-forget callers treat this as non-fatal.
+    return null;
   }
 
   runData.last_heartbeat_at = new Date().toISOString();

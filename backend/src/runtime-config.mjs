@@ -79,6 +79,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
 
     // Codex
     codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 2400),
+    codexFirstOutputTimeout: _getNum("GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT", 180),
     codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
     codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),
     codexStallThreshold: _getNum("GPTWORK_CODEX_STALL_THRESHOLD_SECONDS", 600),
@@ -131,6 +132,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     statePath: "GPTWORK_STATE_PATH",
     runtimeEnvFile: "GPTWORK_RUNTIME_ENV_FILE",
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
+    codexFirstOutputTimeout: "GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT",
     codexExecArgs: "GPTWORK_CODEX_EXEC_ARGS",
     codexConcurrency: "GPTWORK_CODEX_CONCURRENCY",
     codexStallThreshold: "GPTWORK_CODEX_STALL_THRESHOLD_SECONDS",

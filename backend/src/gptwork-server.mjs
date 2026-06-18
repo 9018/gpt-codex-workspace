@@ -123,6 +123,7 @@ export async function createGptWorkServer(options = {}) {
     codexHome: options.codexHome || rcc.codexHome,
     codexExecArgs: options.codexExecArgs || rcc.codexExecArgs,
     codexExecTimeout: Number(options.codexExecTimeout || rcc.codexExecTimeout),
+    codexFirstOutputTimeout: Number(options.codexFirstOutputTimeout || rcc.codexFirstOutputTimeout || 180),
     pythonCommand: options.pythonCommand || rcc.python,
     codexStallThreshold: Number(options.codexStallThreshold || rcc.codexStallThreshold),
     maxReadBytes: rcc.maxReadBytes,
@@ -156,6 +157,7 @@ export async function createGptWorkServer(options = {}) {
       ['codexHome', 'codexHome'],
       ['codexExecArgs', 'codexExecArgs'],
       ['codexExecTimeout', 'codexExecTimeout'],
+      ['codexFirstOutputTimeout', 'codexFirstOutputTimeout'],
       ['codexStallThreshold', 'codexStallThreshold'],
       ['maxReadBytes', 'maxReadBytes'],
       ['maxShellOutputBytes', 'maxShellOutputBytes'],
@@ -1442,6 +1444,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         running_commit,
         defaultWorkspaceRoot: config.defaultWorkspaceRoot,
         codex_exec_timeout: config.codexExecTimeout,
+        codex_first_output_timeout: config.codexFirstOutputTimeout,
         codex_exec_args: config.codexExecArgs,
         shell_timeout: config.shellTimeout,
         max_read_bytes: config.maxReadBytes,
@@ -1462,6 +1465,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         // Config sources for key operational values
         config_sources: {
           codex_exec_timeout: sources.codexExecTimeout,
+          codex_first_output_timeout: sources.codexFirstOutputTimeout,
           shell_timeout: sources.shellTimeout,
           state_path: sources.statePath,
           default_repo: sources.defaultRepo,
@@ -2852,7 +2856,14 @@ ${separator}`;
     });
     runFilePath = initResult.runFilePath;
     runId = initResult.runId;
-    fireHeartbeat(runFilePath, "running_codex");
+    let promptBytes = 0;
+    try { promptBytes = (await stat(promptFile)).size; } catch {}
+    fireHeartbeat(runFilePath, "running_codex", {
+      prompt_bytes: promptBytes,
+      first_output_timeout_seconds: config.codexFirstOutputTimeout || 180,
+      stdout_bytes: 0,
+      stderr_bytes: 0
+    });
   } catch (e) {
     // Non-fatal: run metadata setup failed
   }
@@ -2861,6 +2872,17 @@ ${separator}`;
     const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
     cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000, (pid) => {
       updateRunHeartbeat(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
+    }, {
+      firstOutputTimeoutSeconds: config.codexFirstOutputTimeout || 180,
+      onOutput: (event) => {
+        updateRunHeartbeat(runFilePath, "running_codex", {
+          stdout_bytes: event.stdout_bytes,
+          stderr_bytes: event.stderr_bytes,
+          first_stdout_at: event.first_stdout_at,
+          first_stderr_at: event.first_stderr_at,
+          first_output_delay_ms: event.first_output_delay_ms
+        }).catch(() => {});
+      }
     });
     
     // Write stdout/stderr to durable log files
@@ -2872,7 +2894,14 @@ ${separator}`;
     if (runFilePath) {
       fireHeartbeat(runFilePath, "parsing_result", {
         exit_code: cr?.returncode ?? -1,
-        timed_out: cr?.timed_out || false
+        timed_out: cr?.timed_out || false,
+        no_first_output_timeout: cr?.no_first_output_timeout || false,
+        first_output_timeout_seconds: cr?.first_output_timeout_seconds,
+        stdout_bytes: cr?.stdout_bytes,
+        stderr_bytes: cr?.stderr_bytes,
+        first_stdout_at: cr?.first_stdout_at,
+        first_stderr_at: cr?.first_stderr_at,
+        first_output_delay_ms: cr?.first_output_delay_ms
       });
     }
     
@@ -2903,15 +2932,21 @@ ${separator}`;
   const taskResult = parsedResult
     ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout, returnCode: cr?.returncode ?? 0 })
     : {
-        kind: timedOut ? "codex_timeout" : "codex_failed",
-        summary,
+        kind: cr?.no_first_output_timeout ? "no_first_output_timeout" : timedOut ? "codex_timeout" : "codex_failed",
+        summary: cr?.no_first_output_timeout ? "Codex produced no stdout/stderr before the first-output timeout." : summary,
         completed_at: new Date().toISOString(),
-        ...(timedOut ? { timed_out: true, timeout_seconds: config.codexExecTimeout } : { timed_out: false })
+        stdout_bytes: cr?.stdout_bytes ?? 0,
+        stderr_bytes: cr?.stderr_bytes ?? 0,
+        first_stdout_at: cr?.first_stdout_at || null,
+        first_stderr_at: cr?.first_stderr_at || null,
+        first_output_delay_ms: cr?.first_output_delay_ms ?? null,
+        no_first_output_timeout: cr?.no_first_output_timeout || false,
+        ...(timedOut ? { timed_out: true, timeout_seconds: cr?.no_first_output_timeout ? cr?.first_output_timeout_seconds : config.codexExecTimeout } : { timed_out: false })
       };
 
   const doneAt = new Date().toISOString();
   let taskStatus = taskResult.kind === "codex_executed" ? "completed"
-    : taskResult.kind === "codex_timeout" ? "timed_out"
+    : (taskResult.kind === "codex_timeout" || taskResult.kind === "no_first_output_timeout") ? "timed_out"
     : "failed";
 
   // P1.1/P1.2: Validate autonomy policy for completed results
@@ -2951,16 +2986,25 @@ ${separator}`;
     fireHeartbeat(runFilePath, taskStatus === "completed" ? "completed" : "failed", {
       result_json_path: resultJsonPath,
       exit_code: cr?.returncode ?? -1,
-      timed_out: cr?.timed_out || false
+      timed_out: cr?.timed_out || false,
+      no_first_output_timeout: cr?.no_first_output_timeout || false,
+      first_output_timeout_seconds: cr?.first_output_timeout_seconds,
+      stdout_bytes: cr?.stdout_bytes,
+      stderr_bytes: cr?.stderr_bytes,
+      first_stdout_at: cr?.first_stdout_at,
+      first_stderr_at: cr?.first_stderr_at,
+      first_output_delay_ms: cr?.first_output_delay_ms
     });
   }
 
   const result = await updateTask(store, task.id, (item) => {
     item.status = taskStatus;
     item.result = { ...taskResult, completed_at: doneAt };
-    item.logs.push({ time: doneAt, message: taskResult.kind === "codex_timeout"
-      ? "[worker] timed out after " + config.codexExecTimeout + "s"
-      : "[worker] completed: task processed by Codex CLI" });
+    item.logs.push({ time: doneAt, message: taskResult.kind === "no_first_output_timeout"
+      ? "[worker] timed out waiting for first Codex output after " + (cr?.first_output_timeout_seconds || config.codexFirstOutputTimeout || 180) + "s"
+      : taskResult.kind === "codex_timeout"
+        ? "[worker] timed out after " + config.codexExecTimeout + "s"
+        : "[worker] completed: task processed by Codex CLI" });
   });
 
   // Release repo lock after Codex execution completes
@@ -3505,12 +3549,15 @@ async function runZipCommand(mode, sourcePath, zipPath, pythonCommand = process.
   return result;
 }
 
-function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
+function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned, options = {}) {
   return new Promise((resolve) => {
     const started = Date.now();
+    const startedAtIso = new Date(started).toISOString();
     const shell = process.platform === "win32" ? "cmd" : "/bin/sh";
     const shellFlag = process.platform === "win32" ? "/c" : "-c";
     const maxBuf = Number(maxOutputBytes) || 1048576;
+    const firstOutputTimeoutSeconds = Math.max(0, Number(options.firstOutputTimeoutSeconds) || 0);
+    const onOutput = typeof options.onOutput === "function" ? options.onOutput : null;
 
     const child = spawn(shell, [shellFlag, command], {
       cwd,
@@ -3528,10 +3575,59 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
     let timedOut = false;
     let stdoutTruncated = false;
     let stderrTruncated = false;
+    let stdoutBytes = 0;
+    let stderrBytes = 0;
+    let firstStdoutAt = null;
+    let firstStderrAt = null;
+    let firstOutputDelayMs = null;
+    let firstOutputTimedOut = false;
+    let firstOutputTimer = null;
+    let settled = false;
+
+    function markOutput(streamName, chunk) {
+      const bytes = Buffer.byteLength(chunk);
+      if (streamName === "stdout") {
+        stdoutBytes += bytes;
+        if (!firstStdoutAt) firstStdoutAt = new Date().toISOString();
+      } else {
+        stderrBytes += bytes;
+        if (!firstStderrAt) firstStderrAt = new Date().toISOString();
+      }
+      if (firstOutputDelayMs === null) {
+        firstOutputDelayMs = Date.now() - started;
+        if (firstOutputTimer) clearTimeout(firstOutputTimer);
+      }
+      if (onOutput) {
+        try {
+          onOutput({ stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs });
+        } catch {}
+      }
+    }
+
+    function killProcessGroup() {
+      try {
+        if (child.pid) process.kill(process.platform !== "win32" ? -child.pid : child.pid, "SIGTERM");
+      } catch {}
+      setTimeout(() => {
+        try {
+          if (child.pid) process.kill(process.platform !== "win32" ? -child.pid : child.pid, "SIGKILL");
+        } catch {}
+      }, 3000);
+    }
+
+    function finish(payload) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (firstOutputTimer) clearTimeout(firstOutputTimer);
+      resolve({ ...payload, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs, no_first_output_timeout: firstOutputTimedOut, first_output_timeout_seconds: firstOutputTimeoutSeconds || null, started_at: startedAtIso });
+    }
 
     child.stdout.on("data", (data) => {
+      const chunk = data.toString();
+      markOutput("stdout", chunk);
       if (!stdoutTruncated) {
-        stdout += data.toString();
+        stdout += chunk;
         if (Buffer.byteLength(stdout) >= maxBuf) {
           stdoutTruncated = true;
           child.stdout.destroy();
@@ -3540,8 +3636,10 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
     });
 
     child.stderr.on("data", (data) => {
+      const chunk = data.toString();
+      markOutput("stderr", chunk);
       if (!stderrTruncated) {
-        stderr += data.toString();
+        stderr += chunk;
         if (Buffer.byteLength(stderr) >= maxBuf) {
           stderrTruncated = true;
           child.stderr.destroy();
@@ -3568,9 +3666,16 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
       }, 3000);
     }, timeoutMs);
 
+    firstOutputTimer = firstOutputTimeoutSeconds > 0 ? setTimeout(() => {
+      if (stdoutBytes === 0 && stderrBytes === 0) {
+        timedOut = true;
+        firstOutputTimedOut = true;
+        killProcessGroup();
+      }
+    }, firstOutputTimeoutSeconds * 1000) : null;
+
     child.on("error", (err) => {
-      clearTimeout(timer);
-      resolve({
+      finish({
         command,
         cwd,
         returncode: -1,
@@ -3584,8 +3689,7 @@ function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned) {
     });
 
     child.on("exit", (code, signal) => {
-      clearTimeout(timer);
-      resolve({
+      finish({
         command,
         cwd,
         returncode: code ?? -1,
