@@ -22,7 +22,7 @@ import { buildSshExecCommand, runSshExec, sshListDir, sshReadTextFile, sshDownlo
 import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, getRepoStatus, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "./bark-notifier.mjs";
-import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson } from "./codex-result-parser.mjs";
+import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson, validateAutonomyResult } from "./codex-result-parser.mjs";
 import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
@@ -1002,9 +1002,15 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     }),
 
     create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string" }, ["title", "prompt"]), async (args) => {
+      // P1.4: Require structured escalation reason
+      let warnings = [];
+      const hasEscalation = typeof args.escalation === 'object' && args.escalation !== null && args.escalation.category;
+      if (!hasEscalation) {
+        warnings.push('Missing structured escalation reason. Codex should include escalation.category, escalation.why_subagents_cannot_decide, escalation.options_considered, and escalation.default_if_no_response when asking ChatGPT.');
+      }
       const result = await createChatGptRequest(store, args);
       github.syncChatGptRequest(result.request).catch(() => {});
-      return result;
+      return warnings.length > 0 ? { ...result, warnings } : result;
     }),
     list_chatgpt_requests: tool("List coordination requests from Codex needing ChatGPT attention. Open requests mean Codex is waiting for your analysis, decision, or input.", schema({ status: "string", source: "string", limit: "integer" }), async ({ status, source, limit = 50 }) => {
       const state = await store.load();
@@ -1805,6 +1811,22 @@ async function createGoal(store, config, args, context = defaultTokenContext("sy
     created_at: now,
     updated_at: now
   };
+
+  // P0.1: Inject default autonomy/subagent policies if not provided in payload
+  const payloadPolicies = args.payload || {};
+  goal.autonomy_policy = payloadPolicies.autonomy_policy || {
+    mode: 'subagent_first',
+    gpt_question_budget: 0,
+    allow_autonomous_defaults: true,
+    default_decision_rule: 'choose_smallest_reversible_goal_aligned_change'
+  };
+  goal.subagent_policy = payloadPolicies.subagent_policy || {
+    mode: 'required',
+    roles: ['analyst', 'architect', 'implementer', 'tester', 'reviewer', 'escalation_judge'],
+    require_review_before_completion: true,
+    require_test_or_verification: true
+  };
+
   const conversation = {
     id: conversationId,
     goal_id: goalId,
@@ -2141,6 +2163,8 @@ async function writeGoalWorkspaceFiles(store, config, goal, conversation, memori
     mode: goal.mode,
     workspace_id: goal.workspace_id,
     messages: conversation?.messages || [],
+    autonomy_policy: goal.autonomy_policy,
+    subagent_policy: goal.subagent_policy,
     memories
   };
   const payloadJson = JSON.stringify(payload, null, 2);
@@ -2207,6 +2231,20 @@ function renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) 
     "",
     ...(memories.length ? memories.map((memory) => `- ${memory.key}: ${memory.value}`) : ["(none)"]),
     "",
+    '## Autonomy Policy',
+    '',
+    `Mode: ${goal.autonomy_policy?.mode || 'subagent_first'}`,
+    `GPT question budget: ${goal.autonomy_policy?.gpt_question_budget ?? 0}`,
+    `Default decision rule: ${goal.autonomy_policy?.default_decision_rule || 'choose the smallest reversible goal-aligned change.'}`,
+    '',
+    'Do not ask ChatGPT for implementation decisions.',
+    'Use Codex subagents to resolve uncertainty.',
+    '',
+    '## Subagent Policy',
+    '',
+    'Required roles:',
+    ...(Array.isArray(goal.subagent_policy?.roles) ? goal.subagent_policy.roles.map(r => `- ${r}`) : ['- analyst', '- architect', '- implementer', '- tester', '- reviewer', '- escalation_judge']),
+    '',
     "## Execution Contract",
     "",
     "Read context.json and transcript.md before acting. Execute the goal prompt, update result.md, and append progress with append_goal_message."
@@ -2229,10 +2267,37 @@ function renderTranscriptMarkdown(goal, conversation) {
 
 function codexInstruction(goal) {
   const files = goalWorkspaceFiles(goal);
+  const ap = goal.autonomy_policy || {};
   return [
     "You are executing a GPTWork encoded/shared goal.",
     `Read ${files.goal_md}, ${files.context_json}, and ${files.transcript_md} before acting.`,
-    "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message."
+    "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message.",
+    "",
+    "## Execution Requirements",
+    "",
+    "You are the parent Codex agent.",
+    "You must use subagent-first autonomous execution.",
+    "",
+    "Before asking ChatGPT:",
+    "1. Use internal subagents to analyze the issue.",
+    "2. Compare options.",
+    "3. Choose the smallest reversible goal-aligned change.",
+    "4. Continue execution unless the issue is a product/user decision.",
+    "",
+    "You must not ask ChatGPT for:",
+    "- code navigation",
+    "- implementation choices",
+    "- test failures",
+    "- refactoring choices",
+    "- local verification strategy",
+    "",
+    "Only ask ChatGPT for:",
+    "- contradictory requirements",
+    "- product behavior decisions",
+    "- destructive changes",
+    "- public API breaking changes",
+    "- production approval",
+    "- credential/account/billing access",
   ].join("\n");
 }
 
@@ -2590,7 +2655,23 @@ When complete, write a concise structured report in TWO formats:
      "commit": "sha256",
      "remote_head": "sha256",
      "warnings": ["warning text"],
-     "followups": ["follow-up item"]
+     "followups": ["follow-up item"],
+     "subagents_used": true,
+     "gpt_questions_used": 0,
+     "decision_log": [],
+     "subagents": [
+       { "role": "analyst", "status": "completed", "summary": "..." },
+       { "role": "architect", "status": "completed", "summary": "..." },
+       { "role": "implementer", "status": "completed", "summary": "..." }
+     ],
+     "verification": {
+       "commands": [],
+       "passed": true
+     },
+     "escalation": {
+       "needed": false,
+       "reason": "All decisions were technical and reversible."
+     }
    }
 
 2. Stdout structured report (legacy, still read):
@@ -2706,9 +2787,19 @@ ${separator}`;
       };
 
   const doneAt = new Date().toISOString();
-  const taskStatus = taskResult.kind === "codex_executed" ? "completed"
+  let taskStatus = taskResult.kind === "codex_executed" ? "completed"
     : taskResult.kind === "codex_timeout" ? "timed_out"
     : "failed";
+
+  // P1.1/P1.2: Validate autonomy policy for completed results
+  if (taskStatus === "completed" && goal && parsedResult) {
+    const autonomyValidation = validateAutonomyResult(parsedResult, goal);
+    if (!autonomyValidation.valid) {
+      taskStatus = "waiting_for_review";
+      taskResult.warnings = taskResult.warnings || [];
+      taskResult.warnings.push("Autonomy policy validation failed: " + autonomyValidation.reason);
+    }
+  }
 
   // Update run metadata with final phase
   if (runFilePath) {
@@ -2936,6 +3027,24 @@ async function notifyCreatedTaskIfNeeded(task) {
 
 async function createChatGptRequest(store, args) {
   const state = await store.load();
+
+  // P1.3: Track GPT-question budget usage
+  if (args.task_id) {
+    const linkedTask = state.tasks.find(t => t.id === args.task_id);
+    if (linkedTask && linkedTask.goal_id) {
+      const goal = state.goals.find(g => g.id === linkedTask.goal_id);
+      if (goal) {
+        goal.gpt_questions_used = (goal.gpt_questions_used || 0) + 1;
+        const budget = goal.autonomy_policy?.gpt_question_budget ?? 0;
+        if (goal.gpt_questions_used > budget) {
+          const warnMsg = `GPT question budget exceeded: ${goal.gpt_questions_used} used, budget ${budget}`;
+          state.activities.push({ time: new Date().toISOString(), type: 'gpt_budget.warning', goal_id: goal.id, message: warnMsg });
+        }
+      }
+    }
+  }
+
+  state.chatgpt_requests ||= [];
   state.chatgpt_requests ||= [];
   const now = new Date().toISOString();
   const request = {

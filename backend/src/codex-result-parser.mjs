@@ -54,6 +54,15 @@ export async function parseResultJson(resultJsonPath) {
 
     if (!status) return null;
 
+    // Autonomy/subagent reporting fields (optional, P0.4/P1.1)
+    const subagentsUsed = data.subagents_used === true ? true : false;
+    const subagents = Array.isArray(data.subagents) ? data.subagents : null;
+    const gptQuestionsUsed = typeof data.gpt_questions_used === 'number' ? data.gpt_questions_used : null;
+    const decisionLog = Array.isArray(data.decision_log) ? data.decision_log : null;
+    const verification = data.verification && typeof data.verification === 'object' ? data.verification : null;
+    const escalation = data.escalation && typeof data.escalation === 'object' ? data.escalation : null;
+
+
     return {
       status,
       summary,
@@ -63,6 +72,12 @@ export async function parseResultJson(resultJsonPath) {
       remote_head: remoteHead,
       warnings,
       followups,
+      subagents_used: subagentsUsed,
+      subagents,
+      gpt_questions_used: gptQuestionsUsed,
+      decision_log: decisionLog,
+      verification,
+      escalation,
       structured: true,
       from_json: true,
       json_errors: [],
@@ -347,4 +362,34 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     followups: parsed.followups || [],
     completed_at: now
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Autonomy policy validation (P1.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate that a Codex result.json satisfies the goal's autonomy/subagent policy.
+ *
+ * @param {object} result - Parsed result object from parseResultJson or parseCodexResult.
+ * @param {object} [goal] - Goal object with optional autonomy_policy and subagent_policy.
+ * @returns {{ valid: boolean, reason?: string }}
+ */
+export function validateAutonomyResult(result, goal) {
+  const autonomy = goal?.autonomy_policy || {};
+  const subagent = goal?.subagent_policy || {};
+
+  if (subagent.mode === 'required' && result.subagents_used !== true) {
+    return { valid: false, reason: 'subagents_required_but_not_used' };
+  }
+  if (subagent.mode === 'required' && !Array.isArray(result.subagents)) {
+    return { valid: false, reason: 'missing_subagent_report' };
+  }
+  const budget = autonomy.gpt_question_budget ?? 0;
+  const used = result.gpt_questions_used ?? 0;
+  if (used > budget) {
+    return { valid: false, reason: 'gpt_question_budget_exceeded' };
+  }
+  return { valid: true };
 }
