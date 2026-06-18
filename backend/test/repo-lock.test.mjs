@@ -49,7 +49,7 @@ import {
 function setupMockCodex() {
   const mockDir = mkdtempSync(join(tmpdir(), "mock-codex-"));
   const mockCodex = join(mockDir, "codex");
-  const mockScript = '#!/bin/sh\necho "STATUS=completed\nSUMMARY=test"\nexit 0\n';
+  const mockScript = `#!/bin/sh\necho "STATUS=completed"\necho "SUMMARY=test"\necho "SUBAGENTS_USED=true"\necho 'SUBAGENTS=[{"role":"analyst","status":"completed","summary":"mock analysis"},{"role":"implementer","status":"completed","summary":"mock implementation"}]'\necho "GPT_QUESTIONS_USED=0"\nexit 0\n`;
   writeFileSync(mockCodex, mockScript, "utf8");
   chmodSync(mockCodex, 0o755);
   const origPath = process.env.PATH || "";

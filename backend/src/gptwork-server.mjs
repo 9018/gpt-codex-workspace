@@ -258,23 +258,57 @@ export async function createGptWorkServer(options = {}) {
                   let resultData = null;
                   if (resultJsonPath) { try { resultData = await parseResultJson(resultJsonPath); } catch {} }
                   if (resultData && resultData.status === "completed") {
-                    taskObj.status = "completed";
-                    taskObj.result = taskObj.result || {};
-                    taskObj.result.kind = "codex_executed";
-                    taskObj.result.summary = resultData.summary || "Restart verified: deployment successful";
-                    taskObj.result.restart_state = "verified";
-                    taskObj.result.restart_verified_at = new Date().toISOString();
-                    taskObj.result.commit = resultData.commit;
-                    taskObj.result.remote_head = resultData.remote_head;
-                    taskObj.logs = taskObj.logs || [];
-                    taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Restart verified and task finalized via Phase C startup verification. Running commit: ${diagnostics.running_commit || "unknown"}` });
-                    await notifyTerminalTaskIfNeeded(taskObj);
-                    taskObj.updated_at = new Date().toISOString();
-                    restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
-                    // Release repo lock after restart verification
-                    await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
-                    if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} completed after restart verification
+                    // P1.1/P1.2: Validate autonomy policy for restart-verified tasks
+                    let autonomyValidation = { valid: true };
+                    if (goalId) {
+                      try {
+                        const contextJsonPath = join(config.defaultWorkspaceRoot, ".gptwork/goals", goalId, "context.json");
+                        if (existsSync(contextJsonPath)) {
+                          const contextData = JSON.parse(readFileSync(contextJsonPath, "utf8"));
+                          const goal = contextData.goal || null;
+                          autonomyValidation = validateAutonomyResult(resultData, goal);
+                        }
+                      } catch {}
+                    }
+                    if (autonomyValidation.valid) {
+                      taskObj.status = "completed";
+                      taskObj.result = taskObj.result || {};
+                      taskObj.result.kind = "codex_executed";
+                      taskObj.result.summary = resultData.summary || "Restart verified: deployment successful";
+                      taskObj.result.restart_state = "verified";
+                      taskObj.result.restart_verified_at = new Date().toISOString();
+                      taskObj.result.commit = resultData.commit;
+                      taskObj.result.remote_head = resultData.remote_head;
+                      taskObj.logs = taskObj.logs || [];
+                      taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Restart verified and task finalized via Phase C startup verification. Running commit: ${diagnostics.running_commit || "unknown"}` });
+                      await notifyTerminalTaskIfNeeded(taskObj);
+                      taskObj.updated_at = new Date().toISOString();
+                      restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
+                      // Release repo lock after restart verification
+                      await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
+                      if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} completed after restart verification
 `);
+                    } else {
+                      taskObj.status = "waiting_for_review";
+                      taskObj.result = taskObj.result || {};
+                      taskObj.result.kind = "codex_executed";
+                      taskObj.result.summary = resultData.summary || "Autonomy validation failed after restart";
+                      taskObj.result.warnings = taskObj.result.warnings || [];
+                      taskObj.result.warnings.push("Autonomy policy validation failed after restart: " + autonomyValidation.reason);
+                      taskObj.result.restart_state = "verified";
+                      taskObj.result.restart_verified_at = new Date().toISOString();
+                      taskObj.result.commit = resultData.commit;
+                      taskObj.result.remote_head = resultData.remote_head;
+                      taskObj.logs = taskObj.logs || [];
+                      taskObj.logs.push({ time: new Date().toISOString(), message: "[safe-restart] Autonomy validation failed after restart: " + autonomyValidation.reason });
+                      await notifyTerminalTaskIfNeeded(taskObj);
+                      taskObj.updated_at = new Date().toISOString();
+                      restartVerifications.push({ task_id: marker.task_id, status: "waiting_for_review", verified: true });
+                      // Release repo lock after restart verification (even on autonomy failure)
+                      await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
+                      if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: task ${marker.task_id} autonomy validation failed after restart: ${autonomyValidation.reason}
+`);
+                    }
                   } else {
                     taskObj.result = taskObj.result || {};
                     taskObj.result.restart_state = "verified";

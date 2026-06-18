@@ -350,7 +350,7 @@ test("general Codex worker completes linked goals and writes concise results", a
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
-    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok')"`,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'implementer',status:'completed',summary:'mock implementation'}]) + '\\nGPT_QUESTIONS_USED=0')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true

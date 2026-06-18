@@ -133,6 +133,9 @@ export function parseCodexResult(output) {
   let tests = null;
   let commit = null;
   let remoteHead = null;
+  let subagentsUsed = false;
+  let subagents = null;
+  let gptQuestionsUsed = null;
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -184,6 +187,36 @@ export function parseCodexResult(output) {
       structured = true;
       continue;
     }
+
+    // SUBAGENTS_USED=<true|false>
+    const subagentsUsedMatch = trimmed.match(/^SUBAGENTS_USED=(true|false)$/i);
+    if (subagentsUsedMatch) {
+      subagentsUsed = subagentsUsedMatch[1].toLowerCase() === 'true';
+      structured = true;
+      continue;
+    }
+
+    // SUBAGENTS=<JSON array> — must be on a single line
+    const subagentsMatch = trimmed.match(/^SUBAGENTS=(.*)$/i);
+    if (subagentsMatch) {
+      try {
+        const parsed = JSON.parse(subagentsMatch[1].trim());
+        if (Array.isArray(parsed)) subagents = parsed;
+      } catch {
+        // ignore parse failures
+      }
+      structured = true;
+      continue;
+    }
+
+    // GPT_QUESTIONS_USED=<number>
+    const gptQuestionsUsedMatch = trimmed.match(/^GPT_QUESTIONS_USED=(\d+)$/i);
+    if (gptQuestionsUsedMatch) {
+      gptQuestionsUsed = parseInt(gptQuestionsUsedMatch[1], 10);
+      if (!Number.isFinite(gptQuestionsUsed)) gptQuestionsUsed = null;
+      structured = true;
+      continue;
+    }
   }
 
   // Normalize changed_files
@@ -210,6 +243,9 @@ export function parseCodexResult(output) {
     followups: [],
     structured,
     from_json: false,
+    subagents_used: subagentsUsed,
+    subagents,
+    gpt_questions_used: gptQuestionsUsed,
     raw_summary_excerpt: output.slice(0, 500)
   };
 }
