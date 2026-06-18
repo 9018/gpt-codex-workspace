@@ -362,9 +362,9 @@ test("createGoal injects default autonomy_policy and subagent_policy", async () 
   assert.equal(created.goal.autonomy_policy.default_decision_rule, "choose_smallest_reversible_goal_aligned_change");
 
   assert.ok(created.goal.subagent_policy, "subagent_policy should exist");
-  assert.equal(created.goal.subagent_policy.mode, "required");
+  assert.equal(created.goal.subagent_policy.mode, "optional");
   assert.deepEqual(created.goal.subagent_policy.roles, ["analyst", "architect", "implementer", "tester", "reviewer", "escalation_judge"]);
-  assert.equal(created.goal.subagent_policy.require_review_before_completion, true);
+  assert.equal(created.goal.subagent_policy.require_review_before_completion, false);
   assert.equal(created.goal.subagent_policy.require_test_or_verification, true);
 });
 
@@ -386,7 +386,7 @@ test("createEncodedGoal injects default policies when payload lacks them", async
   assert.ok(created.goal.autonomy_policy, "autonomy_policy should exist");
   assert.equal(created.goal.autonomy_policy.mode, "subagent_first");
   assert.ok(created.goal.subagent_policy, "subagent_policy should exist");
-  assert.equal(created.goal.subagent_policy.mode, "required");
+  assert.equal(created.goal.subagent_policy.mode, "optional");
 });
 
 test("createEncodedGoal respects custom policies in payload", async () => {
@@ -550,7 +550,7 @@ test("payload.json includes autonomy_policy and subagent_policy", async () => {
   assert.ok(payload.autonomy_policy);
   assert.ok(payload.subagent_policy);
   assert.equal(payload.autonomy_policy.mode, "subagent_first");
-  assert.equal(payload.subagent_policy.mode, "required");
+  assert.equal(payload.subagent_policy.mode, "optional");
 });
 
 // ---------------------------------------------------------------------------
@@ -572,7 +572,7 @@ test("context.json includes autonomy_policy and subagent_policy in goal", async 
   assert.ok(context.goal.autonomy_policy);
   assert.ok(context.goal.subagent_policy);
   assert.equal(context.goal.autonomy_policy.mode, "subagent_first");
-  assert.equal(context.goal.subagent_policy.mode, "required");
+  assert.equal(context.goal.subagent_policy.mode, "optional");
 });
 
 

@@ -7,6 +7,28 @@ import { startCodexWorker } from "./gptwork-server.mjs";
 // Force unbuffered stdout/stderr 
 if (process.stdout._handle) process.stdout._handle.setBlocking(true);
 if (process.stderr._handle) process.stderr._handle.setBlocking(true);
+// Step 0: Load runtime.env into process.env before anything else
+try {
+  const envFilePath = process.env.GPTWORK_RUNTIME_ENV_FILE;
+  if (envFilePath) {
+    const envContent = readFileSync(envFilePath, "utf8");
+    for (const raw of envContent.split("\n")) {
+      const line = raw.trim();
+      if (!line || line.startsWith("#") || !line.includes("=")) continue;
+      const idx = line.indexOf("=");
+      const key = line.slice(0, idx);
+      let val = line.slice(idx + 1);
+      if ((val.startsWith('"') && val.endsWith('"')) || (val.startsWith("'") && val.endsWith("'"))) {
+        val = val.slice(1, -1);
+      }
+      if (!Object.prototype.hasOwnProperty.call(process.env, key)) {
+        process.env[key] = val;
+      }
+    }
+  }
+} catch {}
+
+
 
 const PID_FILE = "/tmp/gptwork-mcp.pid";
 const LOG = process.env.GPTWORK_LOG_PATH || "";

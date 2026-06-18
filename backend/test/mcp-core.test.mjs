@@ -94,6 +94,19 @@ test("tools/list exposes gptwork_doctor tool", async () => {
   assert.ok(names.includes("gptwork_doctor"), "gptwork_doctor should be exposed");
 });
 
+test("tools/list exposes worker_status tool", async () => {
+  const server = await makeServer();
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "tools/list",
+    params: {}
+  }, { authorization: "Bearer test-token" });
+
+  const names = response.result.tools.map((tool) => tool.name);
+  assert.ok(names.includes("worker_status"), "worker_status should be in tools/list");
+});
+
 test("tools/list exposes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOLS is set", async () => {
   const oldVal = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
   process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = "true";

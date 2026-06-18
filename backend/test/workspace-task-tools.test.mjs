@@ -1165,12 +1165,13 @@ test("context_prepare check mode plans fixes for missing files", async () => {
 test("complete_task without admin_override marks waiting_for_review when goal has required subagent policy", async () => {
   const server = await makeServer();
 
-  // create_goal with assign_to_codex:true (default) creates a task with required policy
+  // Use explicit payload with required subagent policy to test the review gate
   const created = await callTool(server, "create_goal", {
     user_request: "Policy gate test",
     goal_prompt: "Test policy gate",
     workspace_id: "hosted-default",
-    mode: "deploy"
+    mode: "deploy",
+    payload: { subagent_policy: { mode: "required" } }
   });
 
   // Verify the goal has required subagent policy
@@ -1189,6 +1190,34 @@ test("complete_task without admin_override marks waiting_for_review when goal ha
   assert.ok(completed.task.result.policy_override_required, "policy_override_required should be present");
   assert.ok(completed.task.result.review_message, "review_message should be present");
 });
+
+test("complete_task without admin_override completes normally with default optional policy", async () => {
+  const server = await makeServer();
+
+  // Default subagent_policy is now optional — no review gate triggered
+  const created = await callTool(server, "create_goal", {
+    user_request: "Default optional policy test",
+    goal_prompt: "Test default optional policy",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  // Verify default mode is optional
+  assert.equal(created.goal.subagent_policy.mode, "optional");
+  assert.ok(created.task, "task should be created");
+  assert.ok(created.task.id, "task should have an id");
+
+  // Complete task without admin_override
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Default optional completion"
+  });
+
+  // Should complete normally without waiting_for_review
+  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.result.summary, "Default optional completion");
+});
+
 
 test("complete_task with admin_override completes the task", async () => {
   const server = await makeServer();
