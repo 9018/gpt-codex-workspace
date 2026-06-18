@@ -111,6 +111,21 @@ export function createGithubSync(config) {
       }
       body += "\n";
     }
+    if (task.result) {
+      body += "### Result\n\n";
+      if (task.result.summary) body += task.result.summary + "\n\n";
+      if (task.result.tests) body += "**Tests**: " + task.result.tests + "\n";
+      if (task.result.commit) body += "**Commit**: `" + task.result.commit + "`\n";
+      if (task.result.remote_head) body += "**Remote HEAD**: `" + task.result.remote_head + "`\n";
+      if (Array.isArray(task.result.changed_files) && task.result.changed_files.length > 0) {
+        body += "**Changed Files**: " + task.result.changed_files.join(", ") + "\n";
+      }
+      if (Array.isArray(task.result.warnings) && task.result.warnings.length > 0) {
+        body += "**Warnings**:\n";
+        for (const w of task.result.warnings) body += "- " + w + "\n";
+      }
+      body += "\n";
+    }
     body += "---\n*Sync from GPTWork MCP*\n";
     body += "**Task ID**: `" + task.id + "`\n";
     return body;
@@ -130,6 +145,26 @@ export function createGithubSync(config) {
     return body;
   }
 
+function buildResultComment(task) {
+  let body = "## Task " + (task.status === "completed" ? "Complete" : "Finished") + "\n\n";
+  body += "**Status**: " + task.status + "\n";
+  if (task.result) {
+    if (task.result.summary) body += "**Summary**: " + task.result.summary + "\n\n";
+    if (task.result.tests) body += "**Tests**: " + task.result.tests + "\n";
+    if (task.result.commit) body += "**Commit**: `" + task.result.commit + "`\n";
+    if (task.result.remote_head) body += "**Remote HEAD**: `" + task.result.remote_head + "`\n";
+    if (Array.isArray(task.result.changed_files) && task.result.changed_files.length > 0) {
+      body += "**Changed Files**: " + task.result.changed_files.join(", ") + "\n";
+    }
+    if (Array.isArray(task.result.warnings) && task.result.warnings.length > 0) {
+      body += "**Warnings**:\n";
+      for (const w of task.result.warnings) body += "- " + w + "\n";
+    }
+  }
+  body += "\n---\n*Synced from GPTWork MCP*\n";
+  body += "**Task ID**: `" + task.id + "`\n";
+  return body;
+}
   return {
     /**
      * Search GitHub API for an existing issue containing a Task ID or Request ID.
@@ -143,6 +178,12 @@ export function createGithubSync(config) {
     },
 
     enabled,
+    buildResultComment,
+    async addIssueComment(issueNumber, body) {
+      if (!enabled) return null;
+      return api("POST", "/issues/" + issueNumber + "/comments", { body });
+    },
+
 
     async syncTask(task) {
       if (!enabled) return { ok: false, reason: "github not configured" };
@@ -162,7 +203,12 @@ export function createGithubSync(config) {
             state: task.status === "completed" || task.status === "cancelled" ? "closed" : "open",
             labels: ["gptwork-task", label]
           });
-          if (res) return { ok: true, issue: res.number, updated: true };
+          if (res) {
+            if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
+              this.addIssueComment(res.number, buildResultComment(task)).catch(() => {});
+            }
+            return { ok: true, issue: res.number, updated: true, comment_posted: !!task.result };
+          }
         } else {
           const res = await api("POST", "/issues", {
             title: "[Task] " + task.title + " [" + task.status + "]",
@@ -171,7 +217,10 @@ export function createGithubSync(config) {
           });
           if (res) {
             knownIssues.push({ number: res.number, body: taskToIssueBody(task) });
-            return { ok: true, issue: res.number, created: true };
+            if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
+              this.addIssueComment(res.number, buildResultComment(task)).catch(() => {});
+            }
+            return { ok: true, issue: res.number, created: true, comment_posted: !!task.result };
           }
         }
         return { ok: false, reason: "api call failed" };

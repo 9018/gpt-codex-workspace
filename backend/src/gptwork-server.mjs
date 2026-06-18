@@ -1001,14 +1001,17 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return { count: markers.length, markers };
     }),
 
-    create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string" }, ["title", "prompt"]), async (args) => {
+    create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string", escalation_category: "string", why_subagents_cannot_decide: "string", options_considered: "string", default_if_no_response: "string" }, ["title", "prompt"]), async (args) => {
       // P1.4: Require structured escalation reason
       let warnings = [];
-      const hasEscalation = typeof args.escalation === 'object' && args.escalation !== null && args.escalation.category;
+      // Build escalation object from flat schema fields (schema() cannot express nested objects)
+      const escalated = args.escalation_category || args.why_subagents_cannot_decide || args.options_considered || args.default_if_no_response;
+      const escalation = escalated ? { category: args.escalation_category || '', why_subagents_cannot_decide: args.why_subagents_cannot_decide || '', options_considered: args.options_considered || '', default_if_no_response: args.default_if_no_response || '' } : undefined;
+      const hasEscalation = escalation && escalation.category;
       if (!hasEscalation) {
-        warnings.push('Missing structured escalation reason. Codex should include escalation.category, escalation.why_subagents_cannot_decide, escalation.options_considered, and escalation.default_if_no_response when asking ChatGPT.');
+        warnings.push('Missing structured escalation reason. Codex should include escalation_category, why_subagents_cannot_decide, options_considered (JSON array as string), and default_if_no_response when asking ChatGPT.');
       }
-      const result = await createChatGptRequest(store, args);
+      const result = await createChatGptRequest(store, { ...args, escalation });
       github.syncChatGptRequest(result.request).catch(() => {});
       return warnings.length > 0 ? { ...result, warnings } : result;
     }),
@@ -3044,7 +3047,6 @@ async function createChatGptRequest(store, args) {
     }
   }
 
-  state.chatgpt_requests ||= [];
   state.chatgpt_requests ||= [];
   const now = new Date().toISOString();
   const request = {

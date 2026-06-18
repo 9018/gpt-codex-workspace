@@ -46,3 +46,43 @@ test("syncTask returns not-configured when github not enabled", async () => {
   const result = await sync.syncTask({ id: "test-1", title: "test", status: "open" });
   assert.deepEqual(result, { ok: false, reason: "github not configured" });
 });
+
+test("addIssueComment method exists", async () => {
+  const { createGithubSync } = await import("../src/github-adapter.mjs");
+  const config = { githubRepo: "", githubToken: "" };
+  const sync = createGithubSync(config);
+  assert.equal(typeof sync.addIssueComment, "function", "addIssueComment should be a method");
+});
+
+test("buildResultComment method exists", async () => {
+  const { createGithubSync } = await import("../src/github-adapter.mjs");
+  const config = { githubRepo: "", githubToken: "" };
+  const sync = createGithubSync(config);
+  assert.equal(typeof sync.buildResultComment, "function", "buildResultComment should be a method");
+});
+
+test("buildResultComment produces correct output", async () => {
+  const { createGithubSync } = await import("../src/github-adapter.mjs");
+  const config = { githubRepo: "", githubToken: "" };
+  const sync = createGithubSync(config);
+
+  const task = {
+    id: "task_123",
+    title: "Test task",
+    status: "completed",
+    result: {
+      summary: "Implemented feature X",
+      tests: "npm test: passed 15/15",
+      commit: "abc123def456",
+      remote_head: "abc123def456",
+      changed_files: ["src/file1.js", "src/file2.js"],
+      warnings: ["Minor lint issue"]
+    }
+  };
+
+  const comment = sync.buildResultComment(task);
+  assert.ok(comment.includes("Complete"), "should mention Complete");
+  assert.ok(comment.includes("abc123def456"), "should include commit SHA");
+  assert.ok(comment.includes("pass"), "should include test result");
+  assert.ok(comment.includes("task_123"), "should include task ID");
+});
