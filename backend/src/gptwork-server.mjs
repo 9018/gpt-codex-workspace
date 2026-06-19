@@ -493,6 +493,28 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
 `);
                 }
               }
+            } else if (marker.status === "pending") {
+              const { verified, diagnostics } = await verifyRestartMarker(marker, {
+                defaultRepoPath: config.defaultRepoPath,
+                defaultRemote: config.defaultRemote,
+                defaultBranch: config.defaultBranch,
+              });
+              if (verified) {
+                await updateRestartMarkerStatus(config.defaultWorkspaceRoot, marker.task_id, "verified", {
+                  verified_at: new Date().toISOString(),
+                  running_commit: diagnostics.running_commit,
+                  pre_verified_pending: true,
+                });
+                const taskObj = (state.tasks || []).find(function(t) { return t.id === marker.task_id; });
+                if (taskObj) {
+                  taskObj.logs = taskObj.logs || [];
+                  taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Pending restart marker pre-verified: expected_commit ${marker.expected_commit} matches running commit ${diagnostics.running_commit || "unknown"}` });
+                  taskObj.updated_at = new Date().toISOString();
+                }
+                await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
+                restartVerifications.push({ task_id: marker.task_id, status: "verified", verified: true, pre_verified_pending: true });
+                if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: pending marker ${marker.task_id} pre-verified (expected_commit matches running commit)\n`);
+              }
             }
           }
           if (markers.length > 0 || restartVerifications.length > 0) await store.save();

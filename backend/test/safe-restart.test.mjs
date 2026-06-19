@@ -38,6 +38,7 @@ import {
   getMisplacedMarkerDiagnostic,
   removeMisplacedMarker
 } from "../src/safe-restart.mjs";
+import { safeRepoId } from "../src/repo-lock.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1721,4 +1722,219 @@ test("P2.0b.4: short result.json commit with explicit expected_commit still uses
     "normalized result.json commit should take priority over explicit expected_commit");
   assert.equal(result.expected_commit_source, "result_json_commit",
     "source should be result_json_commit");
+});
+
+
+// ================================================================
+// P2.4.1: Pending restart marker finalization hardening
+// ================================================================
+
+test("P2.4.1: pending restart marker is pre-verified when expected_commit matches running commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p241-match-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+  const headCommit = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const taskId = "task_p241_match_1";
+  const now = new Date().toISOString();
+  const statePath = join(root, "state.json");
+
+  // Write state with running task
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", title: "P2.4.1 match test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  // Write pending restart marker with expected_commit matching HEAD
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: headCommit,
+    repo_path: repoPath,
+  });
+
+  // Create server with the repo path
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: repoPath,
+    defaultRemote: "origin",
+    defaultBranch: "main",
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+
+  // Call reconcileStaleTasks to trigger Phase C
+  const result = await server.reconcileStaleTasks({ authorization: "Bearer test-token" });
+
+  // Verify Phase C pre-verified the pending marker
+  const verification = (result.restart_verifications || []).find(v => v.task_id === taskId);
+  assert.ok(verification, "should have a restart verification for the task");
+  assert.equal(verification.verified, true);
+  assert.equal(verification.pre_verified_pending, true);
+
+  // Verify marker on disk is now "verified"
+  const marker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(marker);
+  assert.equal(marker.status, "verified", "pending marker should be updated to verified");
+  assert.equal(marker.pre_verified_pending, true);
+
+  // Verify task log was updated
+  const updatedState = JSON.parse(await readFile(statePath, "utf8"));
+  const task = updatedState.tasks.find(t => t.id === taskId);
+  assert.ok(task);
+  const lastLog = task.logs[task.logs.length - 1];
+  assert.match(lastLog.message, /pre-verified/);
+});
+
+test("P2.4.1: pending restart marker with commit mismatch stays pending (existing behavior preserved)", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p241-mismatch-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const taskId = "task_p241_mismatch_1";
+  const now = new Date().toISOString();
+  const statePath = join(root, "state.json");
+
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", title: "P2.4.1 mismatch test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  // Write pending restart marker with DIFFERENT expected_commit (doesn't match HEAD)
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: "0000000000000000000000000000000000000000",
+    repo_path: repoPath,
+  });
+
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: repoPath,
+    defaultRemote: "origin",
+    defaultBranch: "main",
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+
+  const result = await server.reconcileStaleTasks({ authorization: "Bearer test-token" });
+
+  // Verify no restart verification was produced for this task (mismatch leaves pending as-is)
+  const verification = (result.restart_verifications || []).find(v => v.task_id === taskId);
+  assert.equal(verification, undefined, "should NOT have a restart verification for mismatched pending marker");
+
+  // Verify marker is still "pending"
+  const marker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(marker);
+  assert.equal(marker.status, "pending", "marker should still be pending after mismatch");
+});
+
+test("P2.4.1: stale repo lock is released when pending marker is pre-verified", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p241-lock-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+  const headCommit = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const taskId = "task_p241_lock_1";
+  const now = new Date().toISOString();
+  const statePath = join(root, "state.json");
+
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", title: "P2.4.1 lock test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  // Write pending restart marker with matching expected_commit
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: headCommit,
+    repo_path: repoPath,
+  });
+
+  // Write a stale repo lock for this task
+  const lockId = safeRepoId(repoPath);
+  const lockDir = join(workspaceRoot, ".gptwork/locks/repos");
+  await mkdir(lockDir, { recursive: true });
+  const lockData = {
+    canonical_repo_path: repoPath,
+    safe_repo_id: lockId,
+    task_id: taskId,
+    run_id: "test-run-123",
+    pid: 99999, // non-existent PID — will be stale
+    child_pid: null,
+    acquired_at: new Date(Date.now() - 3600000).toISOString(),
+    last_heartbeat_at: new Date(Date.now() - 3600000).toISOString(),
+    mode: "builder",
+    restart_state: null,
+    status: "held",
+  };
+  await writeFile(join(lockDir, lockId + ".json"), JSON.stringify(lockData, null, 2), "utf8");
+
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: repoPath,
+    defaultRemote: "origin",
+    defaultBranch: "main",
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+
+  const result = await server.reconcileStaleTasks({ authorization: "Bearer test-token" });
+
+  // Verify marker was pre-verified
+  const verification = (result.restart_verifications || []).find(v => v.task_id === taskId);
+  assert.ok(verification, "should have a restart verification for the task");
+  assert.equal(verification.verified, true);
+  assert.equal(verification.pre_verified_pending, true);
+
+  // Verify lock was released
+  const updatedLockData = JSON.parse(await readFile(join(lockDir, lockId + ".json"), "utf8"));
+  assert.equal(updatedLockData.status, "released", "lock should be released after pre-verification");
 });
