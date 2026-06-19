@@ -366,28 +366,35 @@ export async function scheduleServiceRestart(options = {}) {
   }
 
   const startedAt = Date.now();
-  // P2.0b.1: Reject stale expected_commit before writing restart marker.
-  // If expected_commit is provided and repoPath is available, compare against
-  // current local HEAD. A mismatch means the commit has moved (e.g. another
-  // deployment landed first), so we refuse to write the marker.
-  if (expectedCommit && repoPath) {
+  // P2.0b.2: Resolve expected_commit from local HEAD when absent; reject on mismatch.
+  let resolvedCommit = expectedCommit;
+  let expectedCommitSource = null;
+  if (repoPath) {
     try {
       const localHead = execSync("git rev-parse HEAD", {
         cwd: repoPath, timeout: 5000, encoding: "utf8"
       }).trim();
-      if (localHead !== expectedCommit) {
-        const duration = Date.now() - startedAt;
-        return {
-          ok: false, task_id: taskId, service_name: serviceName,
-          error: "expected_commit_mismatch",
-          expected_commit: expectedCommit,
-          local_head: localHead,
-          duration_ms: duration,
-          warning: `Cannot schedule restart: expected_commit ${expectedCommit} does not match local HEAD ${localHead}`
-        };
+      if (expectedCommit) {
+        // P2.0b.1: Reject stale expected_commit before writing restart marker.
+        if (localHead !== expectedCommit) {
+          const duration = Date.now() - startedAt;
+          return {
+            ok: false, task_id: taskId, service_name: serviceName,
+            error: "expected_commit_mismatch",
+            expected_commit: expectedCommit,
+            local_head: localHead,
+            duration_ms: duration,
+            warning: `Cannot schedule restart: expected_commit ${expectedCommit} does not match local HEAD ${localHead}`
+          };
+        }
+        expectedCommitSource = "explicit";
+      } else {
+        // P2.0b.2: Default from local HEAD when expected_commit absent
+        resolvedCommit = localHead;
+        expectedCommitSource = "local_head";
       }
     } catch (e) {
-      console.warn(`[safe-restart] Could not check expected_commit against local HEAD: ${e.message}`);
+      console.warn(`[safe-restart] Could not resolve local HEAD: ${e.message}`);
     }
   }
 
@@ -395,7 +402,7 @@ export async function scheduleServiceRestart(options = {}) {
   await writePendingRestartMarker(workspaceRoot, taskId, {
     requested_by: requestedBy,
     service_name: serviceName,
-    expected_commit: expectedCommit,
+    expected_commit: resolvedCommit,
     expected_remote_head: expectedRemoteHead,
     repo_path: repoPath,
   });
@@ -409,7 +416,7 @@ export async function scheduleServiceRestart(options = {}) {
         task.logs = task.logs || [];
         task.logs.push({
           time: new Date().toISOString(),
-          message: `[safe-restart] Pending restart marker written for ${serviceName}. Expected commit: ${expectedCommit || "(unchanged)"}`
+          message: `[safe-restart] Pending restart marker written for ${serviceName}. Expected commit: ${resolvedCommit || "(unchanged)"}`
         });
         task.updated_at = new Date().toISOString();
         await store.save();
@@ -446,7 +453,8 @@ export async function scheduleServiceRestart(options = {}) {
     service_name: serviceName,
     restart_scheduled: restart.scheduled,
     restart_method: restart.method,
-    expected_commit: expectedCommit,
+    expected_commit: resolvedCommit,
+    expected_commit_source: expectedCommitSource,
     expected_remote_head: expectedRemoteHead,
     duration_ms: duration,
     warning: !restart.scheduled

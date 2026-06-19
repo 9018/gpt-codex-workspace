@@ -409,6 +409,7 @@ test("scheduleServiceRestart accepts expected_commit match", async () => {
 
   assert.equal(result.ok, true);
   assert.equal(result.expected_commit, localHead);
+  assert.equal(result.expected_commit_source, "explicit");
   assert.equal(result.error, undefined);
 
   // Verify marker was written
@@ -429,6 +430,10 @@ test("scheduleServiceRestart preserves behavior when expected_commit absent", as
   execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
   execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
 
+  const localHead = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
   const result = await scheduleServiceRestart({
     workspaceRoot,
     taskId: "task_p2b1_absent",
@@ -437,12 +442,13 @@ test("scheduleServiceRestart preserves behavior when expected_commit absent", as
   });
 
   assert.equal(result.ok, true);
-  assert.equal(result.expected_commit, null);
+  assert.equal(result.expected_commit, localHead);
+  assert.equal(result.expected_commit_source, "local_head");
 
-  // Verify marker was written
+  // Verify marker was written with resolved HEAD
   const marker = await loadRestartMarker(workspaceRoot, "task_p2b1_absent");
   assert.ok(marker);
-  assert.equal(marker.expected_commit, null);
+  assert.equal(marker.expected_commit, localHead);
 });
 // 4. schedule_service_restart tool visible from MCP
 // ================================================================
