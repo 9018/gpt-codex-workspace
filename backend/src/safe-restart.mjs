@@ -366,6 +366,30 @@ export async function scheduleServiceRestart(options = {}) {
   }
 
   const startedAt = Date.now();
+  // P2.0b.1: Reject stale expected_commit before writing restart marker.
+  // If expected_commit is provided and repoPath is available, compare against
+  // current local HEAD. A mismatch means the commit has moved (e.g. another
+  // deployment landed first), so we refuse to write the marker.
+  if (expectedCommit && repoPath) {
+    try {
+      const localHead = execSync("git rev-parse HEAD", {
+        cwd: repoPath, timeout: 5000, encoding: "utf8"
+      }).trim();
+      if (localHead !== expectedCommit) {
+        const duration = Date.now() - startedAt;
+        return {
+          ok: false, task_id: taskId, service_name: serviceName,
+          error: "expected_commit_mismatch",
+          expected_commit: expectedCommit,
+          local_head: localHead,
+          duration_ms: duration,
+          warning: `Cannot schedule restart: expected_commit ${expectedCommit} does not match local HEAD ${localHead}`
+        };
+      }
+    } catch (e) {
+      console.warn(`[safe-restart] Could not check expected_commit against local HEAD: ${e.message}`);
+    }
+  }
 
   // Step 1: Write pending restart marker
   await writePendingRestartMarker(workspaceRoot, taskId, {

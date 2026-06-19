@@ -16,6 +16,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
@@ -339,6 +340,110 @@ test("scheduleServiceRestart with store appends task log", async () => {
 });
 
 // ================================================================
+
+// ================================================================
+// P2.0b.1: expected_commit guard for safe restart
+// ================================================================
+
+test("scheduleServiceRestart rejects expected_commit mismatch", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sr-mismatch-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init a real git repo with one commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const localHead = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  // Use a different commit SHA
+  const fakeCommit = "a".repeat(40);
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId: "task_p2b1_mismatch",
+    expectedCommit: fakeCommit,
+    repoPath,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "expected_commit_mismatch");
+  assert.equal(result.expected_commit, fakeCommit);
+  assert.equal(result.local_head, localHead);
+
+  // Verify no marker was written
+  const marker = await loadRestartMarker(workspaceRoot, "task_p2b1_mismatch");
+  assert.equal(marker, null);
+});
+
+test("scheduleServiceRestart accepts expected_commit match", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sr-match-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const localHead = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId: "task_p2b1_match",
+    expectedCommit: localHead,
+    repoPath,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, localHead);
+  assert.equal(result.error, undefined);
+
+  // Verify marker was written
+  const marker = await loadRestartMarker(workspaceRoot, "task_p2b1_match");
+  assert.ok(marker);
+  assert.equal(marker.expected_commit, localHead);
+});
+
+test("scheduleServiceRestart preserves behavior when expected_commit absent", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sr-absent-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId: "task_p2b1_absent",
+    repoPath,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, null);
+
+  // Verify marker was written
+  const marker = await loadRestartMarker(workspaceRoot, "task_p2b1_absent");
+  assert.ok(marker);
+  assert.equal(marker.expected_commit, null);
+});
 // 4. schedule_service_restart tool visible from MCP
 // ================================================================
 
