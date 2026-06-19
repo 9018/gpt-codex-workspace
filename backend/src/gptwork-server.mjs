@@ -58,6 +58,7 @@ import { createProjectWorkspaceToolsGroup } from "./tool-groups/project-workspac
 import { createGoalToolsGroup } from "./tool-groups/goal-tools-group.mjs";
 import { createBasicTaskToolsGroup } from "./tool-groups/basic-task-tools-group.mjs";
 import { createSessionInventoryToolsGroup, completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
+import { createTaskCompletionToolsGroup } from "./tool-groups/task-completion-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -863,43 +864,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       runAssignedCodexTasks,
     }),
     ...createSessionInventoryToolsGroup({ tool, schema, config, store, github, createTask }),
-    complete_task: tool("Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.", schema({ task_id: "string", summary: "string", admin_override: "boolean" }, ["task_id"]), async ({ task_id, summary = "", admin_override = false }) => {
-      // Check for linked goal with required subagent policy (P0.2)
-      let targetStatus = "completed";
-      let resultFields = { summary, completed_at: new Date().toISOString() };
-
-      if (!admin_override) {
-        try {
-          const state = await store.load();
-          const existingTask = state.tasks.find(t => t.id === task_id);
-          if (existingTask?.goal_id) {
-            const linkedGoal = (state.goals || []).find(g => g.id === existingTask.goal_id);
-            const subagent = linkedGoal?.subagent_policy || {};
-            if (subagent.mode === 'required') {
-              targetStatus = "waiting_for_review";
-              resultFields = {
-                summary: summary || "Task requires policy validation before completion",
-                completed_at: new Date().toISOString(),
-                policy_override_required: true,
-                review_message: "This task has a goal with required subagent policy. Use admin_override=true to bypass, or wait for Codex execution to validate autonomously."
-              };
-            }
-          }
-        } catch (e) { /* non-fatal: proceed with normal completion */ }
-      }
-
-      if (admin_override) {
-        resultFields.admin_override_used = true;
-      }
-
-      const result = await updateTask(store, task_id, (task) => {
-        task.status = targetStatus;
-        task.result = resultFields;
-      });
-      github.syncTask(result.task).catch(() => {});
-      return result;
-    }),
-    request_human_review: tool("Mark a task as waiting for human review.", schema({ task_id: "string", message: "string" }, ["task_id"]), async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; })),
+    ...createTaskCompletionToolsGroup({ tool, schema, config, store, github }),
     ...createRestartToolsGroup({ tool, schema, config, store }),
 
     create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string", escalation_category: "string", why_subagents_cannot_decide: "string", options_considered: "string", default_if_no_response: "string" }, ["title", "prompt"]), async (args) => {
