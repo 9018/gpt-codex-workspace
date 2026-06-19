@@ -52,6 +52,7 @@ import { resolvePath, workspaceListDir, workspaceStat, workspaceReadText, worksp
 import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
+import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
 let barkNotifier = null;
 
 
@@ -1458,16 +1459,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         repo_locks: _lockSummary,
       };
     }),
-    list_repo_locks: tool("List repo execution locks with safe diagnostics. Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)", schema({}), async () => {
-      const _lockList = await listRepoLocks(config.defaultWorkspaceRoot);
-      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
-     return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
-   }),
-    repo_lock_status: tool("List repo execution locks with safe diagnostics (alias for list_repo_locks). Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)", schema({}), async () => {
-      const _lockList = await listRepoLocks(config.defaultWorkspaceRoot);
-      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
-      return { active_repo_locks: _lockSummary.active_repo_locks, stale_repo_locks: _lockSummary.stale_repo_locks, locks: _lockList };
-    }),
+    ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
   };
   // Gate experimental browser placeholder tools behind env flags (hidden by default unless GPTWORK_EXPOSE_PLACEHOLDER_TOOLS or GPTWORK_EXPERIMENTAL_BROWSER_TOOLS is set)
   const _exposePlaceholderTools = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
