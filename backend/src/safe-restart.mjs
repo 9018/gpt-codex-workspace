@@ -389,6 +389,26 @@ export async function scheduleServiceRestart(options = {}) {
     }
   }
 
+  // P2.0b.4: Normalize result_json_commit to full SHA before writing marker.
+  // Short hashes (e.g. "2fe8ed1") from result.json would fail Phase C strict comparison
+  // against the full running_commit, so we resolve them via git rev-parse on the target repo.
+  if (resultJsonCommit && repoPath && resultJsonCommit.length < 40) {
+    try {
+      const fullSha = execSync(`git rev-parse ${resultJsonCommit}`, {
+        cwd: repoPath, timeout: 5000, encoding: "utf8"
+      }).trim();
+      if (/^[0-9a-f]{40}$/i.test(fullSha)) {
+        resultJsonCommit = fullSha;
+      } else {
+        console.warn(`[safe-restart] Could not resolve result.json commit "${resultJsonCommit}" to a full SHA (got "${fullSha}")`);
+        resultJsonCommit = null;
+      }
+    } catch (e) {
+      console.warn(`[safe-restart] Could not resolve result.json commit "${resultJsonCommit}" in repo ${repoPath}: ${e.message}`);
+      resultJsonCommit = null;
+    }
+  }
+
   // P2.0b.2: Resolve expected_commit from local HEAD when absent; reject on mismatch.
   let resolvedCommit = expectedCommit;
   let expectedCommitSource = null;

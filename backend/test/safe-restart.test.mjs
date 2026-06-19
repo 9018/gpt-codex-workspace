@@ -1449,3 +1449,276 @@ test("P2.0b.3: result.json with empty string commit falls back to expected_commi
   assert.equal(result.expected_commit, localHead, "should fall back to local HEAD when result.json commit is empty");
   assert.equal(result.expected_commit_source, "local_head", "source should be local_head");
 });
+
+// ================================================================
+// P2.0b.4: Normalize result_json_commit before restart verification
+// ================================================================
+
+test("P2.0b.4: short result.json commit is normalized to full SHA via git rev-parse", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p2b4-short-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+  const shortSha = fullSha.slice(0, 7);
+
+  const taskId = "task_p2b4_short_1";
+  const goalId = "goal_p2b4_short_1";
+  const now = new Date().toISOString();
+
+  const statePath = join(root, "state.json");
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", goal_id: goalId, title: "P2.0b.4 short test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  const store = {
+    state: JSON.parse(await readFile(statePath, "utf8")),
+    async load() { return this.state; },
+    async save() {
+      await writeFile(statePath, JSON.stringify(this.state, null, 2), "utf8");
+    }
+  };
+
+  // Write result.json with SHORT commit hash
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "Short hash normalization test",
+    commit: shortSha,
+  }), "utf8");
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId,
+    repoPath,
+    store,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, fullSha,
+    "expected_commit should be the full SHA, not the short hash");
+  assert.equal(result.expected_commit_source, "result_json_commit");
+
+  const marker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(marker);
+  assert.equal(marker.expected_commit, fullSha,
+    "marker should store the full SHA");
+});
+
+test("P2.0b.4: invalid result.json commit falls back to local HEAD default", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p2b4-invalid-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const localHead = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const taskId = "task_p2b4_invalid_1";
+  const goalId = "goal_p2b4_invalid_1";
+  const now = new Date().toISOString();
+
+  const statePath = join(root, "state.json");
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", goal_id: goalId, title: "P2.0b.4 invalid test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  const store = {
+    state: JSON.parse(await readFile(statePath, "utf8")),
+    async load() { return this.state; },
+    async save() {
+      await writeFile(statePath, JSON.stringify(this.state, null, 2), "utf8");
+    }
+  };
+
+  // Write result.json with garbage commit that won't resolve in this repo
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "Invalid commit test",
+    commit: "nonexistent123",
+  }), "utf8");
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId,
+    repoPath,
+    store,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, localHead,
+    "should fall back to local HEAD for invalid result.json commit");
+  assert.equal(result.expected_commit_source, "local_head",
+    "source should be local_head after fallback");
+});
+
+test("P2.0b.4: full 40-char result.json commit passes through unchanged", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p2b4-full-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const taskId = "task_p2b4_full_1";
+  const goalId = "goal_p2b4_full_1";
+  const now = new Date().toISOString();
+
+  const statePath = join(root, "state.json");
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", goal_id: goalId, title: "P2.0b.4 full test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  const store = {
+    state: JSON.parse(await readFile(statePath, "utf8")),
+    async load() { return this.state; },
+    async save() {
+      await writeFile(statePath, JSON.stringify(this.state, null, 2), "utf8");
+    }
+  };
+
+  // Write result.json with the full SHA
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "Full SHA test",
+    commit: fullSha,
+  }), "utf8");
+
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId,
+    repoPath,
+    store,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, fullSha,
+    "full SHA should pass through unchanged");
+  assert.equal(result.expected_commit_source, "result_json_commit");
+
+  const marker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(marker);
+  assert.equal(marker.expected_commit, fullSha,
+    "marker should store the full SHA");
+});
+
+test("P2.0b.4: short result.json commit with explicit expected_commit still uses normalized result.json commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p2b4-explicit-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+  const shortSha = fullSha.slice(0, 7);
+
+  const taskId = "task_p2b4_explicit_1";
+  const goalId = "goal_p2b4_explicit_1";
+  const now = new Date().toISOString();
+
+  const statePath = join(root, "state.json");
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", goal_id: goalId, title: "P2.0b.4 explicit test", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  const store = {
+    state: JSON.parse(await readFile(statePath, "utf8")),
+    async load() { return this.state; },
+    async save() {
+      await writeFile(statePath, JSON.stringify(this.state, null, 2), "utf8");
+    }
+  };
+
+  // Write result.json with SHORT commit hash
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "Short hash with explicit expected_commit test",
+    commit: shortSha,
+  }), "utf8");
+
+  // explicit expected_commit that differs — result.json should still take priority
+  const fakeCommit = "a".repeat(40);
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId,
+    expectedCommit: fakeCommit,
+    repoPath,
+    store,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, fullSha,
+    "normalized result.json commit should take priority over explicit expected_commit");
+  assert.equal(result.expected_commit_source, "result_json_commit",
+    "source should be result_json_commit");
+});
