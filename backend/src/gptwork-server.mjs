@@ -53,6 +53,7 @@ import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, colle
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
+import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 let barkNotifier = null;
 
 
@@ -135,37 +136,7 @@ export async function createGptWorkServer(options = {}) {
   };
   // Augment source tracking: options overrides take highest precedence.
   // Keys explicitly passed via createGptWorkServer(options) are labeled "options".
-  {
-    const OPTIONS_SOURCE_MAP = [
-      ['statePath', 'statePath'],
-      ['defaultWorkspaceRoot', 'workspaceRoot'],
-      ['requireAuth', 'requireAuth'],
-      ['codexHome', 'codexHome'],
-      ['codexExecArgs', 'codexExecArgs'],
-      ['codexExecTimeout', 'codexExecTimeout'],
-      ['codexFirstOutputTimeout', 'codexFirstOutputTimeout'],
-      ['codexStallThreshold', 'codexStallThreshold'],
-      ['maxReadBytes', 'maxReadBytes'],
-      ['maxShellOutputBytes', 'maxShellOutputBytes'],
-      ['barkEnabled', 'barkEnabled'],
-      ['barkUrl', 'barkUrl'],
-      ['barkKey', 'barkKey'],
-      ['barkGroup', 'barkGroup'],
-      ['barkSound', 'barkSound'],
-      ['barkLevel', 'barkLevel'],
-      ['barkIconUrl', 'barkIconUrl'],
-      ['barkClickUrl', 'barkClickUrl'],
-      ['defaultRepo', 'defaultRepo'],
-      ['defaultBranch', 'defaultBranch'],
-      ['defaultRepoPath', 'defaultRepoPath'],
-      ['defaultRemote', 'defaultRemote'],
-    ];
-    for (const [optKey, sourceKey] of OPTIONS_SOURCE_MAP) {
-      if (options[optKey] !== undefined) {
-        sources[sourceKey] = 'options';
-      }
-    }
-  }
+  applyOptionSourceOverrides(sources, options);
   const store = new StateStore({ ...config, oldDefaultStatePath });
   await store.load();
   const browser = createBrowserRegistry();
@@ -183,6 +154,7 @@ export async function createGptWorkServer(options = {}) {
   if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
   if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
   const bark = createBarkNotifier(barkOptions, barkConfigSource); barkNotifier = bark;
+  const serverContext = createServerContext({ config, store, browser, github, bark, barkConfigSource, envLoadResult, earlyEnvResult });
 setTerminalNotifier(notifyTerminalTaskIfNeeded);
   // Create the repo registry
   const registry = new RepoRegistry({
