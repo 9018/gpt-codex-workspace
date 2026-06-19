@@ -54,6 +54,7 @@ import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWork
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
+import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
 
 
@@ -596,7 +597,7 @@ export function startCodexWorker(server, {
 
 function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry }) {
   // resolveRepoDir is imported from ./diagnostics-service.mjs
-  const tool = (description, inputSchema, handler) => ({ description, inputSchema, handler });
+  const tool = createTool;
   // queryContextStatus is imported from ./diagnostics-service.mjs
 
   /** Wrapper for project_context_status and context_status alias handlers. */
