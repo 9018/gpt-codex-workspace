@@ -23,6 +23,7 @@
 
 import { readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
+import { VALID_STATUSES, KIND_EXECUTED, KIND_FAILED, KIND_TIMEOUT } from "./codex-finalizer-contract.mjs";
 
 // ---------------------------------------------------------------------------
 // result.json parser
@@ -42,8 +43,8 @@ export async function parseResultJson(resultJsonPath) {
     const data = JSON.parse(text);
 
     // Validate contract fields
-    const validStatuses = ["completed", "failed", "timed_out"];
-    const status = data.status && validStatuses.includes(data.status) ? data.status : null;
+    
+    const status = data.status && VALID_STATUSES.includes(data.status) ? data.status : null;
     const summary = typeof data.summary === "string" ? data.summary : null;
     const changedFiles = Array.isArray(data.changed_files) ? data.changed_files.filter(f => typeof f === "string") : [];
     const tests = typeof data.tests === "string" ? data.tests : null;
@@ -303,7 +304,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
 
   if (timedOut) {
     return {
-      kind: "codex_timeout",
+      kind: KIND_TIMEOUT,
       summary: parsed.summary || "Codex execution timed out",
       timed_out: true,
       timeout_seconds: timeoutSeconds,
@@ -317,7 +318,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If STATUS=failed (structured failure, not timeout)
   if (parsed.status === "failed") {
     return {
-      kind: "codex_failed",
+      kind: KIND_FAILED,
       summary: parsed.summary || "Codex execution reported failure",
       structured: parsed.structured,
       from_json: parsed.from_json,
@@ -335,7 +336,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If STATUS=completed (success)
   if (parsed.status === "completed") {
     return {
-      kind: "codex_executed",
+      kind: KIND_EXECUTED,
       summary: parsed.summary || "Codex execution completed (no structured summary)",
       structured: parsed.structured,
       from_json: parsed.from_json,
@@ -352,7 +353,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If STATUS=timed_out but process didn't actually time out, treat as failed
   if (parsed.status === "timed_out") {
     return {
-      kind: "codex_failed",
+      kind: KIND_FAILED,
       summary: parsed.summary || "Codex execution reported timeout (no process timeout)",
       structured: parsed.structured,
       from_json: parsed.from_json,
@@ -370,7 +371,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If no structured STATUS field was found, use exit code to decide
   if (returnCode !== 0) {
     return {
-      kind: "codex_failed",
+      kind: KIND_FAILED,
       summary: parsed.summary || "Codex execution failed (non-zero exit)",
       structured: parsed.structured,
       from_json: parsed.from_json,
@@ -386,7 +387,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   }
 
   return {
-    kind: "codex_executed",
+    kind: KIND_EXECUTED,
     summary: parsed.summary || "Codex execution completed (no structured summary)",
     structured: parsed.structured,
     from_json: parsed.from_json,
