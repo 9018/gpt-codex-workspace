@@ -49,6 +49,7 @@ import {
 import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
 import { ensureGoalState, findGoalInState, taskPayloadFromTask, emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
+import { titleFromGoal, normalizeGoalMessage, normalizeGoalMessages, normalizeGoalMemory, normalizeGoalMemories } from "./goal-lifecycle.mjs";
 
 let barkNotifier = null;
 
@@ -2288,44 +2289,6 @@ function buildGoalTask(goal, conversation, createdBy) {
   };
 }
 
-function titleFromGoal(args) {
-  const source = String(args.user_request || args.goal_prompt || "Codex goal").replace(/\s+/g, " ").trim();
-  return source.length > 80 ? `${source.slice(0, 77)}...` : source || "Codex goal";
-}
-
-function normalizeGoalMessages(messages, now, userId) {
-  if (!Array.isArray(messages)) return [];
-  return messages.filter((message) => message && message.content).map((message) => normalizeGoalMessage(message, now, userId));
-}
-
-function normalizeGoalMessage(message, now, userId) {
-  const role = String(message.role || "user").trim().toLowerCase();
-  const allowedRoles = new Set(["user", "assistant", "chatgpt", "codex", "system", "tool"]);
-  return {
-    id: `msg_${randomUUID()}`,
-    role: allowedRoles.has(role) ? role : "user",
-    content: String(message.content || ""),
-    author_id: message.author_id || userId,
-    created_at: message.created_at || now
-  };
-}
-
-function normalizeGoalMemories(memories, goalId, conversationId, now, userId) {
-  if (!Array.isArray(memories)) return [];
-  return memories.filter((memory) => memory && (memory.key || memory.value)).map((memory) => normalizeGoalMemory(memory, goalId, conversationId, now, userId));
-}
-
-function normalizeGoalMemory(memory, goalId, conversationId, now, userId) {
-  return {
-    id: `mem_${randomUUID()}`,
-    goal_id: goalId,
-    conversation_id: conversationId,
-    key: String(memory.key || "note"),
-    value: String(memory.value || ""),
-    created_by: memory.created_by || userId,
-    created_at: memory.created_at || now
-  };
-}
 
 function normalizeCreatedTaskMode(args) {
   const mode = String(args.mode || "").trim().toLowerCase();
