@@ -55,6 +55,7 @@ import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
 import { createProjectWorkspaceToolsGroup } from "./tool-groups/project-workspace-tools-group.mjs";
 import { createGoalToolsGroup } from "./tool-groups/goal-tools-group.mjs";
+import { createBasicTaskToolsGroup } from "./tool-groups/basic-task-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -852,27 +853,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
 
     ...createGoalToolsGroup({ tool, schema, config, store, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
 
-    create_task: tool("Create a new project task. ChatGPT uses this to tell Codex what to do. Assign it to Codex and Codex will execute it. Tasks sync to GitHub Issues if configured. For listing Codex session files, use list_codex_sessions_metadata or create_codex_session_inventory_task instead of a free-text task.", schema({ title: "string", description: "string", assignee: "string", workspace_id: "string", mode: "string" }, ["title"]), async (args, context) => {
-      const result = await createTask(store, config, args, context);
-      github.syncTask(result.task).catch(() => {});
-      return result;
-    }),
-    list_tasks: tool("List project tasks, optionally filtered. Check what Codex is working on and what tasks are waiting or completed.", schema({ status: "string", assignee: "string", limit: "integer" }), async ({ status, assignee, limit = 50 }) => {
-      const state = await store.load();
-      await normalizeLegacyModes(store, state);
-      let tasks = state.tasks;
-      if (status) tasks = tasks.filter((task) => task.status === status);
-      if (assignee) tasks = tasks.filter((task) => task.assignee === assignee);
-      return { tasks: tasks.slice(-limit).reverse() };
-    }),
-    get_task: tool("Return a task.", schema({ task_id: "string" }, ["task_id"]), async ({ task_id }) => ({ task: await findTask(store, task_id) })),
-    update_task_status: tool("Update a task status. Syncs to GitHub if configured.", schema({ task_id: "string", status: "string" }, ["task_id", "status"]), async ({ task_id, status }) => {
-      const result = await updateTask(store, task_id, (task) => { task.status = status; });
-      github.syncTask(result.task).catch(() => {});
-      return result;
-    }),
-    append_task_log: tool("Append a task log entry.", schema({ task_id: "string", message: "string" }, ["task_id", "message"]), async ({ task_id, message }) => updateTask(store, task_id, (task) => { task.logs.push({ time: new Date().toISOString(), message }); })),
-    attach_task_artifact: tool("Attach a task artifact reference.", schema({ task_id: "string", path: "string", label: "string" }, ["task_id", "path"]), async ({ task_id, path, label }) => updateTask(store, task_id, (task) => { task.artifacts.push({ path, label: label || basename(path), time: new Date().toISOString() }); })),
+    ...createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github }),
     assign_task_to_codex: tool("Assign a task to Codex for execution. Ordinary tasks run in builder mode so Codex may edit files and perform implementation or deployment steps according to the task. The server ignores readonly for ordinary tasks; only the dedicated safe Codex session inventory task can remain readonly. Pass mode=deploy for Docker/service deployment or mode=admin for privileged maintenance.", schema({ task_id: "string", mode: "string" }, ["task_id"]), async ({ task_id, mode }, context) => {
       const result = await updateTask(store, task_id, (task) => {
         task.assignee = "codex";
