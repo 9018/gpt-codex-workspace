@@ -48,6 +48,7 @@ import {
 } from "./auth-context.mjs";
 import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
+import { ensureGoalState, findGoalInState, taskPayloadFromTask, emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
 
 let barkNotifier = null;
 
@@ -200,6 +201,7 @@ export async function createGptWorkServer(options = {}) {
   if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
   if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
   const bark = createBarkNotifier(barkOptions, barkConfigSource); barkNotifier = bark;
+setTerminalNotifier(notifyTerminalTaskIfNeeded);
   // Create the repo registry
   const registry = new RepoRegistry({
     registryPath: join(config.defaultWorkspaceRoot, ".gptwork/repos.json"),
@@ -1914,13 +1916,6 @@ async function createTask(store, config, args, context = defaultTokenContext("sy
   return { task: linked.task, goal: linked.goal, conversation: linked.conversation, memories: linked.memories, workspace_files: linked.workspace_files };
 }
 
-function ensureGoalState(state) {
-  state.goals ||= [];
-  state.conversations ||= [];
-  state.memories ||= [];
-  state.tasks ||= [];
-  state.activities ||= [];
-}
 
 async function createGoal(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
@@ -2102,13 +2097,6 @@ async function appendGoalMessage(store, config, args, context = defaultTokenCont
   return { goal, conversation, message, memory, workspace_files };
 }
 
-function findGoalInState(state, { goal_id, task_id } = {}) {
-  const goal = goal_id
-    ? state.goals.find((item) => item.id === goal_id)
-    : state.goals.find((item) => item.task_id === task_id);
-  if (!goal) throw new Error(`goal not found: ${goal_id || task_id || "missing id"}`);
-  return goal;
-}
 
 async function ensureTaskGoal(store, config, taskId, context = defaultTokenContext("system"), options = {}) {
   const state = await store.load();
@@ -2162,28 +2150,6 @@ async function ensureTaskGoal(store, config, taskId, context = defaultTokenConte
   const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, linkedTask, {}, context);
   await store.save();
   return { task: linkedTask, goal, conversation, memories, workspace_files };
-}
-
-function taskPayloadFromTask(task) {
-  return {
-    user_request: task.description || task.title,
-    goal_prompt: [
-      `Task: ${task.title}`,
-      "",
-      task.description || "",
-      "",
-      "Execute this task in the selected workspace and report progress/results back to GPTWork."
-    ].join("\n"),
-    context_summary: "Created automatically from create_task compatibility flow.",
-    project_id: task.project_id,
-    workspace_id: task.workspace_id,
-    mode: task.mode || "builder",
-    messages: [
-      { role: "user", content: task.description || task.title },
-      { role: "chatgpt", content: `Created compatibility goal from task ${task.id}.` }
-    ],
-    memories: []
-  };
 }
 
 function decodeTaskDescriptionEnvelope(description) {
@@ -2243,17 +2209,6 @@ async function taskExecutionSnapshot(store, task) {
 }
 
 
-async function updateGoalStatus(store, goalId, status, updatedAt = new Date().toISOString()) {
-  const state = await store.load();
-  ensureGoalState(state);
-  const goal = state.goals.find((item) => item.id === goalId);
-  if (!goal) return null;
-  goal.status = status;
-  goal.updated_at = updatedAt;
-  state.activities.push({ time: updatedAt, type: `goal.${status}`, goal_id: goal.id, title: goal.title });
-  await store.save();
-  return goal;
-}
 
 async function writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, extras = {}, context = defaultTokenContext("system")) {
   const workspaceFiles = goalWorkspaceFiles(goal);
@@ -2814,65 +2769,10 @@ async function processGeneralTask(store, config, task, context) {
   try { github.syncTask(result.task).catch(() => {}); } catch {}
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
 }
-function emitTaskProgress(context, task, phase, message) {
-  context.emitProgress?.({
-    jsonrpc: "2.0",
-    method: "notifications/message",
-    params: {
-      level: "info",
-      logger: "gptwork.codex_worker",
-      data: {
-        phase,
-        task_id: task.id,
-        title: task.title,
-        status: task.status,
-        message
-      }
-    }
-  });
-}
 
 
-async function findTask(store, task_id) {
-  const state = await store.load();
-  await normalizeLegacyModes(store, state);
-  const task = state.tasks.find((item) => item.id === task_id);
-  if (!task) throw new Error(`task not found: ${task_id}`);
-  return task;
-}
 
-async function normalizeLegacyModes(store, state) {
-  let changed = false;
-  for (const task of state.tasks || []) {
-    if (task.mode === "readonly" && !isCodexSessionInventoryTaskKind(task)) {
-      task.mode = "builder";
-      task.updated_at = task.updated_at || new Date().toISOString();
-      changed = true;
-    }
-  }
-  for (const goal of state.goals || []) {
-    if (goal.mode === "readonly") {
-      goal.mode = "builder";
-      goal.updated_at = goal.updated_at || new Date().toISOString();
-      changed = true;
-    }
-  }
-  if (changed) await store.save();
-}
 
-async function updateTask(store, task_id, updater) {
-  const state = await store.load();
-  const task = state.tasks.find((item) => item.id === task_id);
-  if (!task) throw new Error(`task not found: ${task_id}`);
-  updater(task);
-  task.updated_at = new Date().toISOString();
-  state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
-  
-    // Use shared notification helper for terminal task states (deduplicated per task/status/channel)
-  await notifyTerminalTaskIfNeeded(task);
-await store.save();
-  return { task };
-}
 
 
 async function notifyTerminalTaskIfNeeded(task) {
