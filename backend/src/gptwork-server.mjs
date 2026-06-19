@@ -47,6 +47,7 @@ import {
   requireProjectAccess, requireWorkspaceAccess, requireScope
 } from "./auth-context.mjs";
 import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
+import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
 
 let barkNotifier = null;
 
@@ -2241,9 +2242,6 @@ async function taskExecutionSnapshot(store, task) {
   };
 }
 
-function isTaskTerminal(task) {
-  return ["completed", "failed", "waiting_for_review", "cancelled"].includes(task?.status);
-}
 
 async function updateGoalStatus(store, goalId, status, updatedAt = new Date().toISOString()) {
   const state = await store.load();
@@ -2522,18 +2520,7 @@ async function mapConcurrent(items, concurrency, mapper) {
   return results;
 }
 
-function isCodexSessionInventoryTask(task) {
-  return task?.assignee === "codex"
-    && task?.status === "assigned"
-    && task?.mode === "readonly"
-    && isCodexSessionInventoryTaskKind(task);
-}
 
-function isCodexSessionInventoryTaskKind(task) {
-  return task?.assignee === "codex"
-    && /Codex session metadata/i.test(task?.title || "")
-    && /Do not read session file contents/i.test(task?.description || "");
-}
 
 async function completeCodexSessionInventoryTask(store, config, github, task, context) {
   const boundedLimit = extractTaskLimit(task.description, 50);
@@ -2845,11 +2832,6 @@ function emitTaskProgress(context, task, phase, message) {
   });
 }
 
-function extractTaskLimit(description = "", fallback = 50) {
-  const match = String(description).match(/Return at most\s+(\d+)\s+files/i);
-  if (!match) return fallback;
-  return Math.max(1, Math.min(Number(match[1]) || fallback, 200));
-}
 
 async function findTask(store, task_id) {
   const state = await store.load();
