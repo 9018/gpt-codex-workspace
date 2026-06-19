@@ -306,6 +306,45 @@ test("preview_codex_context returns safe context preview with full structure", a
     assert.ok(section in ctx, `context should have ${section} field`);
   }
 });
+
+test("preview_codex_context exposes actual_prompt_bytes and actual_prompt_warning", async () => {
+  const server = await makeServer();
+
+  // Create a task
+  const createResult = await server.handleRpc({
+    jsonrpc: "2.0", id: 1,
+    method: "tools/call",
+    params: { name: "create_task", arguments: { title: "prompt-size test" } }
+  }, { authorization: "Bearer test-token" });
+  const taskId = createResult.result.structuredContent.task.id;
+
+  // Call preview_codex_context
+  const previewResult = await server.handleRpc({
+    jsonrpc: "2.0", id: 2,
+    method: "tools/call",
+    params: { name: "preview_codex_context", arguments: { task_id: taskId } }
+  }, { authorization: "Bearer test-token" });
+
+  assert.equal(previewResult.error, undefined, "preview_codex_context should not error");
+  const sc = previewResult.result.structuredContent;
+
+  // Check actual_prompt_bytes is present
+  assert.ok("actual_prompt_bytes" in sc,
+    "response should have actual_prompt_bytes field");
+  assert.equal(typeof sc.actual_prompt_bytes, "number",
+    "actual_prompt_bytes should be a number");
+  assert.ok(sc.actual_prompt_bytes > 0,
+    "actual_prompt_bytes should be > 0");
+
+  // actual_prompt_warning should be undefined (no warning for small prompt)
+  assert.equal(sc.actual_prompt_warning, undefined,
+    "actual_prompt_warning should be undefined for small prompt");
+
+  // Verify backward compat: original fields still present
+  assert.ok(sc.context, "should have context object");
+  assert.ok(sc.preview, "should have preview text string");
+  assert.ok(sc.preview_text, "should have preview_text for backward compat");
+});
 test("Codex worker interval uses safe assigned task runner with configured concurrency", async () => {
   let calls = 0;
   const seen = [];

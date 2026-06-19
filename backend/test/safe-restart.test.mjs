@@ -536,8 +536,8 @@ test("processGeneralTask prompt contains safe restart rule", async () => {
 });
 
 test("generated prompt file explicitly contains the Safe Restart Rule section", async () => {
-  // Read the gptwork-server.mjs source to verify the prompt template includes the restart rule
-  const source = await readFile(join(process.cwd(), "src/gptwork-server.mjs"), "utf8");
+  // Read the codex-prompt-builder.mjs source to verify the prompt template includes the restart rule
+  const source = await readFile(join(process.cwd(), "src/codex-prompt-builder.mjs"), "utf8");
   
   // The prompt template should contain the Safe Restart Rule
   assert.match(source, /Safe Restart Rule/i, "prompt should contain Safe Restart Rule section");
