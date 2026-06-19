@@ -366,10 +366,37 @@ export async function scheduleServiceRestart(options = {}) {
   }
 
   const startedAt = Date.now();
+
+  // P2.0b.3: Prefer result.json commit when available.
+  //   Priority: result.json commit > explicit expected_commit (with HEAD match) > local HEAD default
+  let resultJsonCommit = null;
+  if (store && workspaceRoot && taskId) {
+    try {
+      const state = await store.load();
+      const task = (state.tasks || []).find(t => t.id === taskId);
+      if (task && task.goal_id) {
+        const resultJsonPath = join(workspaceRoot, ".gptwork/goals", task.goal_id, "result.json");
+        if (existsSync(resultJsonPath)) {
+          const text = await readFile(resultJsonPath, "utf8");
+          const data = JSON.parse(text);
+          if (typeof data.commit === "string" && data.commit.length > 0) {
+            resultJsonCommit = data.commit;
+          }
+        }
+      }
+    } catch {
+      // Non-fatal: fall back to existing expected_commit resolution
+    }
+  }
+
   // P2.0b.2: Resolve expected_commit from local HEAD when absent; reject on mismatch.
   let resolvedCommit = expectedCommit;
   let expectedCommitSource = null;
-  if (repoPath) {
+  if (resultJsonCommit) {
+    // P2.0b.3: result.json commit takes priority over all other sources
+    resolvedCommit = resultJsonCommit;
+    expectedCommitSource = "result_json_commit";
+  } else if (repoPath) {
     try {
       const localHead = execSync("git rev-parse HEAD", {
         cwd: repoPath, timeout: 5000, encoding: "utf8"
