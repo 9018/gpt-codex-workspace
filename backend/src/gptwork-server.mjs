@@ -53,6 +53,7 @@ import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, colle
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
+import { createProjectWorkspaceToolsGroup } from "./tool-groups/project-workspace-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -842,33 +843,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       workspace_ids: context.workspace_ids,
       scopes: context.scopes
     })),
-    list_projects: tool("List your available projects. Each project has workspaces (hosted or SSH) and tasks. Start here to find which project to work on.", schema({}), async (_args, context) => {
-      const state = await store.load();
-      return { projects: state.projects.filter((project) => canAccessProject(context, project.id)) };
-    }),
-    get_project: tool("Return project detail.", schema({ project_id: "string" }, ["project_id"]), async ({ project_id = "default" }, context) => {
-      const state = await store.load();
-      requireProjectAccess(context, project_id);
-      return { project: findProject(state, project_id) };
-    }),
-    list_workspaces: tool("List project workspaces.", schema({ project_id: "string" }), async ({ project_id = "default" }, context) => {
-      const state = await store.load();
-      requireProjectAccess(context, project_id);
-      return {
-        project_id,
-        workspaces: state.workspaces.filter((workspace) => workspace.project_id === project_id && canAccessWorkspace(context, workspace.id))
-      };
-    }),
-    get_workspace_info: tool("Return workspace configuration and capacity summary.", schema({ workspace_id: "string" }), async (args, context) => {
-      const workspace = await selectWorkspace(store, args.workspace_id, context);
-      if (workspace.type === "hosted") await mkdir(workspace.root, { recursive: true });
-      return { workspace, limits: limits(config) };
-    }),
-    set_active_workspace: tool("Return the selected workspace for caller-side state.", schema({ workspace_id: "string" }, ["workspace_id"]), async ({ workspace_id }, context) => ({ active_workspace: await selectWorkspace(store, workspace_id, context) })),
-    create_workspace: tool("Create a hosted or SSH workspace for a project. SSH workspaces use key authentication first; pass identity_file to pin a key. Hosts outside 10.0.0.0/8 use the default SOCKS proxy 10.0.1.105:20177 unless socks_proxy is provided.", schema({ project_id: "string", id: "string", name: "string", type: "string", root: "string", host: "string", user: "string", port: "integer", identity_file: "string", socks_proxy: "string", default: "boolean" }, ["project_id", "name", "type", "root"]), async (args, context) => createWorkspace(store, config, args, context)),
-    update_workspace: tool("Update workspace metadata or SSH connection settings, including identity_file and socks_proxy.", schema({ workspace_id: "string", name: "string", root: "string", host: "string", user: "string", port: "integer", identity_file: "string", socks_proxy: "string", default: "boolean" }, ["workspace_id"]), async (args, context) => updateWorkspace(store, args, context)),
-    delete_workspace: tool("移除工作区注册信息。不影响远程文件。", schema({ workspace_id: "string" }, ["workspace_id"]), async (args, context) => deleteWorkspace(store, args, context)),
-    test_workspace_connection: tool("Test hosted or SSH workspace connectivity.", schema({ workspace_id: "string", dry_run: "boolean" }, ["workspace_id"]), async (args, context) => testWorkspaceConnection(store, config, args, context)),
+    ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     list_recent_activity: tool("List recent project activity.", schema({ limit: "integer" }), async ({ limit = 50 }) => {
       const state = await store.load();
       return { activities: state.activities.slice(-limit).reverse() };
