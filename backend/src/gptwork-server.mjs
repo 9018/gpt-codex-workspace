@@ -51,6 +51,7 @@ import { resolvePath, workspaceListDir, workspaceStat, workspaceReadText, worksp
 
 import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
+import { handleScheduleServiceRestart, handleListPendingRestarts } from "./restart-tools.mjs";
 let barkNotifier = null;
 
 
@@ -1039,29 +1040,8 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return result;
     }),
     request_human_review: tool("Mark a task as waiting for human review.", schema({ task_id: "string", message: "string" }, ["task_id"]), async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; })),
-    schedule_service_restart: tool("Schedule a safe two-phase service restart. Writes a pending restart marker and schedules a detached systemd service restart. Use when the worker needs to restart itself after completing its work.", schema({ task_id: "string", expected_commit: "string", expected_remote_head: "string" }, ["task_id"]), async ({ task_id, expected_commit = null, expected_remote_head = null }) => {
-      // P0: Validate workspace root is not a repo path
-      const _wsValidation = validateWorkspaceRoot(config.defaultWorkspaceRoot);
-      if (!_wsValidation.valid) {
-        return { ok: false, error: _wsValidation.reason };
-      }
-
-      const result = await scheduleServiceRestart({
-        workspaceRoot: config.defaultWorkspaceRoot,
-        taskId: task_id,
-        requestedBy: "codex",
-        serviceName: "gptwork-mcp.service",
-        expectedCommit: expected_commit,
-        expectedRemoteHead: expected_remote_head,
-        repoPath: config.defaultRepoPath,
-        store,
-      });
-      return result;
-    }),
-    list_pending_restarts: tool("List all pending restart markers waiting for service restart and Phase C startup verification.", schema({}), async () => {
-      const markers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
-      return { count: markers.length, markers };
-    }),
+    schedule_service_restart: tool("Schedule a safe two-phase service restart. Writes a pending restart marker and schedules a detached systemd service restart. Use when the worker needs to restart itself after completing its work.", schema({ task_id: "string", expected_commit: "string", expected_remote_head: "string" }, ["task_id"]), async (args) => handleScheduleServiceRestart(args, { config, store })),
+    list_pending_restarts: tool("List all pending restart markers waiting for service restart and Phase C startup verification.", schema({}), async (args) => handleListPendingRestarts(args, { config })),
 
     create_chatgpt_request: tool("Ask ChatGPT a question or request analysis. Use when Codex needs human input, product direction, design feedback, or a tricky judgment call. ChatGPT sees this and responds. Syncs to GitHub Issues if configured.", schema({ title: "string", prompt: "string", source: "string", task_id: "string", workspace_id: "string", escalation_category: "string", why_subagents_cannot_decide: "string", options_considered: "string", default_if_no_response: "string" }, ["title", "prompt"]), async (args) => {
       // P1.4: Require structured escalation reason
