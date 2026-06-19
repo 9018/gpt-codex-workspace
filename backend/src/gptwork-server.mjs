@@ -50,6 +50,7 @@ import { titleFromGoal, normalizeGoalMessage, normalizeGoalMessages, normalizeGo
 import { resolvePath, workspaceListDir, workspaceStat, workspaceReadText, workspaceDownloadBase64, workspaceWriteText, workspaceUploadBase64, workspaceUploadFromUrl, workspaceUploadBundleBase64, workspaceDownloadBundleBase64, workspaceMkdir, workspaceDelete, workspaceMove, workspaceCopy, workspaceSearch, workspaceSha256, workspaceShellExec, workspaceShellZip, runZipCommand, runLocalShell, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
 import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
+import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
 let barkNotifier = null;
 
 
@@ -58,19 +59,7 @@ const PROCESS_STARTED_AT = new Date();
 // Process-level Codex worker state tracking.
 // Populated by startCodexWorker; read by worker_status,
 // runtime_status, and gptwork_doctor tools.
-const workerState = {
-  enabled: false,
-  running: false,
-  started_at: null,
-  last_tick_started_at: null,
-  last_tick_finished_at: null,
-  last_tick_duration_ms: null,
-  interval_ms: null,
-  limit: null,
-  concurrency: null,
-  last_tick_result: null,
-  last_error: null,
-};
+const workerState = createWorkerState();
 
 async function collectWorkerQueueCounts(store) {
   try {
@@ -584,38 +573,24 @@ export function startCodexWorker(server, {
 
 
   // Initialize module-level worker state tracking
-  workerState.enabled = true;
-  workerState.running = false;
-  workerState.started_at = new Date().toISOString();
-  workerState.interval_ms = intervalMs;
-  workerState.limit = limit;
-  workerState.concurrency = concurrency;
+  markWorkerStarted(workerState, { intervalMs, limit, concurrency });
   async function tick() {
     if (stopped || running) return;
     running = true;
-    workerState.running = true;
-    workerState.last_tick_started_at = new Date().toISOString();
-    workerState.last_error = null;
+    markWorkerTickStarted(workerState);
     try {
       const wr = await server.runAssignedCodexTasks({ limit, concurrency });
-      workerState.last_tick_result = { ok: true, inspected: wr.inspected, completed: wr.completed, skipped: wr.skipped, task_count: wr.tasks.length };
+      recordWorkerTickSuccess(workerState, wr);
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) {
         const done = wr.tasks.filter(t => t.status === "completed").length;
         const skip = wr.tasks.filter(t => t.skipped).length;
         appendFileSync(_lp, `[gptwork-worker] tick inspected=${wr.inspected} completed=${done} skipped=${skip}\n`);
       }}
     } catch (error) {
-      workerState.last_tick_result = { ok: false, error: error.message };
-      workerState.last_error = error.message;
+      recordWorkerTickError(workerState, error);
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] ${error.message}\n`); }
     } finally {
-      workerState.last_tick_finished_at = new Date().toISOString();
-      if (workerState.last_tick_started_at) {
-        const _ss = new Date(workerState.last_tick_started_at).getTime();
-        const _sf = new Date(workerState.last_tick_finished_at).getTime();
-        workerState.last_tick_duration_ms = _sf - _ss;
-      }
-      workerState.running = false;
+      markWorkerTickFinished(workerState);
       running = false;
       if (!stopped) timer = setTimeout(tick, intervalMs);
     }
@@ -1323,19 +1298,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         },
         repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
         // Codex worker state (compact)
-        worker: {
-          enabled: workerState.enabled,
-          running: workerState.running,
-          started_at: workerState.started_at,
-          last_tick_started_at: workerState.last_tick_started_at,
-          last_tick_finished_at: workerState.last_tick_finished_at,
-          last_tick_duration_ms: workerState.last_tick_duration_ms,
-          interval_ms: workerState.interval_ms,
-          concurrency: workerState.concurrency,
-          limit: workerState.limit,
-          last_tick_result: workerState.last_tick_result,
-          last_error: workerState.last_error,
-        },
+        worker: workerStatusSnapshot(workerState),
       };
     }),
     notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null, last_task_event: null })),
@@ -1370,7 +1333,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
 
     worker_status: tool("Return Codex worker status: enabled, running, last tick timing, queue counts (assigned, queued, running, waiting_for_lock, waiting_for_review, completed, failed).", schema({}), async () => {
       const queue = await collectWorkerQueueCounts(store);
-      return { ...workerState, queue, queues: queue };
+      return { ...workerStatusSnapshot(workerState), queue, queues: queue };
     }),
     gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({}, []), async () => {
       const repoDir = resolveRepoDir();
@@ -1511,14 +1474,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
         })(),
         // Codex worker state
         worker: {
-          enabled: workerState.enabled,
-          running: workerState.running,
-          started_at: workerState.started_at,
-          last_tick_started_at: workerState.last_tick_started_at,
-          last_tick_finished_at: workerState.last_tick_finished_at,
-          last_tick_duration_ms: workerState.last_tick_duration_ms,
-          last_tick_result: workerState.last_tick_result,
-          last_error: workerState.last_error,
+          ...workerStatusSnapshot(workerState),
         },
         repo_locks: _lockSummary,
       };
