@@ -422,18 +422,33 @@ export async function scheduleServiceRestart(options = {}) {
         cwd: repoPath, timeout: 5000, encoding: "utf8"
       }).trim();
       if (expectedCommit) {
+        // Normalize short expected_commit to full SHA before comparison.
+        let normalizedCommit = expectedCommit;
+        if (normalizedCommit.length < 40 && repoPath) {
+          try {
+            const fullSha = execSync(`git rev-parse ${normalizedCommit}`, {
+              cwd: repoPath, timeout: 5000, encoding: "utf8"
+            }).trim();
+            if (/^[0-9a-f]{40}$/i.test(fullSha)) {
+              normalizedCommit = fullSha;
+            }
+          } catch (e) {
+            console.warn(`[safe-restart] Could not resolve short expected_commit "${expectedCommit}" in repo ${repoPath}: ${e.message}`);
+          }
+        }
         // P2.0b.1: Reject stale expected_commit before writing restart marker.
-        if (localHead !== expectedCommit) {
+        if (localHead !== normalizedCommit) {
           const duration = Date.now() - startedAt;
           return {
             ok: false, task_id: taskId, service_name: serviceName,
             error: "expected_commit_mismatch",
-            expected_commit: expectedCommit,
+            expected_commit: normalizedCommit,
             local_head: localHead,
             duration_ms: duration,
-            warning: `Cannot schedule restart: expected_commit ${expectedCommit} does not match local HEAD ${localHead}`
+            warning: `Cannot schedule restart: expected_commit ${normalizedCommit} does not match local HEAD ${localHead}`
           };
         }
+        resolvedCommit = normalizedCommit;
         expectedCommitSource = "explicit";
       } else {
         // P2.0b.2: Default from local HEAD when expected_commit absent
@@ -568,9 +583,18 @@ export async function verifyRestartMarker(marker, config = {}) {
     let verified = true;
     const failures = [];
 
-    if (marker.expected_commit && marker.expected_commit !== localHead) {
-      verified = false;
-      failures.push(`expected commit ${marker.expected_commit} but running commit is ${localHead}`);
+    if (marker.expected_commit) {
+      const ec = marker.expected_commit;
+      // Accept if full match, or if short expected_commit is a prefix of running_commit.
+      // Minimum prefix length (4) avoids ambiguous short ref matching.
+      const shortPrefixMatch = ec.length < 40 && ec.length >= 4 && localHead.startsWith(ec);
+      if (ec !== localHead && !shortPrefixMatch) {
+        verified = false;
+        const reason = ec.length < 40
+          ? `expected commit "${ec}" is not a prefix of running commit "${localHead}"`
+          : `expected commit "${ec}" does not match running commit "${localHead}"`;
+        failures.push(reason);
+      }
     }
     if (marker.expected_remote_head && diagnostics.remote_head &&
         marker.expected_remote_head !== diagnostics.remote_head) {

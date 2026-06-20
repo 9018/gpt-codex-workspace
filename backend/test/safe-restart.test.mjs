@@ -1802,7 +1802,7 @@ test("P2.4.1: pending restart marker is pre-verified when expected_commit matche
   assert.match(lastLog.message, /pre-verified/);
 });
 
-test("P2.4.1: pending restart marker with commit mismatch stays pending (existing behavior preserved)", async () => {
+test("P4.2i: pending restart marker with commit mismatch is marked as failed (P2.4.1 updated)", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-p241-mismatch-"));
   const workspaceRoot = join(root, "workspace");
   const repoPath = join(root, "repo");
@@ -1849,14 +1849,17 @@ test("P2.4.1: pending restart marker with commit mismatch stays pending (existin
 
   const result = await server.reconcileStaleTasks({ authorization: "Bearer test-token" });
 
-  // Verify no restart verification was produced for this task (mismatch leaves pending as-is)
+  // Verify restart verification was produced with status=failed for this task
   const verification = (result.restart_verifications || []).find(v => v.task_id === taskId);
-  assert.equal(verification, undefined, "should NOT have a restart verification for mismatched pending marker");
+  assert.ok(verification, "should have a restart verification for mismatched pending marker");
+  assert.equal(verification.status, "failed", "restart verification should be failed");
+  assert.equal(verification.verified, false);
+  assert.equal(verification.pre_verified_pending, false);
 
-  // Verify marker is still "pending"
+  // Verify marker is now "failed" (not still "pending")
   const marker = await loadRestartMarker(workspaceRoot, taskId);
   assert.ok(marker);
-  assert.equal(marker.status, "pending", "marker should still be pending after mismatch");
+  assert.equal(marker.status, "failed", "stale pending marker should be marked as failed after mismatch");
 });
 
 test("P2.4.1: stale repo lock is released when pending marker is pre-verified", async () => {
@@ -1937,4 +1940,262 @@ test("P2.4.1: stale repo lock is released when pending marker is pre-verified", 
   // Verify lock was released
   const updatedLockData = JSON.parse(await readFile(join(lockDir, lockId + ".json"), "utf8"));
   assert.equal(updatedLockData.status, "released", "lock should be released after pre-verification");
+});
+
+
+// ================================================================
+// P4.2i: verifyRestartMarker short-prefix matching
+// ================================================================
+
+test("P4.2i: short expected commit accepted as prefix of running_commit", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p42i-prefix-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+  const shortSha = fullSha.slice(0, 7);
+
+  // Marker with short expected_commit that IS a prefix of running_commit
+  const marker = {
+    task_id: "task_p42i_prefix_1",
+    expected_commit: shortSha,
+    repo_path: repoPath,
+    status: "pending",
+  };
+
+  const { verified, diagnostics } = await verifyRestartMarker(marker, {
+    defaultRepoPath: repoPath,
+  });
+
+  assert.equal(verified, true,
+    "should accept short expected_commit that is a prefix of running_commit");
+  assert.equal(diagnostics.running_commit, fullSha);
+  assert.ok(!diagnostics.failures || diagnostics.failures.length === 0);
+});
+
+test("P4.2i: short expected commit mismatch fails with useful reason", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p42i-mismatch-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  // Marker with wrong short hash that does NOT match running_commit
+  const marker = {
+    task_id: "task_p42i_mismatch_1",
+    expected_commit: "0000000",
+    repo_path: repoPath,
+    status: "pending",
+  };
+
+  const { verified, diagnostics } = await verifyRestartMarker(marker, {
+    defaultRepoPath: repoPath,
+  });
+
+  assert.equal(verified, false,
+    "should reject short expected_commit that is not a prefix of running_commit");
+  assert.equal(diagnostics.running_commit, fullSha);
+  assert.ok(diagnostics.failures && diagnostics.failures.length > 0);
+  // Failure message should be descriptive about prefix mismatch
+  const failureMsg = diagnostics.failures[0];
+  assert.match(failureMsg, /is not a prefix/,
+    "failure message should indicate short hash is not a prefix");
+  assert.match(failureMsg, /0000000/,
+    "failure message should include the short expected commit");
+});
+
+// ================================================================
+// P4.2i: scheduleServiceRestart normalizes short expected_commit
+// ================================================================
+
+test("P4.2i: scheduleServiceRestart normalizes short expected_commit to full SHA", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p42i-normalize-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const fullSha = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+  const shortSha = fullSha.slice(0, 7);
+
+  // Pass short expected_commit; scheduleServiceRestart should normalize it
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId: "task_p42i_normalize_1",
+    expectedCommit: shortSha,
+    repoPath,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.expected_commit, fullSha,
+    "expected_commit in result should be the full SHA, not the short hash");
+  assert.equal(result.expected_commit_source, "explicit");
+
+  const marker = await loadRestartMarker(workspaceRoot, "task_p42i_normalize_1");
+  assert.ok(marker);
+  assert.equal(marker.expected_commit, fullSha,
+    "marker should store the full SHA");
+});
+
+test("P4.2i: scheduleServiceRestart rejects short expected_commit that does not resolve", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p42i-nomatch-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  const localHead = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  // Short hash that does not match local HEAD
+  const result = await scheduleServiceRestart({
+    workspaceRoot,
+    taskId: "task_p42i_nomatch_1",
+    expectedCommit: "0000000",
+    repoPath,
+    dryRun: true,
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "expected_commit_mismatch");
+
+  // Verify no marker was written
+  const marker = await loadRestartMarker(workspaceRoot, "task_p42i_nomatch_1");
+  assert.equal(marker, null);
+});
+
+// ================================================================
+// P4.2i: stale goal-id pending marker is marked as failed during Phase C
+// ================================================================
+
+test("P4.2i: stale goal-id pending marker is marked as failed when expected_commit does not match", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p42i-stale-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+  const headCommit = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  const taskId = "task_p42i_stale_1";
+  const now = new Date().toISOString();
+  const statePath = join(root, "state.json");
+
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Default", type: "hosted", root: workspaceRoot, default: true, created_at: now, updated_at: now }],
+    goals: [], conversations: [], memories: [],
+    tasks: [{ id: taskId, project_id: "default", workspace_id: "hosted-default", title: "P4.2i stale marker", description: "", created_by: "user_default", assignee: "codex", status: "running", mode: "builder", logs: [{ time: now, message: "started" }], artifacts: [], result: null, created_at: now, updated_at: now }],
+    chatgpt_requests: [], activities: [], audit: []
+  };
+  await writeFile(statePath, JSON.stringify(state, null, 2), "utf8");
+
+  // Write pending restart marker with WRONG expected_commit (doesn't match HEAD)
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: "0000000000000000000000000000000000000000",
+    repo_path: repoPath,
+  });
+
+  // Verify marker is pending before reconciliation
+  const preMarker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.equal(preMarker.status, "pending");
+
+  // Create a lock for this task so we can verify it gets released
+  const lockId = safeRepoId(repoPath);
+  const lockDir = join(workspaceRoot, ".gptwork/locks/repos");
+  await mkdir(lockDir, { recursive: true });
+  const lockData = {
+    canonical_repo_path: repoPath,
+    safe_repo_id: lockId,
+    task_id: taskId,
+    run_id: "test-run-stale",
+    pid: 99998,
+    child_pid: null,
+    acquired_at: new Date(Date.now() - 3600000).toISOString(),
+    last_heartbeat_at: new Date(Date.now() - 3600000).toISOString(),
+    mode: "builder",
+    restart_state: null,
+    status: "held",
+  };
+  await writeFile(join(lockDir, lockId + ".json"), JSON.stringify(lockData, null, 2), "utf8");
+
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: repoPath,
+    defaultRemote: "origin",
+    defaultBranch: "main",
+    codexHome: root,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+
+  const result = await server.reconcileStaleTasks({ authorization: "Bearer test-token" });
+
+  // Verify marker is now "failed" (not still "pending")
+  const postMarker = await loadRestartMarker(workspaceRoot, taskId);
+  assert.ok(postMarker);
+  assert.equal(postMarker.status, "failed",
+    "stale pending marker should be marked as failed, not left as pending");
+  assert.ok(postMarker.failure_reason,
+    "failed marker should have failure_reason");
+
+  // Verify restart_verifications includes the failure
+  const verification = (result.restart_verifications || []).find(v => v.task_id === taskId);
+  assert.ok(verification, "should have a restart verification for the task");
+  assert.equal(verification.status, "failed");
+  assert.equal(verification.verified, false);
+  assert.equal(verification.pre_verified_pending, false);
+
+  // Verify task log was updated
+  const updatedState = JSON.parse(await readFile(statePath, "utf8"));
+  const task = updatedState.tasks.find(t => t.id === taskId);
+  assert.ok(task);
+  const lastLog = task.logs[task.logs.length - 1];
+  assert.match(lastLog.message, /restart marker verification failed/);
+
+  // Verify lock was released
+  const updatedLockData = JSON.parse(await readFile(join(lockDir, lockId + ".json"), "utf8"));
+  assert.equal(updatedLockData.status, "released", "lock should be released after pending marker failure");
 });

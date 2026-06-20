@@ -476,6 +476,20 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
                 await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
                 restartVerifications.push({ task_id: marker.task_id, status: "verified", verified: true, pre_verified_pending: true });
                 if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: pending marker ${marker.task_id} pre-verified (expected_commit matches running commit)\n`);
+              } else {
+                await updateRestartMarkerStatus(config.defaultWorkspaceRoot, marker.task_id, "failed", {
+                  failed_at: new Date().toISOString(),
+                  failure_reason: (diagnostics.failures || []).join("; ") || diagnostics.error || "expected_commit_mismatch",
+                });
+                const taskObj = (state.tasks || []).find(function(t) { return t.id === marker.task_id; });
+                if (taskObj) {
+                  taskObj.logs = taskObj.logs || [];
+                  taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Pending restart marker verification failed: expected_commit ${marker.expected_commit} mismatch ${diagnostics.running_commit ? `(running: ${diagnostics.running_commit})` : ""}` });
+                  taskObj.updated_at = new Date().toISOString();
+                }
+                await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
+                restartVerifications.push({ task_id: marker.task_id, status: "failed", verified: false, pre_verified_pending: false });
+                if (_lp) appendFileSync(_lp, `[gptwork-worker] Phase C: pending marker ${marker.task_id} verification failed (expected_commit mismatch)\n`);
               }
             }
           }
