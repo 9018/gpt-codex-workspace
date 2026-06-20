@@ -29,19 +29,10 @@ import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun,
 import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir, validateWorkspaceRoot, scanMisplacedMarkersSync, migrateMisplacedMarker, getMisplacedMarkerDiagnostic, removeMisplacedMarker } from "./safe-restart.mjs";
 import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
 import {
-  MCP_PROTOCOL_VERSION,
-  schema, toolList, initializeResult, jsonResult, jsonError,
-  endSse, setSseHeaders, writeSseMessage,
-  setCors, endJson, readRequest,
+  MCP_PROTOCOL_VERSION, schema, toolList, initializeResult, jsonResult, jsonError,
 } from "./mcp-tooling.mjs";
-import {
-  headersWithPathToken, tokenFromMcpPath,
-  parseTokens, parseTokenContexts, normalizeTokenContexts,
-  defaultTokenContext, defaultScopes, normalizeList,
-  limits, assertAuthorized, selectWorkspace, findProject,
-  canAccessProject, canAccessWorkspace,
-  requireProjectAccess, requireWorkspaceAccess, requireScope
-} from "./auth-context.mjs";
+import { handleHttp } from "./http-handler.mjs";
+import { tokenFromMcpPath, parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, defaultScopes, normalizeList, limits, assertAuthorized, selectWorkspace, findProject, canAccessProject, canAccessWorkspace, requireProjectAccess, requireWorkspaceAccess, requireScope } from "./auth-context.mjs";
 import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
 import { ensureGoalState, findGoalInState, taskPayloadFromTask, emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
@@ -668,34 +659,6 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
   };
   return tools;
 }
-
-async function handleHttp(req, res, server) {
-  setCors(res);
-  if (req.method === "OPTIONS") return endJson(res, 204, {});
-  if (req.url === "/health") return endJson(res, 200, { ok: true, service: "gptwork-mcp", time: new Date().toISOString() });
-  if (!req.url?.startsWith("/mcp")) return endJson(res, 404, { error: "not found" });
-  if (req.method === "GET") return endSse(res, ": connected\n\n");
-  if (req.method !== "POST") return endJson(res, 406, { jsonrpc: "2.0", id: "server-error", error: { code: -32600, message: "Not Acceptable: use POST with Accept: text/event-stream" } });
-
-  try {
-    const raw = await readRequest(req);
-    const message = JSON.parse(raw || "{}");
-    res.setHeader("mcp-session-id", req.headers["mcp-session-id"] || randomUUID());
-    setSseHeaders(res);
-    const response = await server.handleRpc(message, headersWithPathToken(req), (progress) => writeSseMessage(res, progress));
-    if (response) writeSseMessage(res, response);
-    res.end();
-  } catch (error) {
-    const response = { jsonrpc: "2.0", id: null, error: { code: -32700, message: error.message } };
-    if (res.headersSent) {
-      writeSseMessage(res, response);
-      res.end();
-    } else {
-      endJson(res, 400, response);
-    }
-  }
-}
-
 
 async function createWorkspace(store, config, args, context) {
   requireScope(context, "project:admin");
