@@ -46,7 +46,7 @@ import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFile
 import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
 import { ensureGoalState, findGoalInState, taskPayloadFromTask, emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
 import { titleFromGoal, normalizeGoalMessage, normalizeGoalMessages, normalizeGoalMemory, normalizeGoalMemories } from "./goal-lifecycle.mjs";
-import { resolvePath, workspaceWriteText, workspaceUploadBase64, workspaceUploadFromUrl, workspaceUploadBundleBase64, workspaceMkdir, workspaceDelete, workspaceMove, workspaceCopy, workspaceShellExec, workspaceShellZip, runZipCommand, runLocalShell, writeWorkspaceTextInternal } from "./workspace-service.mjs";
+import { workspaceUploadBundleBase64, runLocalShell, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
 import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
@@ -66,6 +66,7 @@ import { createContextHealthToolsGroup } from "./tool-groups/context-health-tool
 import { createRepositoryToolsGroup } from "./tool-groups/repository-tools-group.mjs";
 import { createWorkspaceReadToolsGroup } from "./tool-groups/workspace-read-tools-group.mjs";
 import { createWorkspaceMutationToolsGroup } from "./tool-groups/workspace-mutation-tools-group.mjs";
+import { createWorkspaceOperationsToolsGroup } from "./tool-groups/workspace-operations-tools-group.mjs";
 import { createGitRemoteToolsGroup } from "./tool-groups/git-remote-tools-group.mjs";
 import { createGithubSyncToolsGroup } from "./tool-groups/github-sync-tools-group.mjs";
 import { createSystemDiagnosticsToolsGroup } from "./tool-groups/system-diagnostics-tools-group.mjs";
@@ -650,9 +651,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
 
     ...createWorkspaceReadToolsGroup({ tool, schema, store, config }),
     ...createWorkspaceMutationToolsGroup({ tool, schema, store, config }),
-    upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
-    extract_zip_archive: tool("Extract a ZIP archive into a workspace directory.", schema({ zip_path: "string", target_dir: "string", workspace_id: "string" }, ["zip_path"]), async (args, context) => workspaceShellZip(store, config, "extract", args, context)),
-    shell_exec: tool("在工作区执行终端命令，用于检查服务状态和运行配置脚本。", schema({ command: "string", cwd: "string", timeout: "integer", max_output_bytes: "integer", workspace_id: "string" }, ["command"]), async (args, context) => workspaceShellExec(store, config, args, context)),
+    ...createWorkspaceOperationsToolsGroup({ tool, schema, store, config }),
 
     ...createGithubSyncToolsGroup({ tool, schema, store, github }),
     ...createRepositoryToolsGroup({ tool, schema, registry }),
