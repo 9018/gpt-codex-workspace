@@ -181,6 +181,101 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 7. **ChatGPT responds**: Writes a comment on the GitHub Issue.
 8. **Codex reads the response**: Call `sync_github_comments` tool. It reads Issue comments and attaches them as `answer_chatgpt_request` responses.
 
+
+## GitHub Actions Dispatch Bridge
+
+GitHub Actions provides an explicit trigger path for dispatching task payloads to the GPTWork backend, complementing the worker polling and direct MCP modes.
+
+The bridge is defined in `.github/workflows/gptwork-dispatch.yml`. The entrypoint script is `backend/scripts/github-actions-dispatch.mjs`.
+
+### Triggers
+
+| Trigger | Details |
+|---|---|
+| `push` to `main` with `.gptwork/goal-inbox/**` | Payload files under the goal-inbox directory are discovered on push |
+| `issues` (opened, edited, labeled) | Only issues with the `gptwork-task` label are processed |
+| `workflow_dispatch` (manual) | Accepts `issue_number` or `payload_path` input for explicit dispatch |
+
+### Flow
+
+```
+Push to main (.gptwork/goal-inbox/**)         Issue (opened/edited/labeled)
+  or workflow_dispatch                           with gptwork-task label
+        |                                               |
+        v                                               v
+  GitHub Actions runner                                  |
+  runs github-actions-dispatch.mjs                       |
+        |                                               |
+        v                                               v
+  Reads event payload, identifies task context
+  Calls `create_goal` on GPTWork MCP endpoint
+  Status reported via Issue comment and Actions summary
+```
+
+### Processing Rules
+
+- **Issue processing:** Requires the `gptwork-task` label. Issues without this label are skipped. The issue body is dispatched as `create_goal` with `assign_to_codex: true`. A comment is posted to the issue confirming dispatch or reporting errors.
+- **Push payload discovery:** Files under `.gptwork/goal-inbox/` are detected on push to `main`. The script prefers `.zip.b64` files (extracts `goal.md` and `payload.json`), falls back to `-task.md` markdown files with YAML front-matter, then to `-restore.md` restore descriptors.
+- **Manual dispatch:** Use `workflow_dispatch` with `issue_number` to dispatch an existing issue's body as a goal, or `payload_path` to point to a specific inbox payload file relative to the workspace root.
+- **Environment and secrets:** All configuration values (`GPTWORK_MCP_URL`, `GPTWORK_MCP_TOKEN`, `GITHUB_TOKEN`) are injected through workflow secrets. Never hardcoded in the script.
+- **Status reporting:** Progress and results are written to the Actions step summary (`GITHUB_STEP_SUMMARY`) and, when triggered by an issue or workflow_dispatch with an issue_number, posted as issue comments.
+
+### Compatibility
+
+The dispatch bridge is **additive**. It does not replace:
+
+- The existing Codex worker (polls for assigned tasks and executes them)
+- The GitHub Issues sync flow (`sync_to_github`, `sync_from_github`, `sync_github_comments`)
+- Direct MCP coordination through `create_encoded_goal`
+
+The bridge provides an explicit, event-driven trigger so that pushes to the goal inbox or labeled issues can kick off execution without waiting for the next worker poll cycle or requiring ChatGPT to be online.
+
+### File Layout
+
+```
+.github/workflows/gptwork-dispatch.yml       - Workflow definition
+backend/scripts/github-actions-dispatch.mjs  - Dispatch script entrypoint
+.gptwork/goal-inbox/                         - Payload files discovered on push
+backend/test/fixtures/github-dispatch/       - Test fixtures for dispatch
+```
+
+## Compact Visual Cards and Low-Noise Output
+
+GPTWork/Codex tool responses should prefer compact visual-card summaries over raw terminal-style output. This reduces chat noise and surfaces the information users need most without requiring them to parse raw logs and diffs.
+
+### Principle
+
+- Tool results display key information in a structured card format with status indicators, key-value pairs, and actionable summaries.
+- Raw output (git logs, tree listings, terminal output, diffs, large context blocks) is folded, truncated, or summarized by default in conversational interfaces.
+- Machine-readable `structuredContent` payloads remain compatible and unchanged for programmatic clients.
+- Full raw details remain accessible through artifact paths, result files, or explicit follow-up tools.
+
+### Tools and Their Card Focus
+
+| Tool | Card focus |
+|---|---|
+| `create_encoded_goal` | Goal ID, task ID, status, result path, Codex assignment confirmation |
+| `runtime_status` | Service status, running commit, worker state, GitHub sync, Bark status |
+| `gptwork_doctor` | Red/yellow/green diagnostics with suggested next actions |
+| `get_task` | Task status, log summary, changed files, tests, commit |
+| `preview_codex_context` | Context sources, size metrics, warnings |
+| `github_status` | Repository, sync enabled, known/pending issue state |
+
+### Structured Content
+
+- All card-style responses should include a `structuredContent` field when the MCP protocol supports it, preserving machine readability.
+- Clients that parse `structuredContent` can extract exact values (status, task ID, timestamps, changed files, test results) without parsing display text.
+- Raw details (full diffs, complete logs, file contents) are available through:
+  - Artifact paths returned in the card response
+  - Explicit follow-up tools (`get_task` with `include_logs` or similar detail flags)
+  - Result files stored under `.gptwork/goals/<goal_id>/` or task artifact paths
+
+### Impact
+
+- Reduces visual noise in conversational interfaces (ChatGPT, Codex chat).
+- Maintains backward compatibility: clients that ignore `structuredContent` still get readable summaries.
+- Raw-data consumers can fetch full detail programmatically without display-text interference.
+
 ## Tools (MCP Surface)
 
 ### Diagnostics & Health
@@ -512,6 +607,22 @@ github.api_sync_enabled=false
 direct_git_reader_available=true
 worktree_dirty=false
 ```
+
+
+### Using the Dispatch Bridge
+
+1. **Create or update a `gptwork-task` issue** — Open a GitHub Issue with the task description. The `main.yml` workflow auto-adds the `gptwork-task` label for titles matching `[GPTWork Task]`. You can also add the label manually.
+2. **Place payloads under `.gptwork/goal-inbox/`** — Create a task descriptor markdown file with YAML front-matter (`kind`, `status`, `assignee`, `mode`, `payload`) and push to `main`. The dispatch workflow automatically discovers and processes it.
+3. **Run workflow dispatch manually** — Use `workflow_dispatch` with `issue_number=N` to dispatch an existing issue, or `payload_path=.gptwork/goal-inbox/<file>` to reference a specific payload.
+4. **Check Codex worker status** — Use `runtime_status` or `gptwork_doctor` to verify the worker is running and processing tasks.
+5. **Inspect task result summaries** — Use `get_task` or check the Actions summary for compact card-style results without flooding the conversation.
+6. **Retrieve raw details** — Access full logs, diffs, and artifacts through result artifact paths or by calling `get_task` with detail flags like `include_logs`.
+
+### Reading Compact Cards
+
+- Tool responses show structured cards with status, key metrics, and next actions.
+- For more detail, follow the artifact path or `structuredContent` from the response.
+- For raw terminal output or full diffs, use explicit follow-up calls (`get_task` with detail flags).
 
 ## License
 
