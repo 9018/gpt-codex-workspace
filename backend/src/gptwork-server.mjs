@@ -61,6 +61,7 @@ import { createSessionInventoryToolsGroup, completeCodexSessionInventoryTask } f
 import { createTaskCompletionToolsGroup } from "./tool-groups/task-completion-tools-group.mjs";
 import { createChatGptRequestToolsGroup } from "./tool-groups/chatgpt-request-tools-group.mjs";
 import { createBrowserToolsGroup } from "./tool-groups/browser-tools-group.mjs";
+import { createRuntimeStatusToolsGroup } from "./tool-groups/runtime-status-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -917,14 +918,6 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       const responses = await github.importResponsesFromComments(store);
       return { imported_tasks: imported.length, tasks: imported.map((t) => ({ id: t.id, title: t.title, status: t.status })), imported_responses: responses.length, responses: responses.map((r) => ({ request_id: r.request_id, responded_by: r.user })) };
     }),
-    github_status: tool("Return GitHub sync configuration and known issue count.", schema({}), async () => ({
-      enabled: github.enabled,
-      repo: github.status().api_repo || '',
-      known_issues: github.getKnownIssues().length,
-      config_source: sources.githubEnabled,
-      repo_configured: !!config.githubRepo,
-      token_configured: !!config.githubToken,
-    })),
     register_repository: tool("Register a repository in the workspace registry so Codex can find it via canonical path instead of stale temporary clones.", schema({ remote_url: "string", canonical_path: "string", default_branch: "string", roles: "string", tags: "string", status: "string" }, ["remote_url"]), async (args) => {
       const info = {
         remote_url: args.remote_url,
@@ -1003,94 +996,6 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     browser_set_input_files: tool("[EXPERIMENTAL] Upload files to a browser input. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector", "path"]), async (args) => ({ ok: false, ...args, error: "file input automation requires a Playwright-enabled browser adapter" })),
     browser_click_and_download: tool("[EXPERIMENTAL] Click an element and download its target. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", selector: "string", path: "string" }, ["session_id", "selector"]), async (args) => ({ ok: false, ...args, error: "download automation requires a Playwright-enabled browser adapter" })),
     browser_evaluate: tool("[EXPERIMENTAL] Evaluate JavaScript in the browser page. Requires a Playwright-enabled browser adapter (not available in the default lightweight HTTP browser).", schema({ session_id: "string", script: "string" }, ["session_id", "script"]), async ({ session_id, script }) => browser.evaluate(session_id, script)),
-    runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
-      const repoDir = resolveRepoDir();
-      const gitInfo = collectRuntimeGitInfo(repoDir);
-      const statePath = config.statePath;
-      const statePathAbs = statePath.startsWith("/") ? statePath : join(process.cwd(), statePath);
-      const statePathInsideRepo = repoDir ? statePathAbs.startsWith(repoDir) : false;
-
-      const envPath = envLoadResult.loadedPath;
-      let envFileExists = false;
-      if (envPath) {
-        try {
-          envFileExists = existsSync(envPath);
-        } catch (e) {}
-      }
-
-      // Safe restart markers status (computed from marker files, no secrets)
-      const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
-
-      return {
-        pid: process.pid,
-        started_at: PROCESS_STARTED_AT.toISOString(),
-        repo_head: gitInfo.repo_head,
-        remote_head: gitInfo.remote_head,
-        running_commit: gitInfo.running_commit,
-        defaultWorkspaceRoot: config.defaultWorkspaceRoot,
-        codex_exec_timeout: config.codexExecTimeout,
-        codex_first_output_timeout: config.codexFirstOutputTimeout,
-        codex_exec_args: config.codexExecArgs,
-        shell_timeout: config.shellTimeout,
-        max_read_bytes: config.maxReadBytes,
-        max_shell_output_bytes: config.maxShellOutputBytes,
-        default_repo: config.defaultRepo,
-        default_branch: config.defaultBranch,
-        default_repo_path: config.defaultRepoPath,
-        default_remote: config.defaultRemote,
-        runtime_env_file_path: envPath,
-        runtime_env_file_exists: envFileExists,
-        runtime_env_loaded: envLoadResult.keys.length > 0,
-        runtime_env_keys_loaded: envLoadResult.keys,
-        state_path: statePath,
-        state_path_inside_repo: statePathInsideRepo,
-        worktree_dirty: gitInfo.worktree_dirty,
-        dirty_paths: gitInfo.dirty_paths,
-        restart_markers: restartMarkerData,
-        // Config sources for key operational values
-        config_sources: {
-          codex_exec_timeout: sources.codexExecTimeout,
-          codex_first_output_timeout: sources.codexFirstOutputTimeout,
-          shell_timeout: sources.shellTimeout,
-          state_path: sources.statePath,
-          default_repo: sources.defaultRepo,
-          default_branch: sources.defaultBranch,
-          default_repo_path: sources.defaultRepoPath,
-          default_remote: sources.defaultRemote,
-          bark_enabled: sources.barkEnabled,
-          bark_url: sources.barkUrl,
-          bark_key: sources.barkKey,
-          github_enabled: sources.githubEnabled,
-          github_repo: sources.githubRepo,
-          github_token: sources.githubToken,
-          workspace_root: sources.workspaceRoot,
-          max_read_bytes: sources.maxReadBytes,
-          max_shell_output_bytes: sources.maxShellOutputBytes,
-        },
-        // Bark status (safe, no secrets)
-        bark: bark ? {
-          enabled: bark.isEnabled ? bark.isEnabled() : false,
-          configured: bark.getStatus ? bark.getStatus().configured : false,
-          source: bark.getStatus ? bark.getStatus().source : "unknown",
-          url_set: bark.getStatus ? bark.getStatus().url_set : false,
-          key_set: bark.getStatus ? bark.getStatus().key_set : false,
-          group: bark.getStatus ? bark.getStatus().group : "gptwork",
-        } : { enabled: false, configured: false, source: "none" },
-        // GitHub sync status (safe, no secrets)
-        github: {
-          api_sync_enabled: github.enabled,
-          api_repo_set: !!config.githubRepo,
-          api_token_set: !!config.githubToken,
-          source: sources.githubEnabled,
-          direct_git_available: true,
-          direct_git_reader_available: true,
-        },
-        repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
-        // Codex worker state (compact)
-        worker: workerStatusSnapshot(workerState),
-      };
-    }),
-    notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null, last_task_event: null })),
     test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
     git_remote_resolve_repo: tool("Use this when the user asks to inspect GitHub remote repository code and GitHub connector is unavailable. Finds an existing Git checkout for a repo (owner/name, URL, or path). Returns repo_path, remote info, and local/tracking HEADs. Does NOT auto-clone.", schema({ repo: "string", repo_path: "string" }, []), async (args) => handleResolveRepo(args, { registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote })),
 
@@ -1124,150 +1029,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       const queue = await collectWorkerQueueCounts(store);
       return { ...workerStatusSnapshot(workerState), queue, queues: queue };
     }),
-    gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({}, []), async () => {
-      const repoDir = resolveRepoDir();
-      const registryData = { entries: [], count: 0, hasCanonical: false };
-      try {
-        const allRepos = registry.list();
-        registryData.entries = allRepos;
-        registryData.count = allRepos.length;
-        registryData.hasCanonical = allRepos.some(r => r.canonical_path === config.defaultRepoPath);
-      } catch (e) {}
-      let staleCloneCount = 0;
-      try {
-        const wsRoot = config.defaultWorkspaceRoot || "";
-        if (wsRoot && existsSync(wsRoot)) {
-          const entries = readdirSync(wsRoot, { withFileTypes: true });
-          staleCloneCount = entries.filter(e => e.isDirectory() && e.name.startsWith('.tmp-')).length;
-        }
-      } catch (e) {}
-      const gitInfo = collectRuntimeGitInfo(repoDir);
-      const worktreeDirty = gitInfo.worktree_dirty;
-      const dirtyPaths = gitInfo.dirty_paths;
-      const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
-      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
-      const queueCounts = await collectWorkerQueueCounts(store);
-      return {
-        pid: process.pid,
-        started_at: PROCESS_STARTED_AT.toISOString(),
-        running_commit: gitInfo.running_commit,
-        runtime_env_loaded: envLoadResult.keys.length > 0,
-        runtime_env_file_path: envLoadResult.loadedPath || null,
-        workspace_root: config.defaultWorkspaceRoot,
-        hosted_default_root_aligned: config.defaultWorkspaceRoot === '/home/a9017/mcp/workspace',
-        default_repo: config.defaultRepo,
-        default_branch: config.defaultBranch,
-        default_repo_path: config.defaultRepoPath,
-        repository_registry_count: registryData.count,
-        repository_registry_has_canonical_repo: registryData.hasCanonical,
-        stale_clone_count: staleCloneCount,
-        worktree_dirty: worktreeDirty,
-        dirty_paths: dirtyPaths,
-        codex_exec_timeout: config.codexExecTimeout,
-        github_api_sync_enabled: github.enabled,
-        direct_git_reader_available: true,
-        bark_configured: bark ? (bark.getStatus ? bark.getStatus().configured : false) : false,
-        bark_enabled: bark ? (bark.isEnabled ? bark.isEnabled() : false) : false,
-        placeholder_tools_exposed: exposePlaceholder || false,
-        suggested_next_actions: (() => {
-          const actions = [];
-          if (envLoadResult.keys.length === 0) actions.push('Set up runtime.env with GPTWORK_* variables or configure via process.env');
-          if (!registryData.hasCanonical) actions.push('Register the canonical repo via register_repository');
-          if (staleCloneCount > 0) actions.push('Clean up ' + staleCloneCount + ' stale clone(s) (rm -rf .tmp-* in workspace root)');
-          if (worktreeDirty) actions.push('Commit or stash dirty worktree changes');
-          if (config.defaultRepo !== '9018/gpt-codex-workspace') actions.push('Set GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace for canonical repo resolution');
-          // Check restart markers: only active (pending/scheduled/restarted) ones need action; verified/failed are historical
-          (() => {
-            try {
-              const markers = scanPendingRestartMarkersSync(config.defaultWorkspaceRoot);
-              const active = markers.filter(m => ['pending','scheduled','restarted'].includes(m.status));
-              if (active.length > 0) {
-                actions.push(active.length + ' active restart marker(s) (' + active.map(m => m.task_id.slice(0,12) + ':' + m.status).join(', ') + ') — complete or verify via schedule_service_restart');
-              }
-            } catch(e) {}
-          })();
-          // Suggest project_context_status when project context is missing or unhealthy
-          (() => {
-            try {
-              const canonPath = config.defaultRepoPath;
-              if (canonPath) {
-                const pmdPath = join(canonPath, ".gptwork", "project.md");
-                const penvPath = join(canonPath, ".gptwork", "project.env");
-                const mdExists = existsSync(pmdPath);
-                const envExists = existsSync(penvPath);
-                if (!mdExists || !envExists) {
-                  actions.push('Run project_context_status / context_status for project context health — missing ' + (!mdExists ? 'project.md' : '') + (!mdExists && !envExists ? ' and ' : '') + (!envExists ? 'project.env' : ''));
-                }
-                // Also suggest if env file exists but appears empty
-                if (envExists) {
-                  try {
-                    const envContent = readFileSync(penvPath, "utf8").trim();
-                    if (!envContent) {
-                      actions.push('Run project_context_status / context_status for project context health — project.env exists but is empty');
-                    }
-                  } catch (e) {}
-                }
-              }
-            } catch (e) {}
-         })();
-
-          // Suggest repo_lock_status/list_repo_locks when active or stale locks exist
-          (() => {
-            try {
-              if (_lockSummary.active_repo_locks > 0 || _lockSummary.stale_repo_locks > 0) {
-                const parts = [];
-                if (_lockSummary.active_repo_locks > 0) parts.push(_lockSummary.active_repo_locks + ' active');
-                if (_lockSummary.stale_repo_locks > 0) parts.push(_lockSummary.stale_repo_locks + ' stale');
-                actions.push('Run repo_lock_status / list_repo_locks to inspect ' + parts.join(' and ') + ' repo lock(s) — concurrent Codex execution may be blocked');
-              }
-            } catch (e) {}
-          })();
-
-
-          // Suggest worker diagnostics when actionable
-          (() => {
-            try {
-              // Worker enabled but never ticked
-              if (workerState.enabled && !workerState.last_tick_started_at && !workerState.last_error) {
-                actions.push('Codex worker enabled but has not completed its first tick yet — check GPTWORK_CODEX_WORKER env and service logs');
-              }
-              // Worker disabled with queued or assigned tasks
-              if (!workerState.enabled) {
-                const qcount = queueCounts.queued + queueCounts.assigned;
-                if (qcount > 0) {
-                  actions.push(qcount + ' Codex task(s) queued/assigned but worker is disabled — set GPTWORK_CODEX_WORKER=true or process tasks manually');
-                }
-              }
-              // Stale last tick (worker enabled but no tick in >2x interval)
-              if (workerState.last_tick_finished_at && workerState.interval_ms) {
-                const elapsed = Date.now() - new Date(workerState.last_tick_finished_at).getTime();
-                if (elapsed > workerState.interval_ms * 3) {
-                  actions.push('Codex worker last tick completed ' + Math.round(elapsed / 1000) + 's ago (>3x interval) — check worker health');
-                }
-              }
-              // Last tick error
-              if (workerState.last_error) {
-                actions.push('Codex worker last tick error: ' + workerState.last_error.slice(0, 120));
-              }
-              // waiting_for_lock
-              if (queueCounts.waiting_for_lock > 0) {
-                actions.push(queueCounts.waiting_for_lock + ' Codex task(s) waiting for repo lock — run list_repo_locks to see blocked tasks');
-              }
-              // waiting_for_review
-              if (queueCounts.waiting_for_review > 0) {
-                actions.push(queueCounts.waiting_for_review + ' Codex task(s) waiting for review — check and approve or reassign');
-              }
-            } catch (e) {}
-          })();
-         return actions;
-        })(),
-        // Codex worker state
-        worker: {
-          ...workerStatusSnapshot(workerState),
-        },
-        repo_locks: _lockSummary,
-      };
-    }),
+    ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT, collectWorkerQueueCounts }),
     ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
   };
   // Gate experimental browser placeholder tools behind env flags (hidden by default unless GPTWORK_EXPOSE_PLACEHOLDER_TOOLS or GPTWORK_EXPERIMENTAL_BROWSER_TOOLS is set)
