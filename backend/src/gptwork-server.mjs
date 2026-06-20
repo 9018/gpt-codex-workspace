@@ -20,6 +20,7 @@ import { buildSshExecCommand, runSshExec } from "./ssh-adapter.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "./bark-notifier.mjs";
+import { createNotificationService } from "./notification-service.mjs";
 import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson, validateAutonomyResult, detectRuntimeCodeChanges } from "./codex-result-parser.mjs";
 import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { buildCodexPrompt } from "./codex-prompt-builder.mjs";
@@ -65,7 +66,8 @@ import { createGithubCommentsSyncToolsGroup } from "./tool-groups/github-comment
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 import { startCodexWorker as _startCodexWorker, runAssignedCodexTasks as _runAssignedCodexTasks, mapConcurrent as _mapConcurrent } from "./codex-worker.mjs";
-let barkNotifier = null;
+let notifyTerminalTaskIfNeeded = null;
+let notifyCreatedTaskIfNeeded = null;
 
 
 const PROCESS_STARTED_AT = new Date();
@@ -164,7 +166,8 @@ export async function createGptWorkServer(options = {}) {
   if (options.barkLevel !== undefined) barkOptions.barkLevel = options.barkLevel;
   if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
   if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
-  const bark = createBarkNotifier(barkOptions, barkConfigSource); barkNotifier = bark;
+  const bark = createBarkNotifier(barkOptions, barkConfigSource);
+  ({ notifyTerminalTaskIfNeeded, notifyCreatedTaskIfNeeded } = createNotificationService(bark));
   const serverContext = createServerContext({ config, store, browser, github, bark, barkConfigSource, envLoadResult, earlyEnvResult });
 setTerminalNotifier(notifyTerminalTaskIfNeeded);
   // Create the repo registry
@@ -1421,107 +1424,3 @@ async function processGeneralTask(store, config, task, context) {
 
 
 
-async function notifyTerminalTaskIfNeeded(task) {
-  if (!barkNotifier || !barkNotifier.isEnabled()) return;
-  // Only notify for true terminal or human-review states.
-  // Transient states such as waiting_for_lock (repo-lock block) are intentionally
-  // excluded from the terminal list, so they never send a notification directly.
-  // If a task later reaches a terminal failure or human-review state due to a lock
-  // issue, that notification will be about the actual terminal/resolution state.
-  const terminal = ["completed", "failed", "cancelled", "timed_out", "codex_timeout", "waiting_for_review", "waiting_review"];
-  const channelKey = `notified:bark:${task.status}`;
-  if (!terminal.includes(task.status) || task[channelKey]) return;
-
-  const classification = classifyNotification(task);
-  if (!classification.should_notify) {
-    task.last_notification_policy = classification.reason;
-    return;
-  }
-
-  try {
-    const { title, body } = formatNotification(task, task.status);
-    const nres = await barkNotifier.send(title, body, `task-${task.status}`);
-    if (nres.ok) {
-      task[channelKey] = true;
-      task.notified_at = new Date().toISOString();
-      // Track safe task metadata on the barkNotifier diagnostics
-      if (barkNotifier._setTaskMetadata) {
-        barkNotifier._setTaskMetadata(task.id, task.status, task.status);
-      }
-    }
-    task.notifications ||= [];
-    task.notifications.push({
-      channel: "bark",
-      event: nres.ok ? "sent" : "failed",
-      attempted_at: new Date().toISOString(),
-      ok: nres.ok,
-      response_code: nres.ok ? 200 : null,
-      response_message: nres.ok ? (nres.bark_id || "ok") : null,
-      error_short: nres.ok ? null : (nres.reason || nres.error || null),
-      source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
-      group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
-      endpoint_kind: (() => {
-        const st = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
-        return st.url_set ? "url" : st.key_set ? "key" : "none";
-      })(),
-      icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
-      url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
-    });
-  } catch {
-    // notification failure is non-critical
-  }
-}
-
-/**
- * Send a Bark notification for a newly created/assigned task.
- * Deduplicated (one `created` notification per task) and policy-gated.
- * Suppressed for draft tasks, readonly/internal/test mode tasks by default.
- */
-async function notifyCreatedTaskIfNeeded(task) {
-  if (!barkNotifier || !barkNotifier.isEnabled()) return;
-  const channelKey = 'notified:bark:created';
-  if (task[channelKey]) return;
-
-  const classification = classifyCreatedNotification(task);
-  if (!classification.should_notify) {
-    task.last_notification_policy = classification.reason;
-    return;
-  }
-
-  try {
-    const { title, body } = formatCreatedNotification(task);
-    const nres = await barkNotifier.send(title, body, 'task-created');
-    if (nres.ok) {
-      task[channelKey] = true;
-      task.notified_at = new Date().toISOString();
-      // Track safe task metadata on the barkNotifier diagnostics
-      if (barkNotifier._setTaskMetadata) {
-        barkNotifier._setTaskMetadata(task.id, task.status, task.status);
-      }
-    }
-    // Track safe task metadata on the barkNotifier diagnostics
-    if (barkNotifier._setTaskMetadata) {
-      barkNotifier._setTaskMetadata(task.id, task.status, 'created');
-    }
-    task.notifications ||= [];
-    task.notifications.push({
-      channel: "bark",
-      event: nres.ok ? "sent" : "failed",
-      attempted_at: new Date().toISOString(),
-      ok: nres.ok,
-      response_code: nres.ok ? 200 : null,
-      response_message: nres.ok ? (nres.bark_id || "ok") : null,
-      error_short: nres.ok ? null : (nres.reason || nres.error || null),
-      source: (barkNotifier.getStatus ? barkNotifier.getStatus().source : null) || "unknown",
-      group: (barkNotifier.getStatus ? barkNotifier.getStatus().group : null) || "gptwork",
-      endpoint_kind: (() => {
-        const st = barkNotifier.getStatus ? barkNotifier.getStatus() : {};
-        return st.url_set ? "url" : st.key_set ? "key" : "none";
-      })(),
-      icon_set: (barkNotifier.getStatus ? barkNotifier.getStatus().icon_set : false) || false,
-      url_action_set: (barkNotifier.getStatus ? barkNotifier.getStatus().url_action_set : false) || false
-    });
-  } catch {
-    // notification failure is non-critical
-  }
-}
