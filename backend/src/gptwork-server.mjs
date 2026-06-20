@@ -8,9 +8,7 @@ import {
   readFile,
   readdir,
   rename,
-  rm,
-  stat,
-  writeFile
+  rm
 } from "node:fs/promises";
 import { appendFileSync, existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { basename, dirname, join, relative } from "node:path";
@@ -21,12 +19,11 @@ import { createGithubSync } from "./github-adapter.mjs";
 import { RepoRegistry, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
 import { createBarkNotifier, classifyNotification, classifyCreatedNotification, formatNotification, formatCreatedNotification, formatManualTestNotification } from "./bark-notifier.mjs";
 import { createNotificationService } from "./notification-service.mjs";
-import { parseCodexResult, buildTaskResult, parseCodexResultWithFallback, parseResultJson, validateAutonomyResult, detectRuntimeCodeChanges } from "./codex-result-parser.mjs";
+import { parseCodexResult, buildTaskResult, parseResultJson, validateAutonomyResult } from "./codex-result-parser.mjs";
 import { buildCodexContext, formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
-import { buildCodexPrompt } from "./codex-prompt-builder.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
-import { initRun, fireHeartbeat, writeRunLogs, updateRunHeartbeat, getLatestRun, getRunFilePath } from "./codex-run-metadata.mjs";
+import { fireHeartbeat, getLatestRun, getRunFilePath } from "./codex-run-metadata.mjs";
 import { writePendingRestartMarker, loadRestartMarker, scanPendingRestartMarkers, scanPendingRestartMarkersSync, updateRestartMarkerStatus, verifyRestartMarker, scheduleServiceRestart, getPendingRestartsDir, validateWorkspaceRoot, scanMisplacedMarkersSync, migrateMisplacedMarker, getMisplacedMarkerDiagnostic, removeMisplacedMarker } from "./safe-restart.mjs";
 import { acquireRepoLock, releaseRepoLock, reconcileRepoLocks, releaseLockForTask, getRepoLockSummary, listRepoLocks, safeRepoId, getLockFilePath } from "./repo-lock.mjs";
 import {
@@ -36,12 +33,17 @@ import { handleHttp } from "./http-handler.mjs";
 import { tokenFromMcpPath, parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, defaultScopes, normalizeList, limits, assertAuthorized, selectWorkspace, findProject, canAccessProject, canAccessWorkspace, requireProjectAccess, requireWorkspaceAccess, requireScope } from "./auth-context.mjs";
 import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { isTaskTerminal, isCodexSessionInventoryTask, isCodexSessionInventoryTaskKind, extractTaskLimit } from "./task-status.mjs";
+import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult } from "./task-result-status.mjs";
+import { prepareCodexTaskRun } from "./task-run-setup.mjs";
+import { executeCodexTaskRun } from "./task-codex-execution.mjs";
+import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
 import { ensureGoalState, findGoalInState, taskPayloadFromTask, emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
 import { titleFromGoal, normalizeGoalMessage, normalizeGoalMessages, normalizeGoalMemory, normalizeGoalMemories } from "./goal-lifecycle.mjs";
-import { workspaceUploadBundleBase64, runLocalShell, writeWorkspaceTextInternal } from "./workspace-service.mjs";
+import { workspaceUploadBundleBase64, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
 import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
 import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
+import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
 import { createExecutionToolsGroup } from "./tool-groups/task-execution-tools-group.mjs";
@@ -76,17 +78,6 @@ const PROCESS_STARTED_AT = new Date();
 // Populated by startCodexWorker; read by worker_status,
 // runtime_status, and gptwork_doctor tools.
 const workerState = createWorkerState();
-
-async function collectWorkerQueueCounts(store) {
-  try {
-    const state = await store.load();
-    const codexTasks = state.tasks.filter(t => t.assignee === "codex");
-    return { assigned: codexTasks.filter(t => t.status === "assigned").length, queued: codexTasks.filter(t => t.status === "queued").length, running: codexTasks.filter(t => t.status === "running").length, waiting_for_lock: codexTasks.filter(t => t.status === "waiting_for_lock").length, waiting_for_review: codexTasks.filter(t => t.status === "waiting_for_review").length, completed: codexTasks.filter(t => t.status === "completed").length, failed: codexTasks.filter(t => t.status === "failed").length };
-  } catch (e) {
-    return { assigned: 0, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, completed: 0, failed: 0 };
-  }
-}
-
 
 export async function createGptWorkServer(options = {}) {
   const tokenContexts = normalizeTokenContexts(
@@ -1144,7 +1135,7 @@ function normalizeAssignedTaskMode(task, requestedMode = "") {
   if (isCodexSessionInventoryTaskKind({ ...task, assignee: "codex" })) return "readonly";
   return task.mode && task.mode !== "readonly" ? task.mode : "builder";
 }
-async function processGeneralTask(store, config, task, context) {
+async function processGeneralTask(store, config, task, context, github) {
   const now = new Date().toISOString();
   await updateTask(store, task.id, (item) => {
     item.logs.push({ time: now, message: `[worker] started: ${task.title}` });
@@ -1207,94 +1198,27 @@ async function processGeneralTask(store, config, task, context) {
   });
 
   const mode = task.mode || "builder";
-  const promptFile = `/tmp/.gptwork-task-${task.id}.txt`;
-  const { fullPrompt } = buildCodexPrompt({
+  let summary = "";
+  let parsedResult = null;
+  let cr = null;
+  const { promptFile, runFilePath, runId } = await prepareCodexTaskRun({
     task,
     goal,
     workspaceFiles,
     workspaceRoot: workspace.root,
-    defaultRepoPath: config.defaultRepoPath,
+    config,
   });
-  await writeFile(promptFile, fullPrompt, "utf8");
-  let summary = "";
-  let parsedResult = null;
-  let cr = null;
-  
-  // Initialize run metadata for diagnostics
-  let runFilePath = null;
-  let runId = null;
-  try {
-    const initResult = await initRun({
-      workspaceRoot: config.defaultWorkspaceRoot,
-      taskId: task.id,
-      workspaceId: task.workspace_id,
-      repoPath: config.defaultRepoPath,
-      promptPath: promptFile
-    });
-    runFilePath = initResult.runFilePath;
-    runId = initResult.runId;
-    let promptBytes = 0;
-    try { promptBytes = (await stat(promptFile)).size; } catch {}
-    fireHeartbeat(runFilePath, "running_codex", {
-      prompt_bytes: promptBytes,
-      first_output_timeout_seconds: config.codexFirstOutputTimeout || 180,
-      stdout_bytes: 0,
-      stderr_bytes: 0
-    });
-  } catch (e) {
-    // Non-fatal: run metadata setup failed
-  }
   
   try {
-    const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
-    cr = await runLocalShell(cmd, workspace.root, config.codexExecTimeout, 1000000, (pid) => {
-      updateRunHeartbeat(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
-    }, {
-      firstOutputTimeoutSeconds: config.codexFirstOutputTimeout || 180,
-      onOutput: (event) => {
-        updateRunHeartbeat(runFilePath, "running_codex", {
-          stdout_bytes: event.stdout_bytes,
-          stderr_bytes: event.stderr_bytes,
-          first_stdout_at: event.first_stdout_at,
-          first_stderr_at: event.first_stderr_at,
-          first_output_delay_ms: event.first_output_delay_ms
-        }).catch(() => {});
-      }
-    });
-    
-    // Write stdout/stderr to durable log files
-    if (cr && runId) {
-      writeRunLogs({ workspaceRoot: config.defaultWorkspaceRoot, taskId: task.id, runId, stdout: cr.stdout, stderr: cr.stderr }).catch(() => {});
-    }
-    
-    // Heartbeat after Codex exits
-    if (runFilePath) {
-      fireHeartbeat(runFilePath, "parsing_result", {
-        exit_code: cr?.returncode ?? -1,
-        timed_out: cr?.timed_out || false,
-        no_first_output_timeout: cr?.no_first_output_timeout || false,
-        first_output_timeout_seconds: cr?.first_output_timeout_seconds,
-        stdout_bytes: cr?.stdout_bytes,
-        stderr_bytes: cr?.stderr_bytes,
-        first_stdout_at: cr?.first_stdout_at,
-        first_stderr_at: cr?.first_stderr_at,
-        first_output_delay_ms: cr?.first_output_delay_ms
-      });
-    }
-    
-    const out = (cr.stdout || "").trim();
-    // Try result.json first, fall back to stdout parsing
-    const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
-    parsedResult = await parseCodexResultWithFallback({ resultJsonPath, stdout: out });
-    if (parsedResult.summary) {
-      summary = parsedResult.summary;
-    } else {
-      if (out) {
-        const hdr = out.indexOf(separator);
-        summary = hdr >= 0 ? out.substring(hdr) : out;
-      }
-      if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
-    }
+    ({ cr, parsedResult, summary } = await executeCodexTaskRun({
+      config,
+      workspaceRoot: workspace.root,
+      task,
+      goal,
+      promptFile,
+      runFilePath,
+      runId,
+    }));
   } catch (e) {
     summary = "[ERROR] " + e.message;
   } finally {
@@ -1322,105 +1246,33 @@ async function processGeneralTask(store, config, task, context) {
       };
 
   const doneAt = new Date().toISOString();
-  let taskStatus = taskResult.kind === "codex_executed" ? "completed"
-    : (taskResult.kind === "codex_timeout" || taskResult.kind === "no_first_output_timeout") ? "timed_out"
-    : "failed";
-
-  // P1.1/P1.2: Validate autonomy policy for completed results
-  if (taskStatus === "completed" && goal && parsedResult) {
-    const autonomyValidation = validateAutonomyResult(parsedResult, goal);
-    if (!autonomyValidation.valid) {
-      taskStatus = "waiting_for_review";
-      taskResult.warnings = taskResult.warnings || [];
-      taskResult.warnings.push("Autonomy policy validation failed: " + autonomyValidation.reason);
-    }
-  }
-
-  // P1.3: Runtime code change check for deploy-mode tasks
-  if (taskStatus === "completed" && mode === "deploy" && parsedResult) {
-    const runtimeCheck = detectRuntimeCodeChanges(parsedResult.changed_files || []);
-    if (runtimeCheck.hasRuntimeChanges) {
-      // Check if safe restart marker exists for this task
-      let _hasRestartMarker = false;
-      try {
-        const _rm = await loadRestartMarker(config.defaultWorkspaceRoot, task.id);
-        if (_rm && ["pending", "scheduled", "restarted"].includes(_rm.status)) {
-          _hasRestartMarker = true;
-        }
-      } catch {}
-      if (!_hasRestartMarker) {
-        taskStatus = "waiting_for_review";
-        taskResult.warnings = taskResult.warnings || [];
-        taskResult.warnings.push("runtime_code_changed_without_safe_restart: " +
-          runtimeCheck.matchedFiles.join(", "));
-      }
-    }
-  }
-
-  // Update run metadata with final phase
-  if (runFilePath) {
-    const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
-    fireHeartbeat(runFilePath, taskStatus === "completed" ? "completed" : "failed", {
-      result_json_path: resultJsonPath,
-      exit_code: cr?.returncode ?? -1,
-      timed_out: cr?.timed_out || false,
-      no_first_output_timeout: cr?.no_first_output_timeout || false,
-      first_output_timeout_seconds: cr?.first_output_timeout_seconds,
-      stdout_bytes: cr?.stdout_bytes,
-      stderr_bytes: cr?.stderr_bytes,
-      first_stdout_at: cr?.first_stdout_at,
-      first_stderr_at: cr?.first_stderr_at,
-      first_output_delay_ms: cr?.first_output_delay_ms
-    });
-  }
-
-  const result = await updateTask(store, task.id, (item) => {
-    item.status = taskStatus;
-    item.result = { ...taskResult, completed_at: doneAt };
-    item.logs.push({ time: doneAt, message: taskResult.kind === "no_first_output_timeout"
-      ? "[worker] timed out waiting for first Codex output after " + (cr?.first_output_timeout_seconds || config.codexFirstOutputTimeout || 180) + "s"
-      : taskResult.kind === "codex_timeout"
-        ? "[worker] timed out after " + config.codexExecTimeout + "s"
-        : "[worker] completed: task processed by Codex CLI" });
+  let taskStatus = deriveTaskStatusFromTaskResult(taskResult);
+  taskStatus = applyAutonomyValidation(taskStatus, taskResult, goal, parsedResult);
+  taskStatus = await applyRuntimeCodeChangeGuard({
+    taskStatus,
+    taskResult,
+    mode,
+    parsedResult,
+    workspaceRoot: config.defaultWorkspaceRoot,
+    taskId: task.id,
   });
 
-  // Release repo lock after Codex execution completes
-  if (_repoLockPath) {
-    // Check if task scheduled a safe-restart — keep lock during restart window
-    let _keptForRestart = false;
-    try {
-      const _rm = await loadRestartMarker(config.defaultWorkspaceRoot, task.id);
-      if (_rm && ["pending", "scheduled", "restarted"].includes(_rm.status)) {
-        await releaseRepoLock(config.defaultWorkspaceRoot, _repoLockPath, task.id, {
-          restartState: "scheduled"
-        });
-        _keptForRestart = true;
-      }
-    } catch {}
-    if (!_keptForRestart) {
-      await releaseRepoLock(config.defaultWorkspaceRoot, _repoLockPath, task.id);
-    }
-  }
-  if (goal) {
-    const goalStatus = taskStatus === "timed_out" ? "failed" : taskStatus;
-    await updateGoalStatus(store, goal.id, goalStatus, doneAt);
-    const statusLabel = taskStatus === "timed_out" ? "Timed out" : "Completed";
-    await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.result_md,
-      "# Result\n\n" + summary + "\n\n" + statusLabel + " at: " + doneAt + "\n", context);
-    await appendGoalMessage(store, config, {
-      goal_id: goal.id,
-      role: "codex",
-      content: "[worker] " + statusLabel + " task " + task.id + ".\n\n" + summary,
-      memory_key: "codex_last_result",
-      memory_value: summary.slice(0, 4000)
-    }, context);
-  }
-  try { github.syncTask(result.task).catch(() => {}); } catch {}
-  return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
+  return finalizeCodexTaskRun({
+    store,
+    config,
+    task,
+    taskStatus,
+    taskResult,
+    doneAt,
+    cr,
+    workspace,
+    goal,
+    workspaceFiles,
+    summary,
+    context,
+    runFilePath,
+    repoLockPath: _repoLockPath,
+    github,
+    appendGoalMessageFn: appendGoalMessage,
+  });
 }
-
-
-
-
-
-

@@ -405,6 +405,32 @@ test("hosted workspace supports write, read, search, sha256, and shell_exec", as
   assert.equal(shell.stdout, "shell-ok");
 });
 
+test("hosted workspace search skips default excluded dirs and oversized content", async () => {
+  const server = await makeServer();
+
+  await callTool(server, "write_text_file", {
+    path: "src/keep.txt",
+    content: "needle in source",
+    overwrite: true
+  });
+  await callTool(server, "write_text_file", {
+    path: "node_modules/pkg/skip.txt",
+    content: "needle in dependency",
+    overwrite: true
+  });
+  await callTool(server, "write_text_file", {
+    path: "logs/big.txt",
+    content: "x".repeat(32) + "needle",
+    overwrite: true
+  });
+
+  const defaultSearch = await callTool(server, "search_files", { q: "needle", limit: 10 });
+  assert.deepEqual(defaultSearch.results.map((item) => item.path).sort(), ["logs/big.txt", "src/keep.txt"]);
+
+  const cappedSearch = await callTool(server, "search_files", { q: "needle", limit: 10, max_file_bytes: 16 });
+  assert.deepEqual(cappedSearch.results.map((item) => item.path), ["src/keep.txt"]);
+});
+
 test("hosted workspace supports zip bundle upload and download as base64", async () => {
   const server = await makeServer();
   const zipBase64 = await makeZipBase64({ "bundle/hello.txt": "hello bundle" });
@@ -425,6 +451,25 @@ test("hosted workspace supports zip bundle upload and download as base64", async
   const downloaded = await callTool(server, "download_bundle_base64", { source_dir: "incoming/extracted" });
   assert.equal(downloaded.ok, true);
   assert.match(downloaded.zip_base64, /^[A-Za-z0-9+/=]+$/);
+});
+
+test("download_bundle_base64 rejects bundles larger than max_bytes", async () => {
+  const server = await makeServer();
+
+  await callTool(server, "write_text_file", {
+    path: "bundle/large.txt",
+    content: "bundle content that should exceed the tiny cap",
+    overwrite: true
+  });
+
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 99,
+    method: "tools/call",
+    params: { name: "download_bundle_base64", arguments: { source_dir: "bundle", max_bytes: 10 } }
+  }, { authorization: "Bearer test-token" });
+
+  assert.match(response.error?.message || "", /bundle too large/i);
 });
 
 async function makeZipBase64(files) {

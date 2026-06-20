@@ -335,6 +335,61 @@ test("StateStore concurrent saves are serialized and use atomic write", async ()
   assert.equal(tmpFiles.length, 0, "no temp files should remain after save: " + JSON.stringify(tmpFiles));
 });
 
+test("StateStore save caps activities and preserves newest entries", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-activities-cap-"));
+  const statePath = join(root, "state.json");
+  const store = new StateStore({
+    statePath,
+    defaultWorkspaceRoot: join(root, "workspace"),
+    maxActivities: 3
+  });
+
+  const state = await store.load();
+  state.activities.push(
+    { type: "oldest", index: 1 },
+    { type: "older", index: 2 },
+    { type: "keep-1", index: 3 },
+    { type: "keep-2", index: 4 },
+    { type: "keep-3", index: 5 }
+  );
+
+  await store.save();
+
+  assert.deepEqual(state.activities.map((activity) => activity.type), ["keep-1", "keep-2", "keep-3"]);
+  const persisted = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(persisted.activities.map((activity) => activity.type), ["keep-1", "keep-2", "keep-3"]);
+});
+
+test("StateStore mutate batches state update into one save", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-mutate-"));
+  const statePath = join(root, "state.json");
+  const store = new StateStore({
+    statePath,
+    defaultWorkspaceRoot: join(root, "workspace")
+  });
+
+  let saveCount = 0;
+  const originalSave = store.save.bind(store);
+  store.save = async () => {
+    saveCount += 1;
+    return originalSave();
+  };
+
+  await store.load();
+  saveCount = 0;
+  const result = await store.mutate((state) => {
+    state.tasks.push({ id: "task_mutate", title: "Mutated" });
+    state.activities.push({ type: "task.created", task_id: "task_mutate" });
+    return state.tasks[0].id;
+  });
+
+  assert.equal(result, "task_mutate");
+  assert.equal(saveCount, 1);
+  const persisted = JSON.parse(await readFile(statePath, "utf8"));
+  assert.equal(persisted.tasks[0].id, "task_mutate");
+  assert.equal(persisted.activities[0].task_id, "task_mutate");
+});
+
 // -----------------------------------------------------------------------
 // P0-2: StateStore save chain is resilient to individual failures
 // -----------------------------------------------------------------------

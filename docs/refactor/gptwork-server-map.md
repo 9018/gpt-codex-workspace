@@ -186,6 +186,50 @@ This means the extraction can proceed module-by-module without needing to refact
 
 ---
 
+## Current P4 Snapshot
+
+**Current commit:** `ba29e00d112fd11433aa3b3caf4982b3911ddd86`
+**File:** `backend/src/gptwork-server.mjs` (1278 lines)
+
+### Current Reality
+
+- `gptwork-server.mjs` has no inline `: tool(` MCP registrations.
+- HTTP/SSE/JSON-RPC dispatch is extracted to `http-handler.mjs`.
+- Codex worker dispatch helpers are extracted to `codex-worker.mjs`.
+- Bark notification helpers are extracted to `notification-service.mjs`.
+- `processGeneralTask()` still remains in `gptwork-server.mjs`, with result-status, prompt/run setup, Codex execution, and final writeback helpers extracted.
+- State persistence now caps `activities`, exposes `StateStore.mutate()`, and batches final task/goal writeback where available.
+- Worker queue counts are delegated to a one-pass counter module.
+- Workspace search now skips common generated/vendor directories and caps per-file content reads; bundle download now enforces a result-size cap.
+- Git remote inspection tools now use an async bounded `spawn("git", ...)` runner instead of synchronous git subprocess calls.
+
+### P4.3 Extraction Results
+
+| Area | Current module | Notes |
+| --- | --- | --- |
+| Tool registration groups | `tool-groups/*.mjs` | P4.2 removed inline tool registrations from `gptwork-server.mjs`. |
+| HTTP/MCP transport | `http-handler.mjs` | `gptwork-server.mjs` wires the handler as composition root. |
+| Worker dispatch loop | `codex-worker.mjs` | `startCodexWorker()`, `runAssignedCodexTasks()`, and `mapConcurrent()` are delegated out. |
+| Notifications | `notification-service.mjs` | Terminal and created-task Bark notification helpers are delegated out. |
+| Result-status derivation | `task-result-status.mjs` | `processGeneralTask()` delegates status mapping plus autonomy/runtime guards. |
+| Prompt/run setup | `task-run-setup.mjs` | Prompt file creation, run metadata init, and first heartbeat are delegated out. |
+| Codex execution | `task-codex-execution.mjs` | Codex command execution, run log persistence, parsing heartbeat, and parsed summary selection are delegated out. |
+| Final writeback | `task-final-writeback.mjs` | Final heartbeat, task/goal state writes, repo lock release, result markdown, and GitHub sync are delegated out. |
+| General task execution | `gptwork-server.mjs` | `processGeneralTask()` remains as a thinner orchestration wrapper. |
+| State persistence | `state-store.mjs` | Activities are capped before save and `mutate()` batches load/update/save. |
+| Worker queue status | `worker-queue-counts.mjs` | Runtime queue counters are computed in one pass. |
+| Workspace read limits | `workspace-service.mjs` | Search has default excluded dirs and max file bytes; bundle downloads reject oversized ZIP results. |
+| Git remote inspection | `git-remote-tools.mjs` | Git commands run through async bounded child processes. |
+
+### Recommended Next Decomposition
+
+Do not extract all of `processGeneralTask()` in one task. Split it into focused helpers:
+
+1. Move the thin `processGeneralTask()` wrapper only if further decomposition still provides value.
+2. Continue with additional focused performance work only after committing and restart-verifying this runtime batch.
+
+---
+
 ## Phase 2 & 3 — Extraction Results (Post-Refactor)
 
 **Baseline commit:** `920fffca4792bd29a1eb453324b1bc757e87eda3`

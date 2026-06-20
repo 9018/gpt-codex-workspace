@@ -118,7 +118,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
       return { task_id: completed.task.id, status: completed.task.status, kind: completed.task.result?.kind || "unknown", count: completed.task.result?.sessions?.count ?? 0 };
     }
     if (task.mode === "builder" || task.mode === "deploy" || task.mode === "admin") {
-      return await processGeneralTask(store, config, task, context);
+      return await processGeneralTask(store, config, task, context, github);
     }
     return { task_id: task.id, status: task.status, skipped: true, reason: "no safe built-in handler for this assigned task" };
   });

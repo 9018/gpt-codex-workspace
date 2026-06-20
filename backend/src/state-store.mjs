@@ -3,10 +3,11 @@ import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
 export class StateStore {
-  constructor({ statePath, defaultWorkspaceRoot, oldDefaultStatePath }) {
+  constructor({ statePath, defaultWorkspaceRoot, oldDefaultStatePath, maxActivities = 10000 }) {
     this.statePath = statePath;
     this.defaultWorkspaceRoot = defaultWorkspaceRoot;
     this.oldDefaultStatePath = oldDefaultStatePath || null;
+    this.maxActivities = Math.max(1, Number(maxActivities) || 10000);
     this.state = null;
     this._migrationSource = null;
     this._saveLock = null;
@@ -26,6 +27,7 @@ export class StateStore {
 
   async save() {
     await mkdir(dirname(this.statePath), { recursive: true });
+    this._capActivities();
     // Serialize concurrent saves with an internal promise chain.
     // Use temp-file + atomic rename to avoid partial writes on crash.
     // If a single save fails, we reset the chain so future saves are not
@@ -38,6 +40,19 @@ export class StateStore {
     // Reset on failure so subsequent saves still execute
     this._saveLock = chain.catch(() => {});
     return chain;
+  }
+
+  async mutate(updater) {
+    const state = await this.load();
+    const result = await updater(state);
+    await this.save();
+    return result;
+  }
+
+  _capActivities() {
+    if (!this.state || !Array.isArray(this.state.activities)) return;
+    const excess = this.state.activities.length - this.maxActivities;
+    if (excess > 0) this.state.activities.splice(0, excess);
   }
 
   async _migrateIfNeeded() {

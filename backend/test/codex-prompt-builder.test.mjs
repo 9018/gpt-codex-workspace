@@ -211,9 +211,9 @@ test("processGeneralTask no longer contains inline prompt template", async () =>
   assert.equal(source.includes('const separator = "=".repeat(60)'), false,
     "separator definition should not remain inline in gptwork-server.mjs");
 
-  // processGeneralTask should now use buildCodexPrompt
-  assert.ok(source.includes("buildCodexPrompt({"),
-    "processGeneralTask should use the builder module");
+  // processGeneralTask should now delegate prompt/run setup to the setup helper.
+  assert.ok(source.includes("prepareCodexTaskRun({"),
+    "processGeneralTask should use the run setup helper");
 });
 
 test("codex-prompt-builder.mjs exports buildCodexPrompt", async () => {

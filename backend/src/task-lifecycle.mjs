@@ -129,6 +129,10 @@ export function setTerminalNotifier(fn) {
   _terminalNotifier = fn;
 }
 
+export async function notifyTerminalTask(task) {
+  if (_terminalNotifier) await _terminalNotifier(task);
+}
+
 // ---------------------------------------------------------------------------
 // Task update
 // ---------------------------------------------------------------------------
@@ -142,7 +146,7 @@ export async function updateTask(store, task_id, updater) {
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
 
   // Use shared notification helper for terminal task states (deduplicated per task/status/channel)
-  if (_terminalNotifier) await _terminalNotifier(task);
+  await notifyTerminalTask(task);
 
   await store.save();
   return { task };
