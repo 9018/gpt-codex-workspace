@@ -39,6 +39,7 @@ export function recordWorkerTickSuccess(workerState, workerResult = {}) {
     completed: workerResult.completed ?? 0,
     skipped: workerResult.skipped ?? 0,
     task_count: tasks.length,
+    ...(workerResult.github_sync ? { github_sync: workerResult.github_sync } : {}),
   };
   return workerState;
 }
