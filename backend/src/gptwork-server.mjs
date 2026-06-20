@@ -60,6 +60,7 @@ import { createBasicTaskToolsGroup } from "./tool-groups/basic-task-tools-group.
 import { createSessionInventoryToolsGroup, completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { createTaskCompletionToolsGroup } from "./tool-groups/task-completion-tools-group.mjs";
 import { createChatGptRequestToolsGroup } from "./tool-groups/chatgpt-request-tools-group.mjs";
+import { createBrowserToolsGroup } from "./tool-groups/browser-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -975,13 +976,9 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
       return { checked_issues: github.getKnownIssues().length, responses_found: responses.length, responses: responses.map((r) => ({ request_id: r.request_id, from: r.user })) };
     }),
 
-    browser_new_session: tool("Create a lightweight HTTP browser session (no JS execution, no real rendering).", schema({ headless: "boolean", viewport_width: "integer", viewport_height: "integer" }), async (args) => browser.newSession(args)),
-    browser_list_sessions: tool("List browser sessions.", schema({}), async () => browser.listSessions()),
+    ...createBrowserToolsGroup({ tool, schema, browser }),
     browser_close_session: tool("Close a browser session.", schema({ session_id: "string" }, ["session_id"]), async ({ session_id }) => browser.closeSession(session_id)),
-    browser_goto: tool("Navigate a browser session to a URL. Performs a server-side HTTP GET; page JavaScript is not executed.", schema({ session_id: "string", url: "string" }, ["session_id", "url"]), async ({ session_id, url }) => browser.goto(session_id, url)),
     browser_current_state: tool("Return current page URL and title.", schema({ session_id: "string" }, ["session_id"]), async ({ session_id }) => browser.currentState(session_id)),
-    browser_get_text: tool("Extract visible inner text.", schema({ session_id: "string", max_chars: "integer" }, ["session_id"]), async ({ session_id, max_chars }) => browser.getText(session_id, max_chars)),
-    browser_get_html: tool("Extract HTML.", schema({ session_id: "string", max_chars: "integer" }, ["session_id"]), async ({ session_id, max_chars }) => browser.getHtml(session_id, max_chars)),
     browser_extract_links: tool("Extract links.", schema({ session_id: "string", limit: "integer" }, ["session_id"]), async ({ session_id, limit }) => browser.extractLinks(session_id, limit)),
     browser_click: tool("Record a click target (lightweight HTTP browser; clicks do not trigger JS or navigation).", schema({ session_id: "string", selector: "string" }, ["session_id", "selector"]), async ({ session_id, selector }) => browser.click(session_id, selector)),
     browser_fill: tool("Record input fill target (lightweight HTTP browser; does not execute form JS).", schema({ session_id: "string", selector: "string", text: "string" }, ["session_id", "selector", "text"]), async ({ session_id, selector, text }) => browser.fill(session_id, selector, text)),
