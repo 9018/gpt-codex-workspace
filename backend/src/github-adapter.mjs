@@ -352,15 +352,18 @@ function buildResultComment(task) {
       return results;
     },
 
-    async importFromIssues(store) {
+    async importFromIssues(store, { limit = 100, assignToCodex = false } = {}) {
       if (!enabled) return [];
       const issues = await this.pollIssues();
       const imported = [];
       const state = await store.load();
+      const maxIssues = Math.max(1, Math.min(Number(limit) || 100, 100));
       for (const issue of issues) {
+        if (imported.length >= maxIssues) break;
         if (issue.labels.includes("gptwork-question")) continue;
         const idMatch = issue.body.match(/\*\*Task ID\*\*:\s*`(task_[a-f0-9-]+)`/);
         if (idMatch && state.tasks.find((t) => t.id === idMatch[1])) continue;
+        if (state.tasks.find((t) => t.github_issue_number === issue.number || t.github_issue_url === issue.html_url)) continue;
         const titleMatch = issue.title.match(/^\[Task\]\s+(.+?)\s+\[(.+?)\]$/);
         const taskTitle = titleMatch ? titleMatch[1] : issue.title;
         const taskStatus = titleMatch ? titleMatch[2] : "queued";
@@ -372,9 +375,11 @@ function buildResultComment(task) {
           title: taskTitle,
           description: issue.body || "",
           created_by: "github-import",
-          assignee: "",
+          assignee: assignToCodex ? "codex" : "",
           status: taskStatus,
           mode: "builder",
+          github_issue_number: issue.number,
+          github_issue_url: issue.html_url || null,
           logs: [{ time: now, message: "Imported from GitHub issue #" + issue.number }],
           artifacts: [],
           result: null,

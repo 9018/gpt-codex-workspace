@@ -480,6 +480,7 @@ Key env vars and their defaults:
 | `GPTWORK_BARK_GROUP` | `gptwork` | Notification group |
 | `GPTWORK_GITHUB_ENABLED` | `false` | Enable GitHub Issues sync |
 | `GPTWORK_GITHUB_REPO` | (empty) | `owner/repo` for issue sync |
+| `GPTWORK_GITHUB_SYNC_LIMIT` | `20` | Max new GitHub Issues imported per worker tick |
 | `GPTWORK_SHELL_TIMEOUT` | `60` | Shell command timeout (seconds) |
 | `GPTWORK_MAX_OUTPUT_BYTES` | `200000` | Max shell/file output bytes |
 | `GPTWORK_CODEX_HOME` | `/home/a9017` | Codex user home |

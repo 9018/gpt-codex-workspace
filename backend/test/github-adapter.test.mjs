@@ -135,3 +135,43 @@ test("syncTask returns not-configured when explicitly disabled", async () => {
   const result = await sync.syncTask({ id: "test-1", title: "test", status: "open" });
   assert.deepEqual(result, { ok: false, reason: "github not configured" });
 });
+
+test("importFromIssues limits batches, assigns Codex, and dedupes repeated issue sync", async () => {
+  const previousFetch = globalThis.fetch;
+  const issues = [1, 2, 3].map((number) => ({
+    number,
+    title: `Issue ${number}`,
+    body: `Body ${number}`,
+    labels: [{ name: "gptwork-task" }],
+    state: "open",
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    html_url: `https://github.com/owner/repo/issues/${number}`
+  }));
+  globalThis.fetch = async () => ({ ok: true, json: async () => issues });
+
+  const state = { tasks: [], activities: [] };
+  let saves = 0;
+  const store = {
+    load: async () => state,
+    save: async () => { saves += 1; }
+  };
+
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+    const first = await sync.importFromIssues(store, { limit: 2, assignToCodex: true });
+    const second = await sync.importFromIssues(store, { limit: 2, assignToCodex: true });
+    const third = await sync.importFromIssues(store, { limit: 2, assignToCodex: true });
+
+    assert.equal(first.length, 2);
+    assert.equal(second.length, 1);
+    assert.equal(third.length, 0);
+    assert.equal(state.tasks.length, 3);
+    assert.deepEqual(state.tasks.map((task) => task.github_issue_number), [1, 2, 3]);
+    assert.deepEqual(state.tasks.map((task) => task.assignee), ["codex", "codex", "codex"]);
+    assert.deepEqual(state.tasks.map((task) => task.status), ["queued", "queued", "queued"]);
+    assert.equal(saves, 2);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

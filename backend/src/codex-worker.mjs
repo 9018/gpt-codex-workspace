@@ -38,6 +38,7 @@ import { completeCodexSessionInventoryTask } from "./tool-groups/session-invento
 export function startCodexWorker(server, {
   intervalMs = Number(process.env.GPTWORK_CODEX_WORKER_INTERVAL_MS || 5000),
   limit = Number(process.env.GPTWORK_CODEX_WORKER_LIMIT || 10),
+  githubSyncLimit = Number(process.env.GPTWORK_GITHUB_SYNC_LIMIT || 20),
   concurrency = Number(process.env.GPTWORK_CODEX_WORKER_CONCURRENCY || 4),
   workerState = createWorkerState(),
 } = {}) {
@@ -52,7 +53,16 @@ export function startCodexWorker(server, {
     running = true;
     markWorkerTickStarted(workerState);
     try {
+      let githubSync = null;
+      if (typeof server.syncGithubIssuesForWorker === "function") {
+        try {
+          githubSync = await server.syncGithubIssuesForWorker({ limit: githubSyncLimit });
+        } catch (error) {
+          githubSync = { ok: false, error: error.message };
+        }
+      }
       const wr = await server.runAssignedCodexTasks({ limit, concurrency });
+      if (githubSync) wr.github_sync = githubSync;
       recordWorkerTickSuccess(workerState, wr);
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) {
         const done = wr.tasks.filter(t => t.status === "completed").length;

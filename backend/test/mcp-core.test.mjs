@@ -366,3 +366,28 @@ test("Codex worker interval uses safe assigned task runner with configured concu
     handle.stop();
   }
 });
+
+test("Codex worker tick syncs GitHub issues before assigned task runner", async () => {
+  const calls = [];
+  const handle = startCodexWorker({
+    intervalMs: 5,
+    async syncGithubIssuesForWorker(args) {
+      calls.push({ kind: "sync", args });
+      return { imported_tasks: 3, imported_responses: 1 };
+    },
+    async runAssignedCodexTasks(args) {
+      calls.push({ kind: "run", args });
+      return { completed: 0, tasks: [] };
+    }
+  }, { concurrency: 2, limit: 4, githubSyncLimit: 7 });
+
+  try {
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    assert.equal(calls[0]?.kind, "sync");
+    assert.equal(calls[0]?.args.limit, 7);
+    assert.equal(calls[1]?.kind, "run");
+    assert.equal(calls[1]?.args.limit, 4);
+  } finally {
+    handle.stop();
+  }
+});

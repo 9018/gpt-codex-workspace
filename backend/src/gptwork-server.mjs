@@ -159,6 +159,20 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
       return _runAssignedCodexTasks(store, config, github, args, context, { processGeneralTask });
     },
 
+    async syncGithubIssuesForWorker({ limit = 20 } = {}) {
+      if (!github?.enabled) return { ok: true, enabled: false, imported_tasks: 0, imported_responses: 0 };
+      const imported = await github.importFromIssues(store, { limit, assignToCodex: true });
+      const responses = await github.importResponsesFromComments(store);
+      return {
+        ok: true,
+        enabled: true,
+        limit,
+        imported_tasks: imported.length,
+        imported_task_ids: imported.map((task) => task.id),
+        imported_responses: responses.length,
+      };
+    },
+
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {
       try {
         const state = await store.load();
