@@ -1,0 +1,24 @@
+{
+  "ref": "refs/heads/main",
+  "after": "abc123def456abc123def456abc123def456abc1",
+  "head_commit": {
+    "id": "abc123def456abc123def456abc123def456abc1",
+    "added": [
+      ".gptwork/goal-inbox/foo.zip.b64",
+      ".gptwork/goal-inbox/foo-task.md"
+    ],
+    "modified": [],
+    "removed": []
+  },
+  "commits": [
+    {
+      "id": "abc123def456abc123def456abc123def456abc1",
+      "added": [
+        ".gptwork/goal-inbox/foo.zip.b64",
+        ".gptwork/goal-inbox/foo-task.md"
+      ],
+      "modified": [],
+      "removed": []
+    }
+  ]
+}

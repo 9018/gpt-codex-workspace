@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 42,
+    "title": "[GPTWork Task] Test issue with label",
+    "body": "ZIP base64: `.gptwork/goal-inbox/foo.zip.b64`\n\nRestore instructions: `.gptwork/goal-inbox/restore.md`\n\nFallback queued task file: `.gptwork/goal-inbox/foo-task.md`",
+    "labels": [
+      { "name": "gptwork-task" }
+    ]
+  }
+}

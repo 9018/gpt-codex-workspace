@@ -1,0 +1,55 @@
+name: GPTWork Dispatch
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.gptwork/goal-inbox/**'
+  issues:
+    types: [opened, edited, labeled]
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'GitHub Issue number to dispatch'
+        required: false
+        type: string
+      payload_path:
+        description: 'Explicit payload file path relative to workspace root'
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: ${{ github.event_name == 'issues' && format('issue-{0}', github.event.issue.number) || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Run GPTWork dispatch
+        run: node backend/scripts/github-actions-dispatch.mjs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_SHA: ${{ github.sha }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_STEP_SUMMARY: ${{ github.step_summary }}
+          GPTWORK_MCP_URL: ${{ secrets.GPTWORK_MCP_URL }}
+          GPTWORK_MCP_TOKEN: ${{ secrets.GPTWORK_MCP_TOKEN }}
+          GPTWORK_WORKSPACE_ROOT: ${{ github.workspace }}
+          DISPATCH_PAYLOAD_PATH: ${{ inputs.payload_path || '' }}
+          DISPATCH_ISSUE_NUMBER: ${{ inputs.issue_number || '' }}

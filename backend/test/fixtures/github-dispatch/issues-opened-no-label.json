@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 99,
+    "title": "Regular issue without gptwork label",
+    "body": "This is a regular issue that should be skipped.",
+    "labels": [
+      { "name": "bug" }
+    ]
+  }
+}
