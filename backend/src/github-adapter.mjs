@@ -266,9 +266,15 @@ function buildResultComment(task) {
 
     async pollIssues() {
       if (!enabled) return [];
-      const res = await api("GET", "/issues?labels=gptwork-task,gptwork-question&state=open&per_page=100");
+      const res = await api("GET", "/issues?state=open&per_page=100");
       if (!res) return [];
-      knownIssues = Array.isArray(res) ? res : [];
+      knownIssues = (Array.isArray(res) ? res : []).filter((issue) => {
+        if (issue.pull_request) return false;
+        const labels = (issue.labels || []).map((l) => typeof l === "string" ? l : l.name || "");
+        return labels.includes("gptwork-task")
+          || labels.includes("gptwork-question")
+          || /^\[(?:GPTWork\s+)?(?:Task|Question)\]/i.test(issue.title || "");
+      });
       knownComments = {};
       for (const issue of knownIssues) {
         knownComments[issue.number] = null;

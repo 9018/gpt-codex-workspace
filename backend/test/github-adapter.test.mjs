@@ -175,3 +175,29 @@ test("importFromIssues limits batches, assigns Codex, and dedupes repeated issue
     globalThis.fetch = previousFetch;
   }
 });
+
+test("pollIssues imports gptwork labels or GPTWork title prefixes without requiring both labels", async () => {
+  const previousFetch = globalThis.fetch;
+  const issues = [
+    { number: 1, title: "Labelled task", body: "", labels: [{ name: "gptwork-task" }], state: "open", html_url: "https://github.com/owner/repo/issues/1" },
+    { number: 2, title: "Labelled question", body: "", labels: [{ name: "gptwork-question" }], state: "open", html_url: "https://github.com/owner/repo/issues/2" },
+    { number: 3, title: "[GPTWork Task] Title-only task", body: "", labels: [], state: "open", html_url: "https://github.com/owner/repo/issues/3" },
+    { number: 4, title: "Unrelated issue", body: "", labels: [], state: "open", html_url: "https://github.com/owner/repo/issues/4" },
+    { number: 5, title: "PR should not import", body: "", labels: [{ name: "gptwork-task" }], state: "open", html_url: "https://github.com/owner/repo/pull/5", pull_request: {} },
+  ];
+  const requestedPaths = [];
+  globalThis.fetch = async (url) => {
+    requestedPaths.push(String(url));
+    return { ok: true, json: async () => issues };
+  };
+
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+    const result = await sync.pollIssues();
+
+    assert.equal(requestedPaths.some((url) => url.includes("labels=gptwork-task,gptwork-question")), false);
+    assert.deepEqual(result.map((issue) => issue.number), [1, 2, 3]);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
