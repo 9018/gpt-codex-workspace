@@ -70,6 +70,7 @@ import { createWorkspaceOperationsToolsGroup } from "./tool-groups/workspace-ope
 import { createGitRemoteToolsGroup } from "./tool-groups/git-remote-tools-group.mjs";
 import { createGithubSyncToolsGroup } from "./tool-groups/github-sync-tools-group.mjs";
 import { createSystemDiagnosticsToolsGroup } from "./tool-groups/system-diagnostics-tools-group.mjs";
+import { createGithubCommentsSyncToolsGroup } from "./tool-groups/github-comments-sync-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -657,11 +658,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     ...createRepositoryToolsGroup({ tool, schema, registry }),
     ...createContextHealthToolsGroup({ tool, schema, config, registry, store }),
 
-
-    sync_github_comments: tool("Poll GitHub Issues for new comments and import ChatGPT responses as answers to coordination requests. After ChatGPT responds to a question via GitHub Issue comment, use this to bring the answer back into the system.", schema({}), async () => {
-      const responses = await github.importResponsesFromComments(store);
-      return { checked_issues: github.getKnownIssues().length, responses_found: responses.length, responses: responses.map((r) => ({ request_id: r.request_id, from: r.user })) };
-    }),
+    ...createGithubCommentsSyncToolsGroup({ tool, schema, store, github }),
 
     ...createBrowserToolsGroup({ tool, schema, browser }),
     ...createBrowserInteractionToolsGroup({ tool, schema, browser }),
