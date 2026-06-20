@@ -172,9 +172,14 @@ function buildResultComment(task) {
      */
     async _findExistingIssue(searchBody) {
       if (!enabled) return null;
-      const res = await api("GET", "/issues?labels=gptwork-task,gptwork-question&state=open&per_page=100");
+      const res = await api("GET", "/issues?state=open&per_page=100");
       if (!Array.isArray(res)) return null;
-      return res.find((i) => (i.body || "").includes(searchBody)) || null;
+      return res.find((i) => {
+        if (i.pull_request) return false;
+        const labels = (i.labels || []).map((l) => typeof l === "string" ? l : l.name || "");
+        if (!labels.includes("gptwork-task") && !labels.includes("gptwork-question")) return false;
+        return (i.body || "").includes(searchBody);
+      }) || null;
     },
 
     enabled,

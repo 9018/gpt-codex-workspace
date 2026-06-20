@@ -172,8 +172,8 @@ Codex calls `create_chatgpt_request`. ChatGPT sees the open request and responds
 
 ### ChatGPT ↔ Codex via GitHub Issues (no reverse proxy)
 
-1. **ChatGPT creates a task**: Creates a GitHub Issue with text describing the task.
-2. **Backend polls**: Call `sync_from_github` tool. It imports new Issues as tasks.
+1. **ChatGPT creates a task**: Creates a GitHub Issue with text describing the task. Titles like `[GPTWork Task] ...` are auto-labeled by `.github/workflows/main.yml`.
+2. **Backend polls**: The Codex worker automatically imports matching GitHub Issues each tick; `sync_from_github` can still be called manually.
 3. **Codex executes**: Picks up the task, works on it, updates it.
 4. **Backup syncs results**: Call `sync_to_github` to push status/logs back to the Issue.
 5. **ChatGPT reads**: Views the updated Issue to see progress and results.

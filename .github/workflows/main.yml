@@ -1,1 +1,44 @@
+name: GPTWork Issue Sync Helpers
 
+on:
+  issues:
+    types: [opened, edited, reopened]
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  normalize-gptwork-issue:
+    if: github.event_name == 'issues'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Add GPTWork labels from issue title
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const issue = context.payload.issue;
+            const title = issue.title || '';
+            const labels = new Set((issue.labels || []).map((label) => label.name));
+            const labelsToAdd = [];
+
+            if (/^\[GPTWork\s+Task\]/i.test(title) && !labels.has('gptwork-task')) {
+              labelsToAdd.push('gptwork-task');
+            }
+            if (/^\[GPTWork\s+Question\]/i.test(title) && !labels.has('gptwork-question')) {
+              labelsToAdd.push('gptwork-question');
+            }
+
+            if (labelsToAdd.length === 0) {
+              core.info('No GPTWork labels needed.');
+              return;
+            }
+
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issue.number,
+              labels: labelsToAdd,
+            });
+            core.info(`Added labels: ${labelsToAdd.join(', ')}`);
