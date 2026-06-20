@@ -272,13 +272,18 @@ async function dispatchPayload(payloadPath) {
 async function handlePush(payload) {
   const workspaceRoot = getEnv("GPTWORK_WORKSPACE_ROOT", process.cwd());
 
-  const headCommit = payload.head_commit || payload.commits?.[0] || {};
-  const added = headCommit.added || [];
-  const modified = headCommit.modified || [];
-  // Only consider added/modified files under .gptwork/goal-inbox/
-  const changed = [...added, ...modified].filter(
-    (f) => f.startsWith(".gptwork/goal-inbox/")
-  );
+  // Aggregate added/modified files from ALL commits in the push to avoid
+  // missing payload files that appear only in non-head commits.
+  const commits = payload.commits || (payload.head_commit ? [payload.head_commit] : []);
+  const changedSet = new Set();
+  for (const commit of commits) {
+    for (const f of [...(commit.added || []), ...(commit.modified || [])]) {
+      if (f.startsWith(".gptwork/goal-inbox/")) {
+        changedSet.add(f);
+      }
+    }
+  }
+  const changed = [...changedSet];
 
   if (changed.length === 0) {
     console.log("[dispatch] Push event: no files changed under .gptwork/goal-inbox/");

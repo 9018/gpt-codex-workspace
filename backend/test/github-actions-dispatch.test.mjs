@@ -59,16 +59,20 @@ function parseIssueBodyForPayload(body) {
 }
 
 /**
- * Simulate push event file filtering.
+ * Simulate push event file filtering — aggregates added/modified files
+ * from ALL commits in the push to catch payloads in non-head commits.
  */
 function getGoalInboxFilesFromPush(payload) {
-  const headCommit = payload.head_commit || payload.commits?.[0] || {};
-  const added = headCommit.added || [];
-  const modified = headCommit.modified || [];
-  const changed = [...added, ...modified].filter(
-    (f) => f.startsWith(".gptwork/goal-inbox/")
-  );
-  return changed;
+  const commits = payload.commits || (payload.head_commit ? [payload.head_commit] : []);
+  const changedSet = new Set();
+  for (const commit of commits) {
+    for (const f of [...(commit.added || []), ...(commit.modified || [])]) {
+      if (f.startsWith(".gptwork/goal-inbox/")) {
+        changedSet.add(f);
+      }
+    }
+  }
+  return [...changedSet];
 }
 
 function selectBestPayload(changed) {
@@ -210,6 +214,53 @@ test("handles push event with no goal-inbox files", () => {
   assert.equal(files.length, 0);
   const selected = selectBestPayload(files);
   assert.equal(selected, null);
+});
+
+
+// -- Multi-commit push event tests --
+
+test("discovers goal-inbox files from non-head commit in multi-commit push", () => {
+  const payload = readFixture("push-event-multi-commit.json");
+  const files = getGoalInboxFilesFromPush(payload);
+  assert.ok(files.length > 0, "Should discover files from non-head commit");
+  assert.ok(files.includes(".gptwork/goal-inbox/foo.zip.b64"));
+  assert.ok(files.includes(".gptwork/goal-inbox/foo-task.md"));
+});
+
+test("prefers zip.b64 even when only present in non-head commit", () => {
+  const payload = readFixture("push-event-multi-commit.json");
+  const files = getGoalInboxFilesFromPush(payload);
+  const selected = selectBestPayload(files);
+  assert.equal(selected, ".gptwork/goal-inbox/foo.zip.b64");
+});
+
+test("deduplicates files appearing in multiple commits", () => {
+  const payload = readFixture("push-event-multi-commit.json");
+  const files = getGoalInboxFilesFromPush(payload);
+  // Both commits have foo.zip.b64 ? No — only commit 0 has it.
+  // Let's verify dedup by constructing a payload where same file appears twice.
+  const dedupPayload = {
+    ref: "refs/heads/main",
+    commits: [
+      { id: "c1", added: [".gptwork/goal-inbox/dup.zip.b64"], modified: [], removed: [] },
+      { id: "c2", added: [".gptwork/goal-inbox/dup.zip.b64"], modified: [], removed: [] }
+    ]
+  };
+  const dupFiles = getGoalInboxFilesFromPush(dedupPayload);
+  assert.equal(dupFiles.length, 1, "Duplicate file should appear only once");
+  assert.equal(dupFiles[0], ".gptwork/goal-inbox/dup.zip.b64");
+});
+
+test("multi-commit push with no goal-inbox files returns empty", () => {
+  const payload = {
+    ref: "refs/heads/main",
+    commits: [
+      { id: "c1", added: ["README.md"], modified: [], removed: [] },
+      { id: "c2", added: [], modified: ["src/index.js"], removed: ["old.txt"] }
+    ]
+  };
+  const files = getGoalInboxFilesFromPush(payload);
+  assert.equal(files.length, 0);
 });
 
 // -- Markdown parsing tests --

@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, execSync } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -20,28 +20,8 @@ export async function resolvePath(store, config, args, context) {
     const safePath = (base + "/" + (target === "." ? "" : target)).replace(/\/+/g, "/");
     if (!safePath.startsWith(base)) throw new Error("path is outside workspace root: " + target);
     return { workspace, path: safePath };
-  }
-
-  // P1.2: Use ripgrep for hosted workspace if available
-  if (isRgAvailable()) {
-    const searchStart = Date.now();
-    const rgResult = searchWithRg(q, resolvedPath, maxResults, maxFileBytes, excludeDirs);
-    const elapsedMs = Date.now() - searchStart;
-    return {
-      q,
-      path,
-      count: rgResult.results.length,
-      results: rgResult.results,
-      max_total_bytes: maxTotalBytes,
-      backend: "rg",
-      elapsed_ms: elapsedMs,
-      scanned_bytes: 0,
-      skipped_binary: 0,
-      skipped_total_bytes: false,
-      truncated: rgResult.results.length >= maxResults
-    };
-  }
-  const resolved = await resolveWorkspacePath(workspace.root, args.path || ".");
+ }
+ const resolved = await resolveWorkspacePath(workspace.root, args.path || ".");
   return { workspace, path: resolved.absolutePath };
 }
 
@@ -275,7 +255,6 @@ let _rgAvailable = null;
 function isRgAvailable() {
   if (_rgAvailable !== null) return _rgAvailable;
   try {
-    const { execSync } = require("node:child_process");
     const out = execSync("rg --version", { stdio: ["ignore", "pipe", "pipe"], timeout: 3000, encoding: "utf8" });
     _rgAvailable = out.includes("ripgrep");
   } catch {
@@ -303,8 +282,7 @@ function searchWithRg(q, resolvedPath, maxResults, maxFileBytes, excludeDirs) {
   args.push(resolvedPath);
   
   try {
-    const { execSync } = require("node:child_process");
-    const out = execSync("rg " + args.map(a => require("./mcp-tooling.mjs").shellQuotee(a)).join(" "), {
+    const out = execSync("rg " + args.map(a => shellQuotee(a)).join(" "), {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 30000,
       encoding: "utf8",
@@ -333,13 +311,12 @@ function searchWithRg(q, resolvedPath, maxResults, maxFileBytes, excludeDirs) {
   
   // Check name matches using rg --files
   try {
-    const { execSync } = require("node:child_process");
     const fileArgs = ["--files"];
     for (const dir of excludeDirs) {
       fileArgs.push("--glob", "!" + dir + "/**");
     }
     fileArgs.push(resolvedPath);
-    const fileOut = execSync("rg " + fileArgs.map(a => require("./mcp-tooling.mjs").shellQuotee(a)).join(" "), {
+    const fileOut = execSync("rg " + fileArgs.map(a => shellQuotee(a)).join(" "), {
       stdio: ["ignore", "pipe", "pipe"],
       timeout: 10000,
       encoding: "utf8",
@@ -532,7 +509,7 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
       // Stream to log file if configured
       if (options.streamStdoutPath) {
         try {
-          require("node:fs").appendFileSync(options.streamStdoutPath, chunk);
+          appendFileSync(options.streamStdoutPath, chunk);
         } catch {}
       }
       if (!stdoutTruncated) {
@@ -551,7 +528,7 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
       // Stream to log file if configured
       if (options.streamStderrPath) {
         try {
-          require("node:fs").appendFileSync(options.streamStderrPath, chunk);
+          appendFileSync(options.streamStderrPath, chunk);
         } catch {}
       }
       if (!stderrTruncated) {
