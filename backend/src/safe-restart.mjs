@@ -97,6 +97,9 @@ export async function writePendingRestartMarker(workspaceRoot, taskId, fields = 
     ],
     attempts: 0
   };
+  if (fields.result_json_commit_rejected) {
+    marker.result_json_commit_rejected = fields.result_json_commit_rejected;
+  }
 
   const markerPath = getRestartMarkerPath(workspaceRoot, taskId);
   await writeFile(markerPath, JSON.stringify(marker, null, 2) + "\n", "utf8");
@@ -368,7 +371,7 @@ export async function scheduleServiceRestart(options = {}) {
   const startedAt = Date.now();
 
   // P2.0b.3: Prefer result.json commit when available.
-  //   Priority: result.json commit > explicit expected_commit (with HEAD match) > local HEAD default
+  //   Priority: result.json commit (verified against repo HEAD via P2.0b.5) > explicit expected_commit (with HEAD match) > local HEAD default
   let resultJsonCommit = null;
   if (store && workspaceRoot && taskId) {
     try {
@@ -409,7 +412,35 @@ export async function scheduleServiceRestart(options = {}) {
     }
   }
 
-  // P2.0b.2: Resolve expected_commit from local HEAD when absent; reject on mismatch.
+  
+  // P2.0b.5: If result.json commit conflicts with repo HEAD, prefer HEAD and record diagnostic.
+  // The result.json commit can be stale (e.g., from a previous task run) while the canonical
+  // repo has advanced. Using a stale expected_commit causes a false restart failure during
+  // Phase C verification, so we detect the conflict and use repo HEAD instead.
+  let resultJsonCommitRejected = null;
+  if (resultJsonCommit && repoPath) {
+    try {
+      const localHead = execSync("git rev-parse HEAD", {
+        cwd: repoPath, timeout: 5000, encoding: "utf8"
+      }).trim();
+      if (resultJsonCommit !== localHead) {
+        console.warn(
+          "[safe-restart] result.json commit \"" + resultJsonCommit + "\" differs from " +
+          "repo HEAD \"" + localHead + "\". Using repo HEAD for expected_commit."
+        );
+        resultJsonCommitRejected = resultJsonCommit;
+        resultJsonCommit = null; // fall through to HEAD-based resolution below
+      }
+    } catch (e) {
+      console.warn(
+        "[safe-restart] Could not compare result.json commit against repo HEAD: " + e.message
+      );
+      // Keep resultJsonCommit as-is on error; the marker will use the result.json value,
+      // which is better than nothing.
+    }
+  }
+
+// P2.0b.2: Resolve expected_commit from local HEAD when absent; reject on mismatch.
   let resolvedCommit = expectedCommit;
   let expectedCommitSource = null;
   if (resultJsonCommit) {
@@ -461,13 +492,17 @@ export async function scheduleServiceRestart(options = {}) {
   }
 
   // Step 1: Write pending restart marker
-  await writePendingRestartMarker(workspaceRoot, taskId, {
+  const markerFields = {
     requested_by: requestedBy,
     service_name: serviceName,
     expected_commit: resolvedCommit,
     expected_remote_head: expectedRemoteHead,
     repo_path: repoPath,
-  });
+  };
+  if (resultJsonCommitRejected) {
+    markerFields.result_json_commit_rejected = resultJsonCommitRejected;
+  }
+  await writePendingRestartMarker(workspaceRoot, taskId, markerFields);
 
   // Step 2: Optionally append task log
   if (store && typeof store.load === "function") {
@@ -509,7 +544,7 @@ export async function scheduleServiceRestart(options = {}) {
 
   const duration = Date.now() - startedAt;
 
-  return {
+  const result = {
     ok: restart.scheduled,
     task_id: taskId,
     service_name: serviceName,
@@ -523,6 +558,16 @@ export async function scheduleServiceRestart(options = {}) {
       ? (restart.error || "Failed to schedule detached restart")
       : undefined
   };
+  // Add diagnostic for result.json commit rejection (P2.0b.5)
+  if (resultJsonCommitRejected) {
+    result.warning = (
+      result.warning
+        ? result.warning + "; "
+        : ""
+    ) + `result.json commit "${resultJsonCommitRejected}" did not match repo HEAD "${resolvedCommit}"; used HEAD`;
+    result.result_json_commit_rejected = resultJsonCommitRejected;
+  }
+  return result;
 }
 
 
