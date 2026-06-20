@@ -151,14 +151,15 @@ export async function workspaceUploadBundleBase64(store, config, { path, zip_bas
 
 const DEFAULT_BUNDLE_MAX_BYTES = 25 * 1024 * 1024;
 
-export async function workspaceDownloadBundleBase64(store, config, { source_dir = "", paths = [], max_bytes = DEFAULT_BUNDLE_MAX_BYTES, workspace_id }, context) {
+export async function workspaceDownloadBundleBase64(store, config, { source_dir = "", paths = [], max_bytes = DEFAULT_BUNDLE_MAX_BYTES, max_bundle_bytes, workspace_id }, context) {
   requireScope(context, "files:download");
   const workspace = await selectWorkspace(store, workspace_id, context);
   if (workspace.type === "ssh") throw new Error("download_bundle_base64 currently supports hosted workspaces only");
   const tmpRoot = await mkdtemp(join(tmpdir(), "gptwork-bundle-"));
   const bundlePath = join(tmpRoot, "bundle.zip");
   const source = source_dir || ".";
-  const maxBytes = Math.max(1, Number(max_bytes) || DEFAULT_BUNDLE_MAX_BYTES);
+  const hasExplicitBundleCap = max_bundle_bytes !== undefined && max_bundle_bytes !== null;
+  const maxBytes = Math.max(1, Number(hasExplicitBundleCap ? max_bundle_bytes : max_bytes) || DEFAULT_BUNDLE_MAX_BYTES);
   try {
     if (Array.isArray(paths) && paths.length) {
       const staging = join(tmpRoot, "staging");
@@ -176,6 +177,9 @@ export async function workspaceDownloadBundleBase64(store, config, { source_dir 
     }
     const bytes = await readFile(bundlePath);
     if (bytes.length > maxBytes) {
+      if (hasExplicitBundleCap) {
+        return { ok: false, error: "too_large", too_large: true, source_dir: source, paths, size: bytes.length, max_bundle_bytes: maxBytes };
+      }
       throw new Error(`bundle too large: ${bytes.length} bytes exceeds max_bytes ${maxBytes}`);
     }
     return { ok: true, source_dir: source, paths, size: bytes.length, sha256: sha256(bytes), zip_base64: bytes.toString("base64") };
@@ -230,25 +234,34 @@ export async function workspaceCopy(store, config, { src, dst, overwrite = false
 
 const DEFAULT_SEARCH_EXCLUDE_DIRS = [".git", "node_modules", "dist", "build", "coverage", ".next", "vendor"];
 const DEFAULT_SEARCH_MAX_FILE_BYTES = 1024 * 1024;
+const DEFAULT_SEARCH_MAX_TOTAL_BYTES = 10 * 1024 * 1024;
 
 function normalizeSearchExcludeDirs(excludeDirs) {
   const values = Array.isArray(excludeDirs) ? excludeDirs : [];
   return new Set([...DEFAULT_SEARCH_EXCLUDE_DIRS, ...values].map((item) => String(item || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean));
 }
 
-export async function workspaceSearch(store, config, { q, path = ".", limit = 50, exclude_dirs = [], max_file_bytes = DEFAULT_SEARCH_MAX_FILE_BYTES, workspace_id }, context) {
+function looksBinary(bytes) {
+  return bytes.subarray(0, Math.min(bytes.length, 8000)).includes(0);
+}
+
+export async function workspaceSearch(store, config, { q, path = ".", limit = 50, exclude_dirs = [], max_file_bytes = DEFAULT_SEARCH_MAX_FILE_BYTES, max_total_bytes = DEFAULT_SEARCH_MAX_TOTAL_BYTES, workspace_id }, context) {
   requireScope(context, "workspace:read");
   const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
   const maxResults = Math.max(1, Math.min(Number(limit) || 50, 500));
   const maxFileBytes = Math.max(0, Number(max_file_bytes) || DEFAULT_SEARCH_MAX_FILE_BYTES);
+  const maxTotalBytes = Math.max(0, Number(max_total_bytes) || DEFAULT_SEARCH_MAX_TOTAL_BYTES);
   const excludeDirs = normalizeSearchExcludeDirs(exclude_dirs);
   if (workspace.type === "ssh") {
-    const raw = await sshSearchFiles(workspace, q, resolvedPath, 60, maxResults);
+    const raw = await sshSearchFiles(workspace, q, resolvedPath, 60, maxResults, { maxFileBytes, maxTotalBytes, excludeDirs: [...excludeDirs] });
     const paths = (raw.stdout || "").trim().split("\n").filter(Boolean).slice(0, maxResults);
     const results = paths.map((p) => ({ path: p, matched_name: true, matched_content: true, snippet: "" }));
-    return { q, path, count: results.length, results, raw: { returncode: raw.returncode, stdout: raw.stdout, stderr: raw.stderr } };
+    return { q, path, count: results.length, results, max_total_bytes: maxTotalBytes, raw: { returncode: raw.returncode, stdout: raw.stdout, stderr: raw.stderr } };
   }
   const results = [];
+  let scannedBytes = 0;
+  let skippedBinary = 0;
+  let skippedTotalBytes = false;
   async function walk(abs, rel) {
     const entries = (await readdir(abs, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
     for (const entry of entries) {
@@ -266,8 +279,17 @@ export async function workspaceSearch(store, config, { q, path = ".", limit = 50
         let idx = -1;
         if (info.size <= maxFileBytes) {
           const bytes = await readFile(childAbs);
-          text = bytes.toString("utf8");
-          idx = text.indexOf(q);
+          if (scannedBytes + bytes.length > maxTotalBytes) {
+            skippedTotalBytes = true;
+            return;
+          }
+          scannedBytes += bytes.length;
+          if (looksBinary(bytes)) {
+            skippedBinary += 1;
+          } else {
+            text = bytes.toString("utf8");
+            idx = text.indexOf(q);
+          }
         }
         if (matchedName || idx !== -1) {
           results.push({ path: childRel, size: info.size, matched_name: matchedName, matched_content: idx !== -1, snippet: idx === -1 ? "" : text.slice(Math.max(0, idx - 40), idx + q.length + 40) });
@@ -276,7 +298,7 @@ export async function workspaceSearch(store, config, { q, path = ".", limit = 50
     }
   }
   await walk(resolvedPath, path);
-  return { q, path, count: results.length, results };
+  return { q, path, count: results.length, results, scanned_bytes: scannedBytes, max_total_bytes: maxTotalBytes, skipped_binary: skippedBinary, skipped_total_bytes: skippedTotalBytes, truncated: skippedTotalBytes || results.length >= maxResults };
 }
 
 export async function workspaceSha256(store, config, args, context) {

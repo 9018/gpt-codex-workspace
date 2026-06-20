@@ -68,20 +68,22 @@ test("workspace read tool group has correct input schemas", () => {
   assert.equal(tools.download_file_base64.inputSchema.properties.max_bytes, "integer");
   assert.equal(tools.download_file_base64.inputSchema.properties.workspace_id, "string");
 
-  // download_bundle_base64: source_dir (string), paths (array), max_bytes (integer), workspace_id (string)
+  // download_bundle_base64: source_dir (string), paths (array), max_bytes/max_bundle_bytes (integer), workspace_id (string)
   assert.deepEqual(tools.download_bundle_base64.inputSchema.required, []);
   assert.equal(tools.download_bundle_base64.inputSchema.properties.source_dir, "string");
   assert.equal(tools.download_bundle_base64.inputSchema.properties.paths, "array");
   assert.equal(tools.download_bundle_base64.inputSchema.properties.max_bytes, "integer");
+  assert.equal(tools.download_bundle_base64.inputSchema.properties.max_bundle_bytes, "integer");
   assert.equal(tools.download_bundle_base64.inputSchema.properties.workspace_id, "string");
 
-  // search_files: q (string, required), path (string), limit (integer), exclude_dirs (array), max_file_bytes (integer), workspace_id (string)
+  // search_files: q (string, required), path (string), limit (integer), exclude_dirs (array), max_file_bytes/max_total_bytes (integer), workspace_id (string)
   assert.deepEqual(tools.search_files.inputSchema.required, ["q"]);
   assert.equal(tools.search_files.inputSchema.properties.q, "string");
   assert.equal(tools.search_files.inputSchema.properties.path, "string");
   assert.equal(tools.search_files.inputSchema.properties.limit, "integer");
   assert.equal(tools.search_files.inputSchema.properties.exclude_dirs, "array");
   assert.equal(tools.search_files.inputSchema.properties.max_file_bytes, "integer");
+  assert.equal(tools.search_files.inputSchema.properties.max_total_bytes, "integer");
   assert.equal(tools.search_files.inputSchema.properties.workspace_id, "string");
 
   // sha256_file: path (string, required), workspace_id (string)

@@ -204,15 +204,18 @@ test("promptBytes matches Buffer.byteLength of fullPrompt", () => {
 test("processGeneralTask no longer contains inline prompt template", async () => {
   const { readFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
-  const source = await readFile(join(process.cwd(), "src/gptwork-server.mjs"), "utf8");
+  const serverSource = await readFile(join(process.cwd(), "src/gptwork-server.mjs"), "utf8");
+  const processorSource = await readFile(join(process.cwd(), "src/task-general-processor.mjs"), "utf8");
 
   // The inline separator definition should not exist in processGeneralTask anymore
   // The separator should only be in codex-prompt-builder.mjs
-  assert.equal(source.includes('const separator = "=".repeat(60)'), false,
+  assert.equal(serverSource.includes('const separator = "=".repeat(60)'), false,
     "separator definition should not remain inline in gptwork-server.mjs");
+  assert.equal(processorSource.includes('const separator = "=".repeat(60)'), false,
+    "separator definition should not move into task-general-processor.mjs");
 
   // processGeneralTask should now delegate prompt/run setup to the setup helper.
-  assert.ok(source.includes("prepareCodexTaskRun({"),
+  assert.ok(processorSource.includes("prepareCodexTaskRun({"),
     "processGeneralTask should use the run setup helper");
 });
 

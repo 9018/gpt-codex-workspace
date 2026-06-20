@@ -11,6 +11,7 @@ export class StateStore {
     this.state = null;
     this._migrationSource = null;
     this._saveLock = null;
+    this._mutationLock = null;
   }
 
   async load() {
@@ -43,10 +44,29 @@ export class StateStore {
   }
 
   async mutate(updater) {
+    const chain = (this._mutationLock || Promise.resolve()).then(async () => {
+      const state = await this.load();
+      const result = await updater(state);
+      await this.save();
+      return result;
+    });
+    this._mutationLock = chain.catch(() => {});
+    return chain;
+  }
+
+  async findTaskById(id) {
     const state = await this.load();
-    const result = await updater(state);
-    await this.save();
-    return result;
+    return state.tasks.find((task) => task.id === id) || null;
+  }
+
+  async findGoalById(id) {
+    const state = await this.load();
+    return state.goals.find((goal) => goal.id === id) || null;
+  }
+
+  async findWorkspaceById(id) {
+    const state = await this.load();
+    return state.workspaces.find((workspace) => workspace.id === id) || null;
   }
 
   _capActivities() {

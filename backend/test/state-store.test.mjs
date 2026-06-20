@@ -97,6 +97,63 @@ test("old data/state.json migrates to workspace .gptwork/state.json when new fil
   assert.equal(loaded.users[0].id, "user_migrated");
 });
 
+test("mutate serializes updater and save so concurrent mutations see prior writes", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-mutate-lock-"));
+  const statePath = join(root, "state.json");
+  const store = new StateStore({
+    statePath,
+    defaultWorkspaceRoot: join(root, "workspace")
+  });
+  await store.load();
+
+  let releaseFirstUpdater;
+  let secondUpdaterEntered = false;
+  const firstUpdaterEntered = new Promise((resolve, reject) => {
+    store.mutate(async (state) => {
+      resolve();
+      await new Promise((release) => { releaseFirstUpdater = release; });
+      state.activities.push({ id: "first", order: state.activities.length });
+    }).catch(reject);
+  });
+
+  await firstUpdaterEntered;
+
+  const secondMutation = store.mutate((state) => {
+    secondUpdaterEntered = true;
+    state.activities.push({ id: "second", order: state.activities.length });
+  });
+
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(secondUpdaterEntered, false, "second updater must wait until first updater and save finish");
+  releaseFirstUpdater();
+  await secondMutation;
+
+  const persisted = JSON.parse(await readFile(statePath, "utf8"));
+  assert.deepEqual(persisted.activities.map((item) => item.id), ["first", "second"]);
+  assert.deepEqual(persisted.activities.map((item) => item.order), [0, 1]);
+});
+
+test("mutate lookup helpers return entities by id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-lookup-"));
+  const store = new StateStore({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace")
+  });
+  await store.load();
+  await store.mutate((state) => {
+    state.tasks.push({ id: "task_1", title: "Task" });
+    state.goals.push({ id: "goal_1", title: "Goal" });
+    state.workspaces.push({ id: "workspace_2", name: "Workspace" });
+  });
+
+  assert.equal((await store.findTaskById("task_1")).title, "Task");
+  assert.equal((await store.findGoalById("goal_1")).title, "Goal");
+  assert.equal((await store.findWorkspaceById("workspace_2")).name, "Workspace");
+  assert.equal(await store.findTaskById("missing"), null);
+  assert.equal(await store.findGoalById("missing"), null);
+  assert.equal(await store.findWorkspaceById("missing"), null);
+});
+
 test("migration does not occur when new state file already exists", async () => {
   const root = await mkdtemp(join(tmpdir(), "state-no-migrate-"));
   const workspaceRoot = join(root, "workspace");

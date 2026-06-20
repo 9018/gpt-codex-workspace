@@ -431,6 +431,34 @@ test("hosted workspace search skips default excluded dirs and oversized content"
   assert.deepEqual(cappedSearch.results.map((item) => item.path), ["src/keep.txt"]);
 });
 
+test("hosted workspace search skips binary files and respects max_total_bytes", async () => {
+  const server = await makeServer();
+
+  await callTool(server, "write_text_file", {
+    path: "search/a-binary.txt",
+    content: "\u0000needle in binary",
+    overwrite: true
+  });
+  await callTool(server, "write_text_file", {
+    path: "search/b-large.txt",
+    content: "x".repeat(32),
+    overwrite: true
+  });
+  await callTool(server, "write_text_file", {
+    path: "search/z-needle.txt",
+    content: "needle after cap",
+    overwrite: true
+  });
+
+  const binarySearch = await callTool(server, "search_files", { q: "needle", path: "search", limit: 10 });
+  assert.deepEqual(binarySearch.results.map((item) => item.path), ["search/z-needle.txt"]);
+
+  const cappedSearch = await callTool(server, "search_files", { q: "needle", path: "search", limit: 10, max_total_bytes: 16 });
+  assert.equal(cappedSearch.count, 0);
+  assert.equal(cappedSearch.truncated, true);
+  assert.equal(cappedSearch.skipped_total_bytes, true);
+});
+
 test("hosted workspace supports zip bundle upload and download as base64", async () => {
   const server = await makeServer();
   const zipBase64 = await makeZipBase64({ "bundle/hello.txt": "hello bundle" });
@@ -470,6 +498,24 @@ test("download_bundle_base64 rejects bundles larger than max_bytes", async () =>
   }, { authorization: "Bearer test-token" });
 
   assert.match(response.error?.message || "", /bundle too large/i);
+});
+
+test("download_bundle_base64 returns explicit too_large response for max_bundle_bytes", async () => {
+  const server = await makeServer();
+
+  await callTool(server, "write_text_file", {
+    path: "bundle/large.txt",
+    content: "bundle content that should exceed the tiny cap",
+    overwrite: true
+  });
+
+  const result = await callTool(server, "download_bundle_base64", { source_dir: "bundle", max_bundle_bytes: 10 });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.error, "too_large");
+  assert.equal(result.too_large, true);
+  assert.equal(result.max_bundle_bytes, 10);
+  assert.equal(result.zip_base64, undefined);
 });
 
 async function makeZipBase64(files) {

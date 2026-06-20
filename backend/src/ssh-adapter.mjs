@@ -119,8 +119,15 @@ export async function sshStat(workspace, sshPath, timeout = 10) {
   return { path: sshPath, type: isDir ? "directory" : "file", size: Number(parts[1]) || 0, modified_at: parts[2] ? new Date(Number(parts[2]) * 1000).toISOString() : new Date().toISOString() };
 }
 
-export async function sshSearchFiles(workspace, query, sshBasePath = ".", timeout = 60, limit = 50) {
-  return runSshExec(workspace, "grep -r -l -m1 " + shellQuotee(query) + " " + shellQuotee(sshBasePath) + " 2>/dev/null | head -" + limit, ".", timeout, 50000);
+export async function sshSearchFiles(workspace, query, sshBasePath = ".", timeout = 60, limit = 50, options = {}) {
+  const maxFileBytes = Math.max(0, Number(options.maxFileBytes) || 1024 * 1024);
+  const maxTotalBytes = Math.max(0, Number(options.maxTotalBytes) || 10 * 1024 * 1024);
+  const excludedNames = new Set((options.excludeDirs || []).map(String).filter((name) => !name.includes("/")));
+  const prune = [...excludedNames].map((name) => " -name " + shellQuotee(name)).join(" -o");
+  const pruneExpr = prune ? "\\( " + prune + " \\) -prune -o " : "";
+  const command = "find " + shellQuotee(sshBasePath) + " " + pruneExpr + "-type f -size -" + (maxFileBytes + 1) + "c -print0 2>/dev/null | "
+    + "xargs -0 grep -I -l -m1 " + shellQuotee(query) + " 2>/dev/null | head -" + limit;
+  return runSshExec(workspace, command, ".", timeout, Math.min(maxTotalBytes, 50000));
 }
 
 function posixNormalize(p) {
