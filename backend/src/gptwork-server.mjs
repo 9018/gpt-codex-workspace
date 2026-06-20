@@ -18,7 +18,7 @@ import {
   MCP_PROTOCOL_VERSION, schema, toolList, initializeResult, jsonResult, jsonError,
 } from "./mcp-tooling.mjs";
 import { handleHttp } from "./http-handler.mjs";
-import { runtimeStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
+import { runtimeStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 import { tokenFromMcpPath, parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, defaultScopes, normalizeList, limits, assertAuthorized } from "./auth-context.mjs";
 import { isCodexSessionInventoryTask, extractTaskLimit } from "./task-status.mjs";
 import { emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
@@ -527,6 +527,19 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
           return contextStatusCard(structuredContent);
         case "github_status":
           return githubStatusCard(structuredContent);
+        case "preview_codex_context":
+          return previewCodexContextCard(structuredContent);
+        case "shell_exec":
+          return shellExecCard(structuredContent);
+        case "git_remote_diff":
+          return gitRemoteDiffCard(structuredContent);
+        case "read_text_file":
+          return readTextFileCard(structuredContent);
+        case "list_dir":
+          return listDirCard(structuredContent);
+        case "get_goal_context":
+          return goalContextCard(structuredContent);
+
       }
 
       // Fallback: built-in summary for tools without dedicated card formatters
@@ -577,17 +590,7 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
             const goals = structuredContent.goals || [];
             return goals.length + " goal(s)";
           }
-          case "get_goal_context": {
-            const g = structuredContent.goal;
-            const lines = g ? [
-              formatKeyValue('goal', g.id),
-              formatKeyValue('title', (g.title || '').slice(0, 60)),
-              formatKeyValue('status', g.status),
-              formatKeyValue('mode', g.mode || '-'),
-              formatKeyValue('task', g.task_id || '-'),
-            ] : ['  Goal context loaded'];
-            return formatToolCard('Goal Context', { lines });
-          }
+
           case "worker_status": {
             const w = structuredContent;
             const lines = [

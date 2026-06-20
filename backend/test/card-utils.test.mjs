@@ -25,6 +25,12 @@ import {
   createEncodedGoalCard,
   contextStatusCard,
   githubStatusCard,
+  previewCodexContextCard,
+  shellExecCard,
+  gitRemoteDiffCard,
+  readTextFileCard,
+  listDirCard,
+  goalContextCard,
   truncateVerboseOutput,
 } from "../src/card-utils.mjs";
 
@@ -544,6 +550,287 @@ test("formatNextActions formats action strings", () => {
 test("formatNextActions returns empty for empty input", () => {
   assert.equal(formatNextActions([]), "");
   assert.equal(formatNextActions(null), "");
+});
+
+
+
+// =================================================================
+// previewCodexContextCard
+// =================================================================
+
+test("previewCodexContextCard shows context fields", () => {
+  const data = {
+    context: {
+      task: { id: "task_abc", title: "Test Task", status: "assigned", mode: "builder" },
+      goal: { id: "goal_xyz", status: "assigned", title: "Test Goal" },
+      workspace: { root: "/home/user/workspace", type: "hosted" },
+      canonical_repo: { path: "/home/user/repo", record: { remote_url: "https://github.com/owner/repo" } },
+      project_context: {
+        project_md: { ok: true },
+        project_env: { ok: true, keys: ["KEY1", "KEY2"] },
+      },
+      size_metrics: {
+        transcript_bytes: 50000,
+        transcript_size_label: "48.8 KB",
+        transcript_message_count: 15,
+        memory_count: 3,
+      },
+      warnings: [
+        { severity: "warning", code: "dirty_worktree", message: "Uncommitted changes" },
+      ],
+    },
+    actual_prompt_bytes: 80000,
+    actual_prompt_warning: "Prompt is large",
+  };
+  const card = previewCodexContextCard(data);
+  assert.ok(card.includes("Codex Context"), "title present");
+  assert.ok(card.includes("task_abc"), "task id");
+  assert.ok(card.includes("Test Task"), "task title");
+  assert.ok(card.includes("goal_xyz"), "goal id");
+  assert.ok(card.includes("48.8 KB"), "transcript size");
+  assert.ok(card.includes("15 messages"), "message count");
+  assert.ok(card.includes("3 memories"), "memory count");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+  assert.ok(card.includes("Uncommitted changes"), "warning content");
+  assert.ok(/[─]{2,}/.test(card), "has dividers");
+});
+
+test("previewCodexContextCard handles missing data", () => {
+  const card = previewCodexContextCard(null);
+  assert.ok(card.includes("No context data"));
+});
+
+test("previewCodexContextCard handles no linked task", () => {
+  const data = { context: {} };
+  const card = previewCodexContextCard(data);
+  assert.ok(card.includes("not linked"));
+});
+
+// =================================================================
+// shellExecCard
+// =================================================================
+
+test("shellExecCard shows shell fields", () => {
+  const data = {
+    command: "npm test",
+    cwd: "/home/user/repo",
+    returncode: 0,
+    duration_ms: 5234,
+    stdout_bytes: 15000,
+    stderr_bytes: 0,
+    stdout_truncated: true,
+    stderr_truncated: false,
+    timed_out: false,
+    first_output_delay_ms: 120,
+    stdout: "line 1\nline 2\nline 3\nline 4\nline 5\nline 6\nline 7\nline 8\nline 9\nline 10\nline 11\nline 12",
+    stderr: null,
+  };
+  const card = shellExecCard(data);
+  assert.ok(card.includes("Shell Exec"), "title present");
+  assert.ok(card.includes("npm test"), "command");
+  assert.ok(card.includes("5234ms"), "duration");
+  assert.ok(card.includes("yes"), "stdout truncated");
+  assert.ok(card.includes("no"), "stderr truncated");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+});
+
+test("shellExecCard truncates long stdout preview", () => {
+  const longOut = Array.from({ length: 50 }, (_, i) => `output line ${i + 1}`).join("\n");
+  const data = {
+    command: "make build",
+    cwd: "/tmp",
+    returncode: 0,
+    duration_ms: 1000,
+    stdout_bytes: 5000,
+    stderr_bytes: 0,
+    stdout_truncated: false,
+    stderr_truncated: false,
+    timed_out: false,
+    stdout: longOut,
+  };
+  const card = shellExecCard(data);
+  assert.ok(card.includes("stdout (first 10 of 50 lines)"), "truncation label");
+  assert.ok(card.includes("output line 1"), "first line");
+  assert.ok(!card.includes("output line 20"), "not beyond 10");
+});
+
+test("shellExecCard handles null data", () => {
+  const card = shellExecCard(null);
+  assert.ok(card.includes("No data"));
+});
+
+test("shellExecCard shows timed out warning", () => {
+  const data = {
+    command: "sleep 100",
+    cwd: "/tmp",
+    returncode: -1,
+    duration_ms: 30000,
+    stdout_bytes: 0,
+    stderr_bytes: 0,
+    stdout_truncated: false,
+    stderr_truncated: false,
+    timed_out: true,
+    stdout: null,
+    stderr: null,
+  };
+  const card = shellExecCard(data);
+  assert.ok(card.includes("timed out"), "timed out info");
+  assert.ok(card.includes("Command timed out"), "timeout warning");
+});
+
+// =================================================================
+// gitRemoteDiffCard
+// =================================================================
+
+test("gitRemoteDiffCard shows diff fields", () => {
+  const data = {
+    ok: true,
+    base: "HEAD",
+    head: "origin/main",
+    path: "src/file.js",
+    bytes: 50000,
+    truncated: true,
+    diff: "--- a/src/file.js\n+++ b/src/file.js\n@@ -1,5 +1,6 @@\n line 1\n line 2",
+  };
+  const card = gitRemoteDiffCard(data);
+  assert.ok(card.includes("Git Diff"), "title present");
+  assert.ok(card.includes("HEAD"), "base");
+  assert.ok(card.includes("origin/main"), "head");
+  assert.ok(card.includes("src/file.js"), "path");
+  assert.ok(card.includes("50000"), "bytes");
+  assert.ok(card.includes("yes"), "truncated");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+  assert.ok(card.includes("truncated"), "truncation warning");
+});
+
+test("gitRemoteDiffCard handles error case", () => {
+  const data = { ok: false, error: "Repository not found." };
+  const card = gitRemoteDiffCard(data);
+  assert.ok(card.includes("Repository not found"));
+});
+
+test("gitRemoteDiffCard handles null data", () => {
+  const card = gitRemoteDiffCard(null);
+  assert.ok(card.includes("No diff data"));
+});
+
+// =================================================================
+// readTextFileCard
+// =================================================================
+
+test("readTextFileCard shows file fields", () => {
+  const data = {
+    path: "/home/user/file.txt",
+    size: 100000,
+    truncated: true,
+    content: Array.from({ length: 30 }, (_, i) => `line ${i + 1}`).join("\n"),
+  };
+  const card = readTextFileCard(data);
+  assert.ok(card.includes("Read File"), "title present");
+  assert.ok(card.includes("file.txt"), "path");
+  assert.ok(card.includes("100000 bytes"), "size");
+  assert.ok(card.includes("yes"), "truncated");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+  assert.ok(card.includes("truncated"), "truncation warning");
+});
+
+test("readTextFileCard shows truncated warning", () => {
+  const data = {
+    path: "/tmp/big.txt",
+    size: 50000,
+    truncated: true,
+    content: "short content here",
+  };
+  const card = readTextFileCard(data);
+  assert.ok(card.includes("truncated"), "truncated flag");
+  assert.ok(card.includes("50000 bytes"), "size display");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+});
+
+test("readTextFileCard handles null", () => {
+  const card = readTextFileCard(null);
+  assert.ok(card.includes("No data"));
+});
+
+// =================================================================
+// listDirCard
+// =================================================================
+
+test("listDirCard shows directory fields", () => {
+  const data = {
+    path: "/home/user",
+    recursive: true,
+    count: 150,
+    limit: 100,
+    items: Array.from({ length: 100 }, (_, i) => ({ name: `file${i}.js`, type: "file", size: 100 })),
+  };
+  const card = listDirCard(data);
+  assert.ok(card.includes("List Dir"), "title present");
+  assert.ok(card.includes("150"), "count");
+  assert.ok(card.includes("100"), "limit");
+  assert.ok(card.includes("yes"), "truncated");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+});
+
+test("listDirCard handles empty listing", () => {
+  const data = { path: "/tmp", recursive: false, count: 0, limit: 500, items: [] };
+  const card = listDirCard(data);
+  assert.ok(card.includes("0"), "count zero");
+  assert.ok(!card.includes("Warnings:"), "no warnings");
+});
+
+test("listDirCard handles null", () => {
+  const card = listDirCard(null);
+  assert.ok(card.includes("No data"));
+});
+
+// =================================================================
+// goalContextCard
+// =================================================================
+
+test("goalContextCard shows goal fields without dumping transcript", () => {
+  const data = {
+    goal: {
+      id: "goal_123",
+      title: "My Goal",
+      status: "assigned",
+      mode: "deploy",
+      task_id: "task_456",
+      project_id: "default",
+      workspace_id: "hosted-default",
+    },
+    conversation: {
+      messages: Array.from({ length: 25 }, () => ({ role: "codex", content: "message text" })),
+    },
+    memories: [{ id: "mem1" }, { id: "mem2" }, { id: "mem3" }],
+    task: { id: "task_456", status: "assigned" },
+    workspace_files: { goal_md: ".gptwork/goals/goal_123/goal.md" },
+    codex_instruction: "Follow the goal.md exactly.",
+  };
+  const card = goalContextCard(data);
+  assert.ok(card.includes("Goal Context"), "title present");
+  assert.ok(card.includes("goal_123"), "goal id");
+  assert.ok(card.includes("My Goal"), "title");
+  assert.ok(card.includes("25"), "message count");
+  assert.ok(card.includes("3"), "memory count");
+  assert.ok(card.includes("task_456"), "task id");
+  assert.ok(card.includes("instruction:"), "instruction shown");
+  // Ensure no full transcript dump
+  assert.ok(!card.includes("message text"), "no message content dumped");
+});
+
+test("goalContextCard handles missing goal", () => {
+  const data = { goal: null };
+  const card = goalContextCard(data);
+  assert.ok(card.includes("Goal not found"));
+});
+
+test("goalContextCard handles missing conversation/memories", () => {
+  const data = { goal: { id: "goal_xyz", title: "test", status: "completed" } };
+  const card = goalContextCard(data);
+  // Should not crash, should show basic info
+  assert.ok(card.includes("completed"), "status shown");
+  assert.ok(!card.includes("undefined"), "no undefined in output");
 });
 
 console.log("card-utils tests loaded");
