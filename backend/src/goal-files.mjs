@@ -150,6 +150,15 @@ export function renderTranscriptMarkdown(goal, conversation) {
 }
 
 /**
+ * Render a single message as a transcript.md append-only fragment.
+ * @param {{ role: string, content: string, created_at: string }} message
+ * @returns {string}
+ */
+export function renderTranscriptMessageAppend(message) {
+  return `\n## ${message.role} - ${message.created_at}\n\n${message.content || ""}\n`;
+}
+
+/**
  * Build the codex_instruction string embedded in context.json.
  * @param {object} goal
  * @returns {string}

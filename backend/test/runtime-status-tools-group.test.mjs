@@ -133,12 +133,16 @@ test('runtime status tool group has correct input schemas', () => {
     collectWorkerQueueCounts: fakeCollectWorkerQueueCounts,
   });
 
-  // All four tools take no arguments
-  for (const name of ['github_status', 'runtime_status', 'notification_status', 'gptwork_doctor']) {
+  // All tools take no required args
+  for (const name of ['github_status', 'runtime_status', 'notification_status']) {
     assert.equal(typeof tools[name].handler, 'function', `${name}.handler should be a function`);
     assert.deepEqual(tools[name].inputSchema.required, [], `${name} should have no required args`);
     assert.deepEqual(tools[name].inputSchema.properties, {}, `${name} should have no properties`);
   }
+  // gptwork_doctor has optional deep flag
+  assert.equal(typeof tools.gptwork_doctor.handler, 'function', 'gptwork_doctor.handler should be a function');
+  assert.deepEqual(tools.gptwork_doctor.inputSchema.required, [], 'gptwork_doctor should have no required args');
+  assert.deepEqual(tools.gptwork_doctor.inputSchema.properties, { deep: 'boolean' }, 'gptwork_doctor should have deep property');
 });
 
 test('github_status handler returns expected shape', async () => {
@@ -240,7 +244,7 @@ test('gptwork_doctor handler returns expected shape keys', async () => {
     collectWorkerQueueCounts: fakeCollectWorkerQueueCounts,
   });
 
-  const result = await tools.gptwork_doctor.handler();
+  const result = await tools.gptwork_doctor.handler({});
   const expectedKeys = [
     'pid', 'started_at', 'running_commit',
     'runtime_env_loaded', 'runtime_env_file_path',

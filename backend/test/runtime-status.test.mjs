@@ -358,6 +358,10 @@ test("restart_markers synthetic marker files produce correct status counts", asy
   }
 
   // Re-call runtime_status to get updated markers
+  // Invalidate diagnostics cache so we get fresh restart marker data
+  const { invalidateCache } = await import("../src/diagnostics-service.mjs");
+  invalidateCache("restartMarkers");
+  invalidateCache();
   const updatedStatus = await callTool(server, "runtime_status");
   assert.equal(updatedStatus.restart_markers.total_count, 7);
   assert.equal(updatedStatus.restart_markers.active_count, 5);  // 3 pending + 1 scheduled + 1 restarted

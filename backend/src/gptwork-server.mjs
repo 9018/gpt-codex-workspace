@@ -507,6 +507,73 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
       }
     },
 
+    // P2.1: Generate a human-readable summary from structured tool results
+    summarizeToolResult(name, structuredContent) {
+      if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
+      try {
+        switch (name) {
+          case "create_encoded_goal": {
+            const g = structuredContent.goal;
+            return g ? "Goal created: " + (g.title || g.id) + " [" + g.status + ", " + g.mode + "]" : JSON.stringify(structuredContent);
+          }
+          case "runtime_status": {
+            const s = structuredContent;
+            const parts = ["Runtime " + (s.pid ? "PID " + s.pid : "")];
+            parts.push(s.running_commit ? "commit " + s.running_commit.slice(0, 12) : "no commit");
+            if (s.worktree_dirty) parts.push("dirty");
+            parts.push("queue: " + (s.worker?.queue?.assigned ?? "?") + " assigned");
+            return parts.join(" | ");
+          }
+          case "gptwork_doctor": {
+            const d = structuredContent;
+            const lines = ["GPTWork Doctor"];
+            if (d.running_commit) lines.push("commit=" + d.running_commit.slice(0, 12));
+            lines.push("env=" + (d.runtime_env_loaded ? "loaded" : "missing"));
+            lines.push("repo_registry=" + (d.repository_registry_count || 0));
+            lines.push("stale_clones=" + (d.stale_clone_count || 0));
+            lines.push("worktree=" + (d.worktree_dirty ? "dirty" : "clean"));
+            if (Array.isArray(d.suggested_next_actions)) {
+              lines.push(d.suggested_next_actions.length + " suggestion(s)");
+            }
+            return lines.join(" | ");
+          }
+          case "search_files": {
+            const sch = structuredContent;
+            return "Search \"" + (sch.q || "") + "\" in " + (sch.path || ".") + ": " + (sch.count || 0) + " result(s)" + (sch.backend ? " [" + sch.backend + "]" : "") + (sch.elapsed_ms != null ? " " + sch.elapsed_ms + "ms" : "");
+          }
+          case "list_tasks": {
+            const tasks = structuredContent.tasks || [];
+            return tasks.length + " task(s)";
+          }
+          case "get_task": {
+            const t = structuredContent.task;
+            return t ? "Task " + t.id + ": " + (t.title || "") + " [" + t.status + "]" : "Task not found";
+          }
+          case "list_goals": {
+            const goals = structuredContent.goals || [];
+            return goals.length + " goal(s)";
+          }
+          case "get_goal_context": {
+            const g = structuredContent.goal;
+            return g ? "Goal " + g.id + ": " + (g.title || "") + " [" + g.status + ", " + g.mode + "]" + (g.task_id ? ", task=" + g.task_id : "") : "Goal context loaded";
+          }
+          case "worker_status": {
+            const w = structuredContent;
+            const q = w.queues || w.queue || {};
+            return "Worker " + (w.enabled ? "enabled" : "disabled") + " | interval=" + (w.interval_ms || "?") + "ms" + " | queue: " + (q.assigned || 0) + " assigned, " + (q.running || 0) + " running" + (w.last_error ? " | last error: " + w.last_error.slice(0, 60) : "") + (w.last_tick_finished_at ? " | tick: " + w.last_tick_finished_at : "");
+          }
+          case "sync_to_github": {
+            const sy = structuredContent;
+            return "GitHub sync: " + (sy.synced_tasks ?? "?") + " tasks, " + (sy.synced_requests ?? "?") + " requests";
+          }
+          default:
+            return JSON.stringify(structuredContent);
+        }
+      } catch {
+        return JSON.stringify(structuredContent);
+      }
+    },
+
     async handleRpc(message, headers = {}, emitProgress = () => {}) {
       try {
         if (!message || message.jsonrpc !== "2.0") return jsonError(message?.id ?? null, -32600, "Invalid JSON-RPC request");
@@ -523,8 +590,9 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
           const handler = tools[name]?.handler;
           if (!handler) return jsonError(message.id, -32601, `Unknown tool: ${name}`);
           const structuredContent = await handler(args, context);
+          const summary = this.summarizeToolResult(name, structuredContent);
           return jsonResult(message.id, {
-            content: [{ type: "text", text: JSON.stringify(structuredContent) }],
+            content: [{ type: "text", text: summary }],
             structuredContent,
             isError: false
           });

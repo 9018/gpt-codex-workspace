@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
+import { appendFile } from "node:fs/promises";
 import { defaultTokenContext, canAccessProject, canAccessWorkspace, requireProjectAccess, requireScope, requireWorkspaceAccess } from "./auth-context.mjs";
-import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
+import { goalWorkspaceFiles, publicGoalWorkspaceFiles, internalGoalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, renderTranscriptMessageAppend, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { isTaskTerminal, isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 import { ensureGoalState, findGoalInState, taskPayloadFromTask, normalizeLegacyModes, updateTask } from "./task-lifecycle.mjs";
 import { titleFromGoal, normalizeGoalMessage, normalizeGoalMessages, normalizeGoalMemory, normalizeGoalMemories } from "./goal-lifecycle.mjs";
@@ -174,23 +175,65 @@ export async function getGoalContext(store, config, { goal_id, task_id } = {}, c
   const state = await store.load();
   ensureGoalState(state);
   await normalizeLegacyModes(store, state);
-  const goal = findGoalInState(state, { goal_id, task_id });
+
+  // Use indexed lookups when available
+  let goal = null;
+  if (goal_id && typeof store.findGoalById === "function") {
+    goal = await store.findGoalById(goal_id);
+  }
+  if (!goal && task_id && typeof store.findGoalByTaskId === "function") {
+    goal = await store.findGoalByTaskId(task_id);
+  }
+  if (!goal) {
+    goal = findGoalInState(state, { goal_id, task_id });
+  }
   requireProjectAccess(context, goal.project_id);
   requireWorkspaceAccess(context, goal.workspace_id);
-  const conversation = state.conversations.find((item) => item.id === goal.conversation_id) || null;
-  const memories = state.memories.filter((item) => item.goal_id === goal.id);
-  const task = goal.task_id ? state.tasks.find((item) => item.id === goal.task_id) || null : null;
+
+  const conversation = typeof store.findConversationById === "function"
+    ? store.findConversationById(goal.conversation_id)
+    : state.conversations.find((item) => item.id === goal.conversation_id) || null;
+
+  const memories = typeof store.getMemoriesByGoalId === "function"
+    ? store.getMemoriesByGoalId(goal.id)
+    : state.memories.filter((item) => item.goal_id === goal.id);
+
+  const task = goal.task_id
+    ? (typeof store.findTaskById === "function"
+        ? await store.findTaskById(goal.task_id)
+        : state.tasks.find((item) => item.id === goal.task_id)) || null
+    : null;
+
   return { goal, conversation, memories, task, workspace_files: goalWorkspaceFiles(goal), codex_instruction: codexInstruction(goal) };
 }
+
+// ---------------------------------------------------------------------------
+// Append-only goal message (P0.2)
+// ---------------------------------------------------------------------------
 
 export async function appendGoalMessage(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:update");
   const state = await store.load();
   ensureGoalState(state);
-  const goal = findGoalInState(state, args);
+
+  // Use indexed goal lookup when available
+  let goal = null;
+  if (args.goal_id && typeof store.findGoalById === "function") {
+    goal = await store.findGoalById(args.goal_id);
+  }
+  if (!goal && args.task_id && typeof store.findGoalByTaskId === "function") {
+    goal = await store.findGoalByTaskId(args.task_id);
+  }
+  if (!goal) {
+    goal = findGoalInState(state, args);
+  }
   requireProjectAccess(context, goal.project_id);
   requireWorkspaceAccess(context, goal.workspace_id);
-  let conversation = state.conversations.find((item) => item.id === goal.conversation_id);
+
+  let conversation = typeof store.findConversationById === "function"
+    ? store.findConversationById(goal.conversation_id)
+    : state.conversations.find((item) => item.id === goal.conversation_id);
+
   const now = new Date().toISOString();
   if (!conversation) {
     conversation = {
@@ -216,25 +259,68 @@ export async function appendGoalMessage(store, config, args, context = defaultTo
     state.memories.push(memory);
   }
   state.activities.push({ time: now, type: "goal.message_appended", goal_id: goal.id, role: message.role });
-  const memories = state.memories.filter((item) => item.goal_id === goal.id);
-  const task = goal.task_id ? state.tasks.find((item) => item.id === goal.task_id) || null : null;
-  const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, { initialize_result: false }, context);
+
+  const memories = typeof store.getMemoriesByGoalId === "function"
+    ? store.getMemoriesByGoalId(goal.id)
+    : state.memories.filter((item) => item.goal_id === goal.id);
+
+  const task = goal.task_id
+    ? (typeof store.findTaskById === "function"
+        ? await store.findTaskById(goal.task_id)
+        : state.tasks.find((item) => item.id === goal.task_id)) || null
+    : null;
+
+  // Append-only write: only append to transcript, rewrite goal.md + context.json,
+  // skip payload_base64 and payload.json regeneration
+  const workspaceFiles = goalWorkspaceFiles(goal);
+  await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {
+    initialize_result: false,
+    append_transcript: true,
+    skip_payload: true
+  }, context);
+
+  // Append the new message to transcript.md separately (append-only)
+  try {
+    const resolvedPath = await _resolveWorkspacePathForFile(store, config, goal.workspace_id, workspaceFiles.transcript_md, context);
+    await appendFile(resolvedPath, renderTranscriptMessageAppend(message), "utf8");
+  } catch {
+    // Fallback: full rewrite if append fails (e.g. file doesn't exist yet)
+    const transcriptContent = renderTranscriptMarkdown(goal, conversation);
+    await writeWorkspaceTextInternal(store, config, goal.workspace_id, workspaceFiles.transcript_md, transcriptContent, context);
+  }
+
   await store.save();
-  return { goal, conversation, message, memory, workspace_files };
+  return { goal, conversation, message, memory, workspace_files: workspaceFiles };
+}
+
+// Internal helper: resolve workspace path for append-only operations
+async function _resolveWorkspacePathForFile(store, config, workspaceId, relPath, context) {
+  const { resolvePath } = await import("./workspace-service.mjs");
+  const { path: resolvedPath } = await resolvePath(store, config, { path: relPath, workspace_id: workspaceId }, context);
+  return resolvedPath;
 }
 
 
 export async function ensureTaskGoal(store, config, taskId, context = defaultTokenContext("system"), options = {}) {
   const state = await store.load();
   ensureGoalState(state);
-  const task = state.tasks.find((item) => item.id === taskId);
+  const task = typeof store.findTaskById === "function"
+    ? await store.findTaskById(taskId)
+    : state.tasks.find((item) => item.id === taskId);
   if (!task) throw new Error(`task not found: ${taskId}`);
   if (isCodexSessionInventoryTaskKind(task)) return { task };
 
-  let goal = task.goal_id ? state.goals.find((item) => item.id === task.goal_id) : null;
+  let goal = task.goal_id
+    ? (typeof store.findGoalById === "function" ? await store.findGoalById(task.goal_id) : state.goals.find((item) => item.id === task.goal_id))
+    : (typeof store.findGoalByTaskId === "function" ? await store.findGoalByTaskId(taskId) : state.goals.find((item) => item.task_id === taskId));
+
   if (goal) {
-    const conversation = state.conversations.find((item) => item.id === goal.conversation_id) || null;
-    const memories = state.memories.filter((item) => item.goal_id === goal.id);
+    const conversation = typeof store.findConversationById === "function"
+      ? store.findConversationById(goal.conversation_id)
+      : state.conversations.find((item) => item.id === goal.conversation_id) || null;
+    const memories = typeof store.getMemoriesByGoalId === "function"
+      ? store.getMemoriesByGoalId(goal.id)
+      : state.memories.filter((item) => item.goal_id === goal.id);
     const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {}, context);
     return { task, goal, conversation, memories, workspace_files };
   }
@@ -319,11 +405,17 @@ export async function waitForTaskExecution(store, task, waitMs = 0) {
 
 export async function taskExecutionSnapshot(store, task) {
   const state = await store.load();
-  const freshTask = task?.id ? state.tasks.find((item) => item.id === task.id) || task : null;
+  const freshTask = task?.id
+    ? (typeof store.findTaskById === "function" ? await store.findTaskById(task.id) : state.tasks.find((item) => item.id === task.id)) || task
+    : null;
   const goal = freshTask?.goal_id
-    ? state.goals?.find((item) => item.id === freshTask.goal_id) || null
-    : state.goals?.find((item) => item.task_id === freshTask?.id) || null;
-  const conversation = goal?.conversation_id ? state.conversations?.find((item) => item.id === goal.conversation_id) || null : null;
+    ? (typeof store.findGoalById === "function" ? store.findGoalById(freshTask.goal_id) : state.goals?.find((item) => item.id === freshTask.goal_id)) || null
+    : freshTask?.id
+      ? (typeof store.findGoalByTaskId === "function" ? store.findGoalByTaskId(freshTask.id) : state.goals?.find((item) => item.task_id === freshTask.id)) || null
+      : null;
+  const conversation = goal?.conversation_id
+    ? (typeof store.findConversationById === "function" ? store.findConversationById(goal.conversation_id) : state.conversations?.find((item) => item.id === goal.conversation_id)) || null
+    : null;
   const messages = conversation?.messages || [];
   return {
     status: freshTask?.status || goal?.status || "open",
@@ -334,30 +426,47 @@ export async function taskExecutionSnapshot(store, task) {
   };
 }
 
-
+// ---------------------------------------------------------------------------
+// writeGoalWorkspaceFiles (P0.2: support append_transcript + skip_payload modes)
+// ---------------------------------------------------------------------------
 
 export async function writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, extras = {}, context = defaultTokenContext("system")) {
   const workspaceFiles = goalWorkspaceFiles(goal);
-  const payload = extras.payload || {
-    user_request: goal.user_request,
-    goal_prompt: goal.goal_prompt,
-    context_summary: goal.context_summary,
-    mode: goal.mode,
-    workspace_id: goal.workspace_id,
-    messages: conversation?.messages || [],
-    autonomy_policy: goal.autonomy_policy,
-    subagent_policy: goal.subagent_policy,
-    memories
-  };
-  const payloadJson = JSON.stringify(payload, null, 2);
-  const payloadBase64 = extras.payload_base64 || Buffer.from(payloadJson, "utf8").toString("base64");
+  const appendTranscript = extras.append_transcript === true;
+  const skipPayload = extras.skip_payload === true;
+
+  // Always write goal.md for compatibility
   const files = [
     { path: workspaceFiles.goal_md, content: renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) },
     { path: workspaceFiles.context_json, content: JSON.stringify({ goal, conversation, memories, task, workspace_files: workspaceFiles, codex_instruction: codexInstruction(goal) }, null, 2) },
-    { path: workspaceFiles.transcript_md, content: renderTranscriptMarkdown(goal, conversation) },
-    { path: workspaceFiles.payload_json, content: payloadJson },
-    { path: workspaceFiles.payload_base64, content: payloadBase64 }
   ];
+
+  // Skip payload files during append-only operations (P0.2)
+  if (!skipPayload) {
+    const payload = extras.payload || {
+      user_request: goal.user_request,
+      goal_prompt: goal.goal_prompt,
+      context_summary: goal.context_summary,
+      mode: goal.mode,
+      workspace_id: goal.workspace_id,
+      messages: conversation?.messages || [],
+      autonomy_policy: goal.autonomy_policy,
+      subagent_policy: goal.subagent_policy,
+      memories
+    };
+    const payloadJson = JSON.stringify(payload, null, 2);
+    const payloadBase64 = extras.payload_base64 || Buffer.from(payloadJson, "utf8").toString("base64");
+    files.push(
+      { path: workspaceFiles.transcript_md, content: renderTranscriptMarkdown(goal, conversation) },
+      { path: workspaceFiles.payload_json, content: payloadJson },
+      { path: workspaceFiles.payload_base64, content: payloadBase64 }
+    );
+  } else if (!appendTranscript) {
+    // When !skipPayload and !appendTranscript, write transcript normally
+    files.push({ path: workspaceFiles.transcript_md, content: renderTranscriptMarkdown(goal, conversation) });
+  }
+  // When appendTranscript && skipPayload, transcript is handled by caller via appendFile
+
   if (extras.initialize_result || typeof extras.result_content === "string") {
     files.push({ path: workspaceFiles.result_md, content: typeof extras.result_content === "string" ? extras.result_content : "# Result\n\nPending.\n" });
   }

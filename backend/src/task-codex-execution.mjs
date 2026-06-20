@@ -1,4 +1,4 @@
-import { fireHeartbeat, updateRunHeartbeat, writeRunLogs } from "./codex-run-metadata.mjs";
+import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, createThrottledHeartbeat, removeThrottledHeartbeat, getStdoutLogPath, getStderrLogPath } from "./codex-run-metadata.mjs";
 import { parseCodexResultWithFallback } from "./codex-result-parser.mjs";
 import { runLocalShell } from "./workspace-service.mjs";
 
@@ -23,28 +23,60 @@ export async function executeCodexTaskRun({
   let cr = null;
 
   const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
+
+  // P1.1: Create throttled heartbeat for run
+  const throttledHb = runFilePath ? createThrottledHeartbeat(runFilePath, 1000, updateRunHeartbeatFn) : null;
+
+  // P1.1: Set up log file paths for streaming stdout/stderr during execution
+  const streamOpts = {};
+  if (runId && workspaceRoot && task) {
+    streamOpts.streamStdoutPath = getStdoutLogPath(workspaceRoot, task.id, runId);
+    streamOpts.streamStderrPath = getStderrLogPath(workspaceRoot, task.id, runId);
+  }
+
   cr = await runLocalShellFn(cmd, workspaceRoot, config.codexExecTimeout, 1000000, (pid) => {
-    updateRunHeartbeatFn(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
+    if (throttledHb) {
+      throttledHb("running_codex", { codex_child_pid: pid });
+    } else {
+      updateRunHeartbeatFn(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
+    }
   }, {
     firstOutputTimeoutSeconds: config.codexFirstOutputTimeout || 180,
     onOutput: (event) => {
-      updateRunHeartbeatFn(runFilePath, "running_codex", {
-        stdout_bytes: event.stdout_bytes,
-        stderr_bytes: event.stderr_bytes,
-        first_stdout_at: event.first_stdout_at,
-        first_stderr_at: event.first_stderr_at,
-        first_output_delay_ms: event.first_output_delay_ms,
-      }).catch(() => {});
+      // P1.1: Use throttled heartbeat for output counter updates (at most 1/s)
+      if (throttledHb) {
+        throttledHb("running_codex", {
+          stdout_bytes: event.stdout_bytes,
+          stderr_bytes: event.stderr_bytes,
+          first_stdout_at: event.first_stdout_at,
+          first_stderr_at: event.first_stderr_at,
+          first_output_delay_ms: event.first_output_delay_ms,
+        });
+      } else {
+        updateRunHeartbeatFn(runFilePath, "running_codex", {
+          stdout_bytes: event.stdout_bytes,
+          stderr_bytes: event.stderr_bytes,
+          first_stdout_at: event.first_stdout_at,
+          first_stderr_at: event.first_stderr_at,
+          first_output_delay_ms: event.first_output_delay_ms,
+        }).catch(() => {});
+      }
     },
+    // P1.1: Stream stdout/stderr to run log files during execution
+    ...streamOpts,
   });
+
+  // P1.1: Clean up throttled heartbeat
+  if (throttledHb) removeThrottledHeartbeat(runFilePath);
 
   if (cr && runId) {
     writeRunLogsFn({
       workspaceRoot: config.defaultWorkspaceRoot,
       taskId: task.id,
       runId,
-      stdout: cr.stdout,
-      stderr: cr.stderr,
+      // P1.1: Append any remaining output not yet streamed
+      stdout: cr.stdout || "",
+      stderr: cr.stderr || "",
     }).catch(() => {});
   }
 

@@ -64,6 +64,9 @@ export function createGithubSync(config) {
   const enabled = _isTruthy(config.githubEnabled !== undefined ? config.githubEnabled : process.env.GPTWORK_GITHUB_ENABLED) && !!(repo && token);
   let knownIssues = [];
   let knownComments = [];
+  let _knownIssueMappings = {};
+  // P1.3: Track posted terminal result comments for idempotence
+  const _postedResultComments = new Map();
 
   const headers = () => ({
     "Authorization": "Bearer " + token,
@@ -165,6 +168,20 @@ function buildResultComment(task) {
   body += "**Task ID**: `" + task.id + "`\n";
   return body;
 }
+
+/**
+ * Check whether a terminal result comment should be posted (idempotence).
+ * Same task + status + commit/remote_head should not re-post.
+ */
+function shouldPostResultComment(task) {
+  if (!task.result) return false;
+  const commit = task.result.commit || "";
+  const remoteHead = task.result.remote_head || "";
+  const key = task.id + ":" + task.status + ":" + commit + ":" + remoteHead;
+  if (_postedResultComments.has(key)) return false;
+  _postedResultComments.set(key, Date.now());
+  return true;
+}
   return {
     /**
      * Search GitHub API for an existing issue containing a Task ID or Request ID.
@@ -213,7 +230,7 @@ function buildResultComment(task) {
           });
           if (res) {
             let comment = null;
-            if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
+            if (task.result && (task.status === 'completed' || task.status === 'cancelled') && shouldPostResultComment(task)) {
               comment = await this.addIssueComment(res.number, buildResultComment(task));
             }
             return { ok: true, issue: res.number, updated: true, comment_posted: !!comment };
@@ -227,7 +244,7 @@ function buildResultComment(task) {
           if (res) {
             knownIssues.push({ number: res.number, body: taskToIssueBody(task) });
             let comment = null;
-            if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
+            if (task.result && (task.status === 'completed' || task.status === 'cancelled') && shouldPostResultComment(task)) {
               comment = await this.addIssueComment(res.number, buildResultComment(task));
             }
             return { ok: true, issue: res.number, created: true, comment_posted: !!comment };
@@ -352,20 +369,34 @@ function buildResultComment(task) {
 
     async syncAllTasks(tasks) {
       const results = [];
-      for (const task of tasks) {
-        const result = await this.syncTask(task);
-        results.push({ task_id: task.id, ...result });
-      }
-      return results;
+      const concurrency = 5;
+      let nextIndex = 0;
+      const workerFn = async () => {
+        while (nextIndex < tasks.length) {
+          const idx = nextIndex++;
+          const task = tasks[idx];
+          const result = await this.syncTask(task);
+          results[idx] = { task_id: task.id, ...result };
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, tasks.length) }, () => workerFn()));
+      return results.filter(Boolean);
     },
 
     async syncAllRequests(requests) {
       const results = [];
-      for (const request of requests) {
-        const result = await this.syncChatGptRequest(request);
-        results.push({ request_id: request.id, ...result });
-      }
-      return results;
+      const concurrency = 5;
+      let nextIndex = 0;
+      const workerFn = async () => {
+        while (nextIndex < requests.length) {
+          const idx = nextIndex++;
+          const request = requests[idx];
+          const result = await this.syncChatGptRequest(request);
+          results[idx] = { request_id: request.id, ...result };
+        }
+      };
+      await Promise.all(Array.from({ length: Math.min(concurrency, requests.length) }, () => workerFn()));
+      return results.filter(Boolean);
     },
 
     async importFromIssues(store, { limit = 100, assignToCodex = false } = {}) {

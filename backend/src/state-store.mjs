@@ -2,6 +2,10 @@ import { copyFile, mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 
+// ---------------------------------------------------------------------------
+// StateStore with in-memory indexes for O(1) lookups
+// ---------------------------------------------------------------------------
+
 export class StateStore {
   constructor({ statePath, defaultWorkspaceRoot, oldDefaultStatePath, maxActivities = 10000 }) {
     this.statePath = statePath;
@@ -12,18 +16,131 @@ export class StateStore {
     this._migrationSource = null;
     this._saveLock = null;
     this._mutationLock = null;
+    this._clearIndexes();
+  }
+
+  // -----------------------------------------------------------------------
+  // Index management
+  // -----------------------------------------------------------------------
+
+  /** Clear all in-memory indexes. */
+  _clearIndexes() {
+    this._idxTasksById = null;
+    this._idxGoalsById = null;
+    this._idxGoalsByTaskId = null;
+    this._idxConversationsById = null;
+    this._idxMemoriesByGoalId = null;
+    this._idxCodexActiveTasksByStatus = null;
+  }
+
+  /** Rebuild in-memory indexes from current state. */
+  _buildIndexes() {
+    this._clearIndexes();
+    if (!this.state) return;
+
+    this._idxTasksById = new Map();
+    this._idxGoalsById = new Map();
+    this._idxGoalsByTaskId = new Map();
+    this._idxConversationsById = new Map();
+    this._idxMemoriesByGoalId = new Map();
+    this._idxCodexActiveTasksByStatus = new Map();
+
+    const codexStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "completed", "failed"]);
+    for (const st of codexStatuses) this._idxCodexActiveTasksByStatus.set(st, []);
+
+    for (const task of this.state.tasks || []) {
+      this._idxTasksById.set(task.id, task);
+      if (task.assignee === "codex" && codexStatuses.has(task.status)) {
+        this._idxCodexActiveTasksByStatus.get(task.status).push(task);
+      }
+    }
+
+    for (const goal of this.state.goals || []) {
+      this._idxGoalsById.set(goal.id, goal);
+      if (goal.task_id) this._idxGoalsByTaskId.set(goal.task_id, goal);
+    }
+
+    for (const conv of this.state.conversations || []) {
+      this._idxConversationsById.set(conv.id, conv);
+    }
+
+    for (const mem of this.state.memories || []) {
+      if (!this._idxMemoriesByGoalId.has(mem.goal_id)) this._idxMemoriesByGoalId.set(mem.goal_id, []);
+      this._idxMemoriesByGoalId.get(mem.goal_id).push(mem);
+    }
   }
 
   async load() {
-    if (this.state) return this.state;
-    await this._migrateIfNeeded();
-    try {
-      this.state = JSON.parse(await readFile(this.statePath, "utf8"));
-    } catch {
-      this.state = this.defaultState();
-      await this.save();
+    if (!this.state) {
+      await this._migrateIfNeeded();
+      try {
+        this.state = JSON.parse(await readFile(this.statePath, "utf8"));
+      } catch {
+        this.state = this.defaultState();
+        await this.save();
+      }
     }
+    // Always rebuild indexes so they reflect latest in-memory state
+    this._buildIndexes();
     return this.state;
+  }
+
+  // -----------------------------------------------------------------------
+  // Indexed lookup helpers (O(1) vs. O(n) for array.find)
+  //
+  // These methods use in-memory indexes when available and fall back to
+  // array scanning if indexes haven't been built.  All are async for
+  // backward compatibility with existing callers.
+  // -----------------------------------------------------------------------
+
+  async findTaskById(id) {
+    if (this._idxTasksById) return this._idxTasksById.get(id) ?? null;
+    const state = await this.load();
+    return state.tasks.find((task) => task.id === id) || null;
+  }
+
+  async findGoalById(id) {
+    if (this._idxGoalsById) return this._idxGoalsById.get(id) ?? null;
+    const state = await this.load();
+    return state.goals.find((goal) => goal.id === id) || null;
+  }
+
+  findGoalByTaskId(taskId) {
+    return this._idxGoalsByTaskId?.get(taskId) ?? null;
+  }
+
+  findConversationById(id) {
+    return this._idxConversationsById?.get(id) ?? null;
+  }
+
+  getMemoriesByGoalId(goalId) {
+    return this._idxMemoriesByGoalId?.get(goalId) ?? [];
+  }
+
+  getCodexTasksByStatus(status) {
+    return this._idxCodexActiveTasksByStatus?.get(status) ?? [];
+  }
+
+  /**
+   * Get codex-assigned tasks grouped by status with counts.
+   * Returns { tasks: [], counts: { assigned: N, ... } }.
+   * Used by worker-queue-counts and other status-based queries.
+   */
+  getCodexTaskQueue() {
+    const counts = {};
+    const allTasks = [];
+    const codexStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "completed", "failed"];
+    for (const st of codexStatuses) {
+      const tasks = this.getCodexTasksByStatus(st);
+      counts[st] = tasks.length;
+      if (tasks.length) allTasks.push(...tasks);
+    }
+    return { tasks: allTasks, counts };
+  }
+
+  async findWorkspaceById(id) {
+    const state = await this.load();
+    return state.workspaces.find((workspace) => workspace.id === id) || null;
   }
 
   async save() {
@@ -47,26 +164,13 @@ export class StateStore {
     const chain = (this._mutationLock || Promise.resolve()).then(async () => {
       const state = await this.load();
       const result = await updater(state);
+      // Rebuild indexes after mutation so subsequent index lookups reflect changes
+      this._buildIndexes();
       await this.save();
       return result;
     });
     this._mutationLock = chain.catch(() => {});
     return chain;
-  }
-
-  async findTaskById(id) {
-    const state = await this.load();
-    return state.tasks.find((task) => task.id === id) || null;
-  }
-
-  async findGoalById(id) {
-    const state = await this.load();
-    return state.goals.find((goal) => goal.id === id) || null;
-  }
-
-  async findWorkspaceById(id) {
-    const state = await this.load();
-    return state.workspaces.find((workspace) => workspace.id === id) || null;
   }
 
   _capActivities() {

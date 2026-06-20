@@ -3,6 +3,55 @@ import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 import { getPendingRestartsDir, scanPendingRestartMarkers } from "./safe-restart.mjs";
+
+
+// ---------------------------------------------------------------------------
+// TTL cache for expensive diagnostics (P2.2)
+// ---------------------------------------------------------------------------
+
+const _diagnosticsCache = new Map();
+const CACHE_DEFAULTS = {
+  gitStatus: 5000,       // git status cache: 5s
+  repoLockSummary: 2000, // repo lock summary: 2s
+  staleCloneCount: 10000, // stale clones: 10s
+  restartMarkers: 3000,  // restart markers: 3s
+};
+
+/**
+ * Get a cached value or compute and cache it.
+ * @param {string} key - cache key
+ * @param {number} ttlMs - TTL in ms
+ * @param {function} computeFn - async function to compute value on cache miss
+ * @returns {Promise<*>} cached or computed value
+ */
+export async function withCache(key, ttlMs, computeFn) {
+  const cached = _diagnosticsCache.get(key);
+  if (cached && Date.now() - cached.ts < ttlMs) {
+    return cached.value;
+  }
+  const value = await computeFn();
+  _diagnosticsCache.set(key, { value, ts: Date.now() });
+  return value;
+}
+
+/**
+ * Invalidate a specific cache key or all keys matching a prefix.
+ * @param {string} [prefix] - if provided, only invalidates keys starting with prefix
+ */
+export function invalidateCache(prefix) {
+  if (!prefix) { _diagnosticsCache.clear(); return; }
+  for (const key of _diagnosticsCache.keys()) {
+    if (key.startsWith(prefix)) _diagnosticsCache.delete(key);
+  }
+}
+
+/**
+ * Get cache stats for diagnostics.
+ * @returns {{ size: number, keys: string[] }}
+ */
+export function getCacheStats() {
+  return { size: _diagnosticsCache.size, keys: [..._diagnosticsCache.keys()] };
+}
 import { requireScope } from "./auth-context.mjs";
 import { findTask } from "./task-lifecycle.mjs";
 
@@ -67,6 +116,12 @@ export function collectRuntimeGitInfo(repoDir) {
  * Returns total count, active count, per-status counts, and marker dir existence.
  */
 export async function collectRestartMarkerStatus(workspaceRoot) {
+  const cacheKey = "restartMarkers:" + (workspaceRoot || "none");
+  const cached = _diagnosticsCache.get(cacheKey);
+  if (cached && Date.now() - cached.ts < CACHE_DEFAULTS.restartMarkers) {
+    return cached.value;
+  }
+
   const result = { total_count: 0, active_count: 0, statuses: { pending: 0, scheduled: 0, restarted: 0, verified: 0, failed: 0 }, marker_dir_exists: false };
   try {
     const markerDir = getPendingRestartsDir(workspaceRoot);
@@ -80,6 +135,7 @@ export async function collectRestartMarkerStatus(workspaceRoot) {
       }
     }
   } catch (e) { /* non-fatal */ }
+  _diagnosticsCache.set(cacheKey, { value: result, ts: Date.now() });
   return result;
 }
 

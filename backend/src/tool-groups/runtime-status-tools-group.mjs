@@ -25,6 +25,7 @@ export function createRuntimeStatusToolsGroup({
     })),
 
     runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
+      const startTime = Date.now();
       const repoDir = resolveRepoDir();
       const gitInfo = collectRuntimeGitInfo(repoDir);
       const statePath = config.statePath;
@@ -43,6 +44,7 @@ export function createRuntimeStatusToolsGroup({
       const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
 
       return {
+        elapsed_ms: Date.now() - startTime,
         pid: process.pid,
         started_at: PROCESS_STARTED_AT.toISOString(),
         repo_head: gitInfo.repo_head,
@@ -114,7 +116,8 @@ export function createRuntimeStatusToolsGroup({
 
     notification_status: tool("Return safe Bark notification configuration and last-attempt diagnostics (no endpoint/key values).", schema({}), async () => bark ? bark.getStatus() : ({ enabled: false, configured: false, source: "unknown", url_set: false, key_set: false, group: "gptwork", sound_set: false, level_set: false, icon_set: false, url_action_set: false, last_attempt_at: null, last_success_at: null, last_failure_at: null, last_response_code: null, last_response_message: null, last_error_short: null, last_task_id: null, last_task_status: null, last_task_event: null })),
 
-    gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({}, []), async () => {
+    gptwork_doctor: tool("Return a comprehensive user-facing diagnostic summary: process info, runtime config, git state, repo registry, stale clones, worktree health, Bark/GitHub sync status, placeholder tool exposure, and suggested next actions. Does not expose secrets.", schema({ deep: "boolean" }, []), async ({ deep = false }) => {
+      const startTime = Date.now();
       const repoDir = resolveRepoDir();
       const registryData = { entries: [], count: 0, hasCanonical: false };
       try {
@@ -124,13 +127,15 @@ export function createRuntimeStatusToolsGroup({
         registryData.hasCanonical = allRepos.some(r => r.canonical_path === config.defaultRepoPath);
       } catch (e) {}
       let staleCloneCount = 0;
-      try {
-        const wsRoot = config.defaultWorkspaceRoot || "";
-        if (wsRoot && existsSync(wsRoot)) {
-          const entries = readdirSync(wsRoot, { withFileTypes: true });
-          staleCloneCount = entries.filter(e => e.isDirectory() && e.name.startsWith('.tmp-')).length;
-        }
-      } catch (e) {}
+      if (deep) {
+        try {
+          const wsRoot = config.defaultWorkspaceRoot || "";
+          if (wsRoot && existsSync(wsRoot)) {
+            const entries = readdirSync(wsRoot, { withFileTypes: true });
+            staleCloneCount = entries.filter(e => e.isDirectory() && e.name.startsWith('.tmp-')).length;
+          }
+        } catch (e) {}
+      }
       const gitInfo = collectRuntimeGitInfo(repoDir);
       const worktreeDirty = gitInfo.worktree_dirty;
       const dirtyPaths = gitInfo.dirty_paths;
@@ -251,6 +256,7 @@ export function createRuntimeStatusToolsGroup({
          return actions;
         })(),
         // Codex worker state
+        elapsed_ms: Date.now() - startTime,
         worker: {
           ...workerStatusSnapshot(workerState),
         },

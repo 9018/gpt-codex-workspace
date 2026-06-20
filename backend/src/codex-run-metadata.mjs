@@ -9,9 +9,11 @@
  * - Recovery actions for stuck tasks (mark_waiting_review, mark_failed, reset_to_assigned, etc.)
  * - Startup reconciliation for tasks left in "running" state after service restart
  * - Secret stripping to keep passwords/tokens out of diagnostic output
+ * - Heartbeat throttling (P1.1): phase changes flush immediately, output counters at most 1/s
+ * - Output streaming to log files during execution (P1.1)
  */
 
-import { readdir, mkdir, readFile, writeFile } from "node:fs/promises";
+import { readdir, mkdir, readFile, writeFile, appendFile } from "node:fs/promises";
 import { existsSync, appendFileSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -19,6 +21,94 @@ import { dirname, join } from "node:path";
 
 const RUNS_DIR = ".gptwork/runs";
 const heartbeatWriteQueues = new Map();
+const MAX_STDOUT_TAIL_BYTES = 256 * 1024; // 256KB tail kept in memory
+const MAX_STDERR_TAIL_BYTES = 64 * 1024;  // 64KB stderr tail
+
+// ---------------------------------------------------------------------------
+// Heartbeat throttling (P1.1)
+// ---------------------------------------------------------------------------
+
+/** Per-run heartbeat throttler state */
+const _heartbeatThrottlers = new Map();
+
+/**
+ * Create or get a throttled heartbeat updater for a run.
+ * Phase changes (phase !== lastPhase) flush immediately.
+ * Output-only updates flush at most once per second (default interval).
+ *
+ * @param {string} runFilePath
+ * @param {number} [intervalMs=1000]
+ * @returns {(phase: string, fields?: object) => void} fire-and-forget throttled updater
+ */
+export function createThrottledHeartbeat(runFilePath, intervalMs = 1000, heartbeatFn = null) {
+  let lastFlushAt = 0;
+  let lastPhase = null;
+  let pendingFields = null;
+  let pendingPhase = null;
+  let timer = null;
+
+  const writeFn = heartbeatFn || ((path, phase, fields) => updateRunHeartbeat(path, phase, fields));
+
+  function flush() {
+    if (timer) { clearTimeout(timer); timer = null; }
+    const phase = pendingPhase || lastPhase || "unknown";
+    const fields = pendingFields || {};
+    lastFlushAt = Date.now();
+    pendingPhase = null;
+    pendingFields = null;
+    writeFn(runFilePath, phase, fields).catch(() => {});
+  }
+
+  function throttledUpdate(phase, fields = {}) {
+    const now = Date.now();
+    const phaseChanged = phase !== lastPhase;
+    lastPhase = phase;
+
+    if (phaseChanged) {
+      // Phase change: flush immediately
+      pendingPhase = phase;
+      pendingFields = fields;
+      flush();
+      return;
+    }
+
+    // Output-only update: throttle
+    pendingFields = { ...pendingFields, ...fields };
+    pendingPhase = phase;
+
+    if (now - lastFlushAt >= intervalMs) {
+      flush();
+    } else if (!timer) {
+      timer = setTimeout(flush, intervalMs - (now - lastFlushAt));
+    }
+  }
+
+  _heartbeatThrottlers.set(runFilePath, throttledUpdate);
+  return throttledUpdate;
+}
+
+/**
+ * Get an existing throttled heartbeat function, or create one.
+ * @param {string} runFilePath
+ * @returns {function}
+ */
+export function getThrottledHeartbeat(runFilePath) {
+  let fn = _heartbeatThrottlers.get(runFilePath);
+  if (!fn) {
+    fn = createThrottledHeartbeat(runFilePath);
+    _heartbeatThrottlers.set(runFilePath, fn);
+  }
+  return fn;
+}
+
+/**
+ * Remove throttled heartbeat for a run (cleanup after final heartbeat).
+ * @param {string} runFilePath
+ */
+export function removeThrottledHeartbeat(runFilePath) {
+  const fn = _heartbeatThrottlers.get(runFilePath);
+  if (fn) _heartbeatThrottlers.delete(runFilePath);
+}
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -95,6 +185,7 @@ export async function initRun(opts = {}) {
 
 /**
  * Update heartbeat and optional fields in run.json.
+ * Uses throttling when called through createThrottledHeartbeat.
  *
  * @param {string} runFilePath — path to run.json
  * @param {string} phase — current phase name
@@ -122,8 +213,6 @@ async function updateRunHeartbeatUnlocked(runFilePath, phase, fields = {}) {
     }
   }
   if (!runData) {
-    // Avoid overwriting a transiently unreadable/half-written run.json with
-    // incomplete metadata. Fire-and-forget callers treat this as non-fatal.
     return null;
   }
 
@@ -149,6 +238,35 @@ export function fireHeartbeat(runFilePath, phase, fields = {}) {
 }
 
 /**
+ * Stream a chunk of output to a run log file (append-only).
+ * Also returns bounded tail for in-memory fallback.
+ *
+ * @param {object} opts
+ * @param {string} opts.filePath - log file path (stdout.log or stderr.log)
+ * @param {string} opts.chunk - output chunk to append
+ * @param {string} [opts.boundedTail] - current bounded tail string (mutated in place)
+ * @param {number} [opts.maxTailBytes] - max bytes to keep in tail
+ * @returns {{ tail: string, truncated: boolean }}
+ */
+export function streamToLog(opts = {}) {
+  const { filePath, chunk, boundedTail = "", maxTailBytes = MAX_STDOUT_TAIL_BYTES } = opts;
+  if (!filePath || !chunk) return { tail: boundedTail, truncated: false };
+
+  // Append to file asynchronously (fire-and-forget for streaming perf)
+  appendFile(filePath, chunk, "utf8").catch(() => {});
+
+  // Keep bounded tail in memory
+  let tail = boundedTail + chunk;
+  let truncated = false;
+  if (Buffer.byteLength(tail) > maxTailBytes) {
+    const excess = Buffer.byteLength(tail) - maxTailBytes;
+    tail = tail.slice(excess);
+    truncated = true;
+  }
+  return { tail, truncated };
+}
+
+/**
  * Write stdout and stderr to durable log files for a run.
  *
  * @param {object} opts
@@ -165,13 +283,14 @@ export async function writeRunLogs(opts = {}) {
   const stdLog = getStdoutLogPath(workspaceRoot, taskId, runId);
   const errLog = getStderrLogPath(workspaceRoot, taskId, runId);
 
+  // Append-mode for streaming: write logs incrementally
   if (stdout) {
     await mkdir(dirname(stdLog), { recursive: true });
-    await writeFile(stdLog, stdout, "utf8");
+    await appendFile(stdLog, stdout, "utf8");
   }
   if (stderr) {
     await mkdir(dirname(errLog), { recursive: true });
-    await writeFile(errLog, stderr, "utf8");
+    await appendFile(errLog, stderr, "utf8");
   }
 }
 
@@ -275,4 +394,3 @@ export function isRepoDirty(repoPath) {
     return false;
   }
 }
-
