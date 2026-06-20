@@ -5,7 +5,8 @@
   "private": true,
   "scripts": {
     "start": "node src/cli.mjs",
-    "test": "node --test 'test/**/*.test.mjs'",
-    "test:clean": "node test/helpers/run-clean.mjs"
+    "test": "node --test --test-reporter=dot 'test/**/*.test.mjs'",
+    "test:clean": "node test/helpers/run-clean.mjs",
+    "test:tap": "node --test 'test/**/*.test.mjs'"
   }
 }
