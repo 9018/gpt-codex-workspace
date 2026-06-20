@@ -64,6 +64,7 @@ import { createRuntimeStatusToolsGroup } from "./tool-groups/runtime-status-tool
 import { createContextHealthToolsGroup } from "./tool-groups/context-health-tools-group.mjs";
 import { createRepositoryToolsGroup } from "./tool-groups/repository-tools-group.mjs";
 import { createWorkspaceReadToolsGroup } from "./tool-groups/workspace-read-tools-group.mjs";
+import { createWorkspaceMutationToolsGroup } from "./tool-groups/workspace-mutation-tools-group.mjs";
 import { createGitRemoteToolsGroup } from "./tool-groups/git-remote-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
@@ -657,15 +658,8 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     ...createChatGptRequestToolsGroup({ tool, schema, config, store, github }),
 
     ...createWorkspaceReadToolsGroup({ tool, schema, store, config }),
-    write_text_file: tool("Write a UTF-8 text file.", schema({ path: "string", content: "string", overwrite: "boolean", workspace_id: "string" }, ["path", "content"]), async (args, context) => workspaceWriteText(store, config, args, context)),
-    upload_base64_file: tool("Upload a base64 encoded file.", schema({ path: "string", content_base64: "string", overwrite: "boolean", workspace_id: "string" }, ["path", "content_base64"]), async (args, context) => workspaceUploadBase64(store, config, args, context)),
-    upload_bundle_base64: tool("Upload a ZIP bundle encoded as base64. Optionally extract it in the workspace after upload.", schema({ path: "string", zip_base64: "string", overwrite: "boolean", extract: "boolean", target_dir: "string", sha256_expected: "string", workspace_id: "string" }, ["path", "zip_base64"]), async (args, context) => workspaceUploadBundleBase64(store, config, args, context)),
+    ...createWorkspaceMutationToolsGroup({ tool, schema, store, config }),
     upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
-    mkdir: tool("Create a directory.", schema({ path: "string", workspace_id: "string" }, ["path"]), async (args, context) => workspaceMkdir(store, config, args, context)),
-    delete_path: tool("Permanently delete a file or directory. Files are deleted immediately, without recycle/trash. Use with caution.", schema({ path: "string", recursive: "boolean", workspace_id: "string" }, ["path"]), async (args, context) => workspaceDelete(store, config, args, context)),
-    move_path: tool("Move or rename a file/directory.", schema({ src: "string", dst: "string", overwrite: "boolean", workspace_id: "string" }, ["src", "dst"]), async (args, context) => workspaceMove(store, config, args, context)),
-    copy_path: tool("Copy a file or directory.", schema({ src: "string", dst: "string", overwrite: "boolean", workspace_id: "string" }, ["src", "dst"]), async (args, context) => workspaceCopy(store, config, args, context)),
-    create_zip_archive: tool("Create a ZIP archive from a directory.", schema({ source_dir: "string", zip_path: "string", workspace_id: "string" }, ["source_dir", "zip_path"]), async (args, context) => workspaceShellZip(store, config, "create", args, context)),
     extract_zip_archive: tool("Extract a ZIP archive into a workspace directory.", schema({ zip_path: "string", target_dir: "string", workspace_id: "string" }, ["zip_path"]), async (args, context) => workspaceShellZip(store, config, "extract", args, context)),
     shell_exec: tool("在工作区执行终端命令，用于检查服务状态和运行配置脚本。", schema({ command: "string", cwd: "string", timeout: "integer", max_output_bytes: "integer", workspace_id: "string" }, ["command"]), async (args, context) => workspaceShellExec(store, config, args, context)),
 
