@@ -18,6 +18,7 @@ import {
   MCP_PROTOCOL_VERSION, schema, toolList, initializeResult, jsonResult, jsonError,
 } from "./mcp-tooling.mjs";
 import { handleHttp } from "./http-handler.mjs";
+import { runtimeStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 import { tokenFromMcpPath, parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, defaultScopes, normalizeList, limits, assertAuthorized } from "./auth-context.mjs";
 import { isCodexSessionInventoryTask, extractTaskLimit } from "./task-status.mjs";
 import { emitTaskProgress, normalizeLegacyModes, findTask, updateTask, updateGoalStatus, setTerminalNotifier } from "./task-lifecycle.mjs";
@@ -510,44 +511,67 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
     // P2.1: Generate a human-readable summary from structured tool results
     summarizeToolResult(name, structuredContent) {
       if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
+
+      // Use compact card formatting for targeted tools
+      switch (name) {
+        case "runtime_status":
+          return runtimeStatusCard(structuredContent);
+        case "gptwork_doctor":
+          return gptworkDoctorCard(structuredContent);
+        case "get_task":
+          return getTaskCard(structuredContent);
+        case "create_encoded_goal":
+          return createEncodedGoalCard(structuredContent);
+        case "context_status":
+        case "project_context_status":
+          return contextStatusCard(structuredContent);
+        case "github_status":
+          return githubStatusCard(structuredContent);
+      }
+
+      // Fallback: built-in summary for tools without dedicated card formatters
       try {
         switch (name) {
           case "create_encoded_goal": {
             const g = structuredContent.goal;
-            return g ? "Goal created: " + (g.title || g.id) + " [" + g.status + ", " + g.mode + "]" : JSON.stringify(structuredContent);
+            const lines = g ? [
+              formatKeyValue('goal', g.id),
+              formatKeyValue('title', (g.title || "").slice(0, 60)),
+              formatKeyValue('status', g.status),
+              formatKeyValue('assignee', g.assignee || '-'),
+            ] : ['  Goal not found'];
+            return formatToolCard('Goal', { lines });
           }
           case "runtime_status": {
             const s = structuredContent;
-            const parts = ["Runtime " + (s.pid ? "PID " + s.pid : "")];
-            parts.push(s.running_commit ? "commit " + s.running_commit.slice(0, 12) : "no commit");
-            if (s.worktree_dirty) parts.push("dirty");
-            parts.push("queue: " + (s.worker?.queue?.assigned ?? "?") + " assigned");
-            return parts.join(" | ");
+            const lines = [
+              formatKeyValue('pid', s.pid),
+              formatKeyValue('commit', s.running_commit ? s.running_commit.slice(0, 12) : '-'),
+              formatKeyValue('worktree', s.worktree_dirty ? 'dirty' : 'clean'),
+              '',
+              formatKeyValue('worker', s.worker?.enabled ? 'enabled' : 'disabled'),
+              formatKeyValue('queue', s.worker?.queue?.assigned ?? '?'),
+            ];
+            return formatToolCard('Runtime Status', { lines });
           }
           case "gptwork_doctor": {
             const d = structuredContent;
-            const lines = ["GPTWork Doctor"];
-            if (d.running_commit) lines.push("commit=" + d.running_commit.slice(0, 12));
-            lines.push("env=" + (d.runtime_env_loaded ? "loaded" : "missing"));
-            lines.push("repo_registry=" + (d.repository_registry_count || 0));
-            lines.push("stale_clones=" + (d.stale_clone_count || 0));
-            lines.push("worktree=" + (d.worktree_dirty ? "dirty" : "clean"));
-            if (Array.isArray(d.suggested_next_actions)) {
-              lines.push(d.suggested_next_actions.length + " suggestion(s)");
-            }
-            return lines.join(" | ");
+            const lines = [
+              formatKeyValue('running commit', d.running_commit ? d.running_commit.slice(0, 12) : '-'),
+              formatKeyValue('env', d.runtime_env_loaded ? 'loaded' : 'missing'),
+              formatKeyValue('repo registry', d.repository_registry_count || 0),
+              formatKeyValue('stale clones', d.stale_clone_count || 0),
+              formatKeyValue('worktree', d.worktree_dirty ? 'dirty' : 'clean'),
+            ];
+            return formatToolCard('GPTWork Doctor', { lines });
           }
           case "search_files": {
             const sch = structuredContent;
-            return "Search \"" + (sch.q || "") + "\" in " + (sch.path || ".") + ": " + (sch.count || 0) + " result(s)" + (sch.backend ? " [" + sch.backend + "]" : "") + (sch.elapsed_ms != null ? " " + sch.elapsed_ms + "ms" : "");
+            return "Search \"" + (sch.q || "") + "\" in \"" + (sch.path || ".") + "\": " + (sch.count || 0) + " result(s)" + (sch.backend ? " [" + sch.backend + "]" : "") + (sch.elapsed_ms != null ? " " + sch.elapsed_ms + "ms" : "");
           }
           case "list_tasks": {
             const tasks = structuredContent.tasks || [];
             return tasks.length + " task(s)";
-          }
-          case "get_task": {
-            const t = structuredContent.task;
-            return t ? "Task " + t.id + ": " + (t.title || "") + " [" + t.status + "]" : "Task not found";
           }
           case "list_goals": {
             const goals = structuredContent.goals || [];
@@ -555,12 +579,36 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
           }
           case "get_goal_context": {
             const g = structuredContent.goal;
-            return g ? "Goal " + g.id + ": " + (g.title || "") + " [" + g.status + ", " + g.mode + "]" + (g.task_id ? ", task=" + g.task_id : "") : "Goal context loaded";
+            const lines = g ? [
+              formatKeyValue('goal', g.id),
+              formatKeyValue('title', (g.title || '').slice(0, 60)),
+              formatKeyValue('status', g.status),
+              formatKeyValue('mode', g.mode || '-'),
+              formatKeyValue('task', g.task_id || '-'),
+            ] : ['  Goal context loaded'];
+            return formatToolCard('Goal Context', { lines });
           }
           case "worker_status": {
             const w = structuredContent;
-            const q = w.queues || w.queue || {};
-            return "Worker " + (w.enabled ? "enabled" : "disabled") + " | interval=" + (w.interval_ms || "?") + "ms" + " | queue: " + (q.assigned || 0) + " assigned, " + (q.running || 0) + " running" + (w.last_error ? " | last error: " + w.last_error.slice(0, 60) : "") + (w.last_tick_finished_at ? " | tick: " + w.last_tick_finished_at : "");
+            const lines = [
+              formatKeyValue('worker', w.enabled ? 'enabled' : 'disabled'),
+              formatKeyValue('running', w.running ? 'yes' : 'no'),
+              formatKeyValue('interval', w.interval_ms ? w.interval_ms + 'ms' : '?'),
+              formatKeyValue('queue assigned', w.queue?.assigned ?? w.queues?.assigned ?? 0),
+              formatKeyValue('queue running', w.queue?.running ?? w.queues?.running ?? 0),
+            ];
+            const warnings = [];
+            if (w.last_error) warnings.push('Last error: ' + w.last_error.slice(0, 120));
+            if (w.last_tick_finished_at) lines.push(formatKeyValue('last tick', w.last_tick_finished_at));
+            return formatToolCard('Worker Status', { lines, warnings });
+          }
+          case "health_check": {
+            const h = structuredContent;
+            const lines = [
+              formatKeyValue('service', h.service || 'gptwork-mcp'),
+              formatKeyValue('time', h.time || new Date().toISOString()),
+            ];
+            return formatToolCard('Health', { lines });
           }
           case "sync_to_github": {
             const sy = structuredContent;
