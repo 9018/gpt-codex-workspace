@@ -201,3 +201,54 @@ test("pollIssues imports gptwork labels or GPTWork title prefixes without requir
     globalThis.fetch = previousFetch;
   }
 });
+
+test("syncTask comments and closes imported GitHub issue by stored issue number", async () => {
+  const previousFetch = globalThis.fetch;
+  const requests = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requests.push({ url: String(url), options });
+    if (String(url).endsWith("/issues/4") && options.method === "PATCH") {
+      return { ok: true, json: async () => ({ number: 4 }) };
+    }
+    if (String(url).endsWith("/issues/4/comments") && options.method === "POST") {
+      return { ok: true, json: async () => ({ id: 40 }) };
+    }
+    throw new Error("unexpected GitHub request: " + String(url));
+  };
+
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+    const result = await sync.syncTask({
+      id: "task_imported",
+      title: "Imported issue task",
+      status: "completed",
+      github_issue_number: 4,
+      result: {
+        summary: "Implemented hotfix",
+        tests: "npm test: passed",
+        commit: "abc123",
+        remote_head: "abc123"
+      }
+    });
+
+    assert.equal(result.ok, true);
+    assert.equal(result.issue, 4);
+    assert.equal(result.updated, true);
+    const patch = requests.find((request) => request.options.method === "PATCH");
+    assert.ok(patch, "should PATCH the stored issue number");
+    assert.ok(patch.url.endsWith("/issues/4"));
+    const patchBody = JSON.parse(patch.options.body);
+    assert.equal(patchBody.state, "closed");
+    assert.match(patchBody.body, /abc123/);
+
+    const comment = requests.find((request) => request.options.method === "POST" && request.url.endsWith("/issues/4/comments"));
+    assert.ok(comment, "should post a result comment to the stored issue number");
+    const commentBody = JSON.parse(comment.options.body).body;
+    assert.match(commentBody, /Implemented hotfix/);
+    assert.match(commentBody, /npm test: passed/);
+    assert.match(commentBody, /abc123/);
+    assert.equal(requests.some((request) => request.options.method === "POST" && request.url.endsWith("/issues")), false);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});

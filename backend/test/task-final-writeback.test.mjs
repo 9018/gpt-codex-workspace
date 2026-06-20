@@ -95,3 +95,17 @@ test('finalizeCodexTaskRun batches task and goal state when store.mutate is avai
   assert.equal(calls.some(c => c[0] === 'updateTask'), false);
   assert.equal(calls.some(c => c[0] === 'goalStatus'), false);
 });
+
+test('finalizeCodexTaskRun awaits github task sync before returning', async () => {
+  const { calls, args } = baseArgs();
+  args.github = {
+    syncTask: async (task) => {
+      await Promise.resolve();
+      calls.push(['githubSynced', task.id]);
+    }
+  };
+
+  await finalizeCodexTaskRun(args);
+
+  assert.ok(calls.some(c => c[0] === 'githubSynced' && c[1] === 'task_1'));
+});

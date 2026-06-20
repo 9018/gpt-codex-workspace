@@ -193,9 +193,12 @@ function buildResultComment(task) {
     async syncTask(task) {
       if (!enabled) return { ok: false, reason: "github not configured" };
       const label = "task-" + task.status;
-      let existing = knownIssues.find((i) =>
-        i.body && i.body.includes("**Task ID**: `" + task.id + "`")
-      );
+      const linkedIssueNumber = Number(task.github_issue_number);
+      let existing = Number.isInteger(linkedIssueNumber) && linkedIssueNumber > 0
+        ? { number: linkedIssueNumber }
+        : knownIssues.find((i) =>
+          i.body && i.body.includes("**Task ID**: `" + task.id + "`")
+        );
       if (!existing) {
         const found = await this._findExistingIssue("**Task ID**: `" + task.id + "`");
         if (found) existing = found;
@@ -209,10 +212,11 @@ function buildResultComment(task) {
             labels: ["gptwork-task", label]
           });
           if (res) {
+            let comment = null;
             if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
-              this.addIssueComment(res.number, buildResultComment(task)).catch(() => {});
+              comment = await this.addIssueComment(res.number, buildResultComment(task));
             }
-            return { ok: true, issue: res.number, updated: true, comment_posted: !!task.result };
+            return { ok: true, issue: res.number, updated: true, comment_posted: !!comment };
           }
         } else {
           const res = await api("POST", "/issues", {
@@ -222,10 +226,11 @@ function buildResultComment(task) {
           });
           if (res) {
             knownIssues.push({ number: res.number, body: taskToIssueBody(task) });
+            let comment = null;
             if (task.result && (task.status === 'completed' || task.status === 'cancelled')) {
-              this.addIssueComment(res.number, buildResultComment(task)).catch(() => {});
+              comment = await this.addIssueComment(res.number, buildResultComment(task));
             }
-            return { ok: true, issue: res.number, created: true, comment_posted: !!task.result };
+            return { ok: true, issue: res.number, created: true, comment_posted: !!comment };
           }
         }
         return { ok: false, reason: "api call failed" };

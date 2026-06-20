@@ -103,4 +103,10 @@ test("provided escalation suppresses missing-escalation warning", async () => {
   assert.ok(!created.warnings || created.warnings.length === 0,
     "no warnings when escalation is provided. Got: " + JSON.stringify(created.warnings));
   assert.equal(created.request.status, "open");
+  assert.deepEqual(created.request.escalation, {
+    category: "technical_uncertainty",
+    why_subagents_cannot_decide: "Need product direction on auth approach.",
+    options_considered: '["option_a", "option_b"]',
+    default_if_no_response: "option_a"
+  });
 });

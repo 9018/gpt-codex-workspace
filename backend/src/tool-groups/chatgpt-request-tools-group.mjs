@@ -84,6 +84,7 @@ async function createChatGptRequest(store, args) {
     title: args.title,
     prompt: args.prompt,
     source: args.source || "codex",
+    escalation: args.escalation || null,
     status: "open",
     response: "",
     created_at: now,

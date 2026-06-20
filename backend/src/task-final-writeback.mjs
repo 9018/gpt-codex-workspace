@@ -85,7 +85,7 @@ export async function finalizeCodexTaskRun({
     }, context);
   }
 
-  try { github.syncTask(result.task).catch(() => {}); } catch {}
+  try { await github.syncTask(result.task); } catch {}
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
 }
 

@@ -381,12 +381,16 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
                       taskObj.result.summary = resultData.summary || "Restart verified: deployment successful";
                       taskObj.result.restart_state = "verified";
                       taskObj.result.restart_verified_at = new Date().toISOString();
+                      taskObj.result.tests = resultData.tests;
                       taskObj.result.commit = resultData.commit;
                       taskObj.result.remote_head = resultData.remote_head;
+                      taskObj.result.changed_files = resultData.changed_files;
+                      taskObj.result.warnings = resultData.warnings;
                       taskObj.logs = taskObj.logs || [];
                       taskObj.logs.push({ time: new Date().toISOString(), message: `[safe-restart] Restart verified and task finalized via Phase C startup verification. Running commit: ${diagnostics.running_commit || "unknown"}` });
                       await notifyTerminalTaskIfNeeded(taskObj);
                       taskObj.updated_at = new Date().toISOString();
+                      try { await github.syncTask(taskObj); } catch {}
                       restartVerifications.push({ task_id: marker.task_id, status: "completed", verified: true });
                       // Release repo lock after restart verification
                       await releaseLockForTask(config.defaultWorkspaceRoot, marker.task_id);
