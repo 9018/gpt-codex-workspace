@@ -66,6 +66,7 @@ import { createRepositoryToolsGroup } from "./tool-groups/repository-tools-group
 import { createWorkspaceReadToolsGroup } from "./tool-groups/workspace-read-tools-group.mjs";
 import { createWorkspaceMutationToolsGroup } from "./tool-groups/workspace-mutation-tools-group.mjs";
 import { createGitRemoteToolsGroup } from "./tool-groups/git-remote-tools-group.mjs";
+import { createGithubSyncToolsGroup } from "./tool-groups/github-sync-tools-group.mjs";
 import { applyOptionSourceOverrides, createServerContext } from "./server-context.mjs";
 import { createTool } from "./tool-registry.mjs";
 let barkNotifier = null;
@@ -663,19 +664,7 @@ function createTools({ store, config, browser, github, bark, envLoadResult, sour
     extract_zip_archive: tool("Extract a ZIP archive into a workspace directory.", schema({ zip_path: "string", target_dir: "string", workspace_id: "string" }, ["zip_path"]), async (args, context) => workspaceShellZip(store, config, "extract", args, context)),
     shell_exec: tool("在工作区执行终端命令，用于检查服务状态和运行配置脚本。", schema({ command: "string", cwd: "string", timeout: "integer", max_output_bytes: "integer", workspace_id: "string" }, ["command"]), async (args, context) => workspaceShellExec(store, config, args, context)),
 
-    sync_to_github: tool("Sync all open tasks and ChatGPT requests to GitHub Issues.", schema({}), async () => {
-      const state = await store.load();
-      const tasks = state.tasks.filter((t) => t.status !== 'completed' && t.status !== 'cancelled');
-      const requests = (state.chatgpt_requests || []).filter((r) => r.status === 'open');
-      const taskResults = await github.syncAllTasks(tasks);
-      const requestResults = await github.syncAllRequests(requests);
-      return { options: { github_repo: process.env.GPTWORK_GITHUB_REPO || '(not set)', github_enabled: github.enabled }, synced_tasks: taskResults.length, synced_requests: requestResults.length, taskResults, requestResults };
-    }),
-    sync_from_github: tool("Import open GitHub Issues as tasks, and import GitHub Issue comments as ChatGPT responses. This is the no-reverse-proxy flow: ChatGPT creates GitHub Issues, Codex imports and works on them, results sync back. Also detects ChatGPT responses in issue comments.", schema({}), async () => {
-      const imported = await github.importFromIssues(store);
-      const responses = await github.importResponsesFromComments(store);
-      return { imported_tasks: imported.length, tasks: imported.map((t) => ({ id: t.id, title: t.title, status: t.status })), imported_responses: responses.length, responses: responses.map((r) => ({ request_id: r.request_id, responded_by: r.user })) };
-    }),
+    ...createGithubSyncToolsGroup({ tool, schema, store, github }),
     ...createRepositoryToolsGroup({ tool, schema, registry }),
     ...createContextHealthToolsGroup({ tool, schema, config, registry, store }),
 
