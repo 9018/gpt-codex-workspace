@@ -1,8 +1,8 @@
-import { execSync } from "node:child_process";
 import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runLocalShell } from "./local-shell-runner.mjs";
+import { DEFAULT_SEARCH_MAX_FILE_BYTES, DEFAULT_SEARCH_MAX_TOTAL_BYTES, looksBinary, normalizeSearchExcludeDirs } from "./workspace-search-helpers.mjs";
 import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { selectWorkspace, requireScope } from "./auth-context.mjs";
 import { sha256, shellQuotee } from "./mcp-tooling.mjs";
@@ -232,109 +232,6 @@ export async function workspaceCopy(store, config, { src, dst, overwrite = false
   await cp(srcPath, dstPath, { recursive: true, force: overwrite, errorOnExist: !overwrite });
   return { ok: true, src, dst };
 }
-
-const DEFAULT_SEARCH_EXCLUDE_DIRS = [".git", "node_modules", "dist", "build", "coverage", ".next", "vendor"];
-const DEFAULT_SEARCH_MAX_FILE_BYTES = 1024 * 1024;
-const DEFAULT_SEARCH_MAX_TOTAL_BYTES = 10 * 1024 * 1024;
-
-function normalizeSearchExcludeDirs(excludeDirs) {
-  const values = Array.isArray(excludeDirs) ? excludeDirs : [];
-  return new Set([...DEFAULT_SEARCH_EXCLUDE_DIRS, ...values].map((item) => String(item || "").replace(/\\/g, "/").replace(/^\/+|\/+$/g, "")).filter(Boolean));
-}
-
-function looksBinary(bytes) {
-  return bytes.subarray(0, Math.min(bytes.length, 8000)).includes(0);
-}
-
-// ---------------------------------------------------------------------------
-// ripgrep (rg) detection and search (P1.2)
-// ---------------------------------------------------------------------------
-
-let _rgAvailable = null;
-
-function isRgAvailable() {
-  if (_rgAvailable !== null) return _rgAvailable;
-  try {
-    const out = execSync("rg --version", { stdio: ["ignore", "pipe", "pipe"], timeout: 3000, encoding: "utf8" });
-    _rgAvailable = out.includes("ripgrep");
-  } catch {
-    _rgAvailable = false;
-  }
-  return _rgAvailable;
-}
-
-/**
- * Search files using ripgrep (rg) with Node fallback-compatible semantics.
- */
-function searchWithRg(q, resolvedPath, maxResults, maxFileBytes, excludeDirs) {
-  const startTime = Date.now();
-  const results = [];
-  
-  // Build rg args
-  const args = ["--no-heading", "--line-number", "--color", "never", "-m", "1"];
-  for (const dir of excludeDirs) {
-    args.push("--glob", "!" + dir + "/**");
-  }
-  if (maxFileBytes > 0) {
-    args.push("--max-filesize", maxFileBytes + "B");
-  }
-  args.push("-e", q);
-  args.push(resolvedPath);
-  
-  try {
-    const out = execSync("rg " + args.map(a => shellQuotee(a)).join(" "), {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 30000,
-      encoding: "utf8",
-      maxBuffer: 10 * 1024 * 1024
-    });
-    
-    for (const line of out.trim().split("\n")) {
-      if (results.length >= maxResults) break;
-      if (!line.trim()) continue;
-      const colonIdx = line.indexOf(":");
-      if (colonIdx === -1) continue;
-      const filePath = line.substring(0, colonIdx);
-      const rest = line.substring(colonIdx + 1);
-      const colonIdx2 = rest.indexOf(":");
-      const content = colonIdx2 !== -1 ? rest.substring(colonIdx2 + 1) : rest;
-      results.push({
-        path: filePath,
-        matched_name: false,
-        matched_content: true,
-        snippet: content.trim().slice(0, 200)
-      });
-    }
-  } catch (e) {
-    if (e.status !== 1) { /* no matches */ }
-  }
-  
-  // Check name matches using rg --files
-  try {
-    const fileArgs = ["--files"];
-    for (const dir of excludeDirs) {
-      fileArgs.push("--glob", "!" + dir + "/**");
-    }
-    fileArgs.push(resolvedPath);
-    const fileOut = execSync("rg " + fileArgs.map(a => shellQuotee(a)).join(" "), {
-      stdio: ["ignore", "pipe", "pipe"],
-      timeout: 10000,
-      encoding: "utf8",
-      maxBuffer: 5 * 1024 * 1024
-    });
-    for (const filePath of fileOut.trim().split("\n")) {
-      if (results.length >= maxResults) break;
-      if (!filePath.trim()) continue;
-      const relPath = filePath.startsWith(resolvedPath) ? filePath.slice(resolvedPath.length + 1) : filePath;
-      if (relPath.includes(q) && !results.some(r => r.path === relPath)) {
-        results.push({ path: relPath, matched_name: true, matched_content: false, snippet: "" });
-      }
-    }
-  } catch { /* non-fatal */ }
-  
-  return { results, elapsed_ms: Date.now() - startTime, metadata: { backend: "rg", limit: maxResults } };
-}
-
 
 export async function workspaceSearch(store, config, { q, path = ".", limit = 50, exclude_dirs = [], max_file_bytes = DEFAULT_SEARCH_MAX_FILE_BYTES, max_total_bytes = DEFAULT_SEARCH_MAX_TOTAL_BYTES, workspace_id }, context) {
   requireScope(context, "workspace:read");
