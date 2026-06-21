@@ -15,6 +15,41 @@ export function createGithubSync(config) {
   let _knownIssueMappings = {};
   // P1.3: Track posted terminal result comments for idempotence
   const _postedResultComments = new Map();
+  // P1.3: Track sync diagnostic data for github_status visibility
+  let _lastSyncDiagnostics = {
+    last_sync_at: null,
+    last_sync_ok: null,
+    last_sync_error: null,
+    last_raw_api_issue_count: 0,
+    last_imported_tasks: 0,
+    last_imported_responses: 0,
+    last_scanned_issue_count: 0,
+    skipped_reasons: [],
+  };
+
+  function _resetSyncDiagnostics() {
+    _lastSyncDiagnostics = {
+      last_sync_at: new Date().toISOString(),
+      last_sync_ok: true,
+      last_sync_error: null,
+      last_raw_api_issue_count: 0,
+      last_imported_tasks: 0,
+      last_imported_responses: 0,
+      last_scanned_issue_count: 0,
+      skipped_reasons: [],
+    };
+  }
+
+  function _recordSkip(reason, details) {
+    _lastSyncDiagnostics.skipped_reasons.push({ reason, details: details || null, time: new Date().toISOString() });
+  }
+
+  function _recordError(error) {
+    _lastSyncDiagnostics.last_sync_ok = false;
+    _lastSyncDiagnostics.last_sync_error = typeof error === "string" ? error.slice(0, 200) : (error && error.message ? error.message.slice(0, 200) : String(error).slice(0, 200));
+  }
+
+
 
   const headers = () => ({
     "Authorization": "Bearer " + token,
@@ -36,6 +71,7 @@ export function createGithubSync(config) {
       return response.json();
     } catch (error) {
       console.error("[github-sync] API call failed:", error.message);
+      _recordError(error.message);
       return null;
     }
   }
@@ -166,13 +202,17 @@ function shouldPostResultComment(task) {
       if (!enabled) return [];
       const res = await api("GET", "/issues?state=open&per_page=100");
       if (!res) return [];
-      knownIssues = (Array.isArray(res) ? res : []).filter((issue) => {
-        if (issue.pull_request) return false;
+      const raw = Array.isArray(res) ? res : [];
+      _lastSyncDiagnostics.last_raw_api_issue_count = raw.length;
+      const filtered = [];
+      for (const issue of raw) {
+        if (issue.pull_request) continue;
         const labels = (issue.labels || []).map((l) => typeof l === "string" ? l : l.name || "");
-        return labels.includes("gptwork-task")
-          || labels.includes("gptwork-question")
-          || /^\[(?:GPTWork\s+)?(?:Task|Question)\]/i.test(issue.title || "");
-      });
+        if (labels.includes("gptwork-task") || labels.includes("gptwork-question") || /^\[(?:GPTWork\s+)?(?:Task|Question)\]/i.test(issue.title || "")) {
+          filtered.push(issue);
+        }
+      }
+      knownIssues = filtered;
       knownComments = {};
       for (const issue of knownIssues) {
         knownComments[issue.number] = null;
@@ -192,6 +232,15 @@ function shouldPostResultComment(task) {
     getKnownIssues() {
       return knownIssues;
     },
+
+    getSyncDiagnostics() {
+      return { ..._lastSyncDiagnostics };
+    },
+
+    getKnownComments() {
+      return knownComments;
+    },
+
 
     getKnownComments() {
       return knownComments;
@@ -234,6 +283,7 @@ function shouldPostResultComment(task) {
           imported.push({ request_id: reqId, response: lastComment.body, user: lastComment.user });
         }
       }
+      _lastSyncDiagnostics.last_imported_responses = imported.length;
       if (imported.length > 0) await store.save();
       return imported;
     },
@@ -272,7 +322,13 @@ function shouldPostResultComment(task) {
 
     async importFromIssues(store, { limit = 100, assignToCodex = false } = {}) {
       if (!enabled) return [];
+      _resetSyncDiagnostics();
       const issues = await this.pollIssues();
+      _lastSyncDiagnostics.last_scanned_issue_count = issues ? issues.length : 0;
+      if (!issues || issues.length === 0) {
+        _recordSkip("no_open_issues", "raw API returned " + (_lastSyncDiagnostics.last_raw_api_issue_count ?? 0) + " issues, 0 passed label/title check");
+        return [];
+      }
       const imported = [];
       const state = await store.load();
       const existingTasks = state.tasks || [];
@@ -282,11 +338,11 @@ function shouldPostResultComment(task) {
       const maxIssues = Math.max(1, Math.min(Number(limit) || 100, 100));
       for (const issue of issues) {
         if (imported.length >= maxIssues) break;
-        if (issue.labels.includes("gptwork-question")) continue;
+        if (issue.labels.includes("gptwork-question")) { _recordSkip("question_label", "issue #" + issue.number); continue; }
         const idMatch = issue.body.match(/\*\*Task ID\*\*:\s*`(task_[a-f0-9-]+)`/);
-        if (idMatch && existingTaskIds.has(idMatch[1])) continue;
-        if (existingGithubIssueNumbers.has(issue.number) || existingGithubIssueUrls.has(issue.html_url)) continue;
-        const titleMatch = issue.title.match(/^\[Task\]\s+(.+?)\s+\[(.+?)\]$/);
+        if (idMatch && existingTaskIds.has(idMatch[1])) { _recordSkip("already_imported", "issue #" + issue.number + " task " + idMatch[1]); continue; }
+        if (existingGithubIssueNumbers.has(issue.number) || existingGithubIssueUrls.has(issue.html_url)) { _recordSkip("duplicate_issue_number", "issue #" + issue.number); continue; }
+        const titleMatch = issue.title.match(/^\[(?:GPTWork\s+)?Task\]\s+(.+?)\s+\[(.+?)\]$/);
         const taskTitle = titleMatch ? titleMatch[1] : issue.title;
         const taskStatus = titleMatch ? titleMatch[2] : "queued";
         const now = new Date().toISOString();
@@ -315,6 +371,7 @@ function shouldPostResultComment(task) {
         state.activities.push({ time: now, type: "task.imported", task_id: task.id, source: "github", issue: issue.number });
         imported.push(task);
       }
+      _lastSyncDiagnostics.last_imported_tasks = imported.length;
       if (imported.length > 0) await store.save();
       return imported;
     },

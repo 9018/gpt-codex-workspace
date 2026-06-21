@@ -39,6 +39,16 @@ function createGroup(withHandlers = false) {
         syncAllRequests: async (requests) => requests.map((r) => ({ id: r.id, synced: true })),
         importFromIssues: async () => [],
         importResponsesFromComments: async () => [],
+        getSyncDiagnostics: () => ({
+          last_sync_at: null,
+          last_sync_ok: null,
+          last_sync_error: null,
+          last_raw_api_issue_count: 5,
+          last_imported_tasks: 0,
+          last_imported_responses: 0,
+          last_scanned_issue_count: 3,
+          skipped_reasons: [{ reason: "test_skip", details: null, time: new Date().toISOString() }],
+        }),
       }
     : {};
 
@@ -107,4 +117,16 @@ test("sync_from_github handler returns expected shape", async () => {
   assert.ok(Array.isArray(result.tasks));
   assert.equal(typeof result.imported_responses, "number");
   assert.ok(Array.isArray(result.responses));
+  // Enhanced diagnostics fields
+  assert.ok("last_sync_at" in result);
+  assert.ok("last_sync_ok" in result);
+  assert.ok("last_sync_error" in result);
+  assert.ok("last_imported_tasks" in result);
+  assert.ok("last_imported_responses" in result);
+  assert.ok("last_scanned_issue_count" in result);
+  assert.ok("last_raw_api_issue_count" in result);
+  assert.ok("skipped_reasons" in result);
+  assert.ok(Array.isArray(result.skipped_reasons));
+  assert.equal(result.last_raw_api_issue_count, 5);
+  assert.equal(result.last_scanned_issue_count, 3);
 });

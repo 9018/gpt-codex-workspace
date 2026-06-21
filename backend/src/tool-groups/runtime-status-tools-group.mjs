@@ -2,7 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
-import { workerStatusSnapshot } from "../codex-worker-state.mjs";
+import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
 import { scanPendingRestartMarkersSync } from "../safe-restart.mjs";
 
 /**
@@ -31,14 +31,25 @@ export function createRuntimeStatusToolsGroup({
   }
 
   return {
-    github_status: tool("Return GitHub sync configuration and known issue count.", schema({}), async () => ({
-      enabled: github.enabled,
-      repo: github.status().api_repo || '',
-      known_issues: github.getKnownIssues().length,
-      config_source: sources.githubEnabled,
-      repo_configured: !!config.githubRepo,
-      token_configured: !!config.githubToken,
-    })),
+    github_status: tool("Return GitHub sync configuration, known issue count, and last-sync diagnostics.", schema({}), async () => {
+      const syncDiag = typeof github.getSyncDiagnostics === "function" ? github.getSyncDiagnostics() : {};
+      return {
+        enabled: github.enabled,
+        repo: github.status().api_repo || '',
+        known_issues: github.getKnownIssues().length,
+        config_source: sources.githubEnabled,
+        repo_configured: !!config.githubRepo,
+        token_configured: !!config.githubToken,
+        last_sync_at: syncDiag.last_sync_at || null,
+        last_sync_ok: syncDiag.last_sync_ok,
+        last_sync_error: syncDiag.last_sync_error || null,
+        last_imported_tasks: syncDiag.last_imported_tasks ?? 0,
+        last_imported_responses: syncDiag.last_imported_responses ?? 0,
+        last_scanned_issue_count: syncDiag.last_scanned_issue_count ?? 0,
+        last_raw_api_issue_count: syncDiag.last_raw_api_issue_count ?? 0,
+        skipped_reasons: syncDiag.skipped_reasons || [],
+      };
+    }),
 
     runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
       const startTime = Date.now();
@@ -59,8 +70,10 @@ export function createRuntimeStatusToolsGroup({
       // Safe restart markers status (computed from marker files, no secrets)
       const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
 
+      const queueCounts = await collectWorkerQueueCounts(store);
       return {
         elapsed_ms: Date.now() - startTime,
+        queue: queueCounts,
         pid: process.pid,
         started_at: PROCESS_STARTED_AT.toISOString(),
         repo_head: gitInfo.repo_head,
@@ -127,7 +140,8 @@ export function createRuntimeStatusToolsGroup({
         },
         repo_locks: await getCachedRepoLockSummary(),
         // Codex worker state (compact)
-        worker: workerStatusSnapshot(workerState),
+        worker: workerStatusExtendedSnapshot(workerState),
+        queue: await collectWorkerQueueCounts(store),
       };
     }),
 
@@ -276,8 +290,9 @@ export function createRuntimeStatusToolsGroup({
         })(),
         // Codex worker state
         elapsed_ms: Date.now() - startTime,
+        queue: queueCounts,
         worker: {
-          ...workerStatusSnapshot(workerState),
+          ...workerStatusExtendedSnapshot(workerState),
         },
         repo_locks: _lockSummary,
       };

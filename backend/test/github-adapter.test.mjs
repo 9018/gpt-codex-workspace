@@ -252,3 +252,91 @@ test("syncTask comments and closes imported GitHub issue by stored issue number"
     globalThis.fetch = previousFetch;
   }
 });
+
+// ---------------------------------------------------------------------------
+// P1.3 Diagnostic tracking and skipped reasons tests
+// ---------------------------------------------------------------------------
+
+test("importFromIssues returns skipped_reasons when all issues are already imported", async () => {
+  const previousFetch = globalThis.fetch;
+  const issues = [
+    { number: 1, title: "[Task] Issue 1 [queued]", body: "**Task ID**: `task_existing1`\nStuff", labels: [{ name: "gptwork-task" }], state: "open", html_url: "https://github.com/owner/repo/issues/1" },
+    { number: 2, title: "[Task] Issue 2 [queued]", body: "**Task ID**: `task_existing2`\nStuff", labels: [{ name: "gptwork-task" }], state: "open", html_url: "https://github.com/owner/repo/issues/2" },
+  ];
+  globalThis.fetch = async () => ({ ok: true, json: async () => issues });
+
+  const state = {
+    tasks: [
+      { id: "task_existing1", title: "Existing1", github_issue_number: 1, github_issue_url: "https://github.com/owner/repo/issues/1" },
+      { id: "task_existing2", title: "Existing2", github_issue_number: 2, github_issue_url: "https://github.com/owner/repo/issues/2" },
+    ],
+    activities: []
+  };
+  const store = { load: async () => state, save: async () => {} };
+
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+    const imported = await sync.importFromIssues(store);
+    const diag = sync.getSyncDiagnostics();
+
+    assert.equal(imported.length, 0);
+    assert.ok(Array.isArray(diag.skipped_reasons));
+    assert.ok(diag.skipped_reasons.length > 0, "should have skipped reasons");
+    assert.ok(diag.last_raw_api_issue_count >= 2, "should track raw API count: got " + diag.last_raw_api_issue_count);
+    assert.ok(diag.last_scanned_issue_count > 0, "should have scanned issue count > 0");
+    assert.equal(diag.last_imported_tasks, 0);
+    assert.equal(diag.last_imported_responses, 0);
+
+    // Verify skip reasons include specific types
+    const reasons = diag.skipped_reasons.map(r => r.reason);
+    assert.ok(reasons.includes("already_imported") || reasons.includes("duplicate_issue_number"),
+      "should include skip reasons like already_imported or duplicate_issue_number, got: " + reasons.join(", "));
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("importFromIssues records no_open_issues skip with raw count when no issues match filters", async () => {
+  const previousFetch = globalThis.fetch;
+  // Issues without gptwork-task label AND without GPTWork title prefix
+  const issues = [
+    { number: 101, title: "Random thing", body: "", labels: [], state: "open", html_url: "https://github.com/owner/repo/issues/101" },
+    { number: 102, title: "Another thing", body: "", labels: [], state: "open", html_url: "https://github.com/owner/repo/issues/102" },
+  ];
+  globalThis.fetch = async () => ({ ok: true, json: async () => issues });
+
+  const store = { load: async () => ({ tasks: [], chatgpt_requests: [] }), save: async () => {} };
+
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+    const imported = await sync.importFromIssues(store);
+    const diag = sync.getSyncDiagnostics();
+
+    assert.equal(imported.length, 0);
+    assert.ok(Array.isArray(diag.skipped_reasons));
+    const noOpenIssues = diag.skipped_reasons.find(s => s.reason === "no_open_issues");
+    assert.ok(noOpenIssues, "should have no_open_issues skip reason");
+    assert.ok(noOpenIssues.details.includes("raw API returned"), "details should mention raw API count: " + noOpenIssues.details);
+    assert.ok(noOpenIssues.details.includes("2"), "should mention count of 2: " + noOpenIssues.details);
+    assert.equal(diag.last_raw_api_issue_count, 2);
+    assert.equal(diag.last_scanned_issue_count, 0);
+  } finally {
+    globalThis.fetch = previousFetch;
+  }
+});
+
+test("getSyncDiagnostics returns all expected fields", () => {
+  const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "ghp_token123" });
+  const diag = sync.getSyncDiagnostics();
+
+  assert.ok(diag !== null && typeof diag === "object", "should return an object");
+  assert.ok("last_sync_at" in diag);
+  assert.ok("last_sync_ok" in diag);
+  assert.ok("last_sync_error" in diag);
+  assert.ok("last_raw_api_issue_count" in diag);
+  assert.ok("last_imported_tasks" in diag);
+  assert.ok("last_imported_responses" in diag);
+  assert.ok("last_scanned_issue_count" in diag);
+  assert.ok("skipped_reasons" in diag);
+  assert.ok(Array.isArray(diag.skipped_reasons));
+});
