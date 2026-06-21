@@ -65,6 +65,38 @@ test('StateStore: getCodexActiveQueueCandidates returns indexed tasks without sc
   }
 });
 
+test('StateStore: getCodexActiveQueueCandidates round-robins statuses to avoid starvation', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ss-smoke-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    const base = Date.parse('2026-01-01T00:00:00.000Z');
+    for (let i = 0; i < 6; i++) {
+      store.state.tasks.push({
+        id: `assigned-${i}`,
+        assignee: 'codex',
+        status: 'assigned',
+        project_id: 'default',
+        workspace_id: 'hosted-default',
+        mode: 'builder',
+        logs: [],
+        created_at: new Date(base + i * 1000).toISOString(),
+        updated_at: new Date(base + i * 1000).toISOString(),
+      });
+    }
+    store.state.tasks.push(
+      { id: 'queued-old', assignee: 'codex', status: 'queued', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: new Date(base + 10_000).toISOString(), updated_at: new Date(base + 10_000).toISOString() },
+      { id: 'lock-old', assignee: 'codex', status: 'waiting_for_lock', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: new Date(base + 20_000).toISOString(), updated_at: new Date(base + 20_000).toISOString() },
+    );
+    store._buildIndexes();
+
+    const candidates = store.getCodexActiveQueueCandidates(['assigned', 'queued', 'waiting_for_lock'], 4);
+    assert.deepEqual(candidates.map((t) => t.id), ['assigned-0', 'queued-old', 'lock-old', 'assigned-1']);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('StateStore: getCodexTaskQueue excludes terminal tasks from task list but includes counts', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'ss-smoke-'));
   try {
