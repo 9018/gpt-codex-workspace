@@ -7,6 +7,8 @@ export function createWorkerState() {
     last_tick_finished_at: null,
     last_tick_duration_ms: null,
     interval_ms: null,
+    current_interval_ms: null,
+    next_tick_due_at: null,
     limit: null,
     concurrency: null,
     last_tick_result: null,
@@ -19,6 +21,8 @@ export function markWorkerStarted(workerState, { intervalMs, limit, concurrency,
   workerState.running = false;
   workerState.started_at = now.toISOString();
   workerState.interval_ms = intervalMs ?? null;
+  workerState.current_interval_ms = intervalMs ?? null;
+  workerState.next_tick_due_at = null;
   workerState.limit = limit ?? null;
   workerState.concurrency = concurrency ?? null;
   return workerState;
@@ -62,6 +66,16 @@ export function markWorkerTickFinished(workerState, { now = new Date() } = {}) {
   return workerState;
 }
 
+
+export function markWorkerNextTickScheduled(workerState, { intervalMs, now = new Date() } = {}) {
+  const ms = Number(intervalMs);
+  workerState.current_interval_ms = Number.isFinite(ms) && ms >= 0 ? ms : workerState.interval_ms;
+  workerState.next_tick_due_at = workerState.current_interval_ms != null
+    ? new Date(now.getTime() + workerState.current_interval_ms).toISOString()
+    : null;
+  return workerState;
+}
+
 export function workerStatusSnapshot(workerState) {
   return {
     enabled: workerState.enabled,
@@ -71,6 +85,8 @@ export function workerStatusSnapshot(workerState) {
     last_tick_finished_at: workerState.last_tick_finished_at,
     last_tick_duration_ms: workerState.last_tick_duration_ms,
     interval_ms: workerState.interval_ms,
+    current_interval_ms: workerState.current_interval_ms ?? workerState.interval_ms ?? null,
+    next_tick_due_at: workerState.next_tick_due_at ?? null,
     concurrency: workerState.concurrency,
     limit: workerState.limit,
     last_tick_result: workerState.last_tick_result,

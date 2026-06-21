@@ -242,11 +242,12 @@ export function createRuntimeStatusToolsGroup({
                   actions.push(qcount + ' Codex task(s) queued/assigned but worker is disabled — set GPTWORK_CODEX_WORKER=true or process tasks manually');
                 }
               }
-              // Stale last tick (worker enabled but no tick in >2x interval)
-              if (workerState.last_tick_finished_at && workerState.interval_ms) {
+              // Stale last tick (respect empty-queue backoff effective interval)
+              if (workerState.last_tick_finished_at && (workerState.current_interval_ms || workerState.interval_ms)) {
                 const elapsed = Date.now() - new Date(workerState.last_tick_finished_at).getTime();
-                if (elapsed > workerState.interval_ms * 3) {
-                  actions.push('Codex worker last tick completed ' + Math.round(elapsed / 1000) + 's ago (>3x interval) — check worker health');
+                const watchdogInterval = workerState.current_interval_ms || workerState.interval_ms;
+                if (elapsed > watchdogInterval * 3) {
+                  actions.push('Codex worker last tick completed ' + Math.round(elapsed / 1000) + 's ago (>3x current interval) — check worker health');
                 }
               }
               // Last tick error

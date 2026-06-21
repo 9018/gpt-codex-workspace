@@ -20,6 +20,7 @@ import {
   recordWorkerTickSuccess,
   recordWorkerTickError,
   markWorkerTickFinished,
+  markWorkerNextTickScheduled,
 } from "./codex-worker-state.mjs";
 import {
   requireScope,
@@ -102,6 +103,7 @@ export function startCodexWorker(server, {
           const factor = Math.pow(backoffFactor, consecutiveEmptyTicks);
           effectiveInterval = Math.min(intervalMs * factor, backoffMaxMs);
         }
+        markWorkerNextTickScheduled(workerState, { intervalMs: effectiveInterval });
         timer = setTimeout(tick, effectiveInterval);
       }
     }

@@ -416,7 +416,7 @@ test("runtime_status includes worker summary with expected fields", async () => 
   const status = await callTool(server, "runtime_status");
   assert.ok(status.worker, "runtime_status should have worker field");
   const expectedFields = ["enabled", "running", "started_at", "last_tick_started_at",
-    "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "concurrency",
+    "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "current_interval_ms", "next_tick_due_at", "concurrency",
     "limit", "last_tick_result", "last_error"];
   for (const field of expectedFields) {
     assert.ok(field in status.worker, `runtime_status.worker should have ${field} field`);

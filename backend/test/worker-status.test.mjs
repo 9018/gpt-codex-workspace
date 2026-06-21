@@ -69,7 +69,7 @@ test("worker_status returns expected state fields", async () => {
   const status = await callTool(server, "worker_status");
   // Check all worker state fields exist
   const expectedFields = ["enabled", "running", "started_at", "last_tick_started_at",
-    "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "limit",
+    "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "current_interval_ms", "next_tick_due_at", "limit",
     "concurrency", "last_tick_result", "last_error", "queue", "queues"];
   for (const field of expectedFields) {
     assert.ok(field in status, `worker_status should have ${field} field`);
