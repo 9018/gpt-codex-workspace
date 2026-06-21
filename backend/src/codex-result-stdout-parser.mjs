@@ -1,0 +1,155 @@
+export function parseCodexResult(output) {
+  if (!output || typeof output !== "string") {
+    return {
+      status: null,
+      summary: null,
+      changed_files: [],
+      tests: null,
+      commit: null,
+      remote_head: null,
+      warnings: [],
+      followups: [],
+      structured: false,
+      from_json: false,
+      raw_summary_excerpt: null
+    };
+  }
+
+  const lines = output.split("\n");
+  let structured = false;
+  let status = null;
+  let summary = null;
+  let changedFilesRaw = null;
+  let tests = null;
+  let commit = null;
+  let remoteHead = null;
+  let subagentsUsed = false;
+  let subagents = null;
+  let gptQuestionsUsed = null;
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // STATUS=<completed|failed|timed_out>
+    const statusMatch = trimmed.match(/^STATUS=(completed|failed|timed_out)$/i);
+    if (statusMatch) {
+      status = statusMatch[1].toLowerCase();
+      structured = true;
+      continue;
+    }
+
+    // SUMMARY=<one line>
+    const summaryMatch = trimmed.match(/^SUMMARY=(.*)$/i);
+    if (summaryMatch) {
+      summary = summaryMatch[1].trim() || null;
+      structured = true;
+      continue;
+    }
+
+    // CHANGED_FILES=<comma separated or none>
+    const filesMatch = trimmed.match(/^CHANGED_FILES=(.*)$/i);
+    if (filesMatch) {
+      changedFilesRaw = filesMatch[1].trim() || null;
+      structured = true;
+      continue;
+    }
+
+    // TESTS=<commands and pass/fail or none>
+    const testsMatch = trimmed.match(/^TESTS=(.*)$/i);
+    if (testsMatch) {
+      tests = testsMatch[1].trim() || null;
+      structured = true;
+      continue;
+    }
+
+    // COMMIT=<sha or none>
+    const commitMatch = trimmed.match(/^COMMIT=(.*)$/i);
+    if (commitMatch) {
+      commit = commitMatch[1].trim() || null;
+      structured = true;
+      continue;
+    }
+
+    // REMOTE_HEAD=<sha or none>
+    const remoteMatch = trimmed.match(/^REMOTE_HEAD=(.*)$/i);
+    if (remoteMatch) {
+      remoteHead = remoteMatch[1].trim() || null;
+      structured = true;
+      continue;
+    }
+
+    // SUBAGENTS_USED=<true|false>
+    const subagentsUsedMatch = trimmed.match(/^SUBAGENTS_USED=(true|false)$/i);
+    if (subagentsUsedMatch) {
+      subagentsUsed = subagentsUsedMatch[1].toLowerCase() === 'true';
+      structured = true;
+      continue;
+    }
+
+    // SUBAGENTS=<JSON array> — must be on a single line
+    const subagentsMatch = trimmed.match(/^SUBAGENTS=(.*)$/i);
+    if (subagentsMatch) {
+      try {
+        const parsed = JSON.parse(subagentsMatch[1].trim());
+        if (Array.isArray(parsed)) subagents = parsed;
+      } catch {
+        // ignore parse failures
+      }
+      structured = true;
+      continue;
+    }
+
+    // GPT_QUESTIONS_USED=<number>
+    const gptQuestionsUsedMatch = trimmed.match(/^GPT_QUESTIONS_USED=(\d+)$/i);
+    if (gptQuestionsUsedMatch) {
+      gptQuestionsUsed = parseInt(gptQuestionsUsedMatch[1], 10);
+      if (!Number.isFinite(gptQuestionsUsed)) gptQuestionsUsed = null;
+      structured = true;
+      continue;
+    }
+  }
+
+  // Normalize changed_files
+  let changedFiles = [];
+  if (changedFilesRaw && changedFilesRaw.toLowerCase() !== "none") {
+    changedFiles = changedFilesRaw.split(",").map(f => f.trim()).filter(Boolean);
+  }
+
+  // Normalize "none" values
+  if (status && status === "none") status = null;
+  if (summary && summary.toLowerCase() === "none") summary = null;
+  if (tests && tests.toLowerCase() === "none") tests = null;
+  if (commit && commit.toLowerCase() === "none") commit = null;
+  if (remoteHead && remoteHead.toLowerCase() === "none") remoteHead = null;
+
+  return {
+    status,
+    summary,
+    changed_files: changedFiles,
+    tests,
+    commit,
+    remote_head: remoteHead,
+    warnings: [],
+    followups: [],
+    structured,
+    from_json: false,
+    subagents_used: subagentsUsed,
+    subagents,
+    gpt_questions_used: gptQuestionsUsed,
+    raw_summary_excerpt: output.slice(0, 500)
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Combined parser (prefers result.json, falls back to stdout)
+// ---------------------------------------------------------------------------
+
+/**
+ * Try to parse result.json first. If not found or invalid, fall back to
+ * parsing the stdout structured fields.
+ *
+ * @param {object} options
+ * @param {string} [options.resultJsonPath] - Path to result.json file.
+ * @param {string} [options.stdout] - Raw stdout from Codex CLI execution.
+ * @returns {Promise<object>} Parsed result object.
+ */
