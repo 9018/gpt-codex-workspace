@@ -14,7 +14,8 @@ async function makeServer() {
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 
@@ -41,7 +42,8 @@ async function makeScopedServer() {
         scopes: ["project:read", "workspace:read"]
       }
     },
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 
@@ -217,7 +219,8 @@ test("legacy ordinary readonly tasks are promoted when read", async () => {
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const listed = await callTool(server, "list_tasks");
@@ -256,7 +259,8 @@ test("completed Codex session inventory tasks remain readonly when read", async 
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const completed = await callToolAs(server, "test-token", "create_codex_session_inventory_task", {});
@@ -279,7 +283,8 @@ test("Codex session inventory tools expose metadata only and create an assigned 
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const listed = await callToolAs(server, "test-token", "list_codex_sessions_metadata", {
@@ -315,7 +320,8 @@ test("safe Codex worker completes assigned session inventory tasks", async () =>
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const draft = await callToolAs(server, "test-token", "create_task", {
@@ -354,7 +360,8 @@ test("general Codex worker completes linked goals and writes concise results", a
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const created = await callToolAs(server, "test-token", "create_goal", {
@@ -610,6 +617,7 @@ test("notification diagnostics persisted after completed task", async (t) => {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "persistence-test-key"
   });
 
@@ -653,6 +661,7 @@ test("notification diagnostics show failure on network error", async (t) => {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "fail-test-key"
   });
 
@@ -683,6 +692,7 @@ test("notification diagnostics not persisted when bark disabled", async () => {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkEnabled: false
   });
 
@@ -767,7 +777,8 @@ test("project_context_status reports project.md/project.env existence and sizes/
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "project_context_status", {});
@@ -797,7 +808,8 @@ test("project_context_status reports warnings for missing project.md/project.env
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "project_context_status", {});
@@ -832,7 +844,8 @@ test("gptwork_doctor remains quiet/nominal when context is healthy", async () =>
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const doctor = await callTool(server, "gptwork_doctor", {});
@@ -936,7 +949,8 @@ test("gptwork_doctor mentions both names when context is unhealthy", async () =>
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const doctor = await callTool(server, "gptwork_doctor", {});
@@ -991,7 +1005,8 @@ test("context_prepare() defaults to check mode and does not write files", async 
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "context_prepare", {});
@@ -1018,7 +1033,8 @@ test("context_prepare(mode=fix_safe) creates missing .gptwork/project.md and .gp
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "context_prepare", { mode: "fix_safe" });
@@ -1067,7 +1083,8 @@ test("fix_safe does not overwrite existing project.md/project.env content", asyn
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "context_prepare", { mode: "fix_safe" });
@@ -1096,7 +1113,8 @@ test("empty project.env gets non-secret template comments", async () => {
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "context_prepare", { mode: "fix_safe" });
@@ -1136,7 +1154,8 @@ test("no secret values are exposed in context_prepare outputs", async () => {
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // First check mode
@@ -1167,7 +1186,8 @@ test("project_context_status after fix_safe reports no missing template warnings
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Run fix_safe to create templates
@@ -1197,7 +1217,8 @@ test("context_prepare fix_safe refuses to run on dirty worktree", async () => {
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Run fix_safe - should refuse due to dirty worktree (but git status may not detect since no git init)
@@ -1231,7 +1252,8 @@ test("context_prepare check mode plans fixes for missing files", async () => {
     defaultWorkspaceRoot: root,
     defaultRepoPath: repoPath,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await callTool(server, "context_prepare", {});

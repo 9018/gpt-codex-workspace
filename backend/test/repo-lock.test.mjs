@@ -66,7 +66,8 @@ async function makeServer() {
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=lock-test')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 
@@ -433,7 +434,8 @@ test("gptwork_doctor suggests repo_lock_status when locks exist", async () => {
     defaultWorkspaceRoot: workspaceRoot,
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
   const doctor = await callTool(server, "gptwork_doctor", {});
   assert.ok(doctor.suggested_next_actions.length > 0,
@@ -504,7 +506,8 @@ test("reconcileStaleTasks includes Phase B repo lock reconciliation", async () =
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: workspaceRoot,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const result = await server.reconcileStaleTasks();
@@ -536,7 +539,8 @@ test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_
     codexExecArgs: "",
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Create first task
@@ -611,7 +615,8 @@ test("blocked task with waiting_for_lock is retried after lock release", async (
     codexExecArgs: "",
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Acquire a repo lock manually to simulate another task running
@@ -689,7 +694,8 @@ test("waiting_for_lock task does not trigger Bark waiting_for_review notificatio
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\nSUMMARY=nobark')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Acquire lock manually to force blocking
@@ -748,7 +754,8 @@ test("repo_lock_status and list_repo_locks still report locks correctly with wai
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\nSUMMARY=diag')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Acquire a lock on the repo
@@ -866,7 +873,8 @@ test("readonly session inventory tasks are unaffected by repo locks", async () =
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Create and run a session inventory task — should complete normally
@@ -896,7 +904,8 @@ test("draft task with empty assignee is ignored by run_assigned_codex_tasks", as
     codexExecArgs: "",
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   // Create a draft task without assignee

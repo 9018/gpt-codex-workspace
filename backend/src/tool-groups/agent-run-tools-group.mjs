@@ -67,7 +67,7 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
       inputSchema: schema({ path: "string", max_diff_bytes: "integer" }),
       ...common,
       outputTemplate: "ui://widget/gptwork-card-v1.html",
-      handler: (args) => showChanges(args),
+      handler: (args) => showChanges(args, config),
     }),
   };
 }

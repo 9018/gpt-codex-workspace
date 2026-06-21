@@ -82,3 +82,29 @@ test("gptwork CLI doctor and status print compact local summaries", async () => 
   assert.match(status, /queue:/);
   assert.ok(status.split("\n").length < 30);
 });
+
+test("gptwork CLI help only advertises implemented commands", () => {
+  const help = execFileSync("node", [CLI_BIN, "--help"], { encoding: "utf8" });
+
+  assert.match(help, /setup/);
+  assert.match(help, /start/);
+  assert.match(help, /status \[--local\]/);
+  assert.match(help, /doctor \[--local\]/);
+  assert.match(help, /settings show/);
+  assert.match(help, /settings set KEY VALUE/);
+  assert.match(help, /logs/);
+  assert.match(help, /watch-handoff --dry-run/);
+  assert.doesNotMatch(help, /goal create/);
+  assert.doesNotMatch(help, /codex run/);
+  assert.doesNotMatch(help, /github sync/);
+});
+
+test("repository root does not include extracted productization goal bundle", () => {
+  const repoRoot = resolve(TEST_DIR, "../..");
+  const files = execFileSync("git", ["ls-files", "gptwork_p0_p1_p2_goal"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).trim();
+
+  assert.equal(files, "");
+});

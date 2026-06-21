@@ -16,6 +16,7 @@ async function makeServer(customConfig = {}) {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     ...customConfig
   });
 }
@@ -139,6 +140,7 @@ test("notification_status with runtime env source", async () => {
     defaultWorkspaceRoot: root,
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "env-source-test-key"
   });
 
@@ -161,7 +163,8 @@ test("notification_status source shows workspace-runtime-env when bark config lo
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: root,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
     // No barkKey - it will come from runtime env
   });
 
@@ -196,6 +199,7 @@ test("notification_status includes all Bark diagnostic fields", async () => {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "full-diag-key"
   });
 

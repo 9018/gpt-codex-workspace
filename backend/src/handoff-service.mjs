@@ -53,8 +53,8 @@ function git(args, cwd) {
   }
 }
 
-export async function showChanges(args = {}) {
-  const repo = resolve(args.path || process.cwd());
+export async function showChanges(args = {}, config = {}) {
+  const repo = resolve(args.path || config.defaultRepoPath || process.cwd());
   const statusText = git(["status", "--short"], repo);
   const changedFiles = statusText.split("\n").filter(Boolean).map((line) => ({
     status: line.slice(0, 2).trim(),

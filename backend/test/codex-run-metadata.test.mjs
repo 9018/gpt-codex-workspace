@@ -35,7 +35,8 @@ async function makeServer() {
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 
@@ -313,7 +314,8 @@ test("Codex execution creates run metadata with heartbeats", async () => {
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=heartbeat-test')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const created = await callTool(server, "create_task", {
@@ -360,7 +362,8 @@ test("run metadata is cleaned up properly after execution", async () => {
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=cleanup-test')"`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const created = await callTool(server, "create_task", {
@@ -418,7 +421,8 @@ test("startCodexWorker startup reconciliation runs on first tick", async () => {
   }
 
   const server = await createGptWorkServer({
-    statePath, defaultWorkspaceRoot: workspaceRoot, tokens: ["test-token"], requireAuth: true
+    statePath, defaultWorkspaceRoot: workspaceRoot, tokens: ["test-token"], requireAuth: true,
+    toolMode: "full"
   });
 
   // Call reconciliation directly (same as what startCodexWorker does)
@@ -435,4 +439,3 @@ test("startCodexWorker startup reconciliation runs on first tick", async () => {
 
 // ================================================================
 // ================================================================
-

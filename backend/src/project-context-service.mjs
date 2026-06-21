@@ -18,6 +18,13 @@ function currentRepoRoot() {
   return root ? resolve(root) : resolve(process.cwd());
 }
 
+function resolveContextRepoRoot({ config, registry } = {}) {
+  const defaultRepo = typeof registry?.getDefaultRepo === "function" ? registry.getDefaultRepo() : null;
+  if (defaultRepo?.canonical_path) return resolve(defaultRepo.canonical_path);
+  if (config?.defaultRepoPath) return resolve(config.defaultRepoPath);
+  return currentRepoRoot();
+}
+
 function readJson(path) {
   try {
     return JSON.parse(readFileSync(path, "utf8"));
@@ -59,7 +66,7 @@ function scriptsFromPackage(root) {
 }
 
 export async function collectProjectContext({ config, store, workerState, registry }) {
-  const repoRoot = currentRepoRoot();
+  const repoRoot = resolveContextRepoRoot({ config, registry });
   const state = await store.load();
   const head = safeGit(["rev-parse", "--short", "HEAD"], repoRoot) || null;
   const branch = safeGit(["branch", "--show-current"], repoRoot) || null;

@@ -286,6 +286,7 @@ async function makeServer(customConfig = {}) {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     ...(hasBarkConfig ? {} : { barkEnabled: false }),
     ...customConfig
   });
@@ -576,6 +577,7 @@ test("server loads runtime env from workspace root", async () => {
     defaultWorkspaceRoot: root,
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "env-loader-test-key"
   });
 
@@ -601,6 +603,7 @@ test("runtime env fills missing bark config from file", async () => {
     defaultWorkspaceRoot: root,
     tokens: ["test-token"],
     requireAuth: true,
+    toolMode: "full",
     barkKey: "fill-test-abc"
   });
 

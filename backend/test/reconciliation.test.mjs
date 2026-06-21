@@ -16,7 +16,8 @@ async function makeServer(root) {
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 

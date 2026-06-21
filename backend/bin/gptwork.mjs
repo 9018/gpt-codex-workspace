@@ -17,9 +17,6 @@ function usage() {
   settings show
   settings set KEY VALUE
   logs
-  goal create --assign --title <title> --prompt <prompt>
-  codex run --limit <n>
-  github sync
   watch-handoff --dry-run [--agent <name>] [--command <cmd>]`;
 }
 
@@ -169,18 +166,6 @@ async function main() {
   if (command === "logs") {
     const logPath = process.env.GPTWORK_LOG_PATH || "/tmp/gptwork-mcp.log";
     console.log(existsSync(logPath) ? readFileSync(logPath, "utf8").slice(-8000) : `No log file at ${logPath}`);
-    return;
-  }
-  if (command === "goal" && subcommand === "create") {
-    console.log("Use the MCP create_encoded_goal tool for structured goal creation. CLI HTTP creation will be added on top of this stable command surface.");
-    return;
-  }
-  if (command === "codex" && subcommand === "run") {
-    console.log("Use run_assigned_codex_tasks through MCP or enable GPTWORK_CODEX_WORKER=true with gptwork start.");
-    return;
-  }
-  if (command === "github" && subcommand === "sync") {
-    console.log("Use sync_from_github/sync_to_github through MCP; this CLI command reserves the stable product entrypoint.");
     return;
   }
   if (command === "watch-handoff") {

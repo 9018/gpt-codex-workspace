@@ -12,7 +12,8 @@ async function makeServer() {
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 }
 
@@ -276,7 +277,8 @@ test("legacy readonly goals and linked ordinary tasks are promoted when read", a
     statePath,
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    toolMode: "full"
   });
 
   const listed = await callTool(server, "list_goals", { assignee: "codex" });

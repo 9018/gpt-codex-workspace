@@ -169,7 +169,10 @@ export function filterToolsForMode(tools, mode) {
   const allow = TOOL_MODE_ALLOWLISTS[normalized] || TOOL_MODE_ALLOWLISTS.standard;
   return Object.fromEntries(Object.entries(tools).filter(([name, descriptor]) => {
     const modes = descriptor.metadata?.modes || [];
-    return allow.has(name) || modes.includes(normalized) || modes.includes("standard");
+    if (normalized === "standard") {
+      return allow.has(name) || modes.includes("standard");
+    }
+    return allow.has(name) || modes.includes(normalized);
   }));
 }
 

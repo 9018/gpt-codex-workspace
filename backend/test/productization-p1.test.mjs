@@ -12,7 +12,7 @@ import { buildAgentRunComment } from "../src/github-issue-formatters.mjs";
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_BIN = resolve(TEST_DIR, "../bin/gptwork.mjs");
 
-async function makeServer() {
+async function makeServer(extra = {}) {
   const root = await mkdtemp(join(tmpdir(), "gptwork-p1-"));
   return {
     root,
@@ -21,8 +21,20 @@ async function makeServer() {
       defaultWorkspaceRoot: join(root, "workspace"),
       tokens: ["test-token"],
       requireAuth: true,
+      ...extra,
     }),
   };
+}
+
+async function makeGitRepo(prefix = "gptwork-repo-") {
+  const repo = await mkdtemp(join(tmpdir(), prefix));
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "a.txt"), "one\n", "utf8");
+  execFileSync("git", ["add", "a.txt"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "init"], { cwd: repo, stdio: "ignore" });
+  return repo;
 }
 
 async function call(server, name, args = {}) {
@@ -92,13 +104,7 @@ test("handoff_to_agent writes plan files and read_handoff returns them", async (
 });
 
 test("show_changes returns compact git review summary", async () => {
-  const repo = await mkdtemp(join(tmpdir(), "gptwork-changes-"));
-  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
-  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
-  await writeFile(join(repo, "a.txt"), "one\n", "utf8");
-  execFileSync("git", ["add", "a.txt"], { cwd: repo });
-  execFileSync("git", ["commit", "-m", "init"], { cwd: repo, stdio: "ignore" });
+  const repo = await makeGitRepo("gptwork-changes-");
   await writeFile(join(repo, "a.txt"), "one\ntwo\n", "utf8");
 
   const { server } = await makeServer();
@@ -108,6 +114,40 @@ test("show_changes returns compact git review summary", async () => {
   assert.equal(changes.changed_files[0].path, "a.txt");
   assert.ok(changes.summary.includes("1 changed file"));
   assert.ok(changes.diff_excerpt.includes("+two"));
+});
+
+test("show_changes defaults to configured defaultRepoPath", async () => {
+  const repo = await makeGitRepo("gptwork-default-changes-");
+  await writeFile(join(repo, "a.txt"), "one\ndefault path\n", "utf8");
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p1-default-"));
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace"),
+    defaultRepoPath: repo,
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "codex",
+  });
+
+  const changes = await call(server, "show_changes", {});
+
+  assert.equal(changes.repo, repo);
+  assert.equal(changes.changed_files.length, 1);
+  assert.ok(changes.diff_excerpt.includes("+default path"));
+});
+
+test("open_project_context prefers the registered canonical repository", async () => {
+  const repo = await makeGitRepo("gptwork-context-repo-");
+  const { server } = await makeServer({ toolMode: "full" });
+
+  await call(server, "register_repository", {
+    remote_url: "https://github.com/example/context-repo.git",
+    canonical_path: repo,
+  });
+  const context = await call(server, "open_project_context", {});
+
+  assert.equal(context.repo.root, repo);
+  assert.ok(context.file_tree.includes("a.txt"));
 });
 
 test("gptwork watch-handoff supports dry-run", async () => {

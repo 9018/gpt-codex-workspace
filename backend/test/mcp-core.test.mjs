@@ -194,7 +194,7 @@ test("POST /mcp/:token authenticates MCP requests from the path", async () => {
 });
 
 test("POST /mcp streams progress notifications before the final tool result", async () => {
-  const app = await makeServer();
+  const app = await makeServer({ toolMode: "full" });
   const httpServer = await app.listen({ host: "127.0.0.1", port: 0 });
   try {
     const address = httpServer.address();

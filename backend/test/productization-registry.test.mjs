@@ -74,6 +74,72 @@ test("default standard tool mode exposes bounded ChatGPT-first tools", async () 
   assert.ok(names.length < 70, `standard mode should be bounded, got ${names.length} tools`);
 });
 
+test("minimal tool mode exposes only its explicit safe subset", async () => {
+  const server = await makeServer({ toolMode: "minimal" });
+  const response = await server.handleRpc({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, {
+    authorization: "Bearer test-token",
+  });
+  const names = response.result.tools.map((tool) => tool.name).sort();
+
+  assert.deepEqual(names, [
+    "create_encoded_goal",
+    "get_task",
+    "health_check",
+    "list_tasks",
+    "open_project_context",
+    "runtime_status",
+    "worker_status",
+  ].sort());
+  assert.equal(names.includes("create_agent_run"), false);
+  assert.equal(names.includes("handoff_to_agent"), false);
+  assert.equal(names.includes("run_agent_pipeline"), false);
+  assert.equal(names.includes("show_changes"), false);
+});
+
+test("operator tool mode does not expose agent or handoff tools", async () => {
+  const server = await makeServer({ toolMode: "operator" });
+  const response = await server.handleRpc({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, {
+    authorization: "Bearer test-token",
+  });
+  const names = response.result.tools.map((tool) => tool.name);
+
+  assert.equal(names.includes("create_agent_run"), false);
+  assert.equal(names.includes("handoff_to_agent"), false);
+  assert.equal(names.includes("run_agent_pipeline"), false);
+  assert.equal(names.includes("show_changes"), false);
+});
+
+test("tools/call rejects hidden tools in minimal and standard modes", async () => {
+  for (const toolMode of ["minimal", "standard"]) {
+    const server = await makeServer({ toolMode });
+    const response = await server.handleRpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "shell_exec", arguments: { command: "echo hidden" } },
+    }, { authorization: "Bearer test-token" });
+
+    assert.equal(response.error?.code, -32601, `${toolMode} should reject hidden direct calls`);
+    assert.match(response.error?.message || "", /Unknown tool: shell_exec/);
+  }
+});
+
+test("tools/call keeps shell_exec available in codex and full modes", async () => {
+  for (const toolMode of ["codex", "full"]) {
+    const server = await makeServer({ toolMode });
+    const response = await server.handleRpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "shell_exec", arguments: { command: "printf visible" } },
+    }, { authorization: "Bearer test-token" });
+
+    assert.ifError(response.error);
+    assert.equal(response.result.structuredContent.returncode, 0);
+    assert.match(response.result.structuredContent.stdout, /visible/);
+  }
+});
+
 test("full tool mode keeps the complete compatibility tool surface", async () => {
   process.env.GPTWORK_TOOL_MODE = "full";
   try {
