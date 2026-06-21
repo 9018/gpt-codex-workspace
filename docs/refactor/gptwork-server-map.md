@@ -1,7 +1,7 @@
 # gptwork-server.mjs — Current Responsibility Map
 
 **File:** `backend/src/gptwork-server.mjs` (586 lines)
-**Status:** P4 composition-root refactor mostly complete.
+**Status:** Composition-root refactor complete; runtime modules are split behind stable facades.
 **Goal:** Keep public MCP tool names, schemas, and response shapes stable while moving implementation details into focused modules.
 
 ---

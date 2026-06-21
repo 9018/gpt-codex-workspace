@@ -1,7 +1,7 @@
 # GPT-Codex Workspace Architecture
 
-Date: 2026-06-15
-Status: v2 encoded goal workflow
+Date: 2026-06-21
+Status: v2 encoded goal workflow with modular backend facades
 Default MCP endpoint: `https://mcp.gptwork.cc.cd/mcp/dev-token`
 
 ## Objective
@@ -35,6 +35,11 @@ User request
   -> Codex executes and writes result.md
   -> append_goal_message reports progress/results
 ```
+
+
+## Backend Module Layout
+
+The backend now keeps stable facade modules and moves implementation into focused files. This layout covers cards, notifications, GitHub sync, Codex worker/run/result/context helpers, goal lifecycle, workspace IO, repo locks, repo registry, runtime reconciliation, safe restart, diagnostics, and git remote readers. Run the full verification commands before any restart.
 
 ## Auth Service
 

@@ -1,7 +1,7 @@
 # GPTWork Current Status
-Date: 2026-06-17
-Status: P1 cleanup complete: zero-byte test files replaced with minimal smoke tests, chunk-upload placeholder tools removed, browser placeholder tools tagged as [EXPERIMENTAL] and gated behind feature flags, docs clarified for stable vs experimental tool separation.
-Status: encoded goal workflow is implemented and tuned for GPTChat -> Codex execution on 10.0.1.103. All P0 UX items resolved: placeholder tools gated by default, gptwork_doctor diagnostic tool added, workspace/repo registration validated.
+Date: 2026-06-21
+Status: backend refactor and verification pass complete. Large runtime, worker, repo-lock, safe-restart, GitHub, diagnostics, card, Codex result/run metadata, context, and registry modules are split behind compatibility facades.
+Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Public MCP tool names and compatibility entry points remain stable.
 
 ## What This Project Is
 
@@ -535,3 +535,8 @@ SSH workspaces support file and shell operations but Codex worker execution (`pr
 - SSH file/shell tools (list_dir, read_text_file, write_text_file, shell_exec, etc.) work normally.
 
 To use Codex execution, assign tasks to a hosted workspace.
+
+
+## 2026-06-21 Verification Summary
+
+Backend modules are split behind compatibility facades. Verification passed with npm test, test:clean, test:perf-smoke, check:syntax, and check:imports.
