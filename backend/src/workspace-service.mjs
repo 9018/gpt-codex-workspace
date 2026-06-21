@@ -2,6 +2,7 @@ import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } fr
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { runLocalShell } from "./local-shell-runner.mjs";
+import { runZipCommand } from "./workspace-zip-runner.mjs";
 import { DEFAULT_SEARCH_MAX_FILE_BYTES, DEFAULT_SEARCH_MAX_TOTAL_BYTES, looksBinary, normalizeSearchExcludeDirs } from "./workspace-search-helpers.mjs";
 import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { selectWorkspace, requireScope } from "./auth-context.mjs";
@@ -315,15 +316,6 @@ export async function workspaceShellZip(store, config, mode, args, context) {
     ? config.pythonCommand + " -m zipfile -c " + shellQuotee(args.zip_path) + " " + shellQuotee(args.source_dir)
     : config.pythonCommand + " -m zipfile -e " + shellQuotee(args.zip_path) + " " + shellQuotee(args.target_dir || ".");
   return workspaceShellExec(store, config, { command, cwd: ".", workspace_id: args.workspace_id }, context);
-}
-
-export async function runZipCommand(mode, sourcePath, zipPath, pythonCommand = process.platform === "win32" ? "python" : "python3") {
-  const command = mode === "create"
-    ? pythonCommand + " -m zipfile -c " + shellQuotee(zipPath) + " " + shellQuotee(sourcePath)
-    : pythonCommand + " -m zipfile -e " + shellQuotee(zipPath) + " " + shellQuotee(sourcePath);
-  const result = await runLocalShell(command, dirname(zipPath), 60, 1000000);
-  if (result.returncode !== 0) throw new Error(`zip command failed: ${result.stderr || result.stdout}`);
-  return result;
 }
 
 export { runLocalShell };
