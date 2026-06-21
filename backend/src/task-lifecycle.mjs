@@ -113,7 +113,9 @@ export async function normalizeLegacyModes(store, state) {
 export async function findTask(store, task_id) {
   const state = await store.load();
   await normalizeLegacyModes(store, state);
-  const task = state.tasks.find((item) => item.id === task_id);
+  const task = typeof store.findTaskById === "function"
+    ? await store.findTaskById(task_id)
+    : state.tasks.find((item) => item.id === task_id);
   if (!task) throw new Error(`task not found: ${task_id}`);
   return task;
 }
@@ -139,7 +141,9 @@ export async function notifyTerminalTask(task) {
 
 export async function updateTask(store, task_id, updater) {
   const state = await store.load();
-  const task = state.tasks.find((item) => item.id === task_id);
+  const task = typeof store.findTaskById === "function"
+    ? await store.findTaskById(task_id)
+    : state.tasks.find((item) => item.id === task_id);
   if (!task) throw new Error(`task not found: ${task_id}`);
   updater(task);
   task.updated_at = new Date().toISOString();
@@ -159,7 +163,9 @@ export async function updateTask(store, task_id, updater) {
 export async function updateGoalStatus(store, goalId, status, updatedAt = new Date().toISOString()) {
   const state = await store.load();
   ensureGoalState(state);
-  const goal = state.goals.find((item) => item.id === goalId);
+  const goal = typeof store.findGoalById === "function"
+    ? await store.findGoalById(goalId)
+    : state.goals.find((item) => item.id === goalId);
   if (!goal) return null;
   goal.status = status;
   goal.updated_at = updatedAt;

@@ -60,9 +60,13 @@ async function createChatGptRequest(store, args) {
 
   // P1.3: Track GPT-question budget usage
   if (args.task_id) {
-    const linkedTask = state.tasks.find(t => t.id === args.task_id);
+    const linkedTask = typeof store.findTaskById === "function"
+      ? await store.findTaskById(args.task_id)
+      : state.tasks.find(t => t.id === args.task_id);
     if (linkedTask && linkedTask.goal_id) {
-      const goal = state.goals.find(g => g.id === linkedTask.goal_id);
+      const goal = typeof store.findGoalById === "function"
+        ? await store.findGoalById(linkedTask.goal_id)
+        : state.goals.find(g => g.id === linkedTask.goal_id);
       if (goal) {
         goal.gpt_questions_used = (goal.gpt_questions_used || 0) + 1;
         const budget = goal.autonomy_policy?.gpt_question_budget ?? 0;

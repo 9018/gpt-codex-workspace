@@ -16,10 +16,14 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github }) 
 
         if (!admin_override) {
           try {
-            const state = await store.load();
-            const existingTask = state.tasks.find(t => t.id === task_id);
+            await store.load();
+            const existingTask = typeof store.findTaskById === "function"
+              ? await store.findTaskById(task_id)
+              : (store.state?.tasks || []).find(t => t.id === task_id);
             if (existingTask?.goal_id) {
-              const linkedGoal = (state.goals || []).find(g => g.id === existingTask.goal_id);
+              const linkedGoal = typeof store.findGoalById === "function"
+                ? await store.findGoalById(existingTask.goal_id)
+                : (store.state?.goals || []).find(g => g.id === existingTask.goal_id);
               const subagent = linkedGoal?.subagent_policy || {};
               if (subagent.mode === 'required') {
                 targetStatus = "waiting_for_review";

@@ -1,5 +1,5 @@
 import { spawn, execSync } from "node:child_process";
-import { appendFileSync } from "node:fs";
+import { createWriteStream, mkdirSync } from "node:fs";
 import { cp, mkdtemp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -463,6 +463,50 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     let firstOutputTimedOut = false;
     let firstOutputTimer = null;
     let settled = false;
+    let stdoutLogStream = null;
+    let stderrLogStream = null;
+
+    function getLogStream(streamName) {
+      const streamPath = streamName === "stdout" ? options.streamStdoutPath : options.streamStderrPath;
+      if (!streamPath) return null;
+      try {
+        if (streamName === "stdout") {
+          if (!stdoutLogStream) {
+            mkdirSync(dirname(streamPath), { recursive: true });
+            stdoutLogStream = createWriteStream(streamPath, { flags: "a" });
+            stdoutLogStream.on("error", () => {});
+          }
+          return stdoutLogStream;
+        }
+        if (!stderrLogStream) {
+          mkdirSync(dirname(streamPath), { recursive: true });
+          stderrLogStream = createWriteStream(streamPath, { flags: "a" });
+          stderrLogStream.on("error", () => {});
+        }
+        return stderrLogStream;
+      } catch {
+        return null;
+      }
+    }
+
+    function writeLogChunk(streamName, chunk) {
+      try {
+        getLogStream(streamName)?.write(chunk);
+      } catch {}
+    }
+
+    function closeLogStreams(done) {
+      const streams = [stdoutLogStream, stderrLogStream].filter(Boolean);
+      if (!streams.length) { done(); return; }
+      let pending = streams.length;
+      const finishOne = () => {
+        pending -= 1;
+        if (pending === 0) done();
+      };
+      for (const stream of streams) {
+        try { stream.end(finishOne); } catch { finishOne(); }
+      }
+    }
 
     function markOutput(streamName, chunk) {
       const bytes = Buffer.byteLength(chunk);
@@ -500,18 +544,15 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
       settled = true;
       clearTimeout(timer);
       if (firstOutputTimer) clearTimeout(firstOutputTimer);
-      resolve({ ...payload, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs, no_first_output_timeout: firstOutputTimedOut, first_output_timeout_seconds: firstOutputTimeoutSeconds || null, started_at: startedAtIso });
+      const result = { ...payload, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs, no_first_output_timeout: firstOutputTimedOut, first_output_timeout_seconds: firstOutputTimeoutSeconds || null, started_at: startedAtIso };
+      closeLogStreams(() => resolve(result));
     }
 
     child.stdout.on("data", (data) => {
       const chunk = data.toString();
       markOutput("stdout", chunk);
-      // Stream to log file if configured
-      if (options.streamStdoutPath) {
-        try {
-          appendFileSync(options.streamStdoutPath, chunk);
-        } catch {}
-      }
+      // Stream to log file if configured without blocking the event loop per chunk
+      writeLogChunk("stdout", chunk);
       if (!stdoutTruncated) {
         stdout += chunk;
         if (Buffer.byteLength(stdout) >= maxBuf) {
@@ -525,12 +566,8 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     child.stderr.on("data", (data) => {
       const chunk = data.toString();
       markOutput("stderr", chunk);
-      // Stream to log file if configured
-      if (options.streamStderrPath) {
-        try {
-          appendFileSync(options.streamStderrPath, chunk);
-        } catch {}
-      }
+      // Stream to log file if configured without blocking the event loop per chunk
+      writeLogChunk("stderr", chunk);
       if (!stderrTruncated) {
         stderr += chunk;
         if (Buffer.byteLength(stderr) >= maxBuf) {

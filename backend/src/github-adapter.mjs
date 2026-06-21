@@ -404,13 +404,17 @@ function shouldPostResultComment(task) {
       const issues = await this.pollIssues();
       const imported = [];
       const state = await store.load();
+      const existingTasks = state.tasks || [];
+      const existingTaskIds = new Set(existingTasks.map((task) => task.id));
+      const existingGithubIssueNumbers = new Set(existingTasks.map((task) => task.github_issue_number).filter((value) => value !== undefined && value !== null));
+      const existingGithubIssueUrls = new Set(existingTasks.map((task) => task.github_issue_url).filter(Boolean));
       const maxIssues = Math.max(1, Math.min(Number(limit) || 100, 100));
       for (const issue of issues) {
         if (imported.length >= maxIssues) break;
         if (issue.labels.includes("gptwork-question")) continue;
         const idMatch = issue.body.match(/\*\*Task ID\*\*:\s*`(task_[a-f0-9-]+)`/);
-        if (idMatch && state.tasks.find((t) => t.id === idMatch[1])) continue;
-        if (state.tasks.find((t) => t.github_issue_number === issue.number || t.github_issue_url === issue.html_url)) continue;
+        if (idMatch && existingTaskIds.has(idMatch[1])) continue;
+        if (existingGithubIssueNumbers.has(issue.number) || existingGithubIssueUrls.has(issue.html_url)) continue;
         const titleMatch = issue.title.match(/^\[Task\]\s+(.+?)\s+\[(.+?)\]$/);
         const taskTitle = titleMatch ? titleMatch[1] : issue.title;
         const taskStatus = titleMatch ? titleMatch[2] : "queued";
@@ -434,6 +438,9 @@ function shouldPostResultComment(task) {
           updated_at: now
         };
         state.tasks.push(task);
+        existingTaskIds.add(task.id);
+        existingGithubIssueNumbers.add(issue.number);
+        existingGithubIssueUrls.add(issue.html_url);
         state.activities.push({ time: now, type: "task.imported", task_id: task.id, source: "github", issue: issue.number });
         imported.push(task);
       }

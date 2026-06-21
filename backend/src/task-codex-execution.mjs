@@ -33,6 +33,7 @@ export async function executeCodexTaskRun({
     streamOpts.streamStdoutPath = getStdoutLogPath(workspaceRoot, task.id, runId);
     streamOpts.streamStderrPath = getStderrLogPath(workspaceRoot, task.id, runId);
   }
+  const hasStreamingLogs = Boolean(streamOpts.streamStdoutPath || streamOpts.streamStderrPath);
 
   cr = await runLocalShellFn(cmd, workspaceRoot, config.codexExecTimeout, 1000000, (pid) => {
     if (throttledHb) {
@@ -69,12 +70,11 @@ export async function executeCodexTaskRun({
   // P1.1: Clean up throttled heartbeat
   if (throttledHb) removeThrottledHeartbeat(runFilePath);
 
-  if (cr && runId) {
+  if (cr && runId && !hasStreamingLogs) {
     writeRunLogsFn({
       workspaceRoot: config.defaultWorkspaceRoot,
       taskId: task.id,
       runId,
-      // P1.1: Append any remaining output not yet streamed
       stdout: cr.stdout || "",
       stderr: cr.stderr || "",
     }).catch(() => {});

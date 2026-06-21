@@ -409,7 +409,7 @@ export async function taskExecutionSnapshot(store, task) {
     ? (typeof store.findTaskById === "function" ? await store.findTaskById(task.id) : state.tasks.find((item) => item.id === task.id)) || task
     : null;
   const goal = freshTask?.goal_id
-    ? (typeof store.findGoalById === "function" ? store.findGoalById(freshTask.goal_id) : state.goals?.find((item) => item.id === freshTask.goal_id)) || null
+    ? (typeof store.findGoalById === "function" ? await store.findGoalById(freshTask.goal_id) : state.goals?.find((item) => item.id === freshTask.goal_id)) || null
     : freshTask?.id
       ? (typeof store.findGoalByTaskId === "function" ? store.findGoalByTaskId(freshTask.id) : state.goals?.find((item) => item.task_id === freshTask.id)) || null
       : null;

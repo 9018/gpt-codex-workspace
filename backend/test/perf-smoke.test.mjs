@@ -165,7 +165,7 @@ describe("perf-smoke", { concurrency: 1 }, () => {
     const startTime = Date.now();
     let found = 0;
     for (const task of state.tasks) {
-      const t = store.findTaskById(task.id);
+      const t = await store.findTaskById(task.id);
       if (t) found++;
     }
     const elapsed = Date.now() - startTime;

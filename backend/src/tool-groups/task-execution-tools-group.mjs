@@ -51,8 +51,11 @@ export function createExecutionToolsGroup({
         requireScope(context, "task:read");
         const task = await findTask(store, task_id);
         const workspace = await selectWorkspace(store, task.workspace_id, context);
-        const state = await store.load();
-        const goal = task.goal_id ? state.goals.find(function(g) { return g.id === task.goal_id; }) : null;
+        const goal = task.goal_id
+          ? (typeof store.findGoalById === "function"
+              ? await store.findGoalById(task.goal_id)
+              : (await store.load()).goals.find(function(g) { return g.id === task.goal_id; }))
+          : null;
         let contextJson = null;
         if (goal && workspace) {
           try { contextJson = JSON.parse(await readFile(join(workspace.root, ".gptwork/goals/" + goal.id + "/context.json"), "utf8")); } catch {}

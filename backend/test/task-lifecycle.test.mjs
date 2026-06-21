@@ -298,3 +298,66 @@ test("setTerminalNotifier replaces terminal notifier", () => {
 });
 
 console.log("task-lifecycle tests loaded");
+
+test("findTask uses indexed lookup when available", async () => {
+  const task = makeTask({ id: "task_indexed" });
+  let lookupCount = 0;
+  const store = {
+    async load() { return { tasks: [], goals: [], conversations: [], memories: [], activities: [] }; },
+    async save() {},
+    async findTaskById(id) {
+      lookupCount += 1;
+      return id === task.id ? task : null;
+    },
+  };
+
+  const found = await findTask(store, task.id);
+  assert.equal(found, task);
+  assert.equal(lookupCount, 1);
+});
+
+test("updateTask uses indexed lookup when available", async () => {
+  const task = makeTask({ id: "task_indexed", status: "assigned" });
+  const state = { tasks: [], goals: [], conversations: [], memories: [], activities: [] };
+  let lookupCount = 0;
+  let saveCount = 0;
+  const store = {
+    async load() { return state; },
+    async save() { saveCount += 1; },
+    async findTaskById(id) {
+      lookupCount += 1;
+      return id === task.id ? task : null;
+    },
+  };
+
+  const result = await updateTask(store, task.id, (item) => {
+    item.status = "running";
+  });
+
+  assert.equal(result.task, task);
+  assert.equal(task.status, "running");
+  assert.equal(lookupCount, 1);
+  assert.equal(saveCount, 1);
+  assert.equal(state.activities.length, 1);
+});
+
+test("updateGoalStatus uses indexed lookup when available", async () => {
+  const goal = makeGoal({ id: "goal_indexed", status: "assigned" });
+  const state = { tasks: [], goals: [], conversations: [], memories: [], activities: [] };
+  let lookupCount = 0;
+  const store = {
+    async load() { return state; },
+    async save() {},
+    async findGoalById(id) {
+      lookupCount += 1;
+      return id === goal.id ? goal : null;
+    },
+  };
+
+  const result = await updateGoalStatus(store, goal.id, "completed", "2026-01-01T01:00:00.000Z");
+
+  assert.equal(result, goal);
+  assert.equal(goal.status, "completed");
+  assert.equal(lookupCount, 1);
+  assert.equal(state.activities.length, 1);
+});

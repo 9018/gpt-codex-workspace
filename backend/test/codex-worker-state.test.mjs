@@ -57,6 +57,17 @@ test('worker state records effective next tick interval', () => {
 });
 
 
+
+test('worker next tick schedule preserves zero effective interval', () => {
+  const state = createWorkerState();
+  markWorkerStarted(state, { intervalMs: 5000, limit: 10, concurrency: 4, now: new Date('2026-01-01T00:00:00.000Z') });
+  markWorkerNextTickScheduled(state, { intervalMs: 0, now: new Date('2026-01-01T00:00:10.000Z') });
+
+  assert.equal(state.current_interval_ms, 0);
+  assert.equal(state.next_tick_due_at, '2026-01-01T00:00:10.000Z');
+});
+
+
 test('workerStatusSnapshot returns stable public shape', () => {
   const state = createWorkerState();
   markWorkerStarted(state, { intervalMs: 1, limit: 2, concurrency: 3, now: new Date('2026-01-01T00:00:00.000Z') });

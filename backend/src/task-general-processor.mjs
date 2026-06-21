@@ -13,6 +13,8 @@ import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
 export async function processGeneralTask(store, config, task, context, github) {
   const now = new Date().toISOString();
   await updateTask(store, task.id, (item) => {
+    delete item.lock_blocked_at;
+    delete item.lock_blocked_by;
     item.logs.push({ time: now, message: `[worker] started: ${task.title}` });
   });
 
@@ -33,10 +35,6 @@ export async function processGeneralTask(store, config, task, context, github) {
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
-  await updateTask(store, task.id, (item) => {
-    delete item.lock_blocked_at;
-    delete item.lock_blocked_by;
-  });
   const repoLockPath = config.defaultRepoPath;
   if (repoLockPath) {
     const lockResult = await acquireRepoLock(config.defaultWorkspaceRoot, repoLockPath, {

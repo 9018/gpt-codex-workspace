@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { StateStore } from "./state-store.mjs";
 import { createBrowserRegistry } from "./browser-http.mjs";
 import { createGithubSync } from "./github-adapter.mjs";
-import { RepoRegistry, parseGitHubUrl, isTempClone, detectStaleTempClones } from "./repo-registry.mjs";
+import { RepoRegistry } from "./repo-registry.mjs";
 import { createBarkNotifier } from "./bark-notifier.mjs";
 import { createNotificationService } from "./notification-service.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
@@ -16,14 +16,13 @@ import {
 import { handleHttp } from "./http-handler.mjs";
 import { runtimeStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 import { tokenFromMcpPath, parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, defaultScopes, normalizeList, limits, assertAuthorized } from "./auth-context.mjs";
-import { isCodexSessionInventoryTask, extractTaskLimit } from "./task-status.mjs";
-import { emitTaskProgress, normalizeLegacyModes, findTask, updateTask, setTerminalNotifier } from "./task-lifecycle.mjs";
+import { setTerminalNotifier } from "./task-lifecycle.mjs";
 import { createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection } from "./workspace-lifecycle.mjs";
 import { createTask, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage, ensureTaskGoal, normalizeAssignedTaskMode, setCreatedTaskNotifier } from "./goal-task-lifecycle.mjs";
 import { processGeneralTask } from "./task-general-processor.mjs";
 
-import { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, collectRestartMarkerStatus, queryContextStatus } from "./diagnostics-service.mjs";
-import { createWorkerState, markWorkerStarted, markWorkerTickStarted, recordWorkerTickSuccess, recordWorkerTickError, markWorkerTickFinished, workerStatusSnapshot } from "./codex-worker-state.mjs";
+import { determineBarkConfigSource } from "./diagnostics-service.mjs";
+import { createWorkerState } from "./codex-worker-state.mjs";
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { createRestartToolsGroup } from "./tool-groups/restart-tools-group.mjs";
 import { createRepoLockToolsGroup } from "./tool-groups/repo-lock-tools-group.mjs";
@@ -347,9 +346,7 @@ export function startCodexWorker(server, opts = {}) {
   return _startCodexWorker(server, { ...opts, workerState });
 }
 function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry }) {
-  // resolveRepoDir is imported from ./diagnostics-service.mjs
   const tool = createTool;
-  // queryContextStatus is imported from ./diagnostics-service.mjs
 
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),

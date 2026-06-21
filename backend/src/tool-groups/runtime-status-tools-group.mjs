@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveRepoDir, collectRuntimeGitInfo, collectRestartMarkerStatus } from "../diagnostics-service.mjs";
+import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot } from "../codex-worker-state.mjs";
 import { scanPendingRestartMarkersSync } from "../safe-restart.mjs";
@@ -22,6 +22,14 @@ export function createRuntimeStatusToolsGroup({
     return envLoadResult.keys.length > 0 || hasProcessEnvRuntimeConfig();
   }
 
+  async function getCachedRepoLockSummary() {
+    return withCache(
+      "repoLockSummary:" + (config.defaultWorkspaceRoot || "none"),
+      2000,
+      () => getRepoLockSummary(config.defaultWorkspaceRoot)
+    );
+  }
+
   return {
     github_status: tool("Return GitHub sync configuration and known issue count.", schema({}), async () => ({
       enabled: github.enabled,
@@ -35,7 +43,7 @@ export function createRuntimeStatusToolsGroup({
     runtime_status: tool("Return safe runtime diagnostics: process info, git state, config, env file and state file status.", schema({}), async () => {
       const startTime = Date.now();
       const repoDir = resolveRepoDir();
-      const gitInfo = collectRuntimeGitInfo(repoDir);
+      const gitInfo = await collectRuntimeGitInfoCached(repoDir);
       const statePath = config.statePath;
       const statePathAbs = statePath.startsWith("/") ? statePath : join(process.cwd(), statePath);
       const statePathInsideRepo = repoDir ? statePathAbs.startsWith(repoDir) : false;
@@ -117,7 +125,7 @@ export function createRuntimeStatusToolsGroup({
           direct_git_available: true,
           direct_git_reader_available: true,
         },
-        repo_locks: await getRepoLockSummary(config.defaultWorkspaceRoot),
+        repo_locks: await getCachedRepoLockSummary(),
         // Codex worker state (compact)
         worker: workerStatusSnapshot(workerState),
       };
@@ -145,11 +153,11 @@ export function createRuntimeStatusToolsGroup({
           }
         } catch (e) {}
       }
-      const gitInfo = collectRuntimeGitInfo(repoDir);
+      const gitInfo = await collectRuntimeGitInfoCached(repoDir);
       const worktreeDirty = gitInfo.worktree_dirty;
       const dirtyPaths = gitInfo.dirty_paths;
       const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
-      const _lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+      const _lockSummary = await getCachedRepoLockSummary();
       const queueCounts = await collectWorkerQueueCounts(store);
       return {
         pid: process.pid,
@@ -243,9 +251,9 @@ export function createRuntimeStatusToolsGroup({
                 }
               }
               // Stale last tick (respect empty-queue backoff effective interval)
-              if (workerState.last_tick_finished_at && (workerState.current_interval_ms || workerState.interval_ms)) {
+              const watchdogInterval = workerState.current_interval_ms ?? workerState.interval_ms;
+              if (workerState.last_tick_finished_at && watchdogInterval != null) {
                 const elapsed = Date.now() - new Date(workerState.last_tick_finished_at).getTime();
-                const watchdogInterval = workerState.current_interval_ms || workerState.interval_ms;
                 if (elapsed > watchdogInterval * 3) {
                   actions.push('Codex worker last tick completed ' + Math.round(elapsed / 1000) + 's ago (>3x current interval) — check worker health');
                 }

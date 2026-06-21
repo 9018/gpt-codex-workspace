@@ -111,6 +111,10 @@ export function collectRuntimeGitInfo(repoDir) {
   return { repo_head, remote_head, running_commit, worktree_dirty, dirty_paths };
 }
 
+export async function collectRuntimeGitInfoCached(repoDir, { ttlMs = CACHE_DEFAULTS.gitStatus } = {}) {
+  return withCache("gitStatus:" + (repoDir || "none"), ttlMs, async () => collectRuntimeGitInfo(repoDir));
+}
+
 /**
  * Collect restart marker summary from workspace root.
  * Returns total count, active count, per-status counts, and marker dir existence.
@@ -228,7 +232,11 @@ export async function queryContextStatus(task_id, context, { config, registry, s
     try {
       const task = await findTask(store, task_id);
       const state = await store.load();
-      const goal = task.goal_id ? state.goals.find(function(g) { return g.id === task.goal_id; }) : null;
+      const goal = task.goal_id
+        ? (typeof store.findGoalById === "function"
+            ? await store.findGoalById(task.goal_id)
+            : state.goals.find(function(g) { return g.id === task.goal_id; }))
+        : null;
 
       let previewAvailable = false;
       let approximateContextBytes = 0;
