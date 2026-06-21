@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "type": "module",
   "private": true,
+  "bin": {
+    "gptwork": "./bin/gptwork.mjs"
+  },
   "scripts": {
     "start": "node src/cli.mjs",
     "test": "node --test --test-reporter=dot 'test/**/*.test.mjs'",

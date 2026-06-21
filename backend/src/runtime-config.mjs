@@ -76,6 +76,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     workspaceRoot: _get("GPTWORK_WORKSPACE_ROOT", workspaceRoot),
     statePath: _get("GPTWORK_STATE_PATH", workspaceRoot + "/.gptwork/state.json"),
     runtimeEnvFile: _get("GPTWORK_RUNTIME_ENV_FILE", ".gptwork/runtime.env"),
+    toolMode: _get("GPTWORK_TOOL_MODE", "standard"),
 
     // Codex
     codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 2400),
@@ -131,6 +132,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     workspaceRoot: "GPTWORK_WORKSPACE_ROOT",
     statePath: "GPTWORK_STATE_PATH",
     runtimeEnvFile: "GPTWORK_RUNTIME_ENV_FILE",
+    toolMode: "GPTWORK_TOOL_MODE",
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
     codexFirstOutputTimeout: "GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT",
     codexExecArgs: "GPTWORK_CODEX_EXEC_ARGS",

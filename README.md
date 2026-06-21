@@ -6,6 +6,27 @@ A bidirectional coordination system between **ChatGPT** and **Codex** for collab
 
 See `docs/current-status.md` for the latest operational state, known blockers, and cleanup notes.
 
+## 5-Minute Quick Start
+
+```bash
+cd backend
+npm install
+npm link
+gptwork setup
+gptwork settings set GPTWORK_TOOL_MODE standard
+gptwork start
+```
+
+In another shell:
+
+```bash
+gptwork doctor --local
+gptwork status --local
+curl http://127.0.0.1:8787/health
+```
+
+For ChatGPT, use `open_project_context` first. It returns the current repo, worker, queue, scripts, recent tasks/goals, bounded file tree, and recommended next tools without exposing the full debug tool surface. The default MCP tool mode is `standard`; set `GPTWORK_TOOL_MODE=full` only for operator/debug sessions.
+
 Authentication is path-based: the URL suffix after `/mcp/` is extracted as the bearer token.
 The default connector URL is `https://mcp.gptwork.cc.cd/mcp/dev-token` — no manual token setup required.
 Future: different suffixes (e.g. `/mcp/workspace-x`) will allocate different workspace contexts.
@@ -67,6 +88,8 @@ ChatGPT                                        Codex
 In this mode, ChatGPT interacts with GitHub Issues directly. The backend periodically syncs GitHub Issues ↔ tasks. No public HTTPS MCP endpoint is needed — the backend only needs to be reachable by Codex (same LAN or SSH).
 
 ## Quick Start
+
+The CLI-first path above is the recommended path for new users. The lower-level systemd deployment remains available for long-running production hosts.
 
 ### Recommended Deployment
 

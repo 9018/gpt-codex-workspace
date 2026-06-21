@@ -18,7 +18,8 @@ import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { execSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import {
   writePendingRestartMarker,
@@ -39,6 +40,8 @@ import {
   removeMisplacedMarker
 } from "../src/safe-restart.mjs";
 import { safeRepoId } from "../src/repo-lock.mjs";
+
+const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -455,7 +458,13 @@ test("scheduleServiceRestart preserves behavior when expected_commit absent", as
 // ================================================================
 
 test("schedule_service_restart and list_pending_restarts tools are visible in MCP tool list", async () => {
-  const server = await makeServer();
+  const server = await createGptWorkServer({
+    statePath: join(await mkdtemp(join(tmpdir(), "gptwork-state-")), "state.json"),
+    defaultWorkspaceRoot: await mkdtemp(join(tmpdir(), "gptwork-ws-")),
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "operator",
+  });
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: 1,
@@ -538,7 +547,7 @@ test("processGeneralTask prompt contains safe restart rule", async () => {
 
 test("generated prompt file explicitly contains the Safe Restart Rule section", async () => {
   // Read the codex-prompt-builder.mjs source to verify the prompt template includes the restart rule
-  const source = await readFile(join(process.cwd(), "src/codex-prompt-builder.mjs"), "utf8");
+  const source = await readFile(join(TEST_DIR, "../src/codex-prompt-builder.mjs"), "utf8");
   
   // The prompt template should contain the Safe Restart Rule
   assert.match(source, /Safe Restart Rule/i, "prompt should contain Safe Restart Rule section");

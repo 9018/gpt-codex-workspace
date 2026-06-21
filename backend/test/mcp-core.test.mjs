@@ -6,19 +6,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer, startCodexWorker } from "../src/gptwork-server.mjs";
 
-async function makeServer() {
+async function makeServer(options = {}) {
   const root = await mkdtemp(join(tmpdir(), "gptwork-ws-"));
   const statePath = join(root, "state.json");
   return createGptWorkServer({
     statePath,
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
-    requireAuth: true
+    requireAuth: true,
+    ...options,
   });
 }
 
 test("initialize returns MCP server metadata", async () => {
-  const server = await makeServer();
+  const server = await makeServer({ toolMode: "full" });
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: 1,
@@ -37,7 +38,7 @@ test("initialize returns MCP server metadata", async () => {
 });
 
 test("tools/list exposes project, task, workspace, shell, and browser tools", async () => {
-  const server = await makeServer();
+  const server = await makeServer({ toolMode: "full" });
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: 2,
@@ -112,7 +113,7 @@ test("tools/list exposes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOLS
   process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = "true";
   let names;
   try {
-    const server = await makeServer();
+    const server = await makeServer({ toolMode: "full" });
     const response = await server.handleRpc({
       jsonrpc: "2.0",
       id: 2,

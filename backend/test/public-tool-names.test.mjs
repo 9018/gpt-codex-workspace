@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
 async function makeServer() {
+  process.env.GPTWORK_TOOL_MODE = "full";
   const root = await mkdtemp(join(tmpdir(), "gptwork-ws-"));
   const statePath = join(root, "state.json");
   return createGptWorkServer({
@@ -30,6 +31,7 @@ async function makeServer() {
  */
 const EXPECTED_PUBLIC_TOOL_NAMES = [
   "answer_chatgpt_request",
+  "append_agent_event",
   "append_goal_message",
   "append_task_log",
   "assign_task_to_codex",
@@ -47,10 +49,12 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "browser_press",
   "browser_scroll",
   "browser_wait_for_selector",
+  "complete_agent_run",
   "complete_task",
   "context_prepare",
   "context_status",
   "copy_path",
+  "create_agent_run",
   "create_chatgpt_request",
   "create_codex_session_inventory_task",
   "create_encoded_goal",
@@ -64,6 +68,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "download_bundle_base64",
   "download_file_base64",
   "extract_zip_archive",
+  "get_agent_run",
   "get_chatgpt_request",
   "get_current_user",
   "get_goal_context",
@@ -82,7 +87,9 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "git_remote_status",
   "github_status",
   "gptwork_doctor",
+  "handoff_to_agent",
   "health_check",
+  "list_agent_runs",
   "list_chatgpt_requests",
   "list_codex_sessions_metadata",
   "list_dir",
@@ -97,13 +104,16 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "mkdir",
   "move_path",
   "notification_status",
+  "open_project_context",
   "preview_codex_context",
   "project_context_status",
+  "read_handoff",
   "read_text_file",
   "register_repository",
   "repo_lock_status",
   "request_human_review",
   "resolve_canonical_repository",
+  "run_agent_pipeline",
   "run_assigned_codex_tasks",
   "runtime_status",
   "schedule_service_restart",
@@ -111,6 +121,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "set_active_workspace",
   "sha256_file",
   "shell_exec",
+  "show_changes",
   "stat_path",
   "sync_from_github",
   "sync_github_comments",
@@ -176,9 +187,9 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
       assert.equal(names.includes(placeholder), true,
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
-    // Also verify total count is 99 (95 public + 4 placeholder)
-    assert.equal(names.length, 99,
-      `Expected 99 tools with placeholder flag set, got ${names.length}`);
+    // Also verify total count is 109 (105 public + 4 placeholder)
+    assert.equal(names.length, 109,
+      `Expected 109 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;

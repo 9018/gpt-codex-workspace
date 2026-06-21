@@ -7,7 +7,7 @@ import { createBarkNotifier } from "./bark-notifier.mjs";
 import { createNotificationService } from "./notification-service.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
-import { toolList, initializeResult, jsonResult, jsonError } from "./mcp-tooling.mjs";
+import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource } from "./mcp-tooling.mjs";
 import { parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, assertAuthorized } from "./auth-context.mjs";
 import { setTerminalNotifier } from "./task-lifecycle.mjs";
 import { setCreatedTaskNotifier } from "./goal-task-lifecycle.mjs";
@@ -19,7 +19,9 @@ import { startCodexWorker as _startCodexWorker, runAssignedCodexTasks as _runAss
 import { createReconciler } from "./runtime-reconciler.mjs";
 import { summarizeToolResult } from "./tool-result-summary.mjs";
 import { listenHttp } from "./server-http-listener.mjs";
-import { createTools } from "./server-tools.mjs";
+import { createDiscoverableTools, createTools } from "./server-tools.mjs";
+import { createEventLogger } from "./event-log-service.mjs";
+import { createHookBus } from "./hook-service.mjs";
 let notifyTerminalTaskIfNeeded = null;
 let notifyCreatedTaskIfNeeded = null;
 
@@ -86,6 +88,7 @@ export async function createGptWorkServer(options = {}) {
     githubEnabled: rcc.githubEnabled,
     githubRepo: rcc.githubRepo,
     githubToken: rcc.githubToken,
+    toolMode: options.toolMode || rcc.toolMode,
     // Config sources for diagnostics
     _sources: sources,
   };
@@ -121,7 +124,15 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
     workspaceRoot: config.defaultWorkspaceRoot,
   });
   await registry.load().catch(function() {});
-  const tools = createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt: PROCESS_STARTED_AT, notifyCreatedTaskIfNeeded });
+  const eventLogger = createEventLogger({ workspaceRoot: config.defaultWorkspaceRoot });
+  const hookBus = createHookBus();
+  hookBus.on("onAgentRunCompleted", async ({ agent_run }) => {
+    if (github?.enabled && typeof github.status === "function") {
+      return { github: github.status().api_repo || "configured", agent_run_id: agent_run.id };
+    }
+    return { github: "disabled", agent_run_id: agent_run.id };
+  });
+  const tools = createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt: PROCESS_STARTED_AT, notifyCreatedTaskIfNeeded, eventLogger, hookBus });
 
   return {
     async runAssignedCodexTasks(args = {}, context = defaultTokenContext("worker")) {
@@ -155,7 +166,18 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
         if (message.method === "notifications/initialized") return null;
         if (message.method === "tools/list") {
           assertAuthorized(headers, config);
-          return jsonResult(message.id, { tools: toolList(tools) });
+          return jsonResult(message.id, { tools: toolList(createDiscoverableTools(tools, config.toolMode)) });
+        }
+        if (message.method === "resources/list") {
+          assertAuthorized(headers, config);
+          return jsonResult(message.id, { resources: resourceList() });
+        }
+        if (message.method === "resources/read") {
+          assertAuthorized(headers, config);
+          const uri = message.params?.uri;
+          const resource = readResource(uri);
+          if (!resource) return jsonError(message.id, -32602, `Unknown resource: ${uri}`);
+          return jsonResult(message.id, { contents: [resource] });
         }
         if (message.method === "tools/call") {
           const context = { ...assertAuthorized(headers, config), emitProgress };

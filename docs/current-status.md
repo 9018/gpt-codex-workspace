@@ -1,7 +1,7 @@
 # GPTWork Current Status
-Date: 2026-06-21
-Status: backend refactor and verification pass complete. Large runtime, worker, repo-lock, safe-restart, GitHub, diagnostics, card, Codex result/run metadata, context, and registry modules are split behind compatibility facades.
-Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Public MCP tool names and compatibility entry points remain stable.
+Date: 2026-06-22
+Status: P0/P1/P2 productization pass implemented behind compatibility facades. The backend now has a `gptwork` CLI, default `standard` tool mode, `open_project_context`, tracked `agent_runs`, handoff artifacts, compact `show_changes`, metadata-capable tool descriptors, richer schemas, JSONL events, a hook bus, and one Apps SDK widget resource.
+Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Existing MCP tool names and compatibility entry points remain callable.
 
 ## What This Project Is
 
@@ -55,8 +55,13 @@ User natural language request
 Primary ChatGPT entry:
 
 ```text
+open_project_context
 create_encoded_goal
 ```
+
+Call `open_project_context` first for a compact repo/worker/queue/scripts/recent-work snapshot. Use `create_encoded_goal` for implementation, deployment, maintenance, or multi-step work that Codex should execute.
+
+Default tool discovery is controlled by `GPTWORK_TOOL_MODE=standard`. Use `minimal`, `standard`, `codex`, `operator`, or `full` to tune the advertised MCP tool surface; known tool calls remain compatible.
 
 Compatibility entries still work:
 

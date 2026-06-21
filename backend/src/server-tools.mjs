@@ -27,14 +27,161 @@ import { createGitRemoteToolsGroup } from "./tool-groups/git-remote-tools-group.
 import { createGithubSyncToolsGroup } from "./tool-groups/github-sync-tools-group.mjs";
 import { createSystemDiagnosticsToolsGroup } from "./tool-groups/system-diagnostics-tools-group.mjs";
 import { createGithubCommentsSyncToolsGroup } from "./tool-groups/github-comments-sync-tools-group.mjs";
+import { createProjectContextToolsGroup } from "./tool-groups/project-context-tools-group.mjs";
+import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mjs";
 
-export function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt, notifyCreatedTaskIfNeeded }) {
+export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
+
+const TOOL_MODE_ALLOWLISTS = {
+  minimal: new Set([
+    "health_check",
+    "runtime_status",
+    "worker_status",
+    "open_project_context",
+    "create_encoded_goal",
+    "get_task",
+    "list_tasks",
+  ]),
+  standard: new Set([
+    "health_check",
+    "runtime_status",
+    "worker_status",
+    "gptwork_doctor",
+    "github_status",
+    "open_project_context",
+    "project_context_status",
+    "context_status",
+    "context_prepare",
+    "create_goal",
+    "create_encoded_goal",
+    "list_goals",
+    "get_goal_context",
+    "append_goal_message",
+    "create_task",
+    "list_tasks",
+    "get_task",
+    "append_task_log",
+    "attach_task_artifact",
+    "complete_task",
+    "update_task_status",
+    "request_human_review",
+    "preview_codex_context",
+    "read_text_file",
+    "list_dir",
+    "stat_path",
+    "sha256_file",
+    "search_files",
+    "download_file_base64",
+    "download_bundle_base64",
+    "get_workspace_info",
+    "list_workspaces",
+    "list_projects",
+    "get_project",
+    "get_repository_status",
+    "list_repositories",
+    "resolve_canonical_repository",
+    "sync_from_github",
+    "sync_to_github",
+    "sync_github_comments",
+    "create_chatgpt_request",
+    "answer_chatgpt_request",
+    "get_chatgpt_request",
+    "list_chatgpt_requests",
+    "create_agent_run",
+    "list_agent_runs",
+    "get_agent_run",
+    "append_agent_event",
+    "complete_agent_run",
+    "run_agent_pipeline",
+    "handoff_to_agent",
+    "read_handoff",
+    "show_changes",
+  ]),
+  operator: new Set([
+    "health_check",
+    "runtime_status",
+    "worker_status",
+    "gptwork_doctor",
+    "github_status",
+    "notification_status",
+    "list_pending_restarts",
+    "schedule_service_restart",
+    "repo_lock_status",
+    "list_repo_locks",
+    "detect_stale_clones",
+    "test_bark_notification",
+    "register_repository",
+    "list_repositories",
+    "resolve_canonical_repository",
+    "sync_from_github",
+    "sync_to_github",
+    "sync_github_comments",
+  ]),
+  codex: new Set([
+    "health_check",
+    "runtime_status",
+    "worker_status",
+    "open_project_context",
+    "get_goal_context",
+    "append_goal_message",
+    "preview_codex_context",
+    "run_assigned_codex_tasks",
+    "list_tasks",
+    "get_task",
+    "append_task_log",
+    "attach_task_artifact",
+    "complete_task",
+    "update_task_status",
+    "read_text_file",
+    "write_text_file",
+    "list_dir",
+    "stat_path",
+    "search_files",
+    "mkdir",
+    "copy_path",
+    "move_path",
+    "delete_path",
+    "upload_base64_file",
+    "download_file_base64",
+    "shell_exec",
+    "git_remote_status",
+    "git_remote_diff",
+    "git_remote_changed_files",
+    "create_agent_run",
+    "list_agent_runs",
+    "get_agent_run",
+    "append_agent_event",
+    "complete_agent_run",
+    "handoff_to_agent",
+    "read_handoff",
+    "show_changes",
+  ]),
+};
+
+export function normalizeToolMode(mode) {
+  const normalized = String(mode || "standard").toLowerCase();
+  return VALID_TOOL_MODES.has(normalized) ? normalized : "standard";
+}
+
+export function filterToolsForMode(tools, mode) {
+  const normalized = normalizeToolMode(mode);
+  if (normalized === "full") return tools;
+  const allow = TOOL_MODE_ALLOWLISTS[normalized] || TOOL_MODE_ALLOWLISTS.standard;
+  return Object.fromEntries(Object.entries(tools).filter(([name, descriptor]) => {
+    const modes = descriptor.metadata?.modes || [];
+    return allow.has(name) || modes.includes(normalized) || modes.includes("standard");
+  }));
+}
+
+export function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt, notifyCreatedTaskIfNeeded, eventLogger, hookBus }) {
   const tool = createTool;
 
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     ...createGoalToolsGroup({ tool, schema, config, store, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
+    ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),
+    ...createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }),
 
     ...createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github }),
     ...createExecutionToolsGroup({ tool, schema, config, store, github, registry,
@@ -68,3 +215,6 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   return tools;
 }
 
+export function createDiscoverableTools(tools, mode) {
+  return filterToolsForMode(tools, mode);
+}

@@ -288,6 +288,7 @@ export class StateStore {
         updated_at: now
       }],
       goals: [],
+      agent_runs: [],
       conversations: [],
       memories: [],
       tasks: [],

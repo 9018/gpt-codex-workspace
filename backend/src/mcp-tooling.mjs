@@ -10,17 +10,54 @@ export const MCP_PROTOCOL_VERSION = "2025-03-26";
 
 export function schema(properties, required = []) {
   const mapped = {};
-  for (const [key, type] of Object.entries(properties)) mapped[key] = { type };
+  for (const [key, descriptor] of Object.entries(properties)) {
+    if (typeof descriptor === "string") mapped[key] = { type: descriptor };
+    else if (descriptor && typeof descriptor === "object" && !Array.isArray(descriptor)) mapped[key] = { ...descriptor };
+    else mapped[key] = { type: "string" };
+  }
   return { type: "object", properties: mapped, required, additionalProperties: false };
 }
 
 export function toolList(tools) {
-  return Object.entries(tools).map(([name, value]) => ({
-    name,
-    description: value.description,
-    inputSchema: value.inputSchema,
-    outputSchema: { type: "object", additionalProperties: true }
-  }));
+  return Object.entries(tools).map(([name, value]) => {
+    const descriptor = {
+      name,
+      description: value.description,
+      inputSchema: value.inputSchema,
+      outputSchema: { type: "object", additionalProperties: true }
+    };
+    if (value.metadata?.outputTemplate) {
+      descriptor._meta = { "openai/outputTemplate": value.metadata.outputTemplate };
+    }
+    return descriptor;
+  });
+}
+
+export function resourceList() {
+  return [{
+    uri: "ui://widget/gptwork-card-v1.html",
+    name: "GPTWork Compact Card",
+    mimeType: "text/html",
+    description: "Compact GPTWork status/result card for ChatGPT Apps SDK clients."
+  }];
+}
+
+export function readResource(uri) {
+  if (uri !== "ui://widget/gptwork-card-v1.html") return null;
+  return {
+    uri,
+    mimeType: "text/html",
+    text: `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><style>
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:12px;color:#17202a;background:#ffffff}
+.card{border:1px solid #d8dee4;border-radius:8px;padding:12px;max-width:720px}.title{font-weight:650;margin-bottom:8px}.muted{color:#57606a;font-size:13px}
+pre{white-space:pre-wrap;font:12px ui-monospace,SFMono-Regular,Menlo,monospace;background:#f6f8fa;border-radius:6px;padding:8px;overflow:auto}
+</style></head><body><div class="card"><div class="title">GPTWork</div><div class="muted">Compact result card</div><pre id="content"></pre></div><script>
+const data = window.openai?.toolOutput || window.openai?.structuredContent || {};
+document.getElementById('content').textContent = JSON.stringify(data, null, 2);
+</script></body></html>`
+  };
 }
 
 export function initializeResult() {

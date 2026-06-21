@@ -1,0 +1,80 @@
+{
+  "kind": "gptwork.goal_bundle.v1",
+  "created_at": "2026-06-21T17:07:26.879616+00:00",
+  "title": "GPTWork P0/P1/P2 使用体验、拓展性、协作、多 agent、CLI 产品化改造",
+  "repo": "9018/gpt-codex-workspace",
+  "workspace_id": "hosted-default",
+  "mode": "builder",
+  "user_request": "p0 p1 p2 分优先级做成个 goal 的 zip，我换个 agent 做这个事。",
+  "goal_prompt": "按 P0/P1/P2 优先级改造 GPTWork。不考虑安全问题，只考虑使用体验、拓展性、协作、多 agent、CLI 封装。参考 CodexPro 的 setup/start/settings/doctor、tool mode、compact cards、handoff/watch-handoff。P0 先交付 CLI、tool mode、open_project_context、compact output、README quick start。P1 再交付 agent_runs、handoff_to_agent、watch-handoff、show_changes、GitHub 协作增强。P2 再交付 metadata tool registry、rich schema、event log/SQLite、hook/plugin、Apps SDK widget。",
+  "context_summary": "# Context Summary\n\n本 goal 来源于对 GPTWork 最新全量结构和核心代码路径的分析。\n\n已观察到：\n\n- `backend/src/cli.mjs` 只是服务入口，不是面向用户的 CLI。\n- `backend/src/server-tools.mjs` 默认注册大量 tool group，缺少 minimal/standard/full/operator/codex 等工具面模式。\n- `backend/src/tool-result-summary.mjs` 和 `backend/src/card-*` 已有文本卡片格式，但还没有 CodexPro 那种 Apps SDK widget resource / outputTemplate。\n- `docs/chatgpt-prompting-guide.md` 和 README 中 `create_encoded_goal` 流程清晰，但对新用户偏重，需要一个高层 `open_project_context` 或类似入口。\n- `createGoal` 中已有 `autonomy_policy`、`subagent_policy`，但多 agent 目前主要是 prompt/result.json 约定，不是真正的 agent run 编排。\n- `StateStore` 已有 in-memory indexes 和 atomic save，但若进入多 agent/团队协作，应考虑事件日志或 SQLite。\n- CodexPro 的 CLI、tool mode、compact bash transcript、handoff_to_agent、execute-handoff、watch-handoff、visual cards 对 GPTWork 使用体验很有参考价值。\n",
+  "priorities": {
+    "P0": {
+      "title": "使用体验与入口产品化",
+      "deliverables": [
+        "gptwork CLI: setup/start/status/doctor/settings/logs/goal/codex/github",
+        "GPTWORK_TOOL_MODE=minimal|standard|full|operator|codex",
+        "open_project_context MCP tool",
+        "compact output defaults",
+        "CLI-first README"
+      ],
+      "acceptance": [
+        "gptwork doctor/status 可用",
+        "默认 tools/list 工具面收束",
+        "open_project_context 可作为 ChatGPT 第一工具",
+        "大输出默认不刷屏"
+      ]
+    },
+    "P1": {
+      "title": "协作、多 agent 与 handoff",
+      "deliverables": [
+        "agent_runs state model",
+        "agent run MCP tools",
+        "handoff_to_agent/read_handoff/show_changes",
+        "gptwork watch-handoff CLI",
+        "GitHub Issue progress/result comments"
+      ],
+      "acceptance": [
+        "一个 goal 可拆多个 agent run",
+        "handoff plan 文件可写可读",
+        "watcher 支持 dry-run",
+        "show_changes 输出统一 review 摘要"
+      ]
+    },
+    "P2": {
+      "title": "拓展性、插件化与状态演进",
+      "deliverables": [
+        "metadata-driven tool registry",
+        "rich schema builder",
+        "event log 或 SQLite 方案",
+        "plugin/hook mechanism",
+        "Apps SDK widget card"
+      ],
+      "acceptance": [
+        "工具可按 metadata 过滤",
+        "至少 3 个工具迁移 richer schema",
+        "生命周期事件可追踪",
+        "至少一个 widget card 可用"
+      ]
+    }
+  },
+  "autonomy_policy": {
+    "mode": "subagent_first",
+    "gpt_question_budget": 0,
+    "allow_autonomous_defaults": true,
+    "default_decision_rule": "choose_smallest_reversible_goal_aligned_change"
+  },
+  "subagent_policy": {
+    "mode": "recommended",
+    "roles": [
+      "planner",
+      "architect",
+      "implementer",
+      "tester",
+      "reviewer",
+      "finalizer"
+    ],
+    "require_review_before_completion": true,
+    "require_test_or_verification": true
+  }
+}

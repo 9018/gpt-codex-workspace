@@ -32,6 +32,22 @@ export function summarizeToolResult(name, structuredContent) {
           return workerStatusCard(structuredContent);
         case "get_goal_context":
           return goalContextCard(structuredContent);
+        case "open_project_context": {
+          const ctx = structuredContent;
+          const lines = [
+            formatKeyValue('repo', ctx.repo?.root || '-'),
+            formatKeyValue('branch', ctx.repo?.branch || '-'),
+            formatKeyValue('head', ctx.repo?.head || '-'),
+            formatKeyValue('worktree', ctx.repo?.dirty ? 'dirty' : 'clean'),
+            formatKeyValue('tasks', ctx.state_summary?.tasks ?? 0),
+            formatKeyValue('goals', ctx.state_summary?.goals ?? 0),
+            formatKeyValue('tool mode', ctx.config?.tool_mode || 'standard'),
+          ];
+          if (Array.isArray(ctx.recommended_next_tools) && ctx.recommended_next_tools.length) {
+            lines.push('', 'Next tools: ' + ctx.recommended_next_tools.join(', '));
+          }
+          return formatToolCard('Project Context', { lines });
+        }
 
       }
 

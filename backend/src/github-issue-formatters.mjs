@@ -74,3 +74,27 @@ body += "\n---\n*Synced from GPTWork MCP*\n";
 body += "**Task ID**: `" + task.id + "`\n";
 return body;
 }
+
+export function buildAgentRunComment(agentRun) {
+  const terminal = ["completed", "failed"].includes(agentRun.status);
+  let body = "## Agent Run " + (terminal ? "Result" : "Progress") + "\n\n";
+  body += "**Agent Run ID**: `" + agentRun.id + "`\n";
+  body += "**Role**: " + (agentRun.role || "-") + "\n";
+  body += "**Agent**: " + (agentRun.agent || "-") + "\n";
+  body += "**Status**: " + (agentRun.status || "unknown") + "\n";
+  if (agentRun.goal_id) body += "**Goal ID**: `" + agentRun.goal_id + "`\n";
+  if (agentRun.task_id) body += "**Task ID**: `" + agentRun.task_id + "`\n";
+  if (agentRun.summary) body += "\n" + agentRun.summary + "\n";
+  if (Array.isArray(agentRun.events) && agentRun.events.length > 0) {
+    body += "\n### Recent Events\n\n";
+    for (const event of agentRun.events.slice(-5)) {
+      body += "- " + (event.created_at || "") + " " + (event.type || "event") + ": " + (event.message || "") + "\n";
+    }
+  }
+  if (Array.isArray(agentRun.output_artifacts) && agentRun.output_artifacts.length > 0) {
+    body += "\n### Artifacts\n\n";
+    for (const artifact of agentRun.output_artifacts) body += "- " + artifact + "\n";
+  }
+  body += "\n---\n*Synced from GPTWork MCP agent run*\n";
+  return body;
+}

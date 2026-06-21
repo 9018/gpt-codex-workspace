@@ -345,7 +345,13 @@ test("listRepoLocks returns safe fields only", async () => {
 // ================================================================
 
 test("list_repo_locks tool is exposed in tools/list", async () => {
-  const server = await makeServer();
+  const server = await createGptWorkServer({
+    statePath: join(await mkdtemp(join(tmpdir(), "gptwork-state-")), "state.json"),
+    defaultWorkspaceRoot: await mkdtemp(join(tmpdir(), "gptwork-ws-")),
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "operator",
+  });
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: 1,
@@ -372,7 +378,13 @@ test("list_repo_locks returns empty when no locks exist", async () => {
 // ================================================================
 
 test("repo_lock_status is exposed in tools/list", async () => {
-  const server = await makeServer();
+  const server = await createGptWorkServer({
+    statePath: join(await mkdtemp(join(tmpdir(), "gptwork-state-")), "state.json"),
+    defaultWorkspaceRoot: await mkdtemp(join(tmpdir(), "gptwork-ws-")),
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "operator",
+  });
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: 1,
@@ -921,4 +933,3 @@ test("draft task with empty assignee is ignored by run_assigned_codex_tasks", as
   const realResult = run.tasks.find(function(t) { return t.task_id === realTask.task.id; });
   assert.ok(realResult, "assigned codex task should be processed");
 });
-

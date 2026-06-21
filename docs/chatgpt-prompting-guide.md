@@ -4,6 +4,8 @@ Use this guide when ChatGPT needs to hand implementation, deployment, maintenanc
 
 ## Primary Rule
 
+Start every new GPTWork session with `open_project_context` unless the user is asking for a narrow known task id. This gives ChatGPT the repo state, worker/queue status, recent tasks/goals, scripts, and recommended next tools in one compact response.
+
 For complex execution requests, ChatGPT should not call direct shell tools or raw task assignment first. It should create an encoded goal:
 
 1. Translate the user's request into a readable execution preview.
@@ -118,6 +120,22 @@ These old paths are still supported by the backend but are not the recommended C
 - `create_task` automatically creates a linked goal.
 - `assign_task_to_codex` automatically links old tasks to a goal.
 - `create_task.description` may contain a `gptwork.encoded_goal.v1` envelope; the backend decodes it.
+
+## Tool Modes
+
+GPTWork defaults to `GPTWORK_TOOL_MODE=standard`, which keeps ChatGPT focused on goal/task, context, status, GitHub sync, handoff, and compact review tools. Operator/debug tools remain callable by known name for compatibility, but they are not advertised in the default `tools/list` surface.
+
+Use these modes when configuring the backend:
+
+- `minimal`: health/status, `open_project_context`, encoded goal, task reads.
+- `standard`: normal ChatGPT usage.
+- `codex`: Codex execution and workspace operations.
+- `operator`: restart, diagnostics, repo lock, and sync operations.
+- `full`: full compatibility/debug surface.
+
+## Agent Handoff
+
+For multi-agent collaboration, use `handoff_to_agent` to write `.gptwork/handoff/current-plan.md` and status artifacts, then use `read_handoff` or `gptwork watch-handoff --dry-run` to inspect the handoff. Use `create_agent_run`, `append_agent_event`, and `complete_agent_run` when work needs a tracked planner/implementer/tester/reviewer/finalizer trail. Use `show_changes` for a compact diff summary instead of pasting raw diffs.
 
 ## Attachments
 
