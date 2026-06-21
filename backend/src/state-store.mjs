@@ -31,6 +31,7 @@ export class StateStore {
     this._idxConversationsById = null;
     this._idxMemoriesByGoalId = null;
     this._idxCodexActiveTasksByStatus = null;
+    this._idxCodexTerminalTasksByStatus = null;
   }
 
   /** Rebuild in-memory indexes from current state. */
@@ -43,15 +44,24 @@ export class StateStore {
     this._idxGoalsByTaskId = new Map();
     this._idxConversationsById = new Map();
     this._idxMemoriesByGoalId = new Map();
-    this._idxCodexActiveTasksByStatus = new Map();
 
-    const codexStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "completed", "failed"]);
-    for (const st of codexStatuses) this._idxCodexActiveTasksByStatus.set(st, []);
+    // Split codex task indexes: active (pending work) vs terminal (done/failed)
+    const codexActiveStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review"]);
+    const codexTerminalStatuses = new Set(["completed", "failed"]);
+
+    this._idxCodexActiveTasksByStatus = new Map();
+    this._idxCodexTerminalTasksByStatus = new Map();
+    for (const st of codexActiveStatuses) this._idxCodexActiveTasksByStatus.set(st, []);
+    for (const st of codexTerminalStatuses) this._idxCodexTerminalTasksByStatus.set(st, []);
 
     for (const task of this.state.tasks || []) {
       this._idxTasksById.set(task.id, task);
-      if (task.assignee === "codex" && codexStatuses.has(task.status)) {
-        this._idxCodexActiveTasksByStatus.get(task.status).push(task);
+      if (task.assignee === "codex") {
+        if (codexActiveStatuses.has(task.status)) {
+          this._idxCodexActiveTasksByStatus.get(task.status).push(task);
+        } else if (codexTerminalStatuses.has(task.status)) {
+          this._idxCodexTerminalTasksByStatus.get(task.status).push(task);
+        }
       }
     }
 
@@ -78,6 +88,7 @@ export class StateStore {
       } catch {
         this.state = this.defaultState();
         await this.save();
+        return this.state;
       }
     }
     // Always rebuild indexes so they reflect latest in-memory state
@@ -118,24 +129,64 @@ export class StateStore {
   }
 
   getCodexTasksByStatus(status) {
-    return this._idxCodexActiveTasksByStatus?.get(status) ?? [];
+    if (this._idxCodexActiveTasksByStatus?.has(status)) {
+      return this._idxCodexActiveTasksByStatus.get(status);
+    }
+    if (this._idxCodexTerminalTasksByStatus?.has(status)) {
+      return this._idxCodexTerminalTasksByStatus.get(status);
+    }
+    return [];
   }
 
   /**
    * Get codex-assigned tasks grouped by status with counts.
    * Returns { tasks: [], counts: { assigned: N, ... } }.
-   * Used by worker-queue-counts and other status-based queries.
+   * Only active (non-terminal) tasks are included in the tasks array.
+   * Counts include terminal statuses for monitoring compatibility.
    */
   getCodexTaskQueue() {
     const counts = {};
     const allTasks = [];
-    const codexStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "completed", "failed"];
-    for (const st of codexStatuses) {
+    // Active statuses only for the task list (terminal tasks don't need processing)
+    const activeStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review"];
+    for (const st of activeStatuses) {
       const tasks = this.getCodexTasksByStatus(st);
       counts[st] = tasks.length;
       if (tasks.length) allTasks.push(...tasks);
     }
+    // Include terminal counts for queue monitoring (compatible with worker-queue-counts)
+    const terminalStatuses = ["completed", "failed"];
+    for (const st of terminalStatuses) {
+      counts[st] = this.getCodexTasksByStatus(st).length;
+    }
     return { tasks: allTasks, counts };
+  }
+
+  /**
+   * Index-based query for worker candidate tasks.
+   * Returns tasks matching any of the given statuses without scanning state.tasks.
+   * Preserves order: statuses array controls priority.
+   *
+   * @param {string[]} statuses - Statuses to match (e.g. ["assigned", "queued"])
+   * @param {number} [maxTasks] - Optional max results limit
+   * @returns {object[]} Task objects
+   */
+  getCodexActiveQueueCandidates(statuses, maxTasks) {
+    if (!this._idxCodexActiveTasksByStatus) return [];
+    const result = [];
+    const seen = new Set();
+    for (const st of statuses) {
+      const tasks = this._idxCodexActiveTasksByStatus.get(st);
+      if (!tasks) continue;
+      for (const t of tasks) {
+        if (!seen.has(t.id)) {
+          seen.add(t.id);
+          result.push(t);
+          if (maxTasks && result.length >= maxTasks) return result;
+        }
+      }
+    }
+    return result;
   }
 
   async findWorkspaceById(id) {
@@ -148,12 +199,15 @@ export class StateStore {
     this._capActivities();
     // Serialize concurrent saves with an internal promise chain.
     // Use temp-file + atomic rename to avoid partial writes on crash.
+    // Rebuild indexes after write so they stay consistent with state.
     // If a single save fails, we reset the chain so future saves are not
     // permanently blocked (chain.catch(() => {}) resolves on failure).
     const chain = (this._saveLock || Promise.resolve()).then(async () => {
       const tmpPath = this.statePath + "." + randomUUID() + ".tmp";
       await writeFile(tmpPath, JSON.stringify(this.state, null, 2), "utf8");
       await rename(tmpPath, this.statePath);
+      // Rebuild indexes so they stay consistent with the written state
+      this._buildIndexes();
     });
     // Reset on failure so subsequent saves still execute
     this._saveLock = chain.catch(() => {});
@@ -164,8 +218,7 @@ export class StateStore {
     const chain = (this._mutationLock || Promise.resolve()).then(async () => {
       const state = await this.load();
       const result = await updater(state);
-      // Rebuild indexes after mutation so subsequent index lookups reflect changes
-      this._buildIndexes();
+      // Indexes will be rebuilt inside save()
       await this.save();
       return result;
     });
