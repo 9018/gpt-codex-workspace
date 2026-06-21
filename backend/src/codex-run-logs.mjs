@@ -2,22 +2,45 @@ import { appendFile, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
 import { getStdoutLogPath, getStderrLogPath, MAX_STDOUT_TAIL_BYTES } from "./codex-run-paths.mjs";
 
+const logAppendQueues = new Map();
+
+export function trimUtf8Tail(text = "", maxBytes = MAX_STDOUT_TAIL_BYTES) {
+  const str = String(text || "");
+  const limit = Math.max(1, Number(maxBytes) || MAX_STDOUT_TAIL_BYTES);
+  const buf = Buffer.from(str, "utf8");
+  if (buf.length <= limit) return { tail: str, truncated: false };
+
+  let tail = buf.subarray(buf.length - limit).toString("utf8").replace(/^\uFFFD+/, "");
+  while (Buffer.byteLength(tail, "utf8") > limit) {
+    tail = tail.slice(1);
+  }
+  return { tail, truncated: true };
+}
+
+export async function appendLogFile(filePath, chunk) {
+  if (!filePath || !chunk) return;
+  const previous = logAppendQueues.get(filePath) || Promise.resolve();
+  const next = previous.catch(() => {}).then(async () => {
+    await mkdir(dirname(filePath), { recursive: true });
+    await appendFile(filePath, chunk, "utf8");
+  });
+  logAppendQueues.set(filePath, next);
+  next.finally(() => {
+    if (logAppendQueues.get(filePath) === next) logAppendQueues.delete(filePath);
+  }).catch(() => {});
+  return next;
+}
+
 export function streamToLog(opts = {}) {
   const { filePath, chunk, boundedTail = "", maxTailBytes = MAX_STDOUT_TAIL_BYTES } = opts;
   if (!filePath || !chunk) return { tail: boundedTail, truncated: false };
 
-  // Append to file asynchronously (fire-and-forget for streaming perf)
-  appendFile(filePath, chunk, "utf8").catch(() => {});
+  // Append to file in per-file order. Fire-and-forget keeps streaming fast,
+  // while appendLogFile serializes concurrent chunks for stable logs.
+  appendLogFile(filePath, chunk).catch(() => {});
 
-  // Keep bounded tail in memory
-  let tail = boundedTail + chunk;
-  let truncated = false;
-  if (Buffer.byteLength(tail) > maxTailBytes) {
-    const excess = Buffer.byteLength(tail) - maxTailBytes;
-    tail = tail.slice(excess);
-    truncated = true;
-  }
-  return { tail, truncated };
+  // Keep bounded UTF-8 tail in memory without slicing by UTF-16 code units.
+  return trimUtf8Tail(boundedTail + chunk, maxTailBytes);
 }
 
 /**
@@ -37,15 +60,10 @@ export async function writeRunLogs(opts = {}) {
   const stdLog = getStdoutLogPath(workspaceRoot, taskId, runId);
   const errLog = getStderrLogPath(workspaceRoot, taskId, runId);
 
-  // Append-mode for streaming: write logs incrementally
-  if (stdout) {
-    await mkdir(dirname(stdLog), { recursive: true });
-    await appendFile(stdLog, stdout, "utf8");
-  }
-  if (stderr) {
-    await mkdir(dirname(errLog), { recursive: true });
-    await appendFile(errLog, stderr, "utf8");
-  }
+  // Append-mode for streaming: writes are serialized per log file to avoid
+  // out-of-order chunks when stdout/stderr handlers fire quickly.
+  if (stdout) await appendLogFile(stdLog, stdout);
+  if (stderr) await appendLogFile(errLog, stderr);
 }
 
 // ---------------------------------------------------------------------------
