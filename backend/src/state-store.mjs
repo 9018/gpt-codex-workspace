@@ -166,7 +166,8 @@ export class StateStore {
   /**
    * Index-based query for worker candidate tasks.
    * Returns tasks matching any of the given statuses without scanning state.tasks.
-   * Preserves order: statuses array controls priority.
+   * Uses round-robin status buckets, oldest first within each bucket, so a large
+   * assigned backlog cannot starve queued or waiting_for_lock tasks forever.
    *
    * @param {string[]} statuses - Statuses to match (e.g. ["assigned", "queued"])
    * @param {number} [maxTasks] - Optional max results limit
@@ -174,17 +175,28 @@ export class StateStore {
    */
   getCodexActiveQueueCandidates(statuses, maxTasks) {
     if (!this._idxCodexActiveTasksByStatus) return [];
+    const limit = maxTasks ? Math.max(1, Number(maxTasks) || 1) : null;
     const result = [];
     const seen = new Set();
-    for (const st of statuses) {
-      const tasks = this._idxCodexActiveTasksByStatus.get(st);
-      if (!tasks) continue;
-      for (const t of tasks) {
-        if (!seen.has(t.id)) {
-          seen.add(t.id);
-          result.push(t);
-          if (maxTasks && result.length >= maxTasks) return result;
-        }
+    const taskTime = (task) => {
+      const ts = Date.parse(task.created_at || task.updated_at || "");
+      return Number.isFinite(ts) ? ts : 0;
+    };
+    const byOldest = (a, b) => taskTime(a) - taskTime(b) || String(a.id || "").localeCompare(String(b.id || ""));
+    const buckets = (statuses || [])
+      .map((st) => ({ status: st, tasks: [...(this._idxCodexActiveTasksByStatus.get(st) || [])].sort(byOldest) }))
+      .filter((bucket) => bucket.tasks.length > 0);
+
+    let added = true;
+    while (added) {
+      added = false;
+      for (const bucket of buckets) {
+        const task = bucket.tasks.shift();
+        if (!task || seen.has(task.id)) continue;
+        seen.add(task.id);
+        result.push(task);
+        added = true;
+        if (limit && result.length >= limit) return result;
       }
     }
     return result;
