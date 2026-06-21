@@ -25,6 +25,7 @@ export class StateStore {
 
   /** Clear all in-memory indexes. */
   _clearIndexes() {
+    this._indexesReady = false;
     this._idxTasksById = null;
     this._idxGoalsById = null;
     this._idxGoalsByTaskId = null;
@@ -78,6 +79,7 @@ export class StateStore {
       if (!this._idxMemoriesByGoalId.has(mem.goal_id)) this._idxMemoriesByGoalId.set(mem.goal_id, []);
       this._idxMemoriesByGoalId.get(mem.goal_id).push(mem);
     }
+    this._indexesReady = true;
   }
 
   async load() {
@@ -91,8 +93,7 @@ export class StateStore {
         return this.state;
       }
     }
-    // Always rebuild indexes so they reflect latest in-memory state
-    this._buildIndexes();
+    if (!this._indexesReady) this._buildIndexes();
     return this.state;
   }
 

@@ -141,3 +141,27 @@ test('StateStore: adding task via mutate() keeps indexes consistent', async () =
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+
+test('StateStore: repeated load does not rebuild indexes when state is already loaded', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'ss-smoke-'));
+  try {
+    const store = makeStore(tmpDir);
+    let builds = 0;
+    const originalBuildIndexes = store._buildIndexes.bind(store);
+    store._buildIndexes = () => {
+      builds += 1;
+      return originalBuildIndexes();
+    };
+
+    await store.load();
+    const buildsAfterFirstLoad = builds;
+    assert.equal(buildsAfterFirstLoad, 1);
+
+    await store.load();
+    await store.load();
+    assert.equal(builds, buildsAfterFirstLoad);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
