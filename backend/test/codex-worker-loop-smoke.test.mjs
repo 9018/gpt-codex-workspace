@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { getWorkerProgressCount } from '../src/codex-worker-loop.mjs';
 
-test('getWorkerProgressCount uses explicit worker result counters', () => {
-  assert.equal(getWorkerProgressCount({ progressed: 2, completed: 1, failed: 1, tasks: [] }), 4);
+test('getWorkerProgressCount prefers explicit progressed counter without double-counting', () => {
+  assert.equal(getWorkerProgressCount({ progressed: 2, completed: 1, failed: 1, tasks: [] }), 2);
 });
 
 test('getWorkerProgressCount falls back to task result metadata', () => {
