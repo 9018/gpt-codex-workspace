@@ -8,8 +8,43 @@ export function runtimeStatusCard(data) {
     formatKeyValue('worktree', data.worktree_dirty ? 'dirty' : 'clean'),
     '',
     formatKeyValue('worker', data.worker ? (data.worker.enabled ? 'enabled' : 'disabled') : '?'),
-    formatKeyValue('queue assigned', data.worker?.queue?.assigned ?? '?'),
+    formatKeyValue('queue assigned', data.queue?.assigned ?? data.worker?.queue?.assigned ?? 0),
   ];
+
+  // Queue breakdown (from collectWorkerQueueCounts)
+  if (data.queue) {
+    const q = data.queue;
+    lines.push('');
+    lines.push('  Queue:');
+    lines.push(formatKeyValue('assigned', q.assigned ?? 0));
+    lines.push(formatKeyValue('queued', q.queued ?? 0));
+    lines.push(formatKeyValue('running', q.running ?? 0));
+    lines.push(formatKeyValue('waiting for lock', q.waiting_for_lock ?? 0));
+    lines.push(formatKeyValue('waiting for review', q.waiting_for_review ?? 0));
+    lines.push(formatKeyValue('completed', q.completed ?? 0));
+    lines.push(formatKeyValue('failed', q.failed ?? 0));
+    if (q.oldest_age_ms) {
+      const activeStatuses = ['assigned', 'queued', 'running', 'waiting_for_lock', 'waiting_for_review'];
+      const activeAges = Object.entries(q.oldest_age_ms)
+        .filter(([st]) => activeStatuses.includes(st))
+        .filter(([, age]) => age > 0)
+        .map(([st, age]) => `${st}=${Math.round(age / 1000)}s`);
+      if (activeAges.length > 0) {
+        lines.push(formatKeyValue('oldest ages', activeAges.join(', ')));
+      }
+    }
+  }
+
+  // Worker health
+  if (data.worker?.health) {
+    const h = data.worker.health;
+    lines.push('');
+    lines.push(`  Health: ${h.phase}`);
+    if (h.reason) lines.push(formatKeyValue('reason', h.reason));
+    if (h.last_tick_age_ms != null) lines.push(formatKeyValue('last tick age', `${Math.round(h.last_tick_age_ms / 1000)}s`));
+    if (h.current_tick_duration_ms != null) lines.push(formatKeyValue('current tick', `${Math.round(h.current_tick_duration_ms / 1000)}s`));
+    if (h.next_tick_overdue_ms != null) lines.push(formatKeyValue('next tick overdue', `${Math.round(h.next_tick_overdue_ms / 1000)}s`));
+  }
 
   // Bark (safe)
   if (data.bark) {
@@ -31,8 +66,75 @@ export function runtimeStatusCard(data) {
   if (data.runtime_env_loaded === false && !data.runtime_env_configured) {
     diagnostics.push({ severity: 'warning', message: 'No runtime.env loaded' });
   }
+  if (data.worker?.health?.phase === 'stalled' || data.worker?.health?.phase === 'overdue') {
+    diagnostics.push({ severity: 'warning', message: `Worker health: ${data.worker.health.phase} — ${data.worker.health.reason}` });
+  }
 
   return formatToolCard('Runtime Status', { lines, diagnostics });
+}
+
+
+/**
+ * Format worker_status structured data as a compact card.
+ *
+ * @param {object} data   - The structuredContent from worker_status
+ * @returns {string}
+ */
+export function workerStatusCard(data) {
+  if (!data) return formatToolCard('Worker Status', { lines: ['  No worker data'] });
+
+  const lines = [
+    formatKeyValue('worker', data.enabled ? 'enabled' : 'disabled'),
+    formatKeyValue('running', data.running ? 'yes' : 'no'),
+  ];
+
+  if (data.health) {
+    lines.push(formatKeyValue('health phase', data.health.phase));
+    if (data.health.reason) lines.push(formatKeyValue('reason', data.health.reason));
+    if (data.health.last_tick_age_ms != null) lines.push(formatKeyValue('last tick age', `${Math.round(data.health.last_tick_age_ms / 1000)}s`));
+    if (data.health.current_tick_duration_ms != null) lines.push(formatKeyValue('current tick duration', `${Math.round(data.health.current_tick_duration_ms / 1000)}s`));
+    if (data.health.next_tick_overdue_ms != null) lines.push(formatKeyValue('next tick overdue', `${Math.round(data.health.next_tick_overdue_ms / 1000)}s`));
+  }
+
+  lines.push(formatKeyValue('interval', data.interval_ms ? `${data.interval_ms}ms` : '?'));
+  if (data.current_interval_ms) lines.push(formatKeyValue('current interval', `${data.current_interval_ms}ms`));
+
+  // Queue counts
+  if (data.queue) {
+    const q = data.queue;
+    lines.push('');
+    lines.push('  Queue:');
+    lines.push(formatKeyValue('assigned', q.assigned ?? 0));
+    lines.push(formatKeyValue('queued', q.queued ?? 0));
+    lines.push(formatKeyValue('running', q.running ?? 0));
+    lines.push(formatKeyValue('waiting for lock', q.waiting_for_lock ?? 0));
+    lines.push(formatKeyValue('waiting for review', q.waiting_for_review ?? 0));
+    lines.push(formatKeyValue('completed', q.completed ?? 0));
+    lines.push(formatKeyValue('failed', q.failed ?? 0));
+  } else {
+    lines.push(formatKeyValue('queue assigned', data.queue?.assigned ?? data.queues?.assigned ?? 0));
+    lines.push(formatKeyValue('queue running', data.queue?.running ?? data.queues?.running ?? 0));
+  }
+
+  lines.push(formatKeyValue('started', data.started_at || '-'));
+  if (data.last_tick_finished_at) lines.push(formatKeyValue('last tick', data.last_tick_finished_at));
+  if (data.last_tick_started_at) lines.push(formatKeyValue('tick started', data.last_tick_started_at));
+  if (data.last_tick_duration_ms != null) lines.push(formatKeyValue('tick duration', `${data.last_tick_duration_ms}ms`));
+  if (data.next_tick_due_at) lines.push(formatKeyValue('next tick due', data.next_tick_due_at));
+  if (data.concurrency) lines.push(formatKeyValue('concurrency', data.concurrency));
+  if (data.limit) lines.push(formatKeyValue('limit', data.limit));
+  if (data.last_tick_result?.inspected != null) lines.push(formatKeyValue('last inspected', data.last_tick_result.inspected));
+  if (data.last_tick_result?.completed != null) lines.push(formatKeyValue('last completed', data.last_tick_result.completed));
+  if (data.last_tick_result?.github_sync != null) lines.push(formatKeyValue('last github sync', data.last_tick_result.github_sync?.ok === false ? 'failed' : 'ok'));
+
+  const warnings = [];
+  if (data.health?.phase === 'stalled' || data.health?.phase === 'overdue') {
+    warnings.push(`Worker health: ${data.health.phase} — ${data.health.reason}`);
+  }
+  if (data.last_error) warnings.push('Last error: ' + data.last_error.slice(0, 120));
+  if (!data.enabled) warnings.push('Worker is disabled — codex tasks will not be processed automatically');
+
+  return formatToolCard('Worker Status', { lines, warnings });
 }
 
 
@@ -43,6 +145,9 @@ export function runtimeStatusCard(data) {
  * @returns {string}
  */
 export function gptworkDoctorCard(data) {
+
+  if (!data) return formatToolCard('GPTWork Doctor', { lines: ['  No data'] });
+
   const lines = [
     formatKeyValue('pid', data.pid),
     formatKeyValue('started', data.started_at),
@@ -75,11 +180,3 @@ export function gptworkDoctorCard(data) {
 
   return formatToolCard('GPTWork Doctor', { lines, diagnostics, nextActions });
 }
-
-
-/**
- * Format get_task structured data as a compact card.
- *
- * @param {object} data   - The structuredContent from get_task
- * @returns {string}
- */

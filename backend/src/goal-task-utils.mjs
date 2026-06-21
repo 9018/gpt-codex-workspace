@@ -53,12 +53,18 @@ export async function taskExecutionSnapshot(store, task) {
     ? (typeof store.findConversationById === "function" ? store.findConversationById(goal.conversation_id) : state.conversations?.find((item) => item.id === goal.conversation_id)) || null
     : null;
   const messages = conversation?.messages || [];
+  const logs = freshTask?.logs || [];
+  const log_bytes = logs.reduce((sum, log) => sum + Buffer.byteLength(String(log.message || ""), "utf8"), 0);
+  const lastLog = logs.length > 0 ? logs[logs.length - 1] : null;
+  const last_log_age_ms = lastLog?.time ? Math.max(0, Date.now() - new Date(lastLog.time).getTime()) : null;
   return {
     status: freshTask?.status || goal?.status || "open",
     task: freshTask,
     goal_status: goal?.status || null,
     result: freshTask?.result || null,
-    messages_tail: messages.slice(-5)
+    messages_tail: messages.slice(-5),
+    log_bytes,
+    last_log_age_ms,
   };
 }
 

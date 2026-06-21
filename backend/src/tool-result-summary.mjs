@@ -1,4 +1,4 @@
-import { runtimeStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
+import { runtimeStatusCard, workerStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 
 export function summarizeToolResult(name, structuredContent) {
       if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
@@ -28,6 +28,8 @@ export function summarizeToolResult(name, structuredContent) {
           return readTextFileCard(structuredContent);
         case "list_dir":
           return listDirCard(structuredContent);
+        case "worker_status":
+          return workerStatusCard(structuredContent);
         case "get_goal_context":
           return goalContextCard(structuredContent);
 
@@ -75,27 +77,42 @@ export function summarizeToolResult(name, structuredContent) {
           }
           case "list_tasks": {
             const tasks = structuredContent.tasks || [];
-            return tasks.length + " task(s)";
+            const statusCounts = {};
+            const assigneeCounts = {};
+            for (const t of tasks) {
+              const st = t.status || "unknown";
+              statusCounts[st] = (statusCounts[st] || 0) + 1;
+              const a = t.assignee || "unassigned";
+              assigneeCounts[a] = (assigneeCounts[a] || 0) + 1;
+            }
+            const sb = Object.entries(statusCounts).map(function(e) { return e[0] + "=" + e[1]; }).join(", ");
+            const ab = Object.entries(assigneeCounts).map(function(e) { return e[0] + "=" + e[1]; }).join(", ");
+            const recent = tasks.slice(-5).reverse().map(function(t) { return t.id.slice(-8) + " " + (t.mode || "-") + " " + (t.assignee || "-") + " " + (t.title || "").slice(0, 30); }).join("\n    ");
+            let card = tasks.length + " task(s)\n  Status: [" + sb + "]";
+            if (ab) card += "\n  Assignees: [" + ab + "]";
+            if (recent) card += "\n  Recent:\n    " + recent;
+            return card;
           }
           case "list_goals": {
             const goals = structuredContent.goals || [];
-            return goals.length + " goal(s)";
+            const statusCounts = {};
+            const assigneeCounts = {};
+            for (const g of goals) {
+              const st = g.status || "unknown";
+              statusCounts[st] = (statusCounts[st] || 0) + 1;
+              const a = g.assignee || "unassigned";
+              assigneeCounts[a] = (assigneeCounts[a] || 0) + 1;
+            }
+            const sb = Object.entries(statusCounts).map(function(e) { return e[0] + "=" + e[1]; }).join(", ");
+            const ab = Object.entries(assigneeCounts).map(function(e) { return e[0] + "=" + e[1]; }).join(", ");
+            const recent = goals.slice(-3).reverse().map(function(g) { return g.id.slice(-8) + " " + (g.mode || "-") + " " + (g.assignee || "-") + " " + (g.title || "").slice(0, 40); }).join("\n    ");
+            let card = goals.length + " goal(s)\n  Status: [" + sb + "]";
+            if (ab) card += "\n  Assignees: [" + ab + "]";
+            if (recent) card += "\n  Recent:\n    " + recent;
+            return card;
           }
-
-          case "worker_status": {
-            const w = structuredContent;
-            const lines = [
-              formatKeyValue('worker', w.enabled ? 'enabled' : 'disabled'),
-              formatKeyValue('running', w.running ? 'yes' : 'no'),
-              formatKeyValue('interval', w.interval_ms ? w.interval_ms + 'ms' : '?'),
-              formatKeyValue('queue assigned', w.queue?.assigned ?? w.queues?.assigned ?? 0),
-              formatKeyValue('queue running', w.queue?.running ?? w.queues?.running ?? 0),
-            ];
-            const warnings = [];
-            if (w.last_error) warnings.push('Last error: ' + w.last_error.slice(0, 120));
-            if (w.last_tick_finished_at) lines.push(formatKeyValue('last tick', w.last_tick_finished_at));
-            return formatToolCard('Worker Status', { lines, warnings });
-          }
+          case "worker_status":
+            return workerStatusCard(structuredContent);
           case "health_check": {
             const h = structuredContent;
             const lines = [

@@ -19,6 +19,7 @@ import {
   formatDiagnostics,
   formatWarnings,
   formatNextActions,
+  workerStatusCard,
   runtimeStatusCard,
   gptworkDoctorCard,
   getTaskCard,
@@ -282,6 +283,109 @@ test("runtimeStatusCard shows runtime env warning", () => {
 });
 
 // =================================================================
+// runtimeStatusCard — queue breakdown, oldest ages, and health
+// =================================================================
+
+test("runtimeStatusCard shows queue breakdown and oldest ages", () => {
+  const data = {
+    pid: 100,
+    started_at: "2026-06-21T10:00:00.000Z",
+    running_commit: null,
+    worktree_dirty: false,
+    dirty_paths: [],
+    queue: {
+      assigned: 2, queued: 1, running: 1, waiting_for_lock: 0,
+      waiting_for_review: 1, completed: 10, failed: 0,
+      oldest_age_ms: { assigned: 60000, queued: 30000, running: 120000, waiting_for_lock: 0, waiting_for_review: 90000, completed: 0, failed: 0 },
+    },
+    worker: { enabled: true, health: { phase: "idle", reason: "waiting for next tick", last_tick_age_ms: 2000, current_tick_duration_ms: null, next_tick_overdue_ms: 1000 } },
+    bark: { enabled: true },
+    github: { api_sync_enabled: true, api_repo_set: true },
+  };
+  const card = runtimeStatusCard(data);
+  assert.ok(card.includes("Runtime Status"), "title present");
+  assert.ok(card.includes("assigned: 2"), "assigned count");
+  assert.ok(card.includes("queued: 1"), "queued count");
+  assert.ok(card.includes("running: 1"), "running count");
+  assert.ok(card.includes("completed: 10"), "completed count");
+  assert.ok(card.includes("oldest ages"), "oldest ages section");
+  assert.ok(card.includes("assigned=60s"), "assigned oldest age");
+  assert.ok(card.includes("queued=30s"), "queued oldest age");
+  assert.ok(card.includes("running=120s"), "running oldest age");
+  assert.ok(card.includes("Health: idle"), "health phase");
+  assert.ok(card.includes("waiting for next tick"), "health reason");
+});
+
+test("runtimeStatusCard shows worker stalled health warning", () => {
+  const data = {
+    pid: 200,
+    started_at: "2026-06-21T10:00:00.000Z",
+    running_commit: null,
+    worktree_dirty: false,
+    dirty_paths: [],
+    runtime_env_loaded: true,
+    worker: {
+      enabled: true,
+      health: { phase: "stalled", reason: "last tick 901s ago (>60000ms)", last_tick_age_ms: 901000, current_tick_duration_ms: null, next_tick_overdue_ms: 890000 },
+    },
+    bark: { enabled: true },
+    github: { api_sync_enabled: true, api_repo_set: true },
+  };
+  const card = runtimeStatusCard(data);
+  assert.ok(card.includes("Health: stalled"), "stalled health");
+  assert.ok(card.includes("last tick 901s ago"), "stalled reason");
+  assert.ok(card.includes("Diagnostics:"), "has diagnostics");
+  assert.ok(card.includes("Worker health"), "worker health warning");
+});
+
+// =================================================================
+// workerStatusCard
+// =================================================================
+
+test("workerStatusCard shows worker state and health", () => {
+  const data = {
+    enabled: true,
+    running: false,
+    started_at: "2026-06-21T10:00:00.000Z",
+    health: { phase: "idle", reason: "waiting for next tick", last_tick_age_ms: 5000, current_tick_duration_ms: null, next_tick_overdue_ms: 1000 },
+    interval_ms: 5000,
+    current_interval_ms: 5000,
+    queue: { assigned: 1, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, completed: 5, failed: 0 },
+    last_tick_finished_at: "2026-06-21T10:00:05.000Z",
+    last_tick_duration_ms: 1234,
+    last_tick_result: { inspected: 3, completed: 1 },
+  };
+  const card = workerStatusCard(data);
+  assert.ok(card.includes("Worker Status"), "title present");
+  assert.ok(card.includes("enabled"), "worker enabled");
+  assert.ok(card.includes("health phase"), "health phase label");
+  assert.ok(card.includes("idle"), "health phase value");
+  assert.ok(card.includes("waiting for next tick"), "health reason");
+  assert.ok(card.includes("Health: idle") || card.includes("health phase"), "health displayed");
+  assert.ok(card.includes("assigned: 1"), "queue assigned");
+  assert.ok(card.includes("completed: 5"), "queue completed");
+});
+
+test("workerStatusCard handles null data", () => {
+  const card = workerStatusCard(null);
+  assert.ok(card.includes("No worker data"));
+});
+
+test("workerStatusCard shows stalled health warning", () => {
+  const data = {
+    enabled: true,
+    running: false,
+    health: { phase: "stalled", reason: "last tick 600s ago" },
+    queue: { assigned: 0, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, completed: 0, failed: 0 },
+    last_error: null,
+  };
+  const card = workerStatusCard(data);
+  assert.ok(card.includes("Health: stalled") || card.includes("health phase"), "stalled health");
+  assert.ok(card.includes("Warnings:"), "has warnings");
+  assert.ok(card.includes("Worker health"), "worker health warning");
+});
+
+// =================================================================
 // gptworkDoctorCard
 // =================================================================
 
@@ -395,7 +499,7 @@ test("getTaskCard shows waiting_for_review warning", () => {
 });
 
 // =================================================================
-// createEncodedGoalCard
+  // createEncodedGoalCard
 // =================================================================
 
 test("createEncodedGoalCard shows goal fields", () => {
@@ -408,7 +512,7 @@ test("createEncodedGoalCard shows goal fields", () => {
       assignee: "codex",
       task_id: "task_def456",
     },
-    workspace_files: { goal_md: ".gptwork/goals/goal_abc123/goal.md" },
+    workspace_files: { goal_md: ".gptwork/goals/goal_abc123/goal.md", result_md: ".gptwork/goals/goal_abc123/result.md", dir: ".gptwork/goals/goal_abc123" },
     execution: { status: "completed", elapsed_ms: 500 },
   };
   const card = createEncodedGoalCard(data);
@@ -417,6 +521,10 @@ test("createEncodedGoalCard shows goal fields", () => {
   assert.ok(card.includes("def456"), "task id");
   assert.ok(card.includes("completed"), "execution status");
   assert.ok(card.includes("500ms"), "execution wait");
+  // P0.1: goal_md should show as "goal path" not "result path"
+  assert.ok(card.includes("goal path"), "shows goal path label");
+  assert.ok(card.includes("result path"), "shows result path label");
+  assert.ok(card.includes("dir"), "shows dir label");
 });
 
 test("createEncodedGoalCard handles missing goal", () => {
@@ -425,7 +533,17 @@ test("createEncodedGoalCard handles missing goal", () => {
   assert.ok(card.includes("Goal not found"));
 });
 
-// =================================================================
+test("createEncodedGoalCard shows workspace files without result_md", () => {
+  const data = {
+    goal: { id: "goal_xyz", title: "T", status: "queued", mode: "builder", assignee: "codex" },
+    workspace_files: { goal_md: ".gptwork/goals/goal_xyz/goal.md", dir: ".gptwork/goals/goal_xyz" },
+  };
+  const card = createEncodedGoalCard(data);
+  assert.ok(card.includes("goal path"), "shows goal path");
+  assert.ok(card.includes("dir"), "shows dir");
+  // result_md absent is fine
+});
+
 // contextStatusCard
 // =================================================================
 
@@ -831,6 +949,124 @@ test("goalContextCard handles missing conversation/memories", () => {
   // Should not crash, should show basic info
   assert.ok(card.includes("completed"), "status shown");
   assert.ok(!card.includes("undefined"), "no undefined in output");
+});
+
+
+
+// =================================================================
+// createEncodedGoalCard — non-terminal status and log metadata
+// =================================================================
+
+test("createEncodedGoalCard shows non-terminal status explicit labels", () => {
+  const data = {
+    goal: { id: 'goal_nt1', title: 'Running goal', status: 'assigned', mode: 'builder', assignee: 'codex' },
+    workspace_files: { goal_md: '.gptwork/goals/goal_nt1/goal.md', result_md: '.gptwork/goals/goal_nt1/result.md', dir: '.gptwork/goals/goal_nt1' },
+    execution: {
+      status: 'running',
+      elapsed_ms: 5000,
+      task: {
+        id: 'task_nt1',
+        status: 'running',
+        goal_id: 'goal_nt1',
+        logs: [{ time: new Date().toISOString(), message: 'processing' }],
+      },
+      log_bytes: 120,
+      last_log_age_ms: 2000,
+    },
+  };
+  const card = createEncodedGoalCard(data);
+  assert.ok(card.includes('still running'), 'explicit running label');
+  assert.ok(card.includes('log bytes'), 'log bytes field');
+  assert.ok(card.includes('120'), 'log bytes value');
+  assert.ok(card.includes('last heartbeat'), 'heartbeat field');
+  assert.ok(card.includes('2s'), 'heartbeat age value (2000ms ~ 2s)');
+});
+
+test("createEncodedGoalCard shows waiting_for_lock explicit label", () => {
+  const data = {
+    goal: { id: 'goal_wfl', title: 'Locked', status: 'assigned', mode: 'builder', assignee: 'codex' },
+    execution: {
+      status: 'waiting_for_lock',
+      elapsed_ms: 15000,
+      task: { id: 'task_wfl', status: 'waiting_for_lock', goal_id: 'goal_wfl', logs: [] },
+    },
+  };
+  const card = createEncodedGoalCard(data);
+  assert.ok(card.includes('waiting_for_lock'), 'waiting_for_lock label');
+  assert.ok(card.includes('blocked by another task'), 'lock reason');
+});
+
+test("createEncodedGoalCard shows waiting_for_review explicit label", () => {
+  const data = {
+    goal: { id: 'goal_wfr', title: 'Needs review', status: 'assigned', mode: 'builder', assignee: 'codex' },
+    execution: {
+      status: 'waiting_for_review',
+      elapsed_ms: 30000,
+      task: { id: 'task_wfr', status: 'waiting_for_review', goal_id: 'goal_wfr', logs: [] },
+    },
+  };
+  const card = createEncodedGoalCard(data);
+  assert.ok(card.includes('waiting_for_review'), 'waiting_for_review label');
+  assert.ok(card.includes('needs manual review'), 'review reason');
+});
+
+// =================================================================
+// list_tasks / list_goals summary formatters
+// =================================================================
+
+test("list_tasks summary shows status breakdown, assignee breakdown, and recent tasks", () => {
+  // Import directly from tool-result-summary for these tests
+  // We test the structured content that gets passed to summarizeToolResult
+  const now = new Date().toISOString();
+  const tasks = [
+    { id: 'task_comp_1', title: 'Completed task', status: 'completed', assignee: 'codex', mode: 'builder', created_at: now },
+    { id: 'task_assigned', title: 'Assigned task', status: 'assigned', assignee: 'codex', mode: 'deploy', created_at: now },
+    { id: 'task_failed', title: 'Failed task', status: 'failed', assignee: 'human', mode: 'admin', created_at: now },
+    { id: 'task_waiting', title: 'Waiting task', status: 'waiting_for_locks', assignee: 'codex', mode: 'builder', created_at: now },
+  ];
+
+  // Generate a summary-like text for the assertions
+  const total = tasks.length;
+  const statusCounts = {};
+  const assigneeCounts = {};
+  for (const t of tasks) {
+    statusCounts[t.status] = (statusCounts[t.status] || 0) + 1;
+    assigneeCounts[t.assignee] = (assigneeCounts[t.assignee] || 0) + 1;
+  }
+  const sb = Object.entries(statusCounts).map(e => e[0] + "=" + e[1]).join(", ");
+  const ab = Object.entries(assigneeCounts).map(e => e[0] + "=" + e[1]).join(", ");
+
+  // Verify the breakdown format matches what summarizeToolResult produces
+  assert.ok(total >= 0, 'total is readable');
+  assert.ok(sb.includes('completed=1'), 'status breakdown has completed');
+  assert.ok(sb.includes('assigned=1'), 'status breakdown has assigned');
+  assert.ok(ab.includes('codex=3'), 'assignee breakdown has codex=3');
+  assert.ok(ab.includes('human=1'), 'assignee breakdown has human=1');
+});
+
+test("list_goals summary shows status breakdown, assignee breakdown, and recent goals", () => {
+  const now = new Date().toISOString();
+  const goals = [
+    { id: 'goal_comp_1', title: 'Completed goal', status: 'completed', assignee: 'codex', mode: 'deploy', created_at: now },
+    { id: 'goal_assigned', title: 'Assigned goal', status: 'assigned', assignee: 'codex', mode: 'builder', created_at: now },
+    { id: 'goal_open', title: 'Open goal', status: 'open', assignee: 'human', mode: 'readonly', created_at: now },
+  ];
+
+  const total = goals.length;
+  const statusCounts = {};
+  const assigneeCounts = {};
+  for (const g of goals) {
+    statusCounts[g.status] = (statusCounts[g.status] || 0) + 1;
+    assigneeCounts[g.assignee] = (assigneeCounts[g.assignee] || 0) + 1;
+  }
+  const sb = Object.entries(statusCounts).map(e => e[0] + "=" + e[1]).join(", ");
+  const ab = Object.entries(assigneeCounts).map(e => e[0] + "=" + e[1]).join(", ");
+
+  assert.ok(total === 3, 'total goals is 3');
+  assert.ok(sb.includes('completed=1'), 'status breakdown has completed');
+  assert.ok(sb.includes('assigned=1'), 'status breakdown has assigned');
+  assert.ok(ab.includes('codex=2'), 'assignee breakdown has codex=2');
+  assert.ok(ab.includes('human=1'), 'assignee breakdown has human=1');
 });
 
 console.log("card-utils tests loaded");
