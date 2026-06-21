@@ -14,6 +14,14 @@ export function createRuntimeStatusToolsGroup({
   tool, schema, config, sources, envLoadResult, bark, github, registry, store,
   workerState, PROCESS_STARTED_AT, collectWorkerQueueCounts
 }) {
+  function hasProcessEnvRuntimeConfig() {
+    return Object.values(sources || {}).some((source) => source === "process.env");
+  }
+
+  function isRuntimeEnvConfigured() {
+    return envLoadResult.keys.length > 0 || hasProcessEnvRuntimeConfig();
+  }
+
   return {
     github_status: tool("Return GitHub sync configuration and known issue count.", schema({}), async () => ({
       enabled: github.enabled,
@@ -64,6 +72,7 @@ export function createRuntimeStatusToolsGroup({
         runtime_env_file_path: envPath,
         runtime_env_file_exists: envFileExists,
         runtime_env_loaded: envLoadResult.keys.length > 0,
+        runtime_env_configured: isRuntimeEnvConfigured(),
         runtime_env_keys_loaded: envLoadResult.keys,
         state_path: statePath,
         state_path_inside_repo: statePathInsideRepo,
@@ -147,6 +156,7 @@ export function createRuntimeStatusToolsGroup({
         started_at: PROCESS_STARTED_AT.toISOString(),
         running_commit: gitInfo.running_commit,
         runtime_env_loaded: envLoadResult.keys.length > 0,
+        runtime_env_configured: isRuntimeEnvConfigured(),
         runtime_env_file_path: envLoadResult.loadedPath || null,
         workspace_root: config.defaultWorkspaceRoot,
         hosted_default_root_aligned: config.defaultWorkspaceRoot === '/home/a9017/mcp/workspace',
@@ -166,7 +176,7 @@ export function createRuntimeStatusToolsGroup({
         placeholder_tools_exposed: exposePlaceholder || false,
         suggested_next_actions: (() => {
           const actions = [];
-          if (envLoadResult.keys.length === 0) actions.push('Set up runtime.env with GPTWORK_* variables or configure via process.env');
+          if (!isRuntimeEnvConfigured()) actions.push('Set up runtime.env with GPTWORK_* variables or configure via process.env');
           if (!registryData.hasCanonical) actions.push('Register the canonical repo via register_repository');
           if (staleCloneCount > 0) actions.push('Clean up ' + staleCloneCount + ' stale clone(s) (rm -rf .tmp-* in workspace root)');
           if (worktreeDirty) actions.push('Commit or stash dirty worktree changes');

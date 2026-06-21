@@ -305,7 +305,7 @@ export function runtimeStatusCard(data) {
   if (data.worktree_dirty) {
     diagnostics.push({ severity: 'warning', message: `Dirty worktree (${(data.dirty_paths || []).length} file(s))` });
   }
-  if (data.runtime_env_loaded === false) {
+  if (data.runtime_env_loaded === false && !data.runtime_env_configured) {
     diagnostics.push({ severity: 'warning', message: 'No runtime.env loaded' });
   }
 
@@ -325,7 +325,7 @@ export function gptworkDoctorCard(data) {
     formatKeyValue('started', data.started_at),
     formatKeyValue('running commit', data.running_commit ? data.running_commit.slice(0, 12) : '-'),
     formatKeyValue('worktree', data.worktree_dirty ? 'dirty' : 'clean'),
-    formatKeyValue('env file', data.runtime_env_loaded ? 'loaded' : 'missing'),
+    formatKeyValue('env file', data.runtime_env_loaded ? 'loaded' : (data.runtime_env_configured ? 'process.env' : 'missing')),
     formatKeyValue('registry repos', data.repository_registry_count ?? 0),
     formatKeyValue('stale clones', data.stale_clone_count ?? 0),
     formatKeyValue('GitHub sync', data.github_api_sync_enabled ? 'enabled' : 'disabled'),
@@ -341,7 +341,7 @@ export function gptworkDoctorCard(data) {
   if (data.stale_clone_count > 0) {
     diagnostics.push({ severity: 'warning', message: `${data.stale_clone_count} stale clone(s) in workspace root` });
   }
-  if (!data.runtime_env_loaded) {
+  if (!data.runtime_env_loaded && !data.runtime_env_configured) {
     diagnostics.push({ severity: 'warning', message: 'No runtime.env -- set GPTWORK_* variables or create runtime.env' });
   }
   if (!data.repository_registry_has_canonical_repo) {

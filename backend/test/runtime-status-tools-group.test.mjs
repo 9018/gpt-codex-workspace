@@ -192,7 +192,7 @@ test('runtime_status handler returns expected shape keys', async () => {
     'defaultWorkspaceRoot', 'codex_exec_timeout', 'shell_timeout',
     'default_repo', 'default_branch',
     'runtime_env_file_path', 'runtime_env_file_exists',
-    'runtime_env_loaded', 'runtime_env_keys_loaded',
+    'runtime_env_loaded', 'runtime_env_configured', 'runtime_env_keys_loaded',
     'state_path', 'state_path_inside_repo',
     'worktree_dirty', 'dirty_paths', 'restart_markers',
     'config_sources', 'bark', 'github', 'repo_locks', 'worker',
@@ -247,7 +247,7 @@ test('gptwork_doctor handler returns expected shape keys', async () => {
   const result = await tools.gptwork_doctor.handler({});
   const expectedKeys = [
     'pid', 'started_at', 'running_commit',
-    'runtime_env_loaded', 'runtime_env_file_path',
+    'runtime_env_loaded', 'runtime_env_configured', 'runtime_env_file_path',
     'workspace_root', 'default_repo', 'default_branch', 'default_repo_path',
     'repository_registry_count', 'repository_registry_has_canonical_repo',
     'stale_clone_count', 'worktree_dirty', 'dirty_paths',
