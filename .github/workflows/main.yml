@@ -23,10 +23,11 @@ jobs:
             const labels = new Set((issue.labels || []).map((label) => label.name));
             const labelsToAdd = [];
 
-            if (/^\[GPTWork\s+Task\]/i.test(title) && !labels.has('gptwork-task')) {
+            // Match both "[GPTWork Task]" and "[Task]" prefixes (with optional status suffix)
+            if (/^\[(?:GPTWork\s+)?Task\]/i.test(title) && !labels.has('gptwork-task')) {
               labelsToAdd.push('gptwork-task');
             }
-            if (/^\[GPTWork\s+Question\]/i.test(title) && !labels.has('gptwork-question')) {
+            if (/^\[(?:GPTWork\s+)?Question\]/i.test(title) && !labels.has('gptwork-question')) {
               labelsToAdd.push('gptwork-question');
             }
 

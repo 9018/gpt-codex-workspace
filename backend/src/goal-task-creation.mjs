@@ -4,6 +4,7 @@ import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 import { ensureGoalState } from "./task-lifecycle.mjs";
 import { ensureTaskGoal } from "./goal-task-ensure.mjs";
 import { normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
+import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 
 export async function createTask(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
@@ -33,5 +34,9 @@ export async function createTask(store, config, args, context = defaultTokenCont
   await store.save();
   if (isCodexSessionInventoryTaskKind(task)) return { task };
   const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: Boolean(task.assignee) });
+  // Send created notification for newly created/assigned Codex task.
+  // ensureTaskGoal calls createGoal with skip_created_notification, so we
+  // must fire the notification from here for the original task.
+  if (task.assignee === "codex") notifyCreatedTask(task);
   return { task: linked.task, goal: linked.goal, conversation: linked.conversation, memories: linked.memories, workspace_files: linked.workspace_files };
 }

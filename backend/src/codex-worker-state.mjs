@@ -93,3 +93,63 @@ export function workerStatusSnapshot(workerState) {
     last_error: workerState.last_error,
   };
 }
+
+/**
+ * Compute worker health phase from worker state.
+ * Phases: disabled / idle / running / overdue / stalled
+ * Includes diagnostic timestamps and human-readable reason.
+ *
+ * @param {object} workerState
+ * @returns {{ phase: string, last_tick_age_ms: number|null, current_tick_duration_ms: number|null, next_tick_overdue_ms: number|null, reason: string }}
+ */
+export function computeWorkerHealth(workerState) {
+  if (!workerState.enabled) {
+    return { phase: 'disabled', last_tick_age_ms: null, current_tick_duration_ms: null, next_tick_overdue_ms: null, reason: 'worker not enabled' };
+  }
+
+  const now = Date.now();
+  const lastTickFinishedAt = workerState.last_tick_finished_at
+    ? new Date(workerState.last_tick_finished_at).getTime() : null;
+  const lastTickStartedAt = workerState.last_tick_started_at
+    ? new Date(workerState.last_tick_started_at).getTime() : null;
+  const nextTickDueAt = workerState.next_tick_due_at
+    ? new Date(workerState.next_tick_due_at).getTime() : null;
+
+  const lastTickAgeMs = lastTickFinishedAt !== null ? Math.max(0, now - lastTickFinishedAt) : null;
+  const currentTickDurationMs = (workerState.running && lastTickStartedAt !== null) ? Math.max(0, now - lastTickStartedAt) : null;
+  const nextTickOverdueMs = nextTickDueAt !== null ? Math.max(0, now - nextTickDueAt) : null;
+
+  const intervalMs = workerState.current_interval_ms || workerState.interval_ms || 5000;
+
+  if (workerState.running && currentTickDurationMs !== null) {
+    const reason = `tick running for ${Math.round(currentTickDurationMs / 1000)}s`;
+    return { phase: 'running', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: currentTickDurationMs, next_tick_overdue_ms: nextTickOverdueMs, reason };
+  }
+
+  if (lastTickFinishedAt === null && !workerState.started_at) {
+    return { phase: 'idle', last_tick_age_ms: null, current_tick_duration_ms: null, next_tick_overdue_ms: null, reason: 'never started' };
+  }
+
+  if (lastTickAgeMs !== null && lastTickAgeMs > intervalMs * 6) {
+    return { phase: 'stalled', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: `last tick ${Math.round(lastTickAgeMs / 1000)}s ago (>${intervalMs * 6}ms)` };
+  }
+
+  if (nextTickOverdueMs !== null && nextTickOverdueMs > intervalMs * 3) {
+    return { phase: 'overdue', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: `next tick overdue by ${Math.round(nextTickOverdueMs / 1000)}s` };
+  }
+
+  return { phase: 'idle', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: 'waiting for next tick' };
+}
+
+/**
+ * Extended snapshot that includes worker health.
+ *
+ * @param {object} workerState
+ * @returns {object}
+ */
+export function workerStatusExtendedSnapshot(workerState) {
+  return {
+    ...workerStatusSnapshot(workerState),
+    health: computeWorkerHealth(workerState),
+  };
+}

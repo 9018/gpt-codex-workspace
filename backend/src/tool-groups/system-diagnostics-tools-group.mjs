@@ -12,7 +12,7 @@
  *   workerState - worker state tracking object
  *   collectWorkerQueueCounts - function to collect queue counts
  */
-import { workerStatusSnapshot } from "../codex-worker-state.mjs";
+import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
 
 export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }) {
   return {
@@ -31,7 +31,7 @@ export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, w
     test_bark_notification: tool("Send a test Bark notification and return safe diagnostic result without exposing endpoint/key values.", schema({}), async () => bark ? bark.testSend() : ({ ok: false, attempted_at: null, response_code: null, response_message: null, source: "unknown", group: "gptwork", endpoint_kind: "none", error_short: "bark not initialized" })),
     worker_status: tool("Return Codex worker status: enabled, running, last tick timing, queue counts (assigned, queued, running, waiting_for_lock, waiting_for_review, completed, failed).", schema({}), async () => {
       const queue = await collectWorkerQueueCounts(store);
-      return { ...workerStatusSnapshot(workerState), queue, queues: queue };
+      return { ...workerStatusExtendedSnapshot(workerState), queue, queues: queue };
     }),
   };
 }

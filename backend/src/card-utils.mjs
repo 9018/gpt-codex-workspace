@@ -14,7 +14,7 @@ export {
   truncateVerboseOutput,
 } from "./card-format-utils.mjs";
 
-export { runtimeStatusCard, gptworkDoctorCard } from "./card-runtime-cards.mjs";
+export { runtimeStatusCard, workerStatusCard, gptworkDoctorCard } from "./card-runtime-cards.mjs";
 export { getTaskCard, createEncodedGoalCard } from "./card-task-cards.mjs";
 export { contextStatusCard, previewCodexContextCard, goalContextCard } from "./card-context-cards.mjs";
 export { githubStatusCard, gitRemoteDiffCard } from "./card-github-cards.mjs";

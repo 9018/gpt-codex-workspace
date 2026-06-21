@@ -18,16 +18,28 @@ export async function processGeneralTask(store, config, task, context, github) {
     item.logs.push({ time: now, message: `[worker] started: ${task.title}` });
   });
 
-  const workspace = await selectWorkspace(store, task.workspace_id, context);
-  if (workspace.type !== "hosted") {
-    await updateTask(store, task.id, (item) => {
-      item.logs.push({ time: new Date().toISOString(), message: `[worker] skipped: unsupported workspace type ${workspace.type}` });
-    });
-    return { task_id: task.id, status: task.status, skipped: true, reason: `unsupported workspace type: ${workspace.type}` };
-  }
+  // Ensure goal early so we can append transcript messages for non-hosted workspaces
   const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: true });
   const goal = linked.goal;
-  const workspaceFiles = linked.workspace_files || goalWorkspaceFiles(goal);
+  const workspaceFiles = linked.workspace_files || (goal ? goalWorkspaceFiles(goal) : { dir: '.gptwork/goals/unknown' });
+
+  const workspace = await selectWorkspace(store, task.workspace_id, context);
+  if (workspace.type !== "hosted") {
+    const msg = `[worker] paused: unsupported workspace type "${workspace.type}" — moving to waiting_for_review. This workspace type does not support builder/deploy/admin execution.`;
+    await updateTask(store, task.id, (item) => {
+      item.status = "waiting_for_review";
+      item.logs.push({ time: new Date().toISOString(), message: msg });
+    });
+    if (goal) {
+      await appendGoalMessage(store, config, {
+        goal_id: goal.id,
+        role: "codex",
+        content: msg
+      }, context);
+    }
+    return { task_id: task.id, status: "waiting_for_review", skipped: true, transitioned: true, progressed: true, reason: `unsupported workspace type: ${workspace.type}` };
+  }
+
   if (goal) {
     await appendGoalMessage(store, config, {
       goal_id: goal.id,

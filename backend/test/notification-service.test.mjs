@@ -129,3 +129,39 @@ test("notifyCreatedTaskIfNeeded catches errors from barkNotifier.send gracefully
   assert.equal(task.notifications[0].ok, false);
   assert.equal(task.notifications[0].channel, "bark");
 });
+
+// ================================================================
+// Tests: global notifier pattern (setCreatedTaskNotifier / notifyCreatedTask)
+// ================================================================
+
+test("notifyCreatedTask calls the global notifier when set", async () => {
+  const { setCreatedTaskNotifier, notifyCreatedTask } = await import("../src/goal-task-notifier.mjs");
+  let called = false;
+  let calledTask = null;
+  setCreatedTaskNotifier((task) => { called = true; calledTask = task; });
+  const taskObj = { id: "task_test", status: "assigned", assignee: "codex" };
+  notifyCreatedTask(taskObj);
+  assert.equal(called, true, "global notifier should be called");
+  assert.equal(calledTask, taskObj, "task should be passed through");
+  // Clean up
+  setCreatedTaskNotifier(null);
+});
+
+test("notifyCreatedTask does not throw when no notifier is set", async () => {
+  const { setCreatedTaskNotifier, notifyCreatedTask } = await import("../src/goal-task-notifier.mjs");
+  setCreatedTaskNotifier(null);
+  const taskObj = { id: "task_test", status: "assigned" };
+  notifyCreatedTask(taskObj); // Should not throw
+});
+
+test("setCreatedTaskNotifier can be set and cleared", async () => {
+  const { setCreatedTaskNotifier, notifyCreatedTask } = await import("../src/goal-task-notifier.mjs");
+  let callCount = 0;
+  setCreatedTaskNotifier(() => { callCount++; });
+  notifyCreatedTask({ id: "t1" });
+  assert.equal(callCount, 1);
+  // Clear
+  setCreatedTaskNotifier(null);
+  notifyCreatedTask({ id: "t2" });
+  assert.equal(callCount, 1, "should not increment after clearing");
+});

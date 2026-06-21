@@ -11,13 +11,17 @@ import {
 
 export function getWorkerProgressCount(result = {}) {
   const tasks = Array.isArray(result.tasks) ? result.tasks : [];
+  // Use explicit progressed when available (including 0) to avoid double-counting
   const progressed = Number(result.progressed);
-  if (Number.isFinite(progressed) && progressed > 0) return progressed;
+  if (Number.isFinite(progressed)) return progressed;
 
-  const explicit =
-    Number(result.transitioned || 0) +
-    Number(result.completed || 0) +
-    Number(result.failed || 0);
+  // Fallback: use max() instead of sum() so a task that is both transitioned
+  // and completed does not get counted twice in the same tick.
+  const explicit = Math.max(
+    Number(result.transitioned || 0),
+    Number(result.completed || 0),
+    Number(result.failed || 0)
+  );
   if (explicit > 0) return explicit;
   return tasks.filter((task) =>
     task && (
