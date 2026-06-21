@@ -11,8 +11,10 @@ import {
 
 export function getWorkerProgressCount(result = {}) {
   const tasks = Array.isArray(result.tasks) ? result.tasks : [];
+  const progressed = Number(result.progressed);
+  if (Number.isFinite(progressed) && progressed > 0) return progressed;
+
   const explicit =
-    Number(result.progressed || 0) +
     Number(result.transitioned || 0) +
     Number(result.completed || 0) +
     Number(result.failed || 0);
