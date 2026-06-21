@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 
 const ROLES = new Set(["planner", "architect", "implementer", "tester", "reviewer", "finalizer"]);
-const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review"]);
+const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
 function now() {
   return new Date().toISOString();
@@ -41,7 +41,7 @@ export async function createAgentRun(store, args = {}, context = {}) {
     return { agent_run: agentRun };
   });
   await context.eventLogger?.append("agent_run.created", { agent_run_id: result.agent_run.id, goal_id: result.agent_run.goal_id, task_id: result.agent_run.task_id, role: result.agent_run.role, agent: result.agent_run.agent });
-  await context.hookBus?.emit("onAgentRunStarted", result);
+  await context.hookBus?.emit("onAgentRunStarted", { agent_run: result.agent_run });
   return result;
 }
 
@@ -61,8 +61,8 @@ export async function getAgentRun(store, args = {}) {
   return { agent_run: agentRun };
 }
 
-export async function appendAgentEvent(store, args = {}) {
-  return store.mutate((state) => {
+export async function appendAgentEvent(store, args = {}, context = {}) {
+  return store.mutate(async (state) => {
     const agentRun = ensureAgentRuns(state).find((run) => run.id === args.agent_run_id);
     if (!agentRun) throw new Error(`agent run not found: ${args.agent_run_id}`);
     const event = {
@@ -74,6 +74,8 @@ export async function appendAgentEvent(store, args = {}) {
     if (!Array.isArray(agentRun.events)) agentRun.events = [];
     agentRun.events.push(event);
     agentRun.updated_at = event.created_at;
+    await context.eventLogger?.append("agent_run.event", { agent_run_id: agentRun.id, type: event.type, message: event.message });
+    await context.hookBus?.emit("onAgentRunEvent", { agent_run: agentRun, event });
     return { agent_run: agentRun, event };
   });
 }
@@ -91,16 +93,46 @@ export async function completeAgentRun(store, args = {}, context = {}) {
     return { agent_run: agentRun };
   });
   await context.eventLogger?.append("agent_run.completed", { agent_run_id: result.agent_run.id, status: result.agent_run.status, summary: result.agent_run.summary });
-  await context.hookBus?.emit("onAgentRunCompleted", result);
+  await context.hookBus?.emit("onAgentRunCompleted", { agent_run: result.agent_run });
   return result;
 }
 
-export async function runAgentPipeline(store, args = {}) {
+export async function runAgentPipeline(store, args = {}, context = {}) {
+  const pipelineId = `pipeline_${randomUUID()}`;
   const roles = Array.isArray(args.roles) && args.roles.length ? args.roles : ["planner", "implementer", "tester", "reviewer", "finalizer"];
+  const pipeline = {
+    id: pipelineId,
+    goal_id: args.goal_id || "",
+    task_id: args.task_id || "",
+    roles,
+    review_gate_after: args.review_gate_after || "reviewer",
+    execution_order: args.execution_order || roles,
+    status: "created",
+    created_at: now(),
+  };
   const created = [];
   for (const role of roles) {
-    const result = await createAgentRun(store, { ...args, role, status: "queued" });
+    const result = await createAgentRun(store, { ...args, role, status: "queued" }, context);
     created.push(result.agent_run);
   }
-  return { agent_runs: created, count: created.length };
+  pipeline.agent_run_ids = created.map((r) => r.id);
+  pipeline.updated_at = now();
+  await context.eventLogger?.append("pipeline.created", { pipeline_id: pipelineId, goal_id: pipeline.goal_id, task_id: pipeline.task_id, roles, agent_run_ids: pipeline.agent_run_ids });
+  return { pipeline, agent_runs: created, count: created.length };
+}
+
+export async function cancelAgentRun(store, args = {}, context = {}) {
+  const result = await store.mutate((state) => {
+    const agentRun = ensureAgentRuns(state).find((run) => run.id === args.agent_run_id);
+    if (!agentRun) throw new Error(`agent run not found: ${args.agent_run_id}`);
+    agentRun.status = "cancelled";
+    agentRun.summary = args.reason || "cancelled";
+    agentRun.updated_at = now();
+    if (!Array.isArray(agentRun.events)) agentRun.events = [];
+    agentRun.events.push({ type: "cancelled", message: agentRun.summary, data: {}, created_at: agentRun.updated_at });
+    return { agent_run: agentRun };
+  });
+  await context.eventLogger?.append("agent_run.cancelled", { agent_run_id: result.agent_run.id, reason: args.reason || "" });
+  await context.hookBus?.emit("onAgentRunCancelled", { agent_run: result.agent_run });
+  return result;
 }

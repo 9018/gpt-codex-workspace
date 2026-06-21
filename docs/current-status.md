@@ -188,7 +188,7 @@ Key verification values after a healthy deployment:
 
 ```
 defaultWorkspaceRoot=/home/a9017/mcp/workspace
-codex_exec_timeout=2400
+codex_exec_timeout=3600
 default_repo=9018/gpt-codex-workspace
 default_repo_path=/home/a9017/mcp/workspace/gpt-codex-workspace
 runtime_env_loaded=true
@@ -315,10 +315,10 @@ Override with:
 GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
 ```
 
-Codex execution timeout defaults to 2400 seconds. Override with:
+Codex execution timeout defaults to 3600 seconds. Override with:
 
 ```bash
-GPTWORK_CODEX_EXEC_TIMEOUT=2400
+GPTWORK_CODEX_EXEC_TIMEOUT=3600
 ```
 
 Zip operations use Python. Override if needed:

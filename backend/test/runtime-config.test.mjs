@@ -24,10 +24,10 @@ async function makeEnvFile(content) {
 // Tests: buildRuntimeConfig defaults
 // ================================================================
 
-test("buildRuntimeConfig defaults codexExecTimeout to 2400", () => {
+test("buildRuntimeConfig defaults codexExecTimeout to 3600", () => {
   clearGptWorkVars();
   const { config, sources } = buildRuntimeConfig("/tmp/test-root");
-  assert.equal(config.codexExecTimeout, 2400);
+  assert.equal(config.codexExecTimeout, 3600);
   assert.equal(sources.codexExecTimeout, "default");
 });
 
@@ -135,7 +135,7 @@ test("buildRuntimeConfig process.env wins over runtime.env, runtime.env wins ove
 
   // No runtime env file
   const r3 = buildRuntimeConfig("/tmp/nonexistent");
-  assert.equal(r3.config.codexExecTimeout, 2400);
+  assert.equal(r3.config.codexExecTimeout, 3600);
   assert.equal(r3.sources.codexExecTimeout, "default");
 });
 

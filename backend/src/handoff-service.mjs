@@ -4,7 +4,8 @@ import { execFileSync } from "node:child_process";
 import { join, resolve } from "node:path";
 
 function handoffDir(config) {
-  return join(config.defaultWorkspaceRoot, ".gptwork/handoff");
+  const root = config.defaultWorkspaceRoot || config.workspaceRoot;
+  return join(root, ".gptwork/handoff");
 }
 
 export function handoffPaths(config) {
@@ -60,6 +61,8 @@ export async function showChanges(args = {}, config = {}) {
     status: line.slice(0, 2).trim(),
     path: line.slice(3).trim(),
   }));
+  const staged = changedFiles.filter((f) => f.status === "M" || f.status === "A" || f.status === "D");
+  const unstaged = changedFiles.filter((f) => f.status !== "M" && f.status !== "A" && f.status !== "D");
   const diff = git(["diff", "--", "."], repo);
   const excerptLimit = Number(args.max_diff_bytes) || 12000;
   const summary = `${changedFiles.length} changed file${changedFiles.length === 1 ? "" : "s"}`;
@@ -67,7 +70,10 @@ export async function showChanges(args = {}, config = {}) {
     repo,
     summary,
     changed_files: changedFiles,
+    staged_count: staged.length,
+    unstaged_count: unstaged.length,
     diff_excerpt: diff.slice(0, excerptLimit),
     diff_truncated: diff.length > excerptLimit,
+    artifact_path: join(repo, ".gptwork/handoff"),
   };
 }

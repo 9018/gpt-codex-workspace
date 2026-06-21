@@ -1,14 +1,24 @@
-export function createGoalToolsGroup({ tool, schema, config, store, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }) {
+export function createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }) {
   return {
     create_goal: tool(
       'Create a shared goal from a ChatGPT-written goal prompt. Use this when ChatGPT turns the user\'s request into a Codex-executable goal. Stores the raw request, goal prompt, conversation messages, durable memories, workspace-visible context files, and optionally creates an assigned Codex task linked to the same context.',
       schema({ user_request: 'string', goal_prompt: 'string', context_summary: 'string', project_id: 'string', workspace_id: 'string', mode: 'string', assign_to_codex: 'boolean', title: 'string', messages: 'array', memories: 'array', payload: 'object', payload_base64: 'string', preview_text: 'string', bundles: 'array' }, ['user_request', 'goal_prompt']),
-      async (args, context) => createGoal(store, config, args, context),
+      async (args, context) => {
+        const result = await createGoal(store, config, args, context);
+        await eventLogger?.append("goal.created", { goal_id: result.goal.id, title: result.goal.title });
+        await hookBus?.emit("onGoalCreated", { goal: result.goal });
+        return result;
+      },
     ),
     create_encoded_goal: tool(
       'Create a shared Codex goal from a GPTChat preview plus base64-encoded JSON payload. The server decodes the payload, stores readable goal/context/transcript files, assigns Codex when requested, and can wait briefly for execution status with wait_ms.',
       schema({ preview_text: 'string', payload_base64: 'string', assign_to_codex: 'boolean', wait_ms: 'integer' }, ['preview_text', 'payload_base64']),
-      async (args, context) => createEncodedGoal(store, config, args, context),
+      async (args, context) => {
+        const result = await createEncodedGoal(store, config, args, context);
+        await eventLogger?.append("goal.created", { goal_id: result.goal.id, title: result.goal.title, encoded: true });
+        await hookBus?.emit("onGoalCreated", { goal: result.goal, encoded: true });
+        return result;
+      },
     ),
     list_goals: tool(
       'List shared GPTWork goals for ChatGPT and Codex. Codex should use this to discover assigned or open goal prompts before starting work.',

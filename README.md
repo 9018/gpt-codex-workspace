@@ -586,7 +586,7 @@ Key env vars and their defaults:
 | `GPTWORK_PORT` | `8787` | Server port |
 | `GPTWORK_WORKSPACE_ROOT` | `./data/workspaces/default` | Root for hosted workspaces |
 | `GPTWORK_STATE_PATH` | `<workspace>/.gptwork/state.json` | Server state file |
-| `GPTWORK_CODEX_EXEC_TIMEOUT` | `2400` | Codex execution timeout (seconds) |
+| `GPTWORK_CODEX_EXEC_TIMEOUT` | `3600` | Codex execution timeout (seconds) |
 | `GPTWORK_CODEX_EXEC_ARGS` | `--yolo --skip-git-repo-check` | Args passed to codex exec |
 | `GPTWORK_DEFAULT_REPO` | (empty) | Default owner/repo |
 | `GPTWORK_DEFAULT_BRANCH` | `main` | Default git branch |
@@ -622,7 +622,7 @@ Key verification values after a healthy deployment:
 
 ```
 defaultWorkspaceRoot=/home/a9017/mcp/workspace
-codex_exec_timeout=2400
+codex_exec_timeout=3600
 default_repo=9018/gpt-codex-workspace
 default_repo_path=/home/a9017/mcp/workspace/gpt-codex-workspace
 runtime_env_loaded=true

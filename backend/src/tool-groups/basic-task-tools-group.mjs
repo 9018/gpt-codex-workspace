@@ -6,7 +6,7 @@ import { findTask, updateTask, normalizeLegacyModes } from '../task-lifecycle.mj
  * Dependencies (createTask, github) are passed in to avoid circular imports
  * from gptwork-server.mjs.
  */
-export function createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github }) {
+export function createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github, eventLogger, hookBus }) {
   return {
     create_task: tool(
       "Create a new project task. ChatGPT uses this to tell Codex what to do. Assign it to Codex and Codex will execute it. Tasks sync to GitHub Issues if configured. For listing Codex session files, use list_codex_sessions_metadata or create_codex_session_inventory_task instead of a free-text task.",
@@ -14,6 +14,8 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       async (args, context) => {
         const result = await createTask(store, config, args, context);
         github.syncTask(result.task).catch(() => {});
+        await eventLogger?.append("task.created", { task_id: result.task.id, title: result.task.title, assignee: result.task.assignee });
+        await hookBus?.emit("onTaskCreated", { task: result.task });
         return result;
       },
     ),
@@ -40,6 +42,8 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       async ({ task_id, status }) => {
         const result = await updateTask(store, task_id, (task) => { task.status = status; });
         github.syncTask(result.task).catch(() => {});
+        await eventLogger?.append("task.status_changed", { task_id, status });
+        await hookBus?.emit("onTaskStatusChanged", { task: result.task });
         return result;
       },
     ),

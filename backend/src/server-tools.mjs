@@ -1,4 +1,5 @@
 import { schema } from "./mcp-tooling.mjs";
+import { readEvents } from "./event-log-service.mjs";
 import { createTool } from "./tool-registry.mjs";
 import { getRepoLockSummary, listRepoLocks } from "./repo-lock.mjs";
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
@@ -92,10 +93,12 @@ const TOOL_MODE_ALLOWLISTS = {
     "get_agent_run",
     "append_agent_event",
     "complete_agent_run",
+    "cancel_agent_run",
     "run_agent_pipeline",
     "handoff_to_agent",
     "read_handoff",
     "show_changes",
+    "read_events",
   ]),
   operator: new Set([
     "health_check",
@@ -152,9 +155,12 @@ const TOOL_MODE_ALLOWLISTS = {
     "get_agent_run",
     "append_agent_event",
     "complete_agent_run",
+    "cancel_agent_run",
+    "run_agent_pipeline",
     "handoff_to_agent",
     "read_handoff",
     "show_changes",
+    "read_events",
   ]),
 };
 
@@ -182,11 +188,11 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
-    ...createGoalToolsGroup({ tool, schema, config, store, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
+    ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
     ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),
     ...createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }),
 
-    ...createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github }),
+    ...createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github, eventLogger, hookBus }),
     ...createExecutionToolsGroup({ tool, schema, config, store, github, registry,
       normalizeAssignedTaskMode,
       ensureTaskGoal,
@@ -194,7 +200,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
       runAssignedCodexTasks: (store, config, github, args, context) => runAssignedCodexTasks(store, config, github, args, context, { processGeneralTask }),
     }),
     ...createSessionInventoryToolsGroup({ tool, schema, config, store, github, createTask }),
-    ...createTaskCompletionToolsGroup({ tool, schema, config, store, github }),
+    ...createTaskCompletionToolsGroup({ tool, schema, config, store, github, eventLogger, hookBus }),
     ...createRestartToolsGroup({ tool, schema, config, store }),
 
     ...createChatGptRequestToolsGroup({ tool, schema, config, store, github }),
@@ -214,6 +220,17 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createGitRemoteToolsGroup({ tool, schema, registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote }),
     ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
     ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
+
+    read_events: tool({
+      name: "read_events",
+      description: "Read recent event log entries for monitoring and debugging.",
+      inputSchema: schema({ date: "string", limit: "integer" }),
+      ...{ modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["system", "debug"] },
+      handler: async ({ date, limit }) => {
+        const events = await readEvents({ workspaceRoot: config.defaultWorkspaceRoot, date: date ? new Date(date) : undefined, limit: limit ? Number(limit) : 100 });
+        return { events, count: events.length };
+      },
+    }),
   };
   return tools;
 }

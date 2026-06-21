@@ -79,7 +79,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     toolMode: _get("GPTWORK_TOOL_MODE", "standard"),
 
     // Codex
-    codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 2400),
+    codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 3600),
     codexFirstOutputTimeout: _getNum("GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT", 180),
     codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
     codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),

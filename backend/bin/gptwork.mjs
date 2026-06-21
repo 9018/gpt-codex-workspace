@@ -5,6 +5,7 @@ import { spawn } from "node:child_process";
 import { buildRuntimeConfig } from "../src/runtime-config.mjs";
 import { StateStore } from "../src/state-store.mjs";
 import { collectWorkerQueueCounts } from "../src/worker-queue-counts.mjs";
+import { handoffToAgent, readHandoff, handoffPaths } from "../src/handoff-service.mjs";
 
 const args = process.argv.slice(2);
 
@@ -17,7 +18,8 @@ function usage() {
   settings show
   settings set KEY VALUE
   logs
-  watch-handoff --dry-run [--agent <name>] [--command <cmd>]`;
+  watch-handoff --dry-run [--agent <name>] [--command <cmd>]
+  watch-handoff --once [--agent <name>] [--command <cmd>]`;
 }
 
 function workspaceRoot() {
@@ -140,6 +142,67 @@ function startServer() {
   child.on("exit", (code) => process.exit(code ?? 0));
 }
 
+async function handleWatchHandoff() {
+  const once = args.includes("--once");
+  const dryRun = args.includes("--dry-run");
+  const agentIdx = args.indexOf("--agent");
+  const agent = agentIdx >= 0 ? args[agentIdx + 1] : "codex";
+  const cmdIdx = args.indexOf("--command");
+  const command = cmdIdx >= 0 ? args[cmdIdx + 1] : "";
+  const rc = buildRuntimeConfig(workspaceRoot(), process.env.GPTWORK_RUNTIME_ENV_FILE);
+  const config = rc.config;
+  const paths = handoffPaths(config);
+  const planFile = paths.plan_file;
+
+  console.log("GPTWork Handoff Watcher");
+  console.log(`agent: ${agent}`);
+  console.log(`plan: ${planFile}`);
+  console.log(`dry_run: ${dryRun ? "true" : "false"}`);
+  console.log(`once: ${once ? "true" : "false"}`);
+  console.log(`plan_exists: ${existsSync(planFile) ? "true" : "false"}`);
+
+  if (command) {
+    console.log(`command: ${command}`);
+  }
+
+  if (dryRun) {
+    const handoff = await readHandoff(config);
+    console.log(`status: ${handoff.status.status}`);
+    if (handoff.plan) {
+      console.log(`plan_preview: ${handoff.plan.slice(0, 300)}...`);
+    }
+    return;
+  }
+
+  if (once) {
+    mkdirSync(dirname(paths.status_file), { recursive: true });
+    console.log("Mode: once");
+    const handoff = await readHandoff(config);
+    console.log(`status: ${handoff.status.status}`);
+    if (handoff.plan) {
+      console.log(`plan_preview: ${handoff.plan.slice(0, 300)}...`);
+    }
+
+    // Write status update
+    const statusUpdate = {
+      agent,
+      command: command || "",
+      status: "processing",
+      read_at: new Date().toISOString(),
+    };
+    const statusPath = paths.status_file;
+    await writeFileSync(statusPath, JSON.stringify(statusUpdate, null, 2), "utf8");
+    console.log(`status written: ${statusPath}`);
+
+    // Append to execution log
+    const logLine = JSON.stringify({ event: "handoff_processed", ...statusUpdate }) + "\n";
+    await writeFileSync(paths.log_file, logLine, { flag: "a" });
+    console.log(`log entry written: ${paths.log_file}`);
+
+    console.log("Handoff processed (once mode). No external commands executed.");
+  }
+}
+
 async function main() {
   const [command, subcommand, ...rest] = args;
   if (!command || command === "--help" || command === "help") {
@@ -169,16 +232,7 @@ async function main() {
     return;
   }
   if (command === "watch-handoff") {
-    const dryRun = args.includes("--dry-run");
-    const agentIdx = args.indexOf("--agent");
-    const agent = agentIdx >= 0 ? args[agentIdx + 1] : "codex";
-    const planFile = join(workspaceRoot(), ".gptwork/handoff/current-plan.md");
-    console.log("GPTWork Handoff Watcher");
-    console.log(`agent: ${agent}`);
-    console.log(`plan: ${planFile}`);
-    console.log(`dry_run: ${dryRun ? "true" : "false"}`);
-    console.log(`plan_exists: ${existsSync(planFile) ? "true" : "false"}`);
-    return;
+    return handleWatchHandoff();
   }
   throw new Error(`Unknown command: ${args.join(" ")}\n${usage()}`);
 }

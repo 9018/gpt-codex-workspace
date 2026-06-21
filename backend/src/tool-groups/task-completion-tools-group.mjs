@@ -4,13 +4,12 @@ import { updateTask } from '../task-lifecycle.mjs';
  * Factory for task completion and review MCP tool registration.
  * Dependencies are passed in to avoid circular imports from gptwork-server.mjs.
  */
-export function createTaskCompletionToolsGroup({ tool, schema, store, github }) {
+export function createTaskCompletionToolsGroup({ tool, schema, store, github, eventLogger, hookBus }) {
   return {
     complete_task: tool(
       "Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.",
       schema({ task_id: "string", summary: "string", admin_override: "boolean" }, ["task_id"]),
       async ({ task_id, summary = "", admin_override = false }) => {
-        // Check for linked goal with required subagent policy (P0.2)
         let targetStatus = "completed";
         let resultFields = { summary, completed_at: new Date().toISOString() };
 
@@ -47,6 +46,8 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github }) 
           task.result = resultFields;
         });
         github.syncTask(result.task).catch(() => {});
+        await eventLogger?.append("task.completed", { task_id, status: targetStatus, summary });
+        await hookBus?.emit("onTaskCompleted", { task: result.task });
         return result;
       },
     ),

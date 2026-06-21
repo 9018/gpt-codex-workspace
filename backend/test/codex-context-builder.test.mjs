@@ -260,7 +260,7 @@ test("buildCodexContext with task only (no goal, no workspace, no repo)", async 
     config: {
       defaultWorkspaceRoot: "/home/workspace",
       statePath: "/home/workspace/.gptwork/state.json",
-      codexExecTimeout: 2400,
+      codexExecTimeout: 3600,
       codexExecArgs: "--yolo",
     },
   });
@@ -318,7 +318,7 @@ test("buildCodexContext with repo record and status", async () => {
     config: {
       defaultWorkspaceRoot: "/tmp/workspace",
       statePath: "/tmp/workspace/.gptwork/state.json",
-      codexExecTimeout: 2400,
+      codexExecTimeout: 3600,
       defaultRepoPath: "/tmp/canonical-repo",
     },
   });

@@ -59,7 +59,7 @@ No inline `tool(` registrations remain in `gptwork-server.mjs`; tool registratio
 
 ## Failure History Notes
 
-- P4.3e previously attempted a one-shot `processGeneralTask` move, timed out after 2400s, and left syntax-invalid dirty code.
+- P4.3e previously attempted a one-shot `processGeneralTask` move, timed out after 3600s, and left syntax-invalid dirty code.
 - Current refactor avoided that path by first extracting stable lifecycle modules, then moving the reduced general-task processor into `task-general-processor.mjs` with focused regression tests.
 - Timeout recovery rule remains: inspect diff, run syntax import/tests, and do not continue from broken dirty files.
 
