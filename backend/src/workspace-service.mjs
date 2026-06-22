@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { createWorkspaceGuard } from "./workspace-guard.mjs";
 import { runLocalShell } from "./local-shell-runner.mjs";
 import { runZipCommand } from "./workspace-zip-runner.mjs";
 import { resolvePath, workspaceUploadBase64 } from "./workspace-file-service.mjs";
@@ -26,6 +27,9 @@ export { workspaceSearch } from "./workspace-search-service.mjs";
 
 export async function workspaceShellExec(store, config, { command, cwd = ".", timeout, max_output_bytes, workspace_id }, context) {
   requireScope(context, "shell:exec");
+  // Apply shell mode guard checks
+  const guard = createWorkspaceGuard(config);
+  guard.assertShellAllowed(command, cwd);
   const workspace = await selectWorkspace(store, workspace_id, context);
   const sshCwd = cwd === "." ? "." : cwd.replace(/\\/g, "/");
   if (workspace.type === "ssh") return runSshExec(workspace, command, sshCwd, timeout || config.shellTimeout, max_output_bytes || config.maxShellOutputBytes);

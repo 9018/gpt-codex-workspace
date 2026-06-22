@@ -1,5 +1,6 @@
 import { cp, mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { createWorkspaceGuard, matchesBlockedGlob } from "./workspace-guard.mjs";
 import { ensureParent, resolveWorkspacePath } from "./path-utils.mjs";
 import { selectWorkspace, requireScope } from "./auth-context.mjs";
 import { sha256 } from "./mcp-tooling.mjs";
@@ -9,7 +10,7 @@ export async function writeWorkspaceTextInternal(store, config, workspaceId, pat
   return workspaceWriteText(store, config, { path, content, overwrite: true, workspace_id: workspaceId }, context);
 }
 
-export async function resolvePath(store, config, args, context) {
+export async function resolvePath(store, config, args, context, operation = "read") {
   const workspace = await selectWorkspace(store, args.workspace_id, context);
   if (workspace.type === "ssh") {
     const base = workspace.root.replace(/\/+$/, "");
@@ -17,8 +18,13 @@ export async function resolvePath(store, config, args, context) {
     const safePath = (base + "/" + (target === "." ? "" : target)).replace(/\/+/g, "/");
     if (!safePath.startsWith(base)) throw new Error("path is outside workspace root: " + target);
     return { workspace, path: safePath };
- }
- const resolved = await resolveWorkspacePath(workspace.root, args.path || ".");
+  }
+  const resolved = await resolveWorkspacePath(workspace.root, args.path || ".");
+  // Apply workspace guard checks
+  const guard = createWorkspaceGuard(config);
+  const isWrite = operation === "write";
+  guard.assertAllowedPath(resolved.absolutePath, { operation, isWrite });
+  await guard.assertRealPathInsideWorkspace(resolved.absolutePath);
   return { workspace, path: resolved.absolutePath };
 }
 
@@ -95,7 +101,7 @@ export async function workspaceDownloadBase64(store, config, { path, max_bytes, 
 
 export async function workspaceWriteText(store, config, { path, content, overwrite = false, workspace_id }, context) {
   requireScope(context, "workspace:write");
-  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
+  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context, "write");
   if (workspace.type === "ssh") return sshWriteTextFile(workspace, resolvedPath, content, 30);
   if (!overwrite) {
     try {
@@ -112,7 +118,7 @@ export async function workspaceWriteText(store, config, { path, content, overwri
 
 export async function workspaceUploadBase64(store, config, { path, content_base64, overwrite = false, workspace_id }, context) {
   requireScope(context, "files:upload");
-  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
+  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context, "write");
   if (workspace.type === "ssh") return sshUploadBase64(workspace, resolvedPath, content_base64, 60);
   const content = Buffer.from(content_base64, "base64");
   if (!overwrite) {
@@ -138,7 +144,7 @@ export async function workspaceUploadFromUrl(store, config, { url, path, overwri
 
 export async function workspaceMkdir(store, config, args, context) {
   requireScope(context, "workspace:write");
-  const { workspace, path: resolvedPath } = await resolvePath(store, config, args, context);
+  const { workspace, path: resolvedPath } = await resolvePath(store, config, args, context, "write");
   if (workspace.type === "ssh") return sshMkdir(workspace, resolvedPath, 10);
   await mkdir(resolvedPath, { recursive: true });
   return { ok: true, path: args.path };
@@ -146,7 +152,7 @@ export async function workspaceMkdir(store, config, args, context) {
 
 export async function workspaceDelete(store, config, { path, recursive = false, workspace_id }, context) {
   requireScope(context, "workspace:write");
-  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context);
+  const { workspace, path: resolvedPath } = await resolvePath(store, config, { path, workspace_id }, context, "write");
   if (workspace.type === "ssh") return sshDelete(workspace, resolvedPath, recursive, 15);
   await rm(resolvedPath, { recursive, force: false });
   return { ok: true, deleted: path, permanent: true };
@@ -154,8 +160,8 @@ export async function workspaceDelete(store, config, { path, recursive = false, 
 
 export async function workspaceMove(store, config, { src, dst, overwrite = false, workspace_id }, context) {
   requireScope(context, "workspace:write");
-  const { workspace, path: srcPath } = await resolvePath(store, config, { path: src, workspace_id }, context);
-  const { path: dstPath } = await resolvePath(store, config, { path: dst, workspace_id }, context);
+  const { workspace, path: srcPath } = await resolvePath(store, config, { path: src, workspace_id }, context, "write");
+  const { path: dstPath } = await resolvePath(store, config, { path: dst, workspace_id }, context, "write");
   if (workspace.type === "ssh") return sshMove(workspace, srcPath, dstPath, 15);
   if (!overwrite) {
     try {
@@ -172,8 +178,8 @@ export async function workspaceMove(store, config, { src, dst, overwrite = false
 
 export async function workspaceCopy(store, config, { src, dst, overwrite = false, workspace_id }, context) {
   requireScope(context, "workspace:write");
-  const { workspace, path: srcPath } = await resolvePath(store, config, { path: src, workspace_id }, context);
-  const { path: dstPath } = await resolvePath(store, config, { path: dst, workspace_id }, context);
+  const { workspace, path: srcPath } = await resolvePath(store, config, { path: src, workspace_id }, context, "write");
+  const { path: dstPath } = await resolvePath(store, config, { path: dst, workspace_id }, context, "write");
   if (workspace.type === "ssh") return sshCopy(workspace, srcPath, dstPath, 30);
   await ensureParent(dstPath);
   await cp(srcPath, dstPath, { recursive: true, force: overwrite, errorOnExist: !overwrite });
