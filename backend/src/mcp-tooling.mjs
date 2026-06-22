@@ -5,72 +5,25 @@
  * No coupling to gptwork-server internals.
  */
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
-
-const __gptworkWidgetV2Html = readFileSync(
-  join(dirname(fileURLToPath(import.meta.url)), "widget-card-v2.html"),
-  "utf8"
-);
+import {
+  canReadToolCardResource,
+  readToolCardResource,
+  resourceList as appsSdkCardResourceList,
+} from "./apps-sdk-card/card-resource.mjs";
+import { hasToolCardMetadata, toolCardMeta, toolCardResourceMeta } from "./apps-sdk-card/card-meta.mjs";
+import { shapeToolResult, tagToolResult, toolResultMeta } from "./apps-sdk-card/tool-result.mjs";
+export {
+  GPTWORK_TOOL_CARD_URI,
+  GPTWORK_LEGACY_CARD_V1_URI,
+  GPTWORK_LEGACY_CARD_V2_URI,
+  GPTWORK_LEGACY_TOOL_CARD_V1_URI,
+  GPTWORK_TOOL_CARD_MIME_TYPE,
+  GPTWORK_WIDGET_DOMAIN,
+  normalizeToolCardUri,
+} from "./apps-sdk-card/constants.mjs";
 
 export const MCP_PROTOCOL_VERSION = "2025-03-26";
-export const GPTWORK_TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v1.html";
-export const GPTWORK_LEGACY_CARD_V1_URI = "ui://widget/gptwork-card-v1.html";
-export const GPTWORK_LEGACY_CARD_V2_URI = "ui://widget/gptwork-card-v2.html";
-export const GPTWORK_TOOL_CARD_MIME_TYPE = "text/html;profile=mcp-app";
-export const GPTWORK_WIDGET_DOMAIN = process.env.GPTWORK_WIDGET_DOMAIN || "https://chat.openai.com";
-
-export function toolCardMeta() {
-  return {
-    ui: { resourceUri: GPTWORK_TOOL_CARD_URI },
-    "openai/outputTemplate": GPTWORK_TOOL_CARD_URI,
-  };
-}
-
-export function toolCardResourceMeta() {
-  return {
-    ui: {
-      prefersBorder: true,
-      domain: GPTWORK_WIDGET_DOMAIN,
-      csp: {
-        connectDomains: [],
-        resourceDomains: [],
-      },
-    },
-    "openai/widgetDescription": "Renders GPTWork runtime status, worker state, goals, tasks, queue items, diffs, handoff plans, and diagnostics as compact cards with safe fallbacks.",
-    "openai/widgetPrefersBorder": true,
-    "openai/widgetDomain": GPTWORK_WIDGET_DOMAIN,
-    "openai/widgetCSP": {
-      connect_domains: [],
-      resource_domains: [],
-    },
-  };
-}
-
-function isCardEnabledMetadata(metadata = {}) {
-  return Boolean(metadata.outputTemplate || metadata.resourceUri);
-}
-
-export function tagToolResult(name, toolDescriptor, structuredContent) {
-  const base = structuredContent && typeof structuredContent === "object" && !Array.isArray(structuredContent)
-    ? structuredContent
-    : { value: structuredContent };
-  return {
-    ...base,
-    gptwork_tool: name,
-    gptwork_title: toolDescriptor?.metadata?.name || name,
-    gptwork_type: "tool_result",
-  };
-}
-
-export function toolResultMeta(name, toolDescriptor) {
-  if (!isCardEnabledMetadata(toolDescriptor?.metadata)) return undefined;
-  return {
-    tool: name,
-    resourceUri: GPTWORK_TOOL_CARD_URI,
-  };
-}
+export { shapeToolResult, toolCardMeta, toolCardResourceMeta, tagToolResult, toolResultMeta };
 
 export function schema(properties, required = []) {
   const mapped = {};
@@ -90,7 +43,7 @@ export function toolList(tools) {
       inputSchema: value.inputSchema,
       outputSchema: { type: "object", additionalProperties: true }
     };
-    if (isCardEnabledMetadata(value.metadata)) {
+    if (hasToolCardMetadata(value.metadata)) {
       descriptor._meta = toolCardMeta();
     }
     return descriptor;
@@ -98,28 +51,7 @@ export function toolList(tools) {
 }
 
 export function resourceList() {
-  return [
-    {
-      uri: "ui://widget/gptwork-card-v1.html",
-      name: "GPTWork Compact Card (v1)",
-      mimeType: "text/html",
-      description: "Legacy compact GPTWork status/result card for ChatGPT Apps SDK clients."
-    },
-    {
-      uri: GPTWORK_TOOL_CARD_URI,
-      name: "GPTWork Tool Card",
-      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      description: "GPTWork Apps SDK tool card for structured status, task, queue, diff, handoff, and diagnostic results.",
-      ...toolCardResourceMeta(),
-    },
-    {
-      uri: "ui://widget/gptwork-card-v2.html",
-      name: "GPTWork Apps SDK Card (v2 legacy)",
-      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      description: "Legacy GPTWork Apps SDK card URI kept for older clients. New tool descriptors use the GPTWork Tool Card URI.",
-      ...toolCardResourceMeta(),
-    }
-  ];
+  return appsSdkCardResourceList();
 }
 
 export function readResource(uri) {
@@ -236,14 +168,7 @@ e.innerHTML = renderCard(d);
     };
   }
 
- if (uri === GPTWORK_TOOL_CARD_URI || uri === "ui://widget/gptwork-card-v2.html") {
-   return {
-     uri,
-      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      _meta: toolCardResourceMeta(),
-     text: __gptworkWidgetV2Html
-   };
- }
+ if (canReadToolCardResource(uri)) return readToolCardResource(uri);
 
   return null;
 }

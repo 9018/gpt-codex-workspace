@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
-const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v1.html";
+const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v2.html";
 const TOOL_CARD_MIME_TYPE = "text/html;profile=mcp-app";
 
 // ---------------------------------------------------------------------------
@@ -55,7 +55,13 @@ function renderWidgetHtml(html, openai) {
   const listeners = new Map();
   const windowObject = {
     openai,
-    addEventListener: (event, handler) => listeners.set(event, handler),
+    addEventListener: (event, handler) => {
+      if (!listeners.has(event)) listeners.set(event, []);
+      listeners.get(event).push(handler);
+    },
+    dispatchEvent: (event) => {
+      for (const handler of listeners.get(event.type) || []) handler(event);
+    },
   };
   const context = vm.createContext({
     window: windowObject,
@@ -69,7 +75,11 @@ function renderWidgetHtml(html, openai) {
     vm.runInContext(script, context, { timeout: 1000 });
   }
 
-  return { root, listeners, context };
+  return { root, listeners, context, windowObject };
+}
+
+function dispatchWidgetEvent(rendered, type, event = {}) {
+  for (const handler of rendered.listeners.get(type) || []) handler({ type, ...event });
 }
 
 function extractInitialRootHtml(html) {
@@ -208,10 +218,8 @@ test("SDK-4: resources/read tool card returns HTML with Apps SDK _meta", async (
   assert.ok(content.text.includes("structuredContent"), "tool card HTML must reference structuredContent");
   assert.ok(content.text.includes("toolOutput"), "tool card HTML must reference toolOutput");
   assert.ok(content.text.includes("Show raw JSON"), "tool card HTML must have JSON fallback toggle");
-  assert.ok(content.text.includes("No structured payload received."),
+  assert.ok(content.text.includes("GPTWork card loaded. Waiting for tool result..."),
     "tool card HTML must include a visible no-payload fallback");
-  assert.ok(content.text.includes("This is a renderer fallback, not an empty card."),
-    "tool card HTML must explain that the fallback is not an empty card");
   assert.ok(content.text.includes("window.openai keys"),
     "tool card HTML must include safe renderer diagnostics for missing payloads");
   assert.ok(content.text.includes("try{") || content.text.includes("try {"),
@@ -239,9 +247,9 @@ test("SDK-4a: v2 initial HTML has visible fallback before JavaScript runs", asyn
 
   assert.match(initialRoot, /GPTWork Card/,
     "initial #root markup must identify the card before JavaScript runs");
-  assert.match(initialRoot, /Waiting for tool output/,
+  assert.match(initialRoot, /GPTWork card loaded\. Waiting for tool result/,
     "initial #root markup must show a readable no-payload fallback before JavaScript runs");
-  assert.match(initialRoot, /widget resource loaded/,
+  assert.match(initialRoot, /resource loaded/,
     "initial #root markup must include a resource-loaded diagnostic before JavaScript runs");
   assert.doesNotMatch(initialRoot, /Loading\.\.\./,
     "initial #root markup must not be a skeleton-only loading placeholder");
@@ -286,9 +294,9 @@ test("SDK-4c: tool card HTML renders visible fallback with no window.openai", as
   const { root } = renderWidgetHtml(res.result.contents[0].text, undefined);
 
   assert.match(root.innerHTML, /GPTWork Card/);
-  assert.match(root.innerHTML, /No structured payload received\./);
-  assert.match(root.innerHTML, /This is a renderer fallback, not an empty card\./);
-  assert.match(root.innerHTML, /window\.openai keys/);
+  assert.match(root.innerHTML, /GPTWork card loaded\. Waiting for tool result/);
+  assert.match(root.innerHTML, /source: fallback/);
+  assert.match(root.innerHTML, /renders: 1/);
   assert.doesNotMatch(root.innerHTML, /Loading\.\.\./);
 });
 
@@ -336,6 +344,98 @@ test("SDK-4d: tool card HTML renders structuredContent and toolOutput payloads",
   assert.match(toolOutput.root.innerHTML, /Worker status/);
   assert.match(toolOutput.root.innerHTML, /assigned/);
   assert.match(toolOutput.root.innerHTML, /1/);
+});
+
+test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    widgetState: {
+      lastToolResult: {
+        summary: "Restored runtime snapshot",
+        status: "ok",
+        keyValues: { source: "widget-state" },
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Restored runtime snapshot/);
+  assert.match(rendered.root.innerHTML, /widget-state/);
+  assert.match(rendered.root.innerHTML, /source: widgetState/);
+});
+
+test("SDK-4f: tool card HTML renders toolResponseMetadata mcp_tool_result structuredContent", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    toolResponseMetadata: {
+      mcp_tool_result: {
+        structuredContent: {
+          summary: "Metadata runtime snapshot",
+          status: "running",
+          keyValues: { source: "metadata" },
+        },
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Metadata runtime snapshot/);
+  assert.match(rendered.root.innerHTML, /metadata/);
+  assert.match(rendered.root.innerHTML, /source: toolResponseMetadata/);
+});
+
+test("SDK-4g: tool card HTML persists compact widgetState after successful render", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  let savedState = null;
+  renderWidgetHtml(res.result.contents[0].text, {
+    toolOutput: { summary: "Persist me", status: "ok", keyValues: { id: "snapshot-1" } },
+    setWidgetState: (next) => { savedState = next; },
+  });
+
+  assert.equal(savedState?.lastToolResult?.summary, "Persist me");
+  assert.equal(savedState?.lastToolResult?.keyValues?.id, "snapshot-1");
+  assert.equal(savedState?.lastSource, "toolOutput");
+});
+
+test("SDK-4h: delayed openai:set_globals event rehydrates the card", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const openai = {};
+  const rendered = renderWidgetHtml(res.result.contents[0].text, openai);
+  assert.match(rendered.root.innerHTML, /Waiting for tool result/);
+
+  openai.toolOutput = { summary: "Delayed runtime", status: "ok", keyValues: { event: "set_globals" } };
+  dispatchWidgetEvent(rendered, "openai:set_globals", { detail: { toolOutput: openai.toolOutput } });
+
+  assert.match(rendered.root.innerHTML, /Delayed runtime/);
+  assert.match(rendered.root.innerHTML, /set_globals/);
+  assert.match(rendered.root.innerHTML, /source: toolOutput/);
+});
+
+test("SDK-4i: ui notifications tool-result message rehydrates the card", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {});
+
+  dispatchWidgetEvent(rendered, "message", {
+    data: {
+      method: "ui/notifications/tool-result",
+      params: {
+        result: {
+          structuredContent: {
+            summary: "Notification runtime",
+            status: "ok",
+            keyValues: { event: "tool-result" },
+          },
+        },
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Notification runtime/);
+  assert.match(rendered.root.innerHTML, /tool-result/);
+  assert.match(rendered.root.innerHTML, /source: event/);
 });
 
 test("SDK-5: tools/call result includes structuredContent for card renderer", async () => {

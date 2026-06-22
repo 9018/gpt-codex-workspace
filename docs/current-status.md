@@ -41,7 +41,7 @@
 2. Call `tools/list` — look for `enqueue_goal`, `list_goal_queue`, `start_next_queued_goal`.
 3. Call a high-frequency tool like `runtime_status` or `gptwork_self_test` — should see the v2 compact card instead of raw JSON.
 4. If card still doesn't display, check:
-   - The tool descriptor has `_meta.openai/outputTemplate === "ui://widget/gptwork-card-v2.html"`.
+   - The tool descriptor has `_meta.openai/outputTemplate === "ui://widget/gptwork-tool-card-v2.html"`.
    - `resources/list` includes v2 with `mimeType: "text/html;profile=mcp-app"`.
    - The ChatGPT MCP connector supports Apps SDK widgets.
 
@@ -52,8 +52,8 @@
 
 ### What Changed
 
-- New v2 widget resource `ui://widget/gptwork-card-v2.html` with full Apps SDK metadata (`openai/widgetDescription`, `openai/widgetPrefersBorder`, `openai/widgetDomain`, `openai/widgetCSP`).
-- v2 card HTML rendered from `backend/src/widget-card-v2.html` (separate file, easier to maintain).
+- New v2 widget resource `ui://widget/gptwork-tool-card-v2.html` with full Apps SDK metadata (`openai/widgetDescription`, `openai/widgetPrefersBorder`, `openai/widgetDomain`, `openai/widgetCSP`).
+- v2 card HTML rendered from `backend/src/apps-sdk-card/widget.html` (separate file, easier to maintain).
 - Tool descriptors now include both `_meta["openai/outputTemplate"]` and `_meta.ui.resourceUri`.
 - 12+ high-frequency tools migrated to v2 with compact card formatters.
 - New `docs/widget-card.md` documenting the v2 card contract.

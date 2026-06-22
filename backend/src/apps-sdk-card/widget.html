@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>
+:root{color-scheme:light dark}*{box-sizing:border-box}
+body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:8px;color:#1f2328;background:transparent}
+.card{border:1px solid #d0d7de;border-radius:8px;padding:12px;max-width:720px;font-size:14px;line-height:1.5;background:transparent}
+.section{margin-top:10px;padding-top:10px;border-top:1px solid #d0d7de}.section:first-child{margin-top:0;padding-top:0;border-top:none}
+.title{font-weight:650;font-size:15px;margin-bottom:6px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.badge{display:inline-block;padding:1px 7px;border-radius:10px;font-size:11px;font-weight:600;vertical-align:middle}
+.badge.ok,.badge.pass,.badge.completed,.badge.success,.badge.enabled,.badge.healthy,.badge.connected,.badge.loaded,.badge.true{background:#dafbe1;color:#1a7f37}
+.badge.warn,.badge.warning,.badge.pending,.badge.queued,.badge.waiting,.badge.running,.badge.in_progress,.badge.ready,.badge.started{background:#fff8c5;color:#735c0f}
+.badge.fail,.badge.failed,.badge.error,.badge.crashed,.badge.stopped,.badge.disabled,.badge.dirty,.badge.stale,.badge.missing,.badge.blocked{background:#ffebe9;color:#cf222e}
+.badge.info,.badge.waiting_for_lock,.badge.waiting_for_review{background:#ddf4ff;color:#0969da}
+.badge.cancelled,.badge.skipped,.badge.timeout,.badge.timed_out{background:#f6f8fa;color:#656d76}
+.kv-table{width:100%;border-collapse:collapse;font-size:13px;margin:4px 0}.kv-table td{padding:2px 8px;vertical-align:top;line-height:1.4}
+.kv-table td:first-child{color:#656d76;white-space:nowrap;width:30%}.kv-table tr:nth-child(odd){background:#f6f8fa}
+.item-list{margin:6px 0;padding:0;list-style:none}.item-list li{padding:3px 8px;font-size:13px;border-left:3px solid #d0d7de;margin-bottom:3px;background:#f6f8fa;word-break:break-word}
+.errors{margin:6px 0;padding:6px 10px;background:#fff0f0;border:1px solid #ffc0c0;border-radius:6px;font-size:13px;color:#cf222e}
+.warnings{margin:6px 0;padding:6px 10px;background:#fff8e0;border:1px solid #e0c040;border-radius:6px;font-size:13px;color:#8a6d00}
+.muted{color:#656d76;font-size:12px;margin-bottom:6px}.diag{color:#656d76;font-size:11px;display:flex;gap:8px;flex-wrap:wrap}
+.fold-toggle{background:none;border:1px solid #d0d7de;border-radius:4px;padding:3px 8px;font-size:11px;cursor:pointer;color:#656d76;margin-top:4px}
+.fold-toggle:hover{background:#f6f8fa}
+pre.json{white-space:pre-wrap;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f6f8fa;border-radius:6px;padding:6px;overflow:auto;max-height:200px;margin-top:4px}
+pre.json.collapsed{display:none}
+pre.raw{white-space:pre-wrap;font:11px ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;background:#f6f8fa;border-radius:6px;padding:6px;overflow:auto;max-height:240px;margin-top:4px;font-size:12px}
+.diff-stat{margin:4px 0;font-size:12px;display:flex;gap:12px;flex-wrap:wrap}.diff-stat span{display:inline-flex;align-items:center;gap:3px}
+.diff-add{color:#1a7f37}.diff-del{color:#cf222e}
+@media(prefers-color-scheme:dark){:root{color-scheme:dark}body{color:#e6edf3}.card{border-color:#30363d}
+.badge.ok,.badge.pass,.badge.completed,.badge.success,.badge.enabled,.badge.healthy,.badge.connected,.badge.loaded,.badge.true{background:#0b5e1a;color:#3fb950}
+.badge.warn,.badge.warning,.badge.pending,.badge.queued,.badge.waiting,.badge.running,.badge.in_progress,.badge.ready,.badge.started{background:#3d2e00;color:#d29922}
+.badge.fail,.badge.failed,.badge.error,.badge.crashed,.badge.stopped,.badge.disabled,.badge.dirty,.badge.stale,.badge.missing,.badge.blocked{background:#490202;color:#ff7b72}
+.badge.info,.badge.waiting_for_lock,.badge.waiting_for_review{background:#0c2d6b;color:#58a6ff}.badge.cancelled,.badge.skipped,.badge.timeout,.badge.timed_out{background:#21262d;color:#8b949e}
+.kv-table tr:nth-child(odd){background:#161b22}.item-list li{background:#161b22;border-left-color:#30363d}pre.json,pre.raw{background:#161b22}
+.fold-toggle{border-color:#30363d;color:#8b949e}.fold-toggle:hover{background:#21262d}.errors{background:#3d0b0b;border-color:#792e2e;color:#ff7b72}.warnings{background:#3d2e00;border-color:#705000;color:#d29922}.section{border-top-color:#30363d}}
+</style></head><body><div class="card" id="root"><section class="section"><div class="title">GPTWork Card <span class="badge info">loaded</span></div><p>GPTWork card loaded. Waiting for tool result...</p><p class="muted">resource loaded: ui://widget/gptwork-tool-card-v2.html</p></section></div><script>
+(function(){
+var RESOURCE_URI='ui://widget/gptwork-tool-card-v2.html';
+var VERSION='gptwork-tool-card-v2';
+var root=document.getElementById('root');
+var renderCount=0;
+var loadedAt=new Date().toISOString();
+var lastEventAt='none';
+var lastSource='fallback';
+function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
+function ownKeys(value){return value&&typeof value==='object'?Object.keys(value):[]}
+function isObject(value){return value&&typeof value==='object'&&!Array.isArray(value)}
+function hasData(value){return isObject(value)&&ownKeys(value).length>0}
+function compactClone(value){try{return JSON.parse(JSON.stringify(value))}catch(e){return value}}
+function limitString(value,max){var s=String(value);return s.length>max?s.slice(0,max)+'...':s}
+function compactSnapshot(data){
+  if(!isObject(data)) return data;
+  var out={};
+  var keys=['summary','title','name','status','ok','gptwork_tool','gptwork_title','gptwork_type','keyValues','key_values','items','list','queue','worker','goal','task','item','warnings','errors','changed_files','staged_count','unstaged_count','total_changes','diff_truncated'];
+  for(var i=0;i<keys.length;i++){var k=keys[i];if(data[k]!==undefined) out[k]=compactClone(data[k])}
+  if(data.diff_excerpt) out.diff_excerpt=limitString(data.diff_excerpt,1200);
+  if(!ownKeys(out).length) out=compactClone(data);
+  var json=JSON.stringify(out);
+  if(json&&json.length>16000){out={summary:data.summary||data.title||data.name||'GPTWork result',status:data.status||'',gptwork_tool:data.gptwork_tool||'',truncated:true}}
+  return out;
+}
+function unwrapPayload(value){
+  if(!value) return null;
+  if(Array.isArray(value)){for(var i=value.length-1;i>=0;i--){var fromArray=unwrapPayload(value[i]);if(fromArray) return fromArray}return null}
+  if(typeof value==='string') return {summary:value,status:'info'};
+  if(!isObject(value)) return null;
+  if(hasData(value.structuredContent)) return value.structuredContent;
+  if(hasData(value.toolOutput)) return value.toolOutput;
+  if(hasData(value.output)) return value.output;
+  if(hasData(value.toolResult)) return value.toolResult;
+  if(hasData(value.mcp_tool_result)) return unwrapPayload(value.mcp_tool_result);
+  if(hasData(value.call_tool_result)) return unwrapPayload(value.call_tool_result);
+  if(hasData(value.result)) return unwrapPayload(value.result)||value.result;
+  if(hasData(value.data)) return unwrapPayload(value.data)||value.data;
+  if(hasData(value.params)) return unwrapPayload(value.params)||value.params;
+  if(Array.isArray(value.content)&&value.content.length){
+    var texts=[];for(var c=0;c<value.content.length;c++){if(value.content[c]&&value.content[c].text) texts.push(value.content[c].text)}
+    if(texts.length) return {summary:texts.join('\n'),status:'info'};
+  }
+  return hasData(value)?value:null;
+}
+function firstPayload(candidates){
+  for(var i=0;i<candidates.length;i++){var payload=unwrapPayload(candidates[i]);if(payload&&hasData(payload))return payload}
+  return null;
+}
+function readState(openai){return openai&&(openai.widgetState||openai.state||openai.savedState)}
+function findPayloadFromGlobals(){
+  var openai=window.openai||{};
+  var state=readState(openai);
+  var metadata=openai.toolResponseMetadata||{};
+  var candidates=[
+    {source:'widgetState',value:state&&(state.lastToolResult||state.structuredContent||state.toolOutput)},
+    {source:'toolOutput',value:openai.toolOutput},
+    {source:'toolResponseMetadata',value:metadata.mcp_tool_result&&metadata.mcp_tool_result.structuredContent},
+    {source:'toolResponseMetadata',value:metadata.call_tool_result},
+    {source:'structuredContent',value:openai.structuredContent},
+    {source:'structuredContent',value:openai.output||openai.toolResult||openai.result},
+    {source:'content',value:openai.content||metadata.content}
+  ];
+  if(Array.isArray(openai.messages)&&openai.messages.length){for(var i=openai.messages.length-1;i>=0;i--){candidates.push({source:'messages',value:openai.messages[i]})}}
+  for(var j=0;j<candidates.length;j++){var payload=unwrapPayload(candidates[j].value);if(payload&&hasData(payload)) return {source:candidates[j].source,payload:payload}}
+  return null;
+}
+function findPayloadFromEvent(data){
+  var candidates=[data,data&&data.detail,data&&data.detail&&data.detail.toolOutput,data&&data.detail&&data.detail.toolResponseMetadata,data&&data.params,data&&data.params&&data.params.result,data&&data.result];
+  var payload=firstPayload(candidates);
+  return payload?{source:'event',payload:payload}:null;
+}
+function badge(status){
+  var s=String(status).toLowerCase().replace(/[^a-z0-9_]/g,'');var cls='info';
+  if(/^(ok|pass|completed|success|enabled|healthy|connected|active|clean|true|loaded)$/.test(s)) cls='ok';
+  else if(/^(warn|warning|pending|queued|waiting|ready|started|running|in_progress)$/.test(s)) cls='warn';
+  else if(/^(fail|failed|error|crashed|stopped|disabled|dirty|stale|missing|blocked|false)$/.test(s)) cls='fail';
+  else if(/^(cancelled|skipped|timeout|timed_out)$/.test(s)) cls='cancelled';
+  return '<span class="badge '+cls+'">'+esc(status)+'</span>';
+}
+function diagnostics(source){
+  return '<div class="section"><div class="diag"><span>resource: '+esc(VERSION)+'</span><span>source: '+esc(source||lastSource)+'</span><span>renders: '+renderCount+'</span><span>loaded: '+esc(loadedAt)+'</span><span>last event: '+esc(lastEventAt)+'</span></div></div>';
+}
+function renderFallback(){
+  var keys=ownKeys(window.openai).join(', ')||'(none)';
+  return '<div class="section"><div class="title">GPTWork Card '+badge('loaded')+'</div><p>GPTWork card loaded. Waiting for tool result...</p><div class="muted">window.openai keys: '+esc(keys)+'</div></div>'+diagnostics('fallback');
+}
+function renderError(err){
+  return '<div class="section"><div class="title">GPTWork Card '+badge('error')+'</div><div class="errors">Renderer error: '+esc(err&&err.message?err.message:err)+'</div></div>'+diagnostics('error');
+}
+function renderCard(data,source){
+  if(!isObject(data)) return renderFallback();
+  var parts=[];var title=data.title||data.summary||data.name||data.gptwork_title||'GPTWork Result';
+  parts.push('<div class="section"><div class="title">'+esc(title));
+  if(data.status!==undefined) parts.push(' '+badge(data.status));
+  else if(data.ok!==undefined) parts.push(' '+badge(data.ok?'ok':'error'));
+  parts.push('</div>');
+  if(data.summary&&data.summary!==title) parts.push('<div class="muted">'+esc(data.summary)+'</div>');
+  parts.push('</div>');
+  var kv=data.keyValues||data.key_values||null;
+  if(kv&&typeof kv==='object'){
+    parts.push('<div class="section"><table class="kv-table">');
+    if(Array.isArray(kv)){for(var i=0;i<kv.length;i++){var r=kv[i]||{};parts.push('<tr><td>'+esc(r.key||r.k||'')+'</td><td>'+esc(r.value!==undefined?r.value:(r.v!==undefined?r.v:''))+'</td></tr>')}}
+    else{for(var k in kv){if(Object.prototype.hasOwnProperty.call(kv,k)){parts.push('<tr><td>'+esc(k)+'</td><td>'+esc(String(kv[k]))+'</td></tr>')}}}
+    parts.push('</table></div>');
+  }
+  var items=data.items||data.list||null;
+  if(Array.isArray(items)&&items.length){parts.push('<div class="section"><ul class="item-list">');for(var a=0;a<items.length;a++){parts.push('<li>'+esc(String(items[a]))+'</li>')}parts.push('</ul></div>')}
+  if(Array.isArray(data.changed_files)){parts.push('<div class="section"><div class="muted">Changed files: '+data.changed_files.length+(data.changed_files.length===1?' file':' files')+'</div><ul class="item-list">');for(var f=0;f<Math.min(data.changed_files.length,20);f++){var file=data.changed_files[f];parts.push('<li>'+esc(file&&file.path?file.path:String(file))+'</li>')}if(data.changed_files.length>20)parts.push('<li>... and '+(data.changed_files.length-20)+' more</li>');parts.push('</ul></div>')}
+  if(data.staged_count!=null||data.unstaged_count!=null||data.total_changes!=null){parts.push('<div class="section"><div class="diff-stat">');if(data.staged_count!=null)parts.push('<span class="diff-add">+'+esc(data.staged_count)+' staged</span>');if(data.unstaged_count!=null)parts.push('<span class="diff-del">~'+esc(data.unstaged_count)+' unstaged</span>');if(data.total_changes!=null)parts.push('<span>'+esc(data.total_changes)+' changed</span>');parts.push('</div></div>')}
+  if(data.diff_excerpt){parts.push('<div class="section"><div class="muted">Diff excerpt'+(data.diff_truncated?' (truncated)':'')+':</div><pre class="raw">'+esc(limitString(data.diff_excerpt,1200))+'</pre></div>')}
+  if(Array.isArray(data.warnings)&&data.warnings.length){parts.push('<div class="section"><div class="warnings">'+data.warnings.map(function(w){return esc(typeof w==='string'?w:(w.message||w.code||String(w)))}).join('<br>')+'</div></div>')}
+  if(Array.isArray(data.errors)&&data.errors.length){parts.push('<div class="section"><div class="errors">'+data.errors.map(function(e){return esc(typeof e==='string'?e:(e.message||e.code||String(e)))}).join('<br>')+'</div></div>')}
+  var hasContent=data.status!==undefined||data.ok!==undefined||data.summary||kv||(items&&items.length)||data.changed_files||data.errors||data.warnings||data.staged_count!=null||data.diff_excerpt;
+  var jsonStr=JSON.stringify(data,null,2);
+  if(!hasContent){parts.push('<pre class="json">'+esc(jsonStr)+'</pre>')}
+  else{parts.push('<div class="section"><button class="fold-toggle" onclick="(function(b){var p=b.nextElementSibling;if(p){p.classList.toggle(\'collapsed\');b.textContent=p.classList.contains(\'collapsed\')?\'Show raw JSON\':\'Hide raw JSON\'}})(this)">Show raw JSON</button><pre class="json collapsed">'+esc(jsonStr)+'</pre></div>')}
+  parts.push(diagnostics(source));
+  return parts.join('');
+}
+function saveWidgetState(payload,source){
+  try{
+    var openai=window.openai;if(!openai||typeof openai.setWidgetState!=='function'||!payload) return;
+    openai.setWidgetState({lastToolResult:compactSnapshot(payload),lastSource:source||lastSource,resourceUri:RESOURCE_URI,version:VERSION,savedAt:new Date().toISOString()});
+  }catch(e){}
+}
+function renderFrom(found){
+  try{
+    renderCount++;
+    if(found&&found.payload){lastSource=found.source||'unknown';root.innerHTML=renderCard(found.payload,lastSource);saveWidgetState(found.payload,lastSource)}
+    else{lastSource='fallback';root.innerHTML=renderFallback()}
+  }catch(err){renderCount++;root.innerHTML=renderError(err)}
+}
+function hydrate(){renderFrom(findPayloadFromGlobals())}
+window.addEventListener('openai:set_globals',function(event){
+  lastEventAt=new Date().toISOString();
+  try{
+    if(event&&event.detail&&window.openai&&typeof window.openai==='object'){
+      for(var k in event.detail){if(Object.prototype.hasOwnProperty.call(event.detail,k)) window.openai[k]=event.detail[k]}
+    }
+    hydrate();
+  }catch(err){renderCount++;root.innerHTML=renderError(err)}
+});
+window.addEventListener('message',function(event){
+  lastEventAt=new Date().toISOString();
+  try{renderFrom(findPayloadFromEvent(event&&event.data)||findPayloadFromEvent(event))}catch(err){renderCount++;root.innerHTML=renderError(err)}
+});
+try{hydrate()}catch(err){renderCount++;root.innerHTML=renderError(err)}
+})();
+</script></body></html>

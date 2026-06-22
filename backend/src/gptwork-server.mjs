@@ -7,7 +7,7 @@ import { createBarkNotifier } from "./bark-notifier.mjs";
 import { createNotificationService } from "./notification-service.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
-import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource, tagToolResult, toolResultMeta } from "./mcp-tooling.mjs";
+import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource, shapeToolResult } from "./mcp-tooling.mjs";
 import { parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, assertAuthorized } from "./auth-context.mjs";
 import { setTerminalNotifier } from "./task-lifecycle.mjs";
 import { setCreatedTaskNotifier } from "./goal-task-lifecycle.mjs";
@@ -188,17 +188,12 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
           const handler = toolDescriptor?.handler;
           if (!handler) return jsonError(message.id, -32601, `Unknown tool: ${name}`);
           const rawStructuredContent = await handler(args, context);
-          const structuredContent = toolResultMeta(name, toolDescriptor)
-            ? tagToolResult(name, toolDescriptor, rawStructuredContent)
-            : rawStructuredContent;
-          const summary = this.summarizeToolResult(name, structuredContent);
-          const result = {
-            content: [{ type: "text", text: summary }],
-            structuredContent,
-            isError: false
-          };
-          const meta = toolResultMeta(name, toolDescriptor);
-          if (meta) result._meta = meta;
+          const result = shapeToolResult({
+            name,
+            toolDescriptor,
+            rawStructuredContent,
+            summarizeToolResult: this.summarizeToolResult,
+          });
           return jsonResult(message.id, result);
         }
         return jsonError(message.id, -32601, `Unknown method: ${message.method}`);

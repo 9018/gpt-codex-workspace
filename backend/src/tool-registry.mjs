@@ -1,9 +1,7 @@
-import { GPTWORK_LEGACY_CARD_V1_URI, GPTWORK_LEGACY_CARD_V2_URI, GPTWORK_TOOL_CARD_URI } from "./mcp-tooling.mjs";
+import { normalizeToolCardUri } from "./mcp-tooling.mjs";
 
 function normalizeCardUri(uri) {
-  if (!uri) return "";
-  if (uri === GPTWORK_LEGACY_CARD_V1_URI || uri === GPTWORK_LEGACY_CARD_V2_URI) return GPTWORK_TOOL_CARD_URI;
-  return uri;
+  return normalizeToolCardUri(uri);
 }
 
 export function createTool(descriptionOrDescriptor, inputSchema, handler) {
