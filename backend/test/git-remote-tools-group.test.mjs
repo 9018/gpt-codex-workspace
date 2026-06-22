@@ -3,8 +3,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createGitRemoteToolsGroup } from "../src/tool-groups/git-remote-tools-group.mjs";
 
-function fakeTool(description, inputSchema, handler) {
-  return { description, inputSchema, handler };
+function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
+  if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
+    return { description: descriptionOrDescriptor.description, inputSchema: descriptionOrDescriptor.inputSchema, handler: descriptionOrDescriptor.handler };
+  }
+  return { description: descriptionOrDescriptor, inputSchema, handler };
 }
 
 function fakeSchema(shape = {}, required = []) {
@@ -92,7 +95,8 @@ test("git remote tool group has correct input schemas", () => {
 
   // git_remote_diff: repo, repo_path, base, head, path, max_bytes
   assert.deepEqual(tools.git_remote_diff.inputSchema.required, []);
-  assert.equal(tools.git_remote_diff.inputSchema.properties.max_bytes, "integer");
+  assert.equal(tools.git_remote_diff.inputSchema.properties.max_bytes.type, "integer");
+  assert.equal(tools.git_remote_diff.inputSchema.properties.max_bytes.default, 1048576);
 
   // git_remote_show_commit: repo, repo_path, ref, max_files
   assert.deepEqual(tools.git_remote_show_commit.inputSchema.required, []);

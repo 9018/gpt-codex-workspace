@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createGoalToolsGroup } from '../src/tool-groups/goal-tools-group.mjs';
 
-function fakeTool(description, inputSchema, handler) {
-  return { description, inputSchema, handler };
+function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
+  if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
+    return { description: descriptionOrDescriptor.description, inputSchema: descriptionOrDescriptor.inputSchema, handler: descriptionOrDescriptor.handler };
+  }
+  return { description: descriptionOrDescriptor, inputSchema, handler };
 }
 
 function fakeSchema(shape = {}, required = []) {
@@ -42,10 +45,12 @@ test('goal tool group exposes stable public tool names and schemas', () => {
 
   // create_encoded_goal: required params
   assert.deepEqual(tools.create_encoded_goal.inputSchema.required, ['preview_text', 'payload_base64']);
-  assert.equal(tools.create_encoded_goal.inputSchema.properties.preview_text, 'string');
-  assert.equal(tools.create_encoded_goal.inputSchema.properties.payload_base64, 'string');
-  assert.equal(tools.create_encoded_goal.inputSchema.properties.wait_ms, 'integer');
-  assert.equal(tools.create_encoded_goal.inputSchema.properties.assign_to_codex, 'boolean');
+  assert.equal(tools.create_encoded_goal.inputSchema.properties.preview_text.type, 'string');
+  assert.ok(tools.create_encoded_goal.inputSchema.properties.preview_text.description);
+  assert.equal(tools.create_encoded_goal.inputSchema.properties.payload_base64.type, 'string');
+  assert.equal(tools.create_encoded_goal.inputSchema.properties.wait_ms.type, 'integer');
+  assert.equal(tools.create_encoded_goal.inputSchema.properties.wait_ms.default, 90000);
+  assert.equal(tools.create_encoded_goal.inputSchema.properties.assign_to_codex.type, 'boolean');
 
   // list_goals: all optional
   assert.deepEqual(tools.list_goals.inputSchema.required, []);

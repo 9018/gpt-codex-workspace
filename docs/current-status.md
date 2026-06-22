@@ -1,6 +1,6 @@
 # GPTWork Current Status
 Date: 2026-06-22
-Status: P0/P1/P2 productization pass implemented behind compatibility facades. The backend now has a `gptwork` CLI, default `standard` tool mode, `open_project_context`, tracked `agent_runs`, handoff artifacts, compact `show_changes`, metadata-capable tool descriptors, richer schemas, JSONL events, a hook bus, and one Apps SDK widget resource.
+Status: P2 completed. Tool metadata covers all 6 target groups (goal, task, context/runtime, agent, workspace, git) with modes/audience/tags/outputTemplate. 9 high-frequency tools migrated to rich JSON Schema descriptors (create_encoded_goal, create_task, run_agent_pipeline, handoff_to_agent, show_changes, read_events, git_remote_diff, search_files, read_text_file). Widget compact card renderer upgraded with explicit contract (keyValues, items, warnings, raw JSON fold toggle, renderCard function) and compatibility with legacy structuredContent.
 Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Existing MCP tool names and compatibility entry points remain callable.
 
 ## What This Project Is

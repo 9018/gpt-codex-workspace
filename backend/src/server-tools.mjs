@@ -224,7 +224,10 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",
-      inputSchema: schema({ date: "string", limit: "integer" }),
+      inputSchema: schema({
+      date: { type: "string", description: "Date to read events for, in ISO format (YYYY-MM-DD). Defaults to today.", examples: ["2026-06-22"] },
+      limit: { type: "integer", description: "Maximum number of events to return.", minimum: 1, maximum: 1000, default: 100 }
+    }),
       ...{ modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["system", "debug"] },
       handler: async ({ date, limit }) => {
         const events = await readEvents({ workspaceRoot: config.defaultWorkspaceRoot, date: date ? new Date(date) : undefined, limit: limit ? Number(limit) : 100 });

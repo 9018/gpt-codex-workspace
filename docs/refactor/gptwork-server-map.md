@@ -70,3 +70,38 @@ No inline `tool(` registrations remain in `gptwork-server.mjs`; tool registratio
 - `reconcileStaleTasks()` is the largest remaining server-local implementation block and can be extracted next into a startup reconciliation module.
 - ChatGPT request CRUD still remains in server-local callbacks through its tool group wiring.
 - Runtime-source changes still require `cd backend && npm test` plus safe restart verification before handoff.
+
+---
+
+## P2 Completion Notes (2026-06-22)
+
+### P2-1: Tool Registry Metadata Coverage
+All target tool groups now use object-style `tool({...})` descriptors with `modes`, `audience`, `tags`, and where applicable `outputTemplate`:
+
+| Tool Group | Status |
+|---|---|
+| Goal tools (create_goal, create_encoded_goal, list_goals, get_goal_context, append_goal_message) | Metadata added, tags: ["goal"] |
+| Task tools (create_task, list_tasks, get_task, update_task_status, append_task_log, attach_task_artifact, complete_task) | Metadata added, tags: ["task"] |
+| Context/Runtime tools (open_project_context, runtime_status, worker_status, gptwork_doctor, project_context_status, context_status) | Metadata added, tags vary |
+| Agent tools (create_agent_run, list_agent_runs, get_agent_run, append_agent_event, complete_agent_run, run_agent_pipeline, handoff_to_agent, read_handoff, show_changes) | Already present, tags: ["agent","handoff"] |
+| Workspace read tools (list_dir, read_text_file, search_files, stat_path, download_file_base64) | Metadata added, tags: ["workspace"] |
+| Git remote tools (git_remote_status, git_remote_diff, git_remote_changed_files, git_remote_show_commit, git_remote_read_file, git_remote_list_files) | Metadata added, tags: ["git"] |
+
+### P2-2: Rich Schema Migration
+9 high-frequency tools migrated from simple `{ key: "string" }` to rich JSON Schema descriptors:
+- `create_encoded_goal`, `create_task`, `run_agent_pipeline`, `handoff_to_agent`, `show_changes`, `read_events`, `git_remote_diff`, `search_files`, `read_text_file`
+
+Rich descriptors include: `description`, `enum`, `default`, `items` for arrays, `examples`, `minimum`/`maximum`.
+
+### P2-3: Widget Compact Card Renderer
+The `ui://widget/gptwork-card-v1.html` resource upgraded with:
+- Sections: title/status/summary, key-value list (supports both `keyValues: [{key,value}]` and legacy `key_values: {key:value}`), items/list, changed_files, staged/unstaged stats, errors, warnings, raw JSON fold toggle
+- `renderCard` function with explicit rendering contract
+- Backward compatible with legacy `structuredContent`
+- At least 3 tools have `_meta["openai/outputTemplate"]` pointing to the widget
+
+### Remaining Boundary
+- Not all tools have rich schemas (only 9 high-frequency ones), remaining tools use simple schema for now
+- Widget card rendering in ChatGPT Apps SDK client context requires manual visual verification
+- P1 agent execution not expanded
+- Default timeout stays at 3600

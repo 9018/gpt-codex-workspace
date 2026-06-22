@@ -5,11 +5,15 @@ import { updateTask } from '../task-lifecycle.mjs';
  * Dependencies are passed in to avoid circular imports from gptwork-server.mjs.
  */
 export function createTaskCompletionToolsGroup({ tool, schema, store, github, eventLogger, hookBus }) {
+  const common = { audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v1.html" };
   return {
-    complete_task: tool(
-      "Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.",
-      schema({ task_id: "string", summary: "string", admin_override: "boolean" }, ["task_id"]),
-      async ({ task_id, summary = "", admin_override = false }) => {
+    complete_task: tool({
+      name: "complete_task",
+      description: "Mark a task completed with a summary of what was done. Use after Codex finishes the work and verification passes. Include a brief summary for ChatGPT review.",
+      inputSchema: schema({ task_id: "string", summary: "string", admin_override: "boolean" }, ["task_id"]),
+      modes: ["standard", "codex", "full"],
+      ...common,
+      handler: async ({ task_id, summary = "", admin_override = false }) => {
         let targetStatus = "completed";
         let resultFields = { summary, completed_at: new Date().toISOString() };
 
@@ -50,11 +54,14 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         await hookBus?.emit("onTaskCompleted", { task: result.task });
         return result;
       },
-    ),
-    request_human_review: tool(
-      "Mark a task as waiting for human review.",
-      schema({ task_id: "string", message: "string" }, ["task_id"]),
-      async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; }),
-    ),
+    }),
+    request_human_review: tool({
+      name: "request_human_review",
+      description: "Mark a task as waiting for human review.",
+      inputSchema: schema({ task_id: "string", message: "string" }, ["task_id"]),
+      modes: ["standard", "codex", "full"],
+      ...common,
+      handler: async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; }),
+    }),
   };
 }

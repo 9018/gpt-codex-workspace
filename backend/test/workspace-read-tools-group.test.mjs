@@ -3,8 +3,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createWorkspaceReadToolsGroup } from "../src/tool-groups/workspace-read-tools-group.mjs";
 
-function fakeTool(description, inputSchema, handler) {
-  return { description, inputSchema, handler };
+function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
+  if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
+    return { description: descriptionOrDescriptor.description, inputSchema: descriptionOrDescriptor.inputSchema, handler: descriptionOrDescriptor.handler };
+  }
+  return { description: descriptionOrDescriptor, inputSchema, handler };
 }
 
 function fakeSchema(shape = {}, required = []) {
@@ -58,9 +61,12 @@ test("workspace read tool group has correct input schemas", () => {
 
   // read_text_file: path (string, required), max_bytes (integer), workspace_id (string)
   assert.deepEqual(tools.read_text_file.inputSchema.required, ["path"]);
-  assert.equal(tools.read_text_file.inputSchema.properties.path, "string");
-  assert.equal(tools.read_text_file.inputSchema.properties.max_bytes, "integer");
-  assert.equal(tools.read_text_file.inputSchema.properties.workspace_id, "string");
+  assert.equal(tools.read_text_file.inputSchema.properties.path.type, "string");
+  assert.ok(tools.read_text_file.inputSchema.properties.path.description);
+  assert.equal(tools.read_text_file.inputSchema.properties.max_bytes.type, "integer");
+  assert.equal(tools.read_text_file.inputSchema.properties.max_bytes.default, 1048576);
+  assert.equal(tools.read_text_file.inputSchema.properties.workspace_id.type, "string");
+  assert.ok(tools.read_text_file.inputSchema.properties.workspace_id.description);
 
   // download_file_base64: path (string, required), max_bytes (integer), workspace_id (string)
   assert.deepEqual(tools.download_file_base64.inputSchema.required, ["path"]);
@@ -78,13 +84,15 @@ test("workspace read tool group has correct input schemas", () => {
 
   // search_files: q (string, required), path (string), limit (integer), exclude_dirs (array), max_file_bytes/max_total_bytes (integer), workspace_id (string)
   assert.deepEqual(tools.search_files.inputSchema.required, ["q"]);
-  assert.equal(tools.search_files.inputSchema.properties.q, "string");
-  assert.equal(tools.search_files.inputSchema.properties.path, "string");
-  assert.equal(tools.search_files.inputSchema.properties.limit, "integer");
-  assert.equal(tools.search_files.inputSchema.properties.exclude_dirs, "array");
-  assert.equal(tools.search_files.inputSchema.properties.max_file_bytes, "integer");
-  assert.equal(tools.search_files.inputSchema.properties.max_total_bytes, "integer");
-  assert.equal(tools.search_files.inputSchema.properties.workspace_id, "string");
+  assert.equal(tools.search_files.inputSchema.properties.q.type, "string");
+  assert.ok(tools.search_files.inputSchema.properties.q.description);
+  assert.equal(tools.search_files.inputSchema.properties.path.type, "string");
+  assert.equal(tools.search_files.inputSchema.properties.limit.type, "integer");
+  assert.equal(tools.search_files.inputSchema.properties.limit.default, 50);
+  assert.equal(tools.search_files.inputSchema.properties.exclude_dirs.type, "array");
+  assert.equal(tools.search_files.inputSchema.properties.max_file_bytes.type, "integer");
+  assert.equal(tools.search_files.inputSchema.properties.max_total_bytes.type, "integer");
+  assert.equal(tools.search_files.inputSchema.properties.workspace_id.type, "string");
 
   // sha256_file: path (string, required), workspace_id (string)
   assert.deepEqual(tools.sha256_file.inputSchema.required, ["path"]);

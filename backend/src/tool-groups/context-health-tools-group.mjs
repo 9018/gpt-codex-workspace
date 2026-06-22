@@ -247,15 +247,47 @@ export function createContextHealthToolsGroup({ tool, schema, config, registry, 
   };
 
   return {
-    detect_stale_clones: tool("Scan the workspace root for stale temporary clones (.tmp-* directories) that could confuse Codex status checks. Returns matching directory names and whether they contain git repos.", schema({}), async () => {
-      const clones = await detectStaleTempClones(registry.workspaceRoot);
-      return { count: clones.length, clones };
+    detect_stale_clones: tool({
+      name: "detect_stale_clones",
+      description: "Scan the workspace root for stale temporary clones (.tmp-* directories) that could confuse Codex status checks. Returns matching directory names and whether they contain git repos.",
+      inputSchema: schema({}),
+      modes: ["operator", "full"],
+      audience: ["operator"],
+      tags: ["context", "cleanup"],
+      handler: async () => {
+        const clones = await detectStaleTempClones(registry.workspaceRoot);
+        return { count: clones.length, clones };
+      },
     }),
 
-    project_context_status: tool("Return a concise diagnostic showing context source health and precedence: canonical repo, workspace root, project context files (project.md, project.env), context source precedence summary, and optionally task-linked diagnostics (task status, linked goal, preview availability, warnings). Does not expose secret values from project.env.", schema({ task_id: "string" }, []), contextStatusHandler),
+    project_context_status: tool({
+      name: "project_context_status",
+      description: "Return a concise diagnostic showing context source health and precedence: canonical repo, workspace root, project context files (project.md, project.env), context source precedence summary, and optionally task-linked diagnostics (task status, linked goal, preview availability, warnings). Does not expose secret values from project.env.",
+      inputSchema: schema({ task_id: "string" }, []),
+      modes: ["standard", "operator", "full"],
+      audience: ["chatgpt", "operator"],
+      tags: ["context", "status"],
+      handler: contextStatusHandler,
+    }),
 
-    context_status: tool("Provide context source health and precedence diagnostics: canonical repo, workspace root, project context files (project.md, project.env), context source precedence summary, and optionally task-linked diagnostics (task status, linked goal, preview availability, warnings). Natural alias for project_context_status, responds to queries like 上下文状态. Does not expose secret values from project.env.", schema({ task_id: "string" }, []), contextStatusHandler),
+    context_status: tool({
+      name: "context_status",
+      description: "Provide context source health and precedence diagnostics: canonical repo, workspace root, project context files (project.md, project.env), context source precedence summary, and optionally task-linked diagnostics (task status, linked goal, preview availability, warnings). Natural alias for project_context_status, responds to queries like 上下文状态. Does not expose secret values from project.env.",
+      inputSchema: schema({ task_id: "string" }, []),
+      modes: ["standard", "operator", "full"],
+      audience: ["chatgpt", "operator"],
+      tags: ["context", "status"],
+      handler: contextStatusHandler,
+    }),
 
-    context_prepare: tool("Prepare safe context hygiene fixes after project_context_status detects issues. Defaults to check-only (dry-run). In fix_safe mode, creates missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing. (上下文健康检查和自动修复)", schema({ task_id: "string", mode: "string" }, []), contextPrepareHandler),
+    context_prepare: tool({
+      name: "context_prepare",
+      description: "Prepare safe context hygiene fixes after project_context_status detects issues. Defaults to check-only (dry-run). In fix_safe mode, creates missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing.",
+      inputSchema: schema({ task_id: "string", mode: "string" }, []),
+      modes: ["standard", "operator", "full"],
+      audience: ["chatgpt", "operator"],
+      tags: ["context", "repair"],
+      handler: contextPrepareHandler,
+    }),
   };
 }

@@ -2,8 +2,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createBasicTaskToolsGroup } from '../src/tool-groups/basic-task-tools-group.mjs';
 
-function fakeTool(description, inputSchema, handler) {
-  return { description, inputSchema, handler };
+function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
+  if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
+    return { description: descriptionOrDescriptor.description, inputSchema: descriptionOrDescriptor.inputSchema, handler: descriptionOrDescriptor.handler };
+  }
+  return { description: descriptionOrDescriptor, inputSchema, handler };
 }
 
 function fakeSchema(shape = {}, required = []) {
@@ -31,11 +34,14 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
 
   // create_task: required = ['title']
   assert.deepEqual(tools.create_task.inputSchema.required, ['title']);
-  assert.equal(tools.create_task.inputSchema.properties.title, 'string');
-  assert.equal(tools.create_task.inputSchema.properties.description, 'string');
-  assert.equal(tools.create_task.inputSchema.properties.assignee, 'string');
-  assert.equal(tools.create_task.inputSchema.properties.workspace_id, 'string');
-  assert.equal(tools.create_task.inputSchema.properties.mode, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.title.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.title.description, 'Task title summarizing the work to be done.');
+  assert.equal(tools.create_task.inputSchema.properties.description.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.assignee.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.assignee.default, 'codex');
+  assert.equal(tools.create_task.inputSchema.properties.workspace_id.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.mode.type, 'string');
+  assert.deepEqual(tools.create_task.inputSchema.properties.mode.enum, ['standard', 'readonly']);
 
   // list_tasks: all optional
   assert.deepEqual(tools.list_tasks.inputSchema.required, []);

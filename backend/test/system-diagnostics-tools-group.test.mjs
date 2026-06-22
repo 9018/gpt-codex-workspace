@@ -3,8 +3,11 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createSystemDiagnosticsToolsGroup } from "../src/tool-groups/system-diagnostics-tools-group.mjs";
 
-function fakeTool(description, inputSchema, handler) {
-  return { description, inputSchema, handler };
+function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
+  if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
+    return { description: descriptionOrDescriptor.description, inputSchema: descriptionOrDescriptor.inputSchema, handler: descriptionOrDescriptor.handler };
+  }
+  return { description: descriptionOrDescriptor, inputSchema, handler };
 }
 
 function fakeSchema(shape = {}, required = []) {

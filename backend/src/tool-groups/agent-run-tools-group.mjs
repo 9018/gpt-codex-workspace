@@ -50,14 +50,26 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
     run_agent_pipeline: tool({
       name: "run_agent_pipeline",
       description: "Create a queued agent run pipeline with execution order, review gates, and event log tracking.",
-      inputSchema: schema({ goal_id: "string", task_id: "string", agent: "string", roles: "array", review_gate_after: "string", execution_order: "array" }),
+      inputSchema: schema({
+        goal_id: { type: "string", description: "Goal ID to link the pipeline runs to." },
+        task_id: { type: "string", description: "Task ID to link the pipeline runs to." },
+        agent: { type: "string", description: "Agent name to run the pipeline.", default: "codex" },
+        roles: { type: "array", description: "Roles in execution order, e.g. [\"analyst\",\"architect\",\"implementer\",\"tester\",\"reviewer\"].", items: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] }, examples: [["analyst", "architect", "implementer", "tester", "reviewer"]] },
+        review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] },
+        execution_order: { type: "array", description: "Custom execution order override.", items: { type: "string" } }
+      }),
       ...common,
       handler: (args) => runAgentPipeline(store, args, ctx),
     }),
     handoff_to_agent: tool({
       name: "handoff_to_agent",
       description: "Write the current handoff plan and status artifacts for an external agent.",
-      inputSchema: schema({ agent: "string", plan: "string", goal_id: "string", task_id: "string" }, ["plan"]),
+      inputSchema: schema({
+        agent: { type: "string", description: "Target agent name to hand off to.", default: "codex" },
+        plan: { type: "string", description: "Handoff plan detailing what work remains and what context is available.", examples: ["Continue with implementing feature X. The schema is ready at schema.sql."] },
+        goal_id: { type: "string", description: "Goal ID to link the handoff to." },
+        task_id: { type: "string", description: "Task ID to link the handoff to." }
+      }, ["plan"]),
       ...common,
       outputTemplate: "ui://widget/gptwork-card-v1.html",
       handler: async (args) => {
@@ -81,7 +93,10 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
     show_changes: tool({
       name: "show_changes",
       description: "Return a compact review summary of git changes with staged/unstaged stats, bounded diff excerpt, and artifact path.",
-      inputSchema: schema({ path: "string", max_diff_bytes: "integer" }),
+      inputSchema: schema({
+        path: { type: "string", description: "Path to show git changes for. Defaults to workspace root.", default: "." },
+        max_diff_bytes: { type: "integer", description: "Maximum diff size in bytes. Larger diffs are truncated.", minimum: 256, maximum: 1048576, default: 65536 }
+      }),
       ...common,
       outputTemplate: "ui://widget/gptwork-card-v1.html",
       handler: (args) => showChanges(args, config),
