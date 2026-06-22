@@ -19,7 +19,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
-const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v2.html";
+const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v3.html";
+const LEGACY_TOOL_CARD_V2_URI = "ui://widget/gptwork-tool-card-v2.html";
 const TOOL_CARD_MIME_TYPE = "text/html;profile=mcp-app";
 
 // ---------------------------------------------------------------------------
@@ -184,6 +185,8 @@ test("SDK-3: resources/list includes tool card with Apps SDK metadata", async ()
 
   assert.ok(uris.includes(TOOL_CARD_URI),
     "resources/list must include tool card URI");
+  assert.ok(uris.includes(LEGACY_TOOL_CARD_V2_URI),
+    "resources/list must keep the v2 card URI readable for legacy clients");
 
   const card = resources.find(r => r.uri === TOOL_CARD_URI);
   assert.ok(card, "tool card resource must have an entry");
@@ -199,6 +202,17 @@ test("SDK-3: resources/list includes tool card with Apps SDK metadata", async ()
   assert.deepEqual(card.ui?.csp, { connectDomains: [], resourceDomains: [] });
   assert.equal(card["openai/widgetDomain"], card.ui.domain);
   assert.deepEqual(card["openai/widgetCSP"], { connect_domains: [], resource_domains: [] });
+});
+
+test("SDK-3b: primary tool descriptors use a cache-busting v3 card URI", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/list");
+  const runtime = res.result.tools.find((tool) => tool.name === "runtime_status");
+
+  assert.equal(runtime?._meta?.["openai/outputTemplate"], TOOL_CARD_URI);
+  assert.equal(runtime?._meta?.ui?.resourceUri, TOOL_CARD_URI);
+  assert.notEqual(runtime?._meta?.["openai/outputTemplate"], LEGACY_TOOL_CARD_V2_URI,
+    "primary descriptor must not keep pointing at the cached v2 widget URI");
 });
 
 test("SDK-4: resources/read tool card returns HTML with Apps SDK _meta", async () => {
