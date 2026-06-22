@@ -545,3 +545,50 @@ To use Codex execution, assign tasks to a hosted workspace.
 ## 2026-06-21 Verification Summary
 
 Backend modules are split behind compatibility facades. Verification passed with npm test, test:clean, test:perf-smoke, check:syntax, and check:imports.
+
+---
+
+## 2026-06-22 E2E Product Acceptance
+
+**Result**: PASS — 38 automated acceptance tests passed.
+
+### Verification Summary
+
+| Area | Description | Status |
+|------|-------------|--------|
+| Area 1 | Runtime / Doctor / Context | PASS (6 tests) |
+| Area 2 | Tool Mode / Direct Call Security | PASS (7 tests) |
+| Area 3 | Goal → Task → Codex Result | PASS (5 tests) |
+| Area 4 | Agent Pipeline / Handoff | PASS (5 tests) |
+| Area 5 | Event Log / Recent Activity | PASS (3 tests) |
+| Area 6 | GitHub / Bark Integration (dry-run) | PASS (4 tests) |
+| Area 7 | Widget / Apps SDK Resource | PASS (5 tests) |
+| Contract | normalizeToolMode / VALID_TOOL_MODES / filterToolsForMode | PASS (3 tests) |
+
+### Other Checks
+
+- `npm run check:syntax` — PASS
+- `npm run check:imports` — PASS
+- `npm test` — PASS (all unit tests)
+- `node bin/gptwork.mjs --help` — PASS
+- `node bin/gptwork.mjs doctor --local` — PASS
+- `npm run test:e2e-acceptance` — PASS (38 tests)
+
+### Key Findings
+
+- All 5 tool modes (`minimal`, `standard`, `operator`, `codex`, `full`) enforce correct tool boundaries.
+- `shell_exec` is correctly denied in `minimal`/`standard` and available in `codex`/`full`.
+- Goal→Task→Result pipeline (create_goal/create_encoded_goal → get_goal_context → result.md) works end-to-end.
+- Agent runs, handoff files, and event logs are written correctly.
+- GitHub and Bark integrations show graceful disabled-state behavior; no credentials are leaked.
+- Widget card resource is registered, returns valid HTML with all contract sections.
+- 8+ tool descriptors reference the widget via `_meta["openai/outputTemplate"]`.
+
+### New Files
+
+- `backend/test/e2e-product-acceptance.test.mjs` — 38 automated E2E acceptance tests
+- `docs/e2e-acceptance.md` — Human-readable acceptance documentation
+
+### Latest Commit
+
+Will be: `Add E2E product acceptance documentation`

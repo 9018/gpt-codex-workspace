@@ -6,6 +6,15 @@ A bidirectional coordination system between **ChatGPT** and **Codex** for collab
 
 See `docs/current-status.md` for the latest operational state, known blockers, and cleanup notes.
 
+## Product Acceptance / Verification
+
+See `docs/e2e-acceptance.md` for the full E2E product acceptance report covering runtime diagnostics, tool mode security boundaries, goal→task→result pipeline, agent/handoff lifecycle, event log, GitHub/Bark integrations, and the Apps SDK widget resource.
+
+```bash
+cd backend && npm run test:e2e-acceptance
+```
+
+
 ## 5-Minute Quick Start
 
 ```bash
