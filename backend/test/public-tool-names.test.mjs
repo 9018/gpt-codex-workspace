@@ -51,6 +51,9 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "browser_wait_for_selector",
  "cancel_agent_run",
   "cancel_goal_queue_item",
+  "cleanup_goals",
+  "cleanup_tmp",
+  "clear_repo_lock",
  "complete_agent_run",
   "complete_task",
   "context_prepare",
@@ -90,6 +93,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "git_remote_show_commit",
   "git_remote_status",
   "github_status",
+  "goal_storage_status",
   "gptwork_doctor",
   "gptwork_self_test",
   "handoff_to_agent",
@@ -136,6 +140,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "sync_to_github",
   "test_bark_notification",
  "test_workspace_connection",
+  "tmp_status",
  "update_goal_queue_item",
  "update_task_status",
  "update_workspace",
@@ -201,8 +206,8 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
     // Also verify total count is 118 (114 public + 4 placeholder)
-    assert.equal(names.length, 122,
-      `Expected 118 tools with placeholder flag set, got ${names.length}`);
+    assert.equal(names.length, 127,
+      `Expected 127 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;

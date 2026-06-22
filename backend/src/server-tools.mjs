@@ -32,6 +32,7 @@ import { createProjectContextToolsGroup } from "./tool-groups/project-context-to
 import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mjs";
 import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mjs";
 import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.mjs";
+import { createCleanupToolsGroup } from "./tool-groups/cleanup-tools-group.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
@@ -95,6 +96,11 @@ export const TOOL_MODE_ALLOWLISTS = {
     "sync_from_github",
     "sync_to_github",
     "sync_github_comments",
+    "clear_repo_lock",
+    "tmp_status",
+    "cleanup_tmp",
+    "goal_storage_status",
+    "cleanup_goals",
     "create_chatgpt_request",
     "answer_chatgpt_request",
     "get_chatgpt_request",
@@ -110,6 +116,10 @@ export const TOOL_MODE_ALLOWLISTS = {
     "read_handoff",
     "show_changes",
     "read_events",
+    "tmp_status",
+    "cleanup_tmp",
+    "goal_storage_status",
+    "cleanup_goals",
   ]),
   operator: new Set([
     "gptwork_self_test",
@@ -133,7 +143,13 @@ export const TOOL_MODE_ALLOWLISTS = {
     "sync_github_comments",
   
     "list_goal_queue",
-    "get_goal_queue",]),
+    "get_goal_queue",
+    "clear_repo_lock",
+    "tmp_status",
+    "cleanup_tmp",
+    "goal_storage_status",
+    "cleanup_goals",
+  ]),
   codex: new Set([
     "gptwork_self_test",
     "health_check",
@@ -176,6 +192,10 @@ export const TOOL_MODE_ALLOWLISTS = {
     "read_handoff",
     "show_changes",
     "read_events",
+    "tmp_status",
+    "cleanup_tmp",
+    "goal_storage_status",
+    "cleanup_goals",
   ]),
 };
 
@@ -236,9 +256,10 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createBrowserInteractionToolsGroup({ tool, schema, browser }),
     ...createGitRemoteToolsGroup({ tool, schema, registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote }),
    ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
-   ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
+   ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary, store }),
 
   ...createWorkflowToolsGroup({ tool, schema, store, config, workerState, collectWorkerQueueCounts }),
+  ...createCleanupToolsGroup({ tool, schema, config }),
    read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",

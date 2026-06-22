@@ -26,7 +26,7 @@ test('repo lock tool group exposes stable public aliases and response shape', as
     },
   });
 
-  assert.deepEqual(Object.keys(tools), ['list_repo_locks', 'repo_lock_status']);
+  assert.deepEqual(Object.keys(tools), ['list_repo_locks', 'repo_lock_status', 'clear_repo_lock']);
   assert.deepEqual(tools.list_repo_locks.inputSchema.required, []);
   assert.deepEqual(tools.repo_lock_status.inputSchema.required, []);
 

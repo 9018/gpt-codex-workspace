@@ -1,7 +1,6 @@
-import { stat, writeFile } from "node:fs/promises";
-
 import { buildCodexPrompt } from "./codex-prompt-builder.mjs";
 import { fireHeartbeat, initRun } from "./codex-run-metadata.mjs";
+import { writeTaskPromptFile } from "./gptwork-tmp.mjs";
 
 export async function prepareCodexTaskRun({
   task,
@@ -10,7 +9,6 @@ export async function prepareCodexTaskRun({
   workspaceRoot,
   config,
 }) {
-  const promptFile = `/tmp/.gptwork-task-${task.id}.txt`;
   const { fullPrompt } = buildCodexPrompt({
     task,
     goal,
@@ -18,7 +16,13 @@ export async function prepareCodexTaskRun({
     workspaceRoot,
     defaultRepoPath: config.defaultRepoPath,
   });
-  await writeFile(promptFile, fullPrompt, "utf8");
+
+  // Write prompt to managed tmp directory with ENOSPC recovery
+  const promptFile = await writeTaskPromptFile({
+    workspaceRoot: config.defaultWorkspaceRoot,
+    taskId: task.id,
+    content: fullPrompt,
+  });
 
   let runFilePath = null;
   let runId = null;
@@ -33,7 +37,7 @@ export async function prepareCodexTaskRun({
     runFilePath = initResult.runFilePath;
     runId = initResult.runId;
     let promptBytes = 0;
-    try { promptBytes = (await stat(promptFile)).size; } catch {}
+    try { const { stat } = await import("node:fs/promises"); promptBytes = (await stat(promptFile)).size; } catch {}
     fireHeartbeat(runFilePath, "running_codex", {
       prompt_bytes: promptBytes,
       first_output_timeout_seconds: config.codexFirstOutputTimeout || 180,

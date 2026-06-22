@@ -1,7 +1,7 @@
 import { rm } from "node:fs/promises";
 import { selectWorkspace } from "./auth-context.mjs";
 import { goalWorkspaceFiles } from "./goal-files.mjs";
-import { acquireRepoLock } from "./repo-lock.mjs";
+import { acquireRepoLock, releaseLockForTask } from "./repo-lock.mjs";
 import { buildTaskResult } from "./codex-result-parser.mjs";
 import { prepareCodexTaskRun } from "./task-run-setup.mjs";
 import { executeCodexTaskRun } from "./task-codex-execution.mjs";
@@ -77,17 +77,56 @@ export async function processGeneralTask(store, config, task, context, github) {
     item.logs.push({ time: new Date().toISOString(), message: "[worker] codex exec started" });
   });
 
+  // ---------------------------------------------------------------------------
+  // Prepare prompt file — this may fail with ENOSPC or other operational errors
+  // ---------------------------------------------------------------------------
+  let promptFile = null;
+  let runFilePath = null;
+  let runId = null;
+  try {
+    const prepResult = await prepareCodexTaskRun({
+      task,
+      goal,
+      workspaceFiles,
+      workspaceRoot: workspace.root,
+      config,
+    });
+    promptFile = prepResult.promptFile;
+    runFilePath = prepResult.runFilePath;
+    runId = prepResult.runId;
+  } catch (prepErr) {
+    // If prepareCodexTaskRun fails (e.g. ENOSPC), release the lock and mark
+    // the task as failed so it doesn't remain in "running" state with the lock held.
+    const failMsg = `[worker] failed during prompt preparation: ${prepErr.message}`;
+    if (repoLockPath) {
+      try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
+    }
+    await updateTask(store, task.id, (item) => {
+      item.status = "failed";
+      item.result = {
+        kind: "operational_error",
+        summary: failMsg,
+        completed_at: new Date().toISOString(),
+        error_code: prepErr.code || null,
+      };
+      item.logs.push({ time: new Date().toISOString(), message: failMsg });
+    });
+    if (goal) {
+      try {
+        await appendGoalMessage(store, config, {
+          goal_id: goal.id,
+          role: "codex",
+          content: failMsg,
+        }, context);
+      } catch {}
+    }
+    return { task_id: task.id, status: "failed", kind: "operational_error", reason: failMsg };
+  }
+
   const mode = task.mode || "builder";
   let summary = "";
   let parsedResult = null;
   let cr = null;
-  const { promptFile, runFilePath, runId } = await prepareCodexTaskRun({
-    task,
-    goal,
-    workspaceFiles,
-    workspaceRoot: workspace.root,
-    config,
-  });
 
   try {
     ({ cr, parsedResult, summary } = await executeCodexTaskRun({

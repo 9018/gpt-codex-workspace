@@ -2,8 +2,7 @@
  * self-test-tools-group.mjs — gptwork_self_test MCP tool
  *
  * P0.5: Self-test for ChatGPT-connected users.
- * Verifies system health in a compact, structured way without
- * executing dangerous commands or leaking secrets.
+ * P0.1: Enhanced with operational tool presence and no-op completion checks.
  *
  * Checks:
  *   - Tool mode matrix integrity (all 5 modes non-regressed)
@@ -12,10 +11,12 @@
  *   - Widget resource discoverable
  *   - E2E acceptance script exists
  *   - GitHub/Bark status (redacted — no credentials)
+ *   - Operational tools present (workflow, tmp, goal, repo-lock, cleanup)
+ *   - No-op completion detection available
  *
  * Dependencies:
- *   tool   - MCP tool factory from tool-registry.mjs
- *   schema - schema factory from mcp-tooling.mjs
+ *   tool   - MCP tool factory
+ *   schema - schema factory
  *   config - runtime config object
  *   bark   - Bark notifier instance
  *   github - GitHub sync instance
@@ -30,16 +31,10 @@ import { GPTWORK_TOOL_CARD_URI } from "../mcp-tooling.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/**
- * Resolve path to the backend root (parent of src/).
- */
 function backendRoot() {
   return join(__dirname, "..", "..");
 }
 
-/**
- * Check whether the E2E acceptance test file exists.
- */
 function checkE2EScript() {
   const candidates = [
     join(backendRoot(), "test", "e2e-product-acceptance.test.mjs"),
@@ -52,9 +47,6 @@ function checkE2EScript() {
   return { exists: false, path: candidates[0] };
 }
 
-/**
- * Check that the widget resource (GPTWork Compact Card) is registered.
- */
 function checkWidgetResource() {
   const toolingPath = join(backendRoot(), "src", "mcp-tooling.mjs");
   let hasToolCard = false;
@@ -69,27 +61,89 @@ function checkWidgetResource() {
   return { registered: hasToolCard || hasV2 || hasV1, hasToolCard, hasV2, hasV1 };
 }
 
-/**
- * Report tool mode matrix shape.
- */
 function checkToolModeMatrix() {
   const modes = ["minimal", "standard", "operator", "codex", "full"];
-  return modes.map(mode => ({
-    mode,
-    allowlist_defined: true,
-    expected_min_order: "minimal < standard < codex",
-  }));
+  return modes.map(mode => ({ mode, allowlist_defined: true, expected_min_order: "minimal < standard < codex" }));
 }
 
-/**
- * Report shell_exec boundary policy.
- */
 function checkShellExecBoundary() {
   return {
     policy: "shell_exec only in codex and full modes",
     expected_exposed_modes: ["codex", "full"],
     expected_restricted_modes: ["minimal", "standard", "operator"],
   };
+}
+
+/**
+ * P0.1: Check that required operational tools exist in the tool registry.
+ * This detects broken imports or missing tool registrations.
+ */
+function checkOperationalTools() {
+  const toolingPath = join(backendRoot(), "src", "server-tools.mjs");
+  if (!existsSync(toolingPath)) {
+    return { status: "FAIL", detail: "server-tools.mjs not found" };
+  }
+  const content = readFileSync(toolingPath, "utf8");
+
+  const requiredTools = [
+    { name: "workflow_status", pattern: "workflow_status" },
+    { name: "workflow_record_result", pattern: "workflow_record_result" },
+    { name: "workflow_advance", pattern: "workflow_advance" },
+    { name: "workflow_apply_proposal", pattern: "workflow_apply_proposal" },
+    { name: "tmp_status", pattern: "tmp_status" },
+    { name: "cleanup_tmp", pattern: "cleanup_tmp" },
+    { name: "goal_storage_status", pattern: "goal_storage_status" },
+    { name: "cleanup_goals", pattern: "cleanup_goals" },
+    { name: "repo_lock_status", pattern: "repo_lock_status" },
+    { name: "list_repo_locks", pattern: "list_repo_locks" },
+    { name: "clear_repo_lock", pattern: "clear_repo_lock" },
+  ];
+
+  const missing = [];
+  const present = [];
+  for (const t of requiredTools) {
+    if (content.includes(t.pattern)) {
+      present.push(t.name);
+    } else {
+      missing.push(t.name);
+    }
+  }
+
+  if (missing.length > 0) {
+    return {
+      status: "FAIL",
+      detail: `${missing.length} operational tool(s) missing from server-tools.mjs: ${missing.join(", ")}`,
+      present,
+      missing,
+    };
+  }
+
+  return {
+    status: "PASS",
+    detail: `All ${present.length} operational tools found in server-tools.mjs`,
+    present,
+    missing: [],
+  };
+}
+
+/**
+ * P0.1: Check that no-op completion handling code exists.
+ */
+function checkNoopCompletionHandling() {
+  const path = join(backendRoot(), "src", "codex-task-result-builder.mjs");
+  if (!existsSync(path)) {
+    return { status: "FAIL", detail: "codex-task-result-builder.mjs not found" };
+  }
+  const content = readFileSync(path, "utf8");
+  const hasNoopDetection = content.includes('kind: "noop"') || content.includes("isNoopResult");
+  const hasNoopWarning = content.includes("noop") && content.includes("warnings");
+
+  if (hasNoopDetection && hasNoopWarning) {
+    return { status: "PASS", detail: "No-op completion detection and warning present" };
+  } else if (hasNoopDetection) {
+    return { status: "WARN", detail: "No-op detection present but no warning generation" };
+  }
+  return { status: "FAIL", detail: "No no-op completion handling found" };
 }
 
 export function createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }) {
@@ -191,6 +245,22 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
           check: "state_store",
           status: store ? "PASS" : "FAIL",
           detail: store ? "StateStore initialized" : "StateStore not available",
+        });
+
+        // 10. P0.1: Operational tools present
+        const opTools = checkOperationalTools();
+        results.push({
+          check: "operational_tools",
+          status: opTools.status,
+          detail: opTools.detail,
+        });
+
+        // 11. P0.1: No-op completion handling
+        const noopCheck = checkNoopCompletionHandling();
+        results.push({
+          check: "noop_completion_handling",
+          status: noopCheck.status,
+          detail: noopCheck.detail,
         });
 
         // Overall summary

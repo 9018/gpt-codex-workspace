@@ -24,6 +24,14 @@ function usage() {
   watch-handoff --dry-run [--agent <name>] [--command <cmd>]
   watch-handoff --once [--agent <name>] [--command <cmd>]
 
+Tmp commands:
+  tmp status
+  tmp cleanup [--dry-run|--apply]
+
+Goals commands:
+  goals storage-status
+  goals cleanup [--dry-run|--apply]
+
 Queue commands:
   queue list [--status <s>]
   queue start-next [--dry-run]
@@ -404,6 +412,80 @@ async function handleWatchHandoff() {
     console.log("Handoff processed (once mode). No external commands executed.");
   }
 }
+async function handleTmp() {
+  const { store, config } = await localStore();
+  const [ subcommand, ...rest ] = process.argv.slice(4);
+  if (subcommand === "status") {
+    const { scanManagedTmp, scanSystemTmp, getInodePressure } = await import("../src/gptwork-tmp.mjs");
+    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+    const managed = await scanManagedTmp({ workspaceRoot });
+    const systemTmp = await scanSystemTmp();
+    const inodePressure = await getInodePressure();
+    console.log("GPTWork /tmp Status");
+    console.log("=".repeat(60));
+    console.log("Managed tmp (.gptwork/tmp/):");
+    console.log("  files:", managed.fileCount);
+    console.log("  bytes:", managed.totalBytesH);
+    console.log("System /tmp:");
+    console.log("  files:", systemTmp.file_count);
+    console.log("  bytes:", systemTmp.total_bytes_h);
+    if (inodePressure) {
+      console.log("Inode pressure:");
+      console.log("  used:", inodePressure.used_pct);
+      console.log("  free:", inodePressure.free_inodes);
+    }
+  } else if (subcommand === "cleanup") {
+    const dryRun = rest.includes("--dry-run") || !rest.includes("--apply");
+    const { cleanupManagedTmp, cleanupSystemTmp } = await import("../src/gptwork-tmp.mjs");
+    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+    const managedResult = await cleanupManagedTmp({ workspaceRoot, dryRun });
+    const systemResult = await cleanupSystemTmp({ dryRun });
+    console.log("GPTWork /tmp Cleanup");
+    console.log("=".repeat(60));
+    console.log(managedResult.dryRun ? "[dry-run]" : "[applied]");
+    console.log("Managed tmp:", managedResult.deleted, "deleted,", managedResult.skipped, "skipped");
+    console.log("System /tmp:", systemResult.deleted, "deleted,", systemResult.skipped, "skipped");
+  } else {
+    console.log("Usage: gptwork tmp status|cleanup [--dry-run|--apply]");
+  }
+}
+
+async function handleGoals() {
+  const { store, config } = await localStore();
+  const [ subcommand, ...rest ] = process.argv.slice(4);
+  if (subcommand === "storage-status") {
+    const { scanGoals, scanEvents } = await import("../src/goal-storage-service.mjs");
+    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+    const gs = await scanGoals(workspaceRoot);
+    const es = await scanEvents(workspaceRoot);
+    console.log("GPTWork Goal Storage");
+    console.log("=".repeat(60));
+    console.log("Goal dirs:", gs.goal_dir_count);
+    console.log("Total files:", gs.total_files);
+    console.log("Total bytes:", gs.total_bytes_h);
+    if (gs.oldest_goal) console.log("Oldest:", gs.oldest_goal.name, gs.oldest_goal.age_days + " days");
+    if (gs.newest_goal) console.log("Newest:", gs.newest_goal.name, gs.newest_goal.age_days + " days");
+    console.log("Status:", JSON.stringify(gs.status_breakdown));
+    console.log("");
+    console.log("Events:");
+    console.log("  files:", es.file_count, "bytes:", es.total_bytes_h);
+  } else if (subcommand === "cleanup") {
+    const dryRun = rest.includes("--dry-run") || !rest.includes("--apply");
+    const { cleanupGoals } = await import("../src/goal-storage-service.mjs");
+    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+    const result = await cleanupGoals({ workspaceRoot, dryRun });
+    console.log("GPTWork Goal Cleanup");
+    console.log("=".repeat(60));
+    console.log(dryRun ? "[dry-run]" : "[applied]");
+    console.log("Eligible:", result.eligible);
+    console.log("Skipped:", result.skipped);
+    console.log("Freed:", result.freed_bytes_h);
+    console.log(result.message);
+  } else {
+    console.log("Usage: gptwork goals storage-status|cleanup [--dry-run|--apply]");
+  }
+}
+
 
 async function main() {
   const [command, subcommand, ...rest] = args;
@@ -544,7 +626,15 @@ async function main() {
     throw new Error('Unknown queue subcommand: ' + sub + '. Usage: gptwork queue list|start-next|enqueue <goal_id>|cancel <queue_id>');
   }
 
-  if (command === "watch-handoff") {
+  if (command === "watch-handoff")
+
+  if (command === "tmp") {
+    return handleTmp();
+  }
+
+  if (command === "goals") {
+    return handleGoals();
+  } {
     return handleWatchHandoff();
   }
   throw new Error(`Unknown command: ${args.join(" ")}\n${usage()}`);
