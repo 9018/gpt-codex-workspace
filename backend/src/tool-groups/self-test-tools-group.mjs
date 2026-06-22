@@ -26,6 +26,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { GPTWORK_TOOL_CARD_URI } from "../mcp-tooling.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -56,14 +57,16 @@ function checkE2EScript() {
  */
 function checkWidgetResource() {
   const toolingPath = join(backendRoot(), "src", "mcp-tooling.mjs");
+  let hasToolCard = false;
   let hasV2 = false;
   let hasV1 = false;
   if (existsSync(toolingPath)) {
     const content = readFileSync(toolingPath, "utf8");
+    hasToolCard = content.includes(GPTWORK_TOOL_CARD_URI);
     hasV2 = content.includes("ui://widget/gptwork-card-v2.html");
     hasV1 = content.includes("ui://widget/gptwork-card-v1.html");
   }
-  return { registered: hasV2 || hasV1, hasV2, hasV1 };
+  return { registered: hasToolCard || hasV2 || hasV1, hasToolCard, hasV2, hasV1 };
 }
 
 /**
@@ -135,7 +138,7 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
           check: "widget_resource",
           status: widget.registered ? "PASS" : "FAIL",
           detail: widget.registered
-            ? `registered (v2: ${widget.hasV2 || false}, v1: ${widget.hasV1 || false})`
+            ? `registered (toolCard: ${widget.hasToolCard || false}, v2: ${widget.hasV2 || false}, v1: ${widget.hasV1 || false})`
             : `widget resource not found`,
         });
 

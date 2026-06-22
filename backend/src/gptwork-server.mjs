@@ -7,7 +7,7 @@ import { createBarkNotifier } from "./bark-notifier.mjs";
 import { createNotificationService } from "./notification-service.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
-import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource } from "./mcp-tooling.mjs";
+import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource, tagToolResult, toolResultMeta } from "./mcp-tooling.mjs";
 import { parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, assertAuthorized } from "./auth-context.mjs";
 import { setTerminalNotifier } from "./task-lifecycle.mjs";
 import { setCreatedTaskNotifier } from "./goal-task-lifecycle.mjs";
@@ -184,15 +184,22 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
           const name = message.params?.name;
           const args = message.params?.arguments || {};
           const visibleTools = createDiscoverableTools(tools, config.toolMode);
-          const handler = visibleTools[name]?.handler;
+          const toolDescriptor = visibleTools[name];
+          const handler = toolDescriptor?.handler;
           if (!handler) return jsonError(message.id, -32601, `Unknown tool: ${name}`);
-          const structuredContent = await handler(args, context);
+          const rawStructuredContent = await handler(args, context);
+          const structuredContent = toolResultMeta(name, toolDescriptor)
+            ? tagToolResult(name, toolDescriptor, rawStructuredContent)
+            : rawStructuredContent;
           const summary = this.summarizeToolResult(name, structuredContent);
-          return jsonResult(message.id, {
+          const result = {
             content: [{ type: "text", text: summary }],
             structuredContent,
             isError: false
-          });
+          };
+          const meta = toolResultMeta(name, toolDescriptor);
+          if (meta) result._meta = meta;
+          return jsonResult(message.id, result);
         }
         return jsonError(message.id, -32601, `Unknown method: ${message.method}`);
       } catch (error) {

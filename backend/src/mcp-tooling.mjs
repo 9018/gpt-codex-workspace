@@ -15,6 +15,62 @@ const __gptworkWidgetV2Html = readFileSync(
 );
 
 export const MCP_PROTOCOL_VERSION = "2025-03-26";
+export const GPTWORK_TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v1.html";
+export const GPTWORK_LEGACY_CARD_V1_URI = "ui://widget/gptwork-card-v1.html";
+export const GPTWORK_LEGACY_CARD_V2_URI = "ui://widget/gptwork-card-v2.html";
+export const GPTWORK_TOOL_CARD_MIME_TYPE = "text/html;profile=mcp-app";
+export const GPTWORK_WIDGET_DOMAIN = process.env.GPTWORK_WIDGET_DOMAIN || "https://chat.openai.com";
+
+export function toolCardMeta() {
+  return {
+    ui: { resourceUri: GPTWORK_TOOL_CARD_URI },
+    "openai/outputTemplate": GPTWORK_TOOL_CARD_URI,
+  };
+}
+
+export function toolCardResourceMeta() {
+  return {
+    ui: {
+      prefersBorder: true,
+      domain: GPTWORK_WIDGET_DOMAIN,
+      csp: {
+        connectDomains: [],
+        resourceDomains: [],
+      },
+    },
+    "openai/widgetDescription": "Renders GPTWork runtime status, worker state, goals, tasks, queue items, diffs, handoff plans, and diagnostics as compact cards with safe fallbacks.",
+    "openai/widgetPrefersBorder": true,
+    "openai/widgetDomain": GPTWORK_WIDGET_DOMAIN,
+    "openai/widgetCSP": {
+      connect_domains: [],
+      resource_domains: [],
+    },
+  };
+}
+
+function isCardEnabledMetadata(metadata = {}) {
+  return Boolean(metadata.outputTemplate || metadata.resourceUri);
+}
+
+export function tagToolResult(name, toolDescriptor, structuredContent) {
+  const base = structuredContent && typeof structuredContent === "object" && !Array.isArray(structuredContent)
+    ? structuredContent
+    : { value: structuredContent };
+  return {
+    ...base,
+    gptwork_tool: name,
+    gptwork_title: toolDescriptor?.metadata?.name || name,
+    gptwork_type: "tool_result",
+  };
+}
+
+export function toolResultMeta(name, toolDescriptor) {
+  if (!isCardEnabledMetadata(toolDescriptor?.metadata)) return undefined;
+  return {
+    tool: name,
+    resourceUri: GPTWORK_TOOL_CARD_URI,
+  };
+}
 
 export function schema(properties, required = []) {
   const mapped = {};
@@ -34,13 +90,8 @@ export function toolList(tools) {
       inputSchema: value.inputSchema,
       outputSchema: { type: "object", additionalProperties: true }
     };
-    if (value.metadata?.outputTemplate) {
-      descriptor._meta = { "openai/outputTemplate": value.metadata.outputTemplate };
-    }
-    if (value.metadata?.resourceUri) {
-      if (!descriptor._meta) descriptor._meta = {};
-      descriptor._meta["openai/outputTemplate"] ??= value.metadata.resourceUri;
-      descriptor._meta.ui = { resourceUri: value.metadata.resourceUri };
+    if (isCardEnabledMetadata(value.metadata)) {
+      descriptor._meta = toolCardMeta();
     }
     return descriptor;
   });
@@ -55,14 +106,18 @@ export function resourceList() {
       description: "Legacy compact GPTWork status/result card for ChatGPT Apps SDK clients."
     },
     {
-     uri: "ui://widget/gptwork-card-v2.html",
-     name: "GPTWork Apps SDK Card (v2)",
-      mimeType: "text/html;profile=mcp-app",
-     description: "GPTWork Apps SDK Card v2 - structured status/result card with key-values, items, changed_files, diff summary, warnings, errors, and raw JSON fallback.",
-      "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
-      "openai/widgetPrefersBorder": true,
-      "openai/widgetDomain": ["runtime_status", "worker_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
-      "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
+      uri: GPTWORK_TOOL_CARD_URI,
+      name: "GPTWork Tool Card",
+      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
+      description: "GPTWork Apps SDK tool card for structured status, task, queue, diff, handoff, and diagnostic results.",
+      ...toolCardResourceMeta(),
+    },
+    {
+      uri: "ui://widget/gptwork-card-v2.html",
+      name: "GPTWork Apps SDK Card (v2 legacy)",
+      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
+      description: "Legacy GPTWork Apps SDK card URI kept for older clients. New tool descriptors use the GPTWork Tool Card URI.",
+      ...toolCardResourceMeta(),
     }
   ];
 }
@@ -181,16 +236,11 @@ e.innerHTML = renderCard(d);
     };
   }
 
- if (uri === "ui://widget/gptwork-card-v2.html") {
+ if (uri === GPTWORK_TOOL_CARD_URI || uri === "ui://widget/gptwork-card-v2.html") {
    return {
      uri,
-      mimeType: "text/html;profile=mcp-app",
-      _meta: {
-        "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
-        "openai/widgetPrefersBorder": true,
-        "openai/widgetDomain": ["runtime_status", "worker_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
-        "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
-      },
+      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
+      _meta: toolCardResourceMeta(),
      text: __gptworkWidgetV2Html
    };
  }

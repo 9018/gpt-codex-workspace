@@ -25,6 +25,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import { normalizeToolMode, filterToolsForMode, VALID_TOOL_MODES } from "../src/server-tools.mjs";
+import { GPTWORK_TOOL_CARD_URI } from "../src/mcp-tooling.mjs";
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_BIN = resolve(TEST_DIR, "../bin/gptwork.mjs");
@@ -541,21 +542,23 @@ test("Area 6d: sync_from_github handles disabled gracefully", async () => {
 // Area 7: Widget / Apps SDK Resource
 // ===========================================================================
 
-test("Area 7a: resources/list includes v1 and v2 widget card resources", async () => {
+test("Area 7a: resources/list includes primary tool card and legacy widget card resources", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/list", params: {},
   }, { authorization: "Bearer test-token" });
   const resources = response.result.resources;
   const uris = resources.map(r => r.uri);
+  assert.ok(uris.includes(GPTWORK_TOOL_CARD_URI), "primary tool card resource listed");
   assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "v1 widget card resource listed");
   assert.ok(uris.includes("ui://widget/gptwork-card-v2.html"), "v2 widget card resource listed");
-  const v2 = resources.find(r => r.uri === "ui://widget/gptwork-card-v2.html");
-  assert.ok(v2, "v2 resource entry exists");
-  assert.ok(v2["openai/widgetDescription"], "v2 has widgetDescription");
-  assert.ok(v2["openai/widgetPrefersBorder"] === true, "v2 has widgetPrefersBorder");
-  assert.ok(Array.isArray(v2["openai/widgetDomain"]), "v2 has widgetDomain array");
-  assert.ok(v2["openai/widgetCSP"], "v2 has widgetCSP");
+  const card = resources.find(r => r.uri === GPTWORK_TOOL_CARD_URI);
+  assert.ok(card, "tool card resource entry exists");
+  assert.ok(card["openai/widgetDescription"], "tool card has widgetDescription");
+  assert.equal(card["openai/widgetPrefersBorder"], true, "tool card has widgetPrefersBorder");
+  assert.equal(typeof card["openai/widgetDomain"], "string", "tool card has widgetDomain string");
+  assert.deepEqual(card["openai/widgetCSP"], { connect_domains: [], resource_domains: [] }, "tool card has object widgetCSP");
+  assert.deepEqual(card.ui?.csp, { connectDomains: [], resourceDomains: [] }, "tool card has ui CSP object");
 });
 
 test("Area 7b: resources/read returns compact card HTML for v1 and v2", async () => {
@@ -603,19 +606,19 @@ test("Area 7c: v2 HTML contains badge/renderCard/keyValues/items/warnings/errors
   assert.ok(html.includes("Show raw JSON"), "has JSON fallback toggle");
 });
 
-test("Area 7d: tool descriptors have _meta with outputTemplate AND resourceUri pointing to v2", async () => {
+test("Area 7d: tool descriptors have _meta with outputTemplate AND resourceUri pointing to primary tool card", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const descriptors = await toolDescriptors(server);
-  const withV2 = descriptors.filter(d => {
+  const withCard = descriptors.filter(d => {
     const ot = d._meta?.["openai/outputTemplate"];
     const ru = d._meta?.ui?.resourceUri;
-    return ot === "ui://widget/gptwork-card-v2.html" || ru === "ui://widget/gptwork-card-v2.html";
+    return ot === GPTWORK_TOOL_CARD_URI || ru === GPTWORK_TOOL_CARD_URI;
   });
-  assert.ok(withV2.length >= 8, `at least 8 tools use v2 card, got ${withV2.length}`);
+  assert.ok(withCard.length >= 8, `at least 8 tools use primary tool card, got ${withCard.length}`);
   // At least 3 must have both outputTemplate AND resourceUri
   const withBoth = descriptors.filter(d => {
-    return d._meta?.["openai/outputTemplate"] === "ui://widget/gptwork-card-v2.html" &&
-      d._meta?.ui?.resourceUri === "ui://widget/gptwork-card-v2.html";
+    return d._meta?.["openai/outputTemplate"] === GPTWORK_TOOL_CARD_URI &&
+      d._meta?.ui?.resourceUri === GPTWORK_TOOL_CARD_URI;
   });
   assert.ok(withBoth.length >= 3, `at least 3 tools have both outputTemplate and resourceUri, got ${withBoth.length}`);
 });
@@ -627,6 +630,7 @@ test("Area 7e: resources/list returns both widget cards even in minimal mode", a
   }, { authorization: "Bearer test-token" });
   const resources = response.result.resources;
   const uris = resources.map(r => r.uri);
+  assert.ok(uris.includes(GPTWORK_TOOL_CARD_URI), "primary tool card visible in minimal mode");
   assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "v1 visible in minimal mode");
   assert.ok(uris.includes("ui://widget/gptwork-card-v2.html"), "v2 visible in minimal mode");
 });

@@ -186,17 +186,17 @@ test("Goal and task events are logged through lifecycle hooks (no-op test for ho
 // P2: Widget card resource tests (upgraded contract)
 // ================================================================
 
-import { resourceList, readResource } from "../src/mcp-tooling.mjs";
+import { GPTWORK_TOOL_CARD_URI, resourceList, readResource } from "../src/mcp-tooling.mjs";
 
 test("widget card resource is listed and returns proper compact HTML", () => {
   const list = resourceList();
   assert.ok(list.length > 0);
-  const entry = list.find((r) => r.uri === "ui://widget/gptwork-card-v2.html");
- assert.ok(entry, "gptwork-card-v1.html should be in resource list");
+  const entry = list.find((r) => r.uri === GPTWORK_TOOL_CARD_URI);
+ assert.ok(entry, "GPTWork tool card should be in resource list");
   assert.equal(entry.mimeType, "text/html;profile=mcp-app");
  assert.match(entry.name, /GPTWork/);
  
- const resource = readResource("ui://widget/gptwork-card-v2.html");
+ const resource = readResource(GPTWORK_TOOL_CARD_URI);
  assert.ok(resource, "readResource should return content");
   assert.equal(resource.mimeType, "text/html;profile=mcp-app");
   // Root card container
@@ -228,7 +228,7 @@ test("widget card resource is listed and returns proper compact HTML", () => {
 });
 
 test("widget card render function produces correct sections", () => {
-  const resource = readResource("ui://widget/gptwork-card-v2.html");
+  const resource = readResource(GPTWORK_TOOL_CARD_URI);
   const html = resource.text;
 
  // Verify sections
@@ -250,7 +250,7 @@ import { schema } from "../src/mcp-tooling.mjs";
 
 test("goal tools have metadata with correct tags and modes", () => {
   const handler = async () => ({});
-  const common = { modes: ["minimal", "standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["goal"], outputTemplate: "ui://widget/gptwork-card-v2.html" };
+  const common = { modes: ["minimal", "standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["goal"], outputTemplate: GPTWORK_TOOL_CARD_URI };
 
   const createGoal = createTool({
     name: "create_goal", description: "Create a shared goal",
@@ -259,7 +259,7 @@ test("goal tools have metadata with correct tags and modes", () => {
   });
   assert.deepEqual(createGoal.metadata.modes, ["standard", "codex", "full"]);
   assert.deepEqual(createGoal.metadata.tags, ["goal"]);
-  assert.equal(createGoal.metadata.outputTemplate, "ui://widget/gptwork-card-v2.html");
+  assert.equal(createGoal.metadata.outputTemplate, GPTWORK_TOOL_CARD_URI);
 
   const createEncodedGoal = createTool({
     name: "create_encoded_goal", description: "Create an encoded goal",
@@ -489,7 +489,7 @@ test("default tool mode exposes standard tools and not agent tools", async () =>
   // Some tool metadata outputTemplate should point to widget
   const tool = response.result.tools.find((t) => t.name === "open_project_context");
   assert.ok(tool, "open_project_context should exist");
-  assert.equal(tool._meta?.["openai/outputTemplate"], "ui://widget/gptwork-card-v2.html");
+  assert.equal(tool._meta?.["openai/outputTemplate"], GPTWORK_TOOL_CARD_URI);
 });
 
 test("minimal tool mode exposes only its explicit safe subset", async () => {
@@ -583,7 +583,7 @@ test("at least one tool descriptor has outputTemplate pointing to widget", () =>
       authorization: "Bearer test-token",
     });
     const toolsWithTemplate = response.result.tools.filter((t) =>
-      t._meta && t._meta["openai/outputTemplate"] === "ui://widget/gptwork-card-v2.html"
+      t._meta && t._meta["openai/outputTemplate"] === GPTWORK_TOOL_CARD_URI
     );
     assert.ok(toolsWithTemplate.length >= 3,
       `expected at least 3 tools with outputTemplate, got ${toolsWithTemplate.length}: ${toolsWithTemplate.map(t => t.name).join(", ")}`

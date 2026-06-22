@@ -55,8 +55,8 @@ function unwrapPayload(value){
 function getPayload(){
   var openai=window.openai;
   var candidates=[
-    openai&&openai.toolOutput,
     openai&&openai.structuredContent,
+    openai&&openai.toolOutput,
     openai&&openai.output,
     openai&&openai.toolResult
   ];
