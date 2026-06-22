@@ -31,11 +31,13 @@ gptwork start
 
 In another shell:
 
-```bash
+  ```bash
 gptwork doctor --local
 gptwork status --local
+gptwork connect --local
+gptwork self-test --local
 curl http://127.0.0.1:8787/health
-```
+  ```
 
 For ChatGPT, use `open_project_context` first. It returns the current repo, worker, queue, scripts, recent tasks/goals, bounded file tree, and recommended next tools without exposing the full debug tool surface. The default MCP tool mode is `standard`; set `GPTWORK_TOOL_MODE=full` only for operator/debug sessions.
 
@@ -44,6 +46,8 @@ The default connector URL is `https://mcp.gptwork.cc.cd/mcp/dev-token` — no ma
 Future: different suffixes (e.g. `/mcp/workspace-x`) will allocate different workspace contexts.
 
 - ChatGPT handles command, analysis, task creation, and mobile coordination.
+For a detailed setup and connection guide, see [docs/setup-connect.md](docs/setup-connect.md).
+
 - Codex handles implementation, testing, file edits, and verification.
 - The backend MCP service owns authentication, workspaces, tasks, and audit.
 - **GitHub Issues** can optionally replace the need for a public HTTPS reverse proxy.

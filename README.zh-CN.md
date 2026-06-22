@@ -53,6 +53,10 @@ gptwork start
 gptwork doctor --local
 gptwork status --local
 curl http://127.0.0.1:8787/health
+gptwork connect --local
+gptwork self-test --local
+详细的安装与连接指南请参考 [docs/setup-connect.md](docs/setup-connect.md)。
+
 ```
 
 ### ChatGPT MCP 接入
@@ -91,6 +95,8 @@ GPTWORK_TOOL_MODE=standard
 | `gptwork start` | 启动 MCP 服务 |
 | `gptwork status --local` | 查看服务状态与队列信息 |
 | `gptwork doctor --local` | 运行诊断，检查环境配置 |
+| `gptwork connect --local` | 查看本地 MCP URL 与连接选项 |
+| `gptwork self-test --local` | 运行系统自检 (PASS/WARN/FAIL) |
 | `gptwork settings show` | 查看当前配置 |
 | `gptwork logs` | 查看服务日志 |
 | `gptwork watch-handoff --dry-run` | 模拟监听 handoff 目录 |

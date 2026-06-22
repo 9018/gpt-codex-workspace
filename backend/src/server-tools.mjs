@@ -30,10 +30,11 @@ import { createSystemDiagnosticsToolsGroup } from "./tool-groups/system-diagnost
 import { createGithubCommentsSyncToolsGroup } from "./tool-groups/github-comments-sync-tools-group.mjs";
 import { createProjectContextToolsGroup } from "./tool-groups/project-context-tools-group.mjs";
 import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mjs";
+import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
 
-const TOOL_MODE_ALLOWLISTS = {
+export const TOOL_MODE_ALLOWLISTS = {
   minimal: new Set([
     "health_check",
     "runtime_status",
@@ -44,6 +45,7 @@ const TOOL_MODE_ALLOWLISTS = {
     "list_tasks",
   ]),
   standard: new Set([
+    "gptwork_self_test",
     "health_check",
     "runtime_status",
     "worker_status",
@@ -101,6 +103,7 @@ const TOOL_MODE_ALLOWLISTS = {
     "read_events",
   ]),
   operator: new Set([
+    "gptwork_self_test",
     "health_check",
     "runtime_status",
     "worker_status",
@@ -121,6 +124,7 @@ const TOOL_MODE_ALLOWLISTS = {
     "sync_github_comments",
   ]),
   codex: new Set([
+    "gptwork_self_test",
     "health_check",
     "runtime_status",
     "worker_status",
@@ -187,6 +191,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
 
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
+    ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
     ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),

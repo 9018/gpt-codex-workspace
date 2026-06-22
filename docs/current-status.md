@@ -1,5 +1,25 @@
 # GPTWork Current Status
 Date: 2026-06-22
+
+## 2026-06-22 P0/P0.5 UX Parity
+
+CLI enhancements:
+- `gptwork setup` — Non-interactive default setup, generates .gptwork/runtime.env without overwriting secrets
+- `gptwork connect --local` — Shows local MCP URL, ChatGPT connector example, and connectivity options
+- `gptwork self-test --local` — Runs 9-category self-check (tool mode matrix, shell_exec boundary, timeout 3600, widget resource, E2E script, GitHub/Bark status, config sources, state store)
+- `gptwork doctor --local` — Shows repo root, workspace root, tool mode, timeout, GitHub/Bark status, E2E script existence
+- `gptwork status --local` — Shows server URL, queue, repo, tool mode, timeout, GitHub/Bark states
+
+MCP tool:
+- `gptwork_self_test` — New MCP tool (standard/operator/codex/full) returning compact structured results
+
+npm script:
+- `npm run release:check` — Chains check:syntax → check:imports → test:e2e-acceptance
+
+Docs:
+- `docs/setup-connect.md` — Detailed setup and connection guide
+- README.md / README.zh-CN.md — Updated with connect/self-test/release:check and setup-connect reference
+
 Status: P2 completed. Tool metadata covers all 6 target groups (goal, task, context/runtime, agent, workspace, git) with modes/audience/tags/outputTemplate. 9 high-frequency tools migrated to rich JSON Schema descriptors (create_encoded_goal, create_task, run_agent_pipeline, handoff_to_agent, show_changes, read_events, git_remote_diff, search_files, read_text_file). Widget compact card renderer upgraded with explicit contract (keyValues, items, warnings, raw JSON fold toggle, renderCard function) and compatibility with legacy structuredContent.
 Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Existing MCP tool names and compatibility entry points remain callable.
 
