@@ -204,6 +204,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
+    ...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }),
     ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),
     ...createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }),
 
@@ -235,8 +236,6 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createGitRemoteToolsGroup({ tool, schema, registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote }),
    ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
    ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
-
-    ...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }),
 
    read_events: tool({
       name: "read_events",

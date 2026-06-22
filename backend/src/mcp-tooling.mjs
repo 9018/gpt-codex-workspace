@@ -61,7 +61,7 @@ export function resourceList() {
      description: "GPTWork Apps SDK Card v2 - structured status/result card with key-values, items, changed_files, diff summary, warnings, errors, and raw JSON fallback.",
       "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
       "openai/widgetPrefersBorder": true,
-      "openai/widgetDomain": ["runtime_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
+      "openai/widgetDomain": ["runtime_status", "worker_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
       "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
     }
   ];
@@ -188,7 +188,7 @@ e.innerHTML = renderCard(d);
       _meta: {
         "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
         "openai/widgetPrefersBorder": true,
-        "openai/widgetDomain": ["runtime_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
+        "openai/widgetDomain": ["runtime_status", "worker_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item", "read_handoff"],
         "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
       },
      text: __gptworkWidgetV2Html

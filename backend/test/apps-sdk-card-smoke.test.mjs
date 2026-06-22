@@ -69,6 +69,11 @@ function renderWidgetHtml(html, openai) {
   return { root, listeners, context };
 }
 
+function extractInitialRootHtml(html) {
+  const match = html.match(/<div class="card" id="root">([\s\S]*?)<\/div><script>/);
+  return match ? match[1] : "";
+}
+
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
@@ -198,6 +203,8 @@ test("SDK-3: resources/list includes v2 with Apps SDK metadata", async () => {
     "openai/widgetDomain must include runtime_status");
   assert.ok(domain.includes("gptwork_doctor"),
     "openai/widgetDomain must include gptwork_doctor");
+  assert.ok(domain.includes("worker_status"),
+    "openai/widgetDomain must include worker_status");
 
   // Verify total count is reasonable
   assert.ok(domain.length >= 12,
@@ -238,6 +245,42 @@ test("SDK-4: resources/read v2 returns HTML with Apps SDK _meta", async () => {
     "v2 resource content _meta should have widgetPrefersBorder: true");
   assert.ok(content._meta["openai/widgetCSP"],
     "v2 resource content _meta should have widgetCSP");
+});
+
+test("SDK-4a: v2 initial HTML has visible fallback before JavaScript runs", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: "ui://widget/gptwork-card-v2.html" });
+  const html = res.result.contents[0].text;
+  const initialRoot = extractInitialRootHtml(html);
+
+  assert.match(initialRoot, /GPTWork Card/,
+    "initial #root markup must identify the card before JavaScript runs");
+  assert.match(initialRoot, /Waiting for tool output/,
+    "initial #root markup must show a readable no-payload fallback before JavaScript runs");
+  assert.match(initialRoot, /widget resource loaded/,
+    "initial #root markup must include a resource-loaded diagnostic before JavaScript runs");
+  assert.doesNotMatch(initialRoot, /Loading\.\.\./,
+    "initial #root markup must not be a skeleton-only loading placeholder");
+});
+
+test("SDK-2c: queue tools are inside the first 58 standard tools for ChatGPT surface truncation", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/list");
+  const names = res.result.tools.map((t) => t.name);
+  const visiblePrefix = new Set(names.slice(0, 58));
+  const queueTools = [
+    "enqueue_goal",
+    "list_goal_queue",
+    "get_goal_queue",
+    "start_next_queued_goal",
+    "update_goal_queue_item",
+    "cancel_goal_queue_item",
+  ];
+
+  for (const name of queueTools) {
+    assert.ok(visiblePrefix.has(name),
+      `${name} must be in the first 58 tools; current index=${names.indexOf(name)}`);
+  }
 });
 
 test("SDK-4b: v2 HTML is self-contained and avoids external assets", async () => {
@@ -392,6 +435,8 @@ test("SDK-10: resources/read v2 widgetDomain includes all queue tools", async ()
     assert.ok(domain.includes(tool),
       `readResource v2 openai/widgetDomain must include ${tool}`);
   }
+  assert.ok(domain.includes("worker_status"),
+    "readResource v2 openai/widgetDomain must include worker_status");
 
   assert.ok(content.text.includes("renderCard"), "v2 HTML must include renderCard function");
 });
