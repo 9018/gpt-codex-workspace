@@ -1,5 +1,8 @@
 # GPT-Codex Workspace
 
+[中文说明](README.zh-CN.md) | English
+
+
 A bidirectional coordination system between **ChatGPT** and **Codex** for collaborative project development.
 
 ## Current Status
