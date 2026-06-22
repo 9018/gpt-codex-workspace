@@ -68,6 +68,8 @@ export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, w
       modes: ["minimal", "standard", "operator", "codex", "full"],
       audience: ["chatgpt", "codex", "operator"],
       tags: ["system", "worker"],
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const queue = await collectWorkerQueueCounts(store);
         return { ...workerStatusExtendedSnapshot(workerState), queue, queues: queue };

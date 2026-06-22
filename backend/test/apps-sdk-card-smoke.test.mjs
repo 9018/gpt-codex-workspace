@@ -13,6 +13,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import vm from "node:vm";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -41,6 +42,31 @@ async function rpc(server, method, params = {}, token = "test-token") {
     method,
     params,
   }, headers);
+}
+
+function renderWidgetHtml(html, openai) {
+  const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((match) => match[1]);
+  assert.ok(scripts.length > 0, "widget HTML must contain an inline script");
+
+  const root = { innerHTML: "" };
+  const listeners = new Map();
+  const windowObject = {
+    openai,
+    addEventListener: (event, handler) => listeners.set(event, handler),
+  };
+  const context = vm.createContext({
+    window: windowObject,
+    document: {
+      readyState: "complete",
+      getElementById: (id) => id === "root" ? root : null,
+    },
+  });
+
+  for (const script of scripts) {
+    vm.runInContext(script, context, { timeout: 1000 });
+  }
+
+  return { root, listeners, context };
 }
 
 // ---------------------------------------------------------------------------
@@ -97,6 +123,37 @@ test("SDK-2: tools/list contains v2 card _meta on tools with outputTemplate", as
     "enqueue_goal must have _meta.openai/outputTemplate pointing to v2 card");
   assert.ok(enqueueTool?._meta?.ui?.resourceUri === "ui://widget/gptwork-card-v2.html",
     "enqueue_goal must have _meta.ui.resourceUri pointing to v2 card");
+});
+
+test("SDK-2b: required card-enabled tools expose both v2 descriptor metadata fields", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/list");
+  const toolsByName = new Map(res.result.tools.map((t) => [t.name, t]));
+
+  const requiredCardTools = [
+    "runtime_status",
+    "gptwork_self_test",
+    "gptwork_doctor",
+    "worker_status",
+    "list_goals",
+    "get_goal_context",
+    "list_tasks",
+    "get_task",
+    "show_changes",
+    "read_handoff",
+    "list_goal_queue",
+    "get_goal_queue",
+    "start_next_queued_goal",
+  ];
+
+  for (const name of requiredCardTools) {
+    const descriptor = toolsByName.get(name);
+    assert.ok(descriptor, `${name} must be visible in standard tools/list`);
+    assert.equal(descriptor._meta?.["openai/outputTemplate"], "ui://widget/gptwork-card-v2.html",
+      `${name} must expose _meta.openai/outputTemplate for the v2 card`);
+    assert.equal(descriptor._meta?.ui?.resourceUri, "ui://widget/gptwork-card-v2.html",
+      `${name} must expose _meta.ui.resourceUri for the v2 card`);
+  }
 });
 
 test("SDK-3: resources/list includes v2 with Apps SDK metadata", async () => {
@@ -164,6 +221,14 @@ test("SDK-4: resources/read v2 returns HTML with Apps SDK _meta", async () => {
   assert.ok(content.text.includes("structuredContent"), "v2 HTML must reference structuredContent");
   assert.ok(content.text.includes("toolOutput"), "v2 HTML must reference toolOutput");
   assert.ok(content.text.includes("Show raw JSON"), "v2 HTML must have JSON fallback toggle");
+  assert.ok(content.text.includes("No structured payload received."),
+    "v2 HTML must include a visible no-payload fallback");
+  assert.ok(content.text.includes("This is a renderer fallback, not an empty card."),
+    "v2 HTML must explain that the fallback is not an empty card");
+  assert.ok(content.text.includes("window.openai keys"),
+    "v2 HTML must include safe renderer diagnostics for missing payloads");
+  assert.ok(content.text.includes("try{") || content.text.includes("try {"),
+    "v2 HTML must include an error boundary");
 
   // Check Apps SDK _meta in readResource response
   assert.ok(content._meta, "v2 resource content should have _meta");
@@ -173,6 +238,60 @@ test("SDK-4: resources/read v2 returns HTML with Apps SDK _meta", async () => {
     "v2 resource content _meta should have widgetPrefersBorder: true");
   assert.ok(content._meta["openai/widgetCSP"],
     "v2 resource content _meta should have widgetCSP");
+});
+
+test("SDK-4b: v2 HTML is self-contained and avoids external assets", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: "ui://widget/gptwork-card-v2.html" });
+  const html = res.result.contents[0].text;
+
+  assert.equal(/<script\b[^>]*\bsrc\s*=/.test(html), false,
+    "v2 HTML must not load external scripts");
+  assert.equal(/<link\b[^>]*\brel\s*=\s*["']?stylesheet/i.test(html), false,
+    "v2 HTML must not load external stylesheets");
+  assert.equal(/<img\b[^>]*\bsrc\s*=\s*["']?https?:/i.test(html), false,
+    "v2 HTML must not load external images");
+});
+
+test("SDK-4c: v2 HTML renders visible fallback with no window.openai", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: "ui://widget/gptwork-card-v2.html" });
+  const { root } = renderWidgetHtml(res.result.contents[0].text, undefined);
+
+  assert.match(root.innerHTML, /GPTWork Card/);
+  assert.match(root.innerHTML, /No structured payload received\./);
+  assert.match(root.innerHTML, /This is a renderer fallback, not an empty card\./);
+  assert.match(root.innerHTML, /window\.openai keys/);
+  assert.doesNotMatch(root.innerHTML, /Loading\.\.\./);
+});
+
+test("SDK-4d: v2 HTML renders structuredContent and toolOutput payloads", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: "ui://widget/gptwork-card-v2.html" });
+  const html = res.result.contents[0].text;
+
+  const structured = renderWidgetHtml(html, {
+    structuredContent: {
+      summary: "Runtime status",
+      status: "ok",
+      keyValues: { commit: "abc123", worker: "running" },
+      items: ["queue ready"],
+    },
+  });
+  assert.match(structured.root.innerHTML, /Runtime status/);
+  assert.match(structured.root.innerHTML, /abc123/);
+  assert.match(structured.root.innerHTML, /queue ready/);
+
+  const toolOutput = renderWidgetHtml(html, {
+    toolOutput: {
+      summary: "Worker status",
+      status: "running",
+      keyValues: { assigned: 1 },
+    },
+  });
+  assert.match(toolOutput.root.innerHTML, /Worker status/);
+  assert.match(toolOutput.root.innerHTML, /assigned/);
+  assert.match(toolOutput.root.innerHTML, /1/);
 });
 
 test("SDK-5: tools/call result includes structuredContent for card renderer", async () => {

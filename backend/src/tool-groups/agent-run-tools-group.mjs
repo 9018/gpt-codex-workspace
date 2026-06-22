@@ -85,6 +85,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
       description: "Read the current handoff plan, status, and artifact paths.",
       inputSchema: schema({}),
       ...common,
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const result = await readHandoff(config);
         await eventLogger?.append("handoff.read", { agent: result.status.agent, status: result.status.status });

@@ -39,9 +39,41 @@ pre.json,pre.raw{background:#161b22}
 .section,.section{border-top-color:#30363d}}
 </style></head><body><div class="card" id="root"><div class="title">GPTWork</div><div class="muted">Loading...</div></div><script>
 (function(){
-var d = window.openai && (window.openai.toolOutput || window.openai.structuredContent) || {};
 var root = document.getElementById('root');
 function esc(s){return String(s).replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+function ownKeys(value){return value&&typeof value==='object'?Object.keys(value):[]}
+function unwrapPayload(value){
+  if(!value||typeof value!=='object') return null;
+  if(value.structuredContent&&typeof value.structuredContent==='object') return value.structuredContent;
+  if(value.toolOutput&&typeof value.toolOutput==='object') return value.toolOutput;
+  if(value.output&&typeof value.output==='object') return value.output;
+  if(value.toolResult&&typeof value.toolResult==='object') return value.toolResult;
+  if(value.result&&typeof value.result==='object') return unwrapPayload(value.result)||value.result;
+  if(value.data&&typeof value.data==='object') return unwrapPayload(value.data)||value.data;
+  return value;
+}
+function getPayload(){
+  var openai=window.openai;
+  var candidates=[
+    openai&&openai.toolOutput,
+    openai&&openai.structuredContent,
+    openai&&openai.output,
+    openai&&openai.toolResult
+  ];
+  if(openai&&Array.isArray(openai.messages)&&openai.messages.length){
+    for(var i=openai.messages.length-1;i>=0;i--){candidates.push(openai.messages[i])}
+  }
+  for(var j=0;j<candidates.length;j++){
+    var payload=unwrapPayload(candidates[j]);
+    if(payload&&typeof payload==='object'&&ownKeys(payload).length) return payload;
+  }
+  return null;
+}
+function renderFallback(){
+  var openaiKeys=ownKeys(window.openai).join(', ')||'(none)';
+  return '<div class="section"><div class="title">GPTWork Card</div><div>No structured payload received.</div><div class="muted">This is a renderer fallback, not an empty card.</div></div>'+
+    '<div class="section"><table class="kv-table"><tr><td>window.openai keys</td><td>'+esc(openaiKeys)+'</td></tr><tr><td>document ready state</td><td>'+esc(document.readyState)+'</td></tr></table></div>';
+}
 function badge(status){
   var s=String(status).toLowerCase().replace(/[^a-z0-9_]/g,'');
   var cls='info';
@@ -50,6 +82,10 @@ function badge(status){
   else if(/^(fail|failed|error|crashed|stopped|disabled|dirty|stale|missing|blocked)$/.test(s)) cls='fail';
   else if(/^(cancelled|skipped|timeout|timed_out)$/.test(s)) cls='cancelled';
   return '<span class="badge '+cls+'">'+esc(status)+'</span>';
+}
+function renderError(err){
+  return '<div class="section"><div class="title">GPTWork Card '+badge('error')+'</div><div class="errors">Renderer error: '+esc(err&&err.message?err.message:err)+'</div></div>'+
+    '<div class="section"><table class="kv-table"><tr><td>window.openai keys</td><td>'+esc(ownKeys(window.openai).join(', ')||'(none)')+'</td></tr><tr><td>document ready state</td><td>'+esc(document.readyState)+'</td></tr></table></div>';
 }
 function renderCard(data){
   if(!data||typeof data!=='object'){return '<div class="muted">No data</div>'}
@@ -111,6 +147,22 @@ function renderCard(data){
   }
   return parts.join('');
 }
-root.innerHTML=renderCard(d);
+function render(data){
+  try{
+    var payload=data||getPayload();
+    root.innerHTML=payload?renderCard(payload):renderFallback();
+  }catch(err){
+    root.innerHTML=renderError(err);
+  }
+}
+window.addEventListener('message',function(event){
+  try{
+    var payload=unwrapPayload(event&&event.data);
+    if(payload&&typeof payload==='object'&&ownKeys(payload).length) render(payload);
+  }catch(err){
+    root.innerHTML=renderError(err);
+  }
+});
+render();
 })();
 </script></body></html>
