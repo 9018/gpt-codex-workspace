@@ -289,6 +289,7 @@ export class StateStore {
       }],
       goals: [],
       agent_runs: [],
+      goal_queue: [],
       conversations: [],
       memories: [],
       tasks: [],

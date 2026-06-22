@@ -31,6 +31,8 @@ import { createGithubCommentsSyncToolsGroup } from "./tool-groups/github-comment
 import { createProjectContextToolsGroup } from "./tool-groups/project-context-tools-group.mjs";
 import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mjs";
 import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mjs";
+import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.mjs";
+import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
 
@@ -60,6 +62,12 @@ export const TOOL_MODE_ALLOWLISTS = {
     "list_goals",
     "get_goal_context",
     "append_goal_message",
+    "enqueue_goal",
+    "list_goal_queue",
+    "get_goal_queue",
+    "start_next_queued_goal",
+    "update_goal_queue_item",
+    "cancel_goal_queue_item",
     "create_task",
     "list_tasks",
     "get_task",
@@ -122,7 +130,9 @@ export const TOOL_MODE_ALLOWLISTS = {
     "sync_from_github",
     "sync_to_github",
     "sync_github_comments",
-  ]),
+  
+    "list_goal_queue",
+    "get_goal_queue",]),
   codex: new Set([
     "gptwork_self_test",
     "health_check",

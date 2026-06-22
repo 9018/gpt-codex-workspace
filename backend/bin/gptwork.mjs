@@ -6,6 +6,7 @@ import { buildRuntimeConfig } from "../src/runtime-config.mjs";
 import { StateStore } from "../src/state-store.mjs";
 import { collectWorkerQueueCounts } from "../src/worker-queue-counts.mjs";
 import { handoffToAgent, readHandoff, handoffPaths } from "../src/handoff-service.mjs";
+import { enqueueGoal, listGoalQueue, startNextQueuedGoal, cancelGoalQueueItem } from "../src/goal-queue.mjs";
 
 const args = process.argv.slice(2);
 
@@ -21,7 +22,14 @@ function usage() {
   settings set KEY VALUE
   logs
   watch-handoff --dry-run [--agent <name>] [--command <cmd>]
-  watch-handoff --once [--agent <name>] [--command <cmd>]`;
+  watch-handoff --once [--agent <name>] [--command <cmd>]
+
+Queue commands:
+  queue list [--status <s>]
+  queue start-next [--dry-run]
+  queue enqueue <goal_id> [--depends-on-goal <gid>] [--depends-on-task <tid>]
+  queue cancel <queue_id>`;
+
 }
 
 function workspaceRoot() {
@@ -420,6 +428,122 @@ async function main() {
     console.log(existsSync(logPath) ? readFileSync(logPath, "utf8").slice(-8000) : `No log file at ${logPath}`);
     return;
   }
+  
+  if (command === 'queue') {
+    const sub = subcommand;
+    if (sub === 'list') {
+      const rc = buildRuntimeConfig(workspaceRoot(), process.env.GPTWORK_RUNTIME_ENV_FILE);
+      const config = rc.config;
+      const store = new StateStore({
+        statePath: config.statePath,
+        defaultWorkspaceRoot: config.workspaceRoot,
+      });
+      await store.load();
+      const opts = {};
+      const idx_status = rest.indexOf('--status');
+      if (idx_status >= 0 && rest[idx_status + 1]) opts.status = rest[idx_status + 1];
+      const result = await listGoalQueue(store, opts);
+      console.log('Goal Queue');
+      console.log('='.repeat(60));
+      if (result.items.length === 0) {
+        console.log('  (empty)');
+      } else {
+        for (const item of result.items) {
+          const status = String(item.status || '?').padEnd(10);
+          const title = (item.goal_title || '').slice(0, 50);
+          console.log('  ' + item.queue_id + '  [' + status + ']  pos=' + item.position + '  goal=' + item.goal_id + '  ' + title);
+          if (item.task_id) console.log('         task=' + item.task_id);
+          if (item.blocked_reason) console.log('         blocked: ' + item.blocked_reason);
+          if (item.depends_on_goal_id) console.log('         depends_on_goal: ' + item.depends_on_goal_id);
+          if (item.depends_on_task_id) console.log('         depends_on_task: ' + item.depends_on_task_id);
+        }
+      }
+      console.log('');
+      console.log('Total: ' + result.total + ' items');
+      return;
+    }
+    if (sub === 'start-next') {
+      const dryRun = rest.includes('--dry-run');
+      const rc = buildRuntimeConfig(workspaceRoot(), process.env.GPTWORK_RUNTIME_ENV_FILE);
+      const config = rc.config;
+      const store = new StateStore({
+        statePath: config.statePath,
+        defaultWorkspaceRoot: config.workspaceRoot,
+      });
+      await store.load();
+      const result = await startNextQueuedGoal(store, config, { dry_run: dryRun });
+      console.log('GPTWork Queue: start-next');
+      console.log('='.repeat(60));
+      console.log('started: ' + result.started);
+      console.log('reason: ' + result.reason);
+      if (result.item) {
+        console.log('queue_id: ' + result.item.queue_id);
+        console.log('goal_id: ' + result.item.goal_id);
+        console.log('status: ' + result.item.status);
+      }
+      if (result.task) {
+        console.log('task_id: ' + result.task.id);
+        console.log('task_status: ' + result.task.status);
+      }
+      console.log('');
+      console.log('Checks:');
+      for (const c of result.checks || []) {
+        const icon = c.passed ? 'OK' : 'BLOCKED';
+        console.log('  ' + icon + ' ' + c.check + ': ' + c.detail);
+      }
+      return;
+    }
+    if (sub === 'enqueue') {
+      const goalId = rest[0];
+      if (!goalId) throw new Error('Usage: gptwork queue enqueue <goal_id>');
+      const rc = buildRuntimeConfig(workspaceRoot(), process.env.GPTWORK_RUNTIME_ENV_FILE);
+      const config = rc.config;
+      const store = new StateStore({
+        statePath: config.statePath,
+        defaultWorkspaceRoot: config.workspaceRoot,
+      });
+      await store.load();
+      const idx_dep_goal = rest.indexOf('--depends-on-goal');
+      const idx_dep_task = rest.indexOf('--depends-on-task');
+      const opts = {};
+      if (idx_dep_goal >= 0 && rest[idx_dep_goal + 1]) opts.depends_on_goal_id = rest[idx_dep_goal + 1];
+      if (idx_dep_task >= 0 && rest[idx_dep_task + 1]) opts.depends_on_task_id = rest[idx_dep_task + 1];
+      const result = await enqueueGoal(store, goalId, opts);
+      console.log('GPTWork Queue: enqueue');
+      console.log('='.repeat(60));
+      if (result.ok) {
+        console.log('Enqueued goal ' + goalId);
+        console.log('queue_id: ' + result.item.queue_id);
+        console.log('position: ' + result.item.position);
+        console.log('status: ' + result.item.status);
+      } else {
+        console.log('Failed: ' + result.warnings.join(', '));
+      }
+      return;
+    }
+    if (sub === 'cancel') {
+      const queueId = rest[0];
+      if (!queueId) throw new Error('Usage: gptwork queue cancel <queue_id>');
+      const rc = buildRuntimeConfig(workspaceRoot(), process.env.GPTWORK_RUNTIME_ENV_FILE);
+      const config = rc.config;
+      const store = new StateStore({
+        statePath: config.statePath,
+        defaultWorkspaceRoot: config.workspaceRoot,
+      });
+      await store.load();
+      const result = await cancelGoalQueueItem(store, queueId);
+      console.log('GPTWork Queue: cancel');
+      console.log('='.repeat(60));
+      if (result.ok) {
+        console.log('Cancelled queue item ' + queueId);
+      } else {
+        console.log('Failed: ' + result.warnings.join(', '));
+      }
+      return;
+    }
+    throw new Error('Unknown queue subcommand: ' + sub + '. Usage: gptwork queue list|start-next|enqueue <goal_id>|cancel <queue_id>');
+  }
+
   if (command === "watch-handoff") {
     return handleWatchHandoff();
   }

@@ -1,6 +1,35 @@
 # GPTWork Current Status
 Date: 2026-06-22
 
+## 2026-06-22 Goal Queue Execution (New)
+
+**Implemented**: Real goal/task queue execution.
+
+### What Changed
+
+- New `goal-queue.mjs` module: Queue data model with status transitions, dependency management, repo concurrency guards, worktree dirty checks, and autostart hooks.
+- New `goal-queue-tools-group.mjs`: 6 MCP tools (`enqueue_goal`, `list_goal_queue`, `get_goal_queue`, `start_next_queued_goal`, `update_goal_queue_item`, `cancel_goal_queue_item`).
+- CLI: New `queue` subcommand with `list`, `start-next`, `enqueue`, `cancel`.
+- Task completion hook: `complete_task` now calls `autoStartNextOnTaskCompleted`.
+- `goal_queue` added to `state.json` (default state).
+- New documentation: `docs/goal-queue.md`.
+- New tests: 12 tests in `test/goal-queue.test.mjs`.
+
+### Key Design Decisions
+
+1. Queue is stored in `state.goal_queue` as an array, using the same `state.json` persistence.
+2. `start_next_queued_goal` performs three checks before creating a task: dependency satisfaction, repo lock status, and worktree cleanliness.
+3. The `complete_task` hook calls `autoStartNextOnTaskCompleted` but failures are non-fatal (do not roll back the completion).
+4. Tool mode exposure follows existing conventions: standard/codex/full have full access, operator has read-only (list/get), minimal has none.
+5. Dependencies support both `depends_on_goal_id` and `depends_on_task_id`.
+
+### Status
+
+Queue 2 (`goal_51da0e55-3395-41b2-8200-fddf6c7045f7`) and Queue 3 (`goal_d11eca32-7bcd-4d9e-ac2d-0405506b0dc7`) are NOT automatically migrated.
+To enqueue them, use `gptwork queue enqueue <goal_id>`.
+
+
+
 ## 2026-06-22 P0/P0.5 UX Parity
 
 CLI enhancements:

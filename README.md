@@ -7,7 +7,7 @@ A bidirectional coordination system between **ChatGPT** and **Codex** for collab
 
 ## Current Status
 
-See `docs/current-status.md` for the latest operational state, known blockers, and cleanup notes.
+See `docs/current-status.md` for the latest operational state and `docs/goal-queue.md` for the goal queue execution, known blockers, and cleanup notes.
 
 ## Product Acceptance / Verification
 
@@ -531,7 +531,7 @@ GPTWork uses two levels of environment configuration:
 - These are safe for project-specific configuration that needs to change without restarting the service
 - Do not put secrets into `project.md`; use `project.env` for key/value configuration
 
-See `docs/current-status.md` for the latest operational state.
+See `docs/current-status.md` for the latest operational state and `docs/goal-queue.md` for the goal queue execution.
 
 
 

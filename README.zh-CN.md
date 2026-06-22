@@ -2,6 +2,15 @@
 
 # GPT-Codex Workspace
 
+## 新功能：目标队列执行
+
+参见 `docs/goal-queue.md` 了解真实的目标执行队列能力。
+
+Open Goal 不会被自动执行。只有放入执行队列（Queue）的 Goal 才会被顺序处理。
+依赖管理、仓库并发锁和工作目录检查确保安全执行。
+
+
+
 **GPTWork** —— ChatGPT 与 Codex 双向协作的后端 MCP 服务。
 
 通过这套系统，你可以用自然语言在 ChatGPT 中描述需求，由 Codex 在工作空间中执行代码修改、运行测试、提交结果，整个过程通过 MCP（Model Context Protocol）衔接。

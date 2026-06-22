@@ -1,4 +1,5 @@
 import { updateTask } from '../task-lifecycle.mjs';
+import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
 
 /**
  * Factory for task completion and review MCP tool registration.
