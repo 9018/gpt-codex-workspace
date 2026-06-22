@@ -11,6 +11,7 @@ export function createTool(descriptionOrDescriptor, inputSchema, handler) {
       examples = [],
       tags = [],
       outputTemplate = "",
+      resourceUri = "",
       annotations = {},
     } = descriptionOrDescriptor;
     return {
@@ -25,6 +26,7 @@ export function createTool(descriptionOrDescriptor, inputSchema, handler) {
         examples,
         tags,
         outputTemplate,
+        resourceUri,
         annotations,
       },
     };

@@ -66,7 +66,8 @@ export function createRuntimeStatusToolsGroup({
       modes: ["minimal", "standard", "operator", "codex", "full"],
       audience: ["chatgpt", "codex", "operator"],
       tags: ["system", "runtime"],
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const startTime = Date.now();
         const repoDir = resolveRepoDir();
@@ -174,7 +175,8 @@ export function createRuntimeStatusToolsGroup({
       modes: ["standard", "operator", "codex", "full"],
       audience: ["chatgpt", "operator"],
       tags: ["system", "doctor"],
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async ({ deep = false }) => {
         const startTime = Date.now();
         const repoDir = resolveRepoDir();

@@ -541,39 +541,61 @@ test("Area 6d: sync_from_github handles disabled gracefully", async () => {
 // Area 7: Widget / Apps SDK Resource
 // ===========================================================================
 
-test("Area 7a: resources/list includes widget card resource", async () => {
+test("Area 7a: resources/list includes v1 and v2 widget card resources", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/list", params: {},
   }, { authorization: "Bearer test-token" });
   const resources = response.result.resources;
   const uris = resources.map(r => r.uri);
-  assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "widget card resource listed");
+  assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "v1 widget card resource listed");
+  assert.ok(uris.includes("ui://widget/gptwork-card-v2.html"), "v2 widget card resource listed");
+  const v2 = resources.find(r => r.uri === "ui://widget/gptwork-card-v2.html");
+  assert.ok(v2, "v2 resource entry exists");
+  assert.ok(v2["openai/widgetDescription"], "v2 has widgetDescription");
+  assert.ok(v2["openai/widgetPrefersBorder"] === true, "v2 has widgetPrefersBorder");
+  assert.ok(Array.isArray(v2["openai/widgetDomain"]), "v2 has widgetDomain array");
+  assert.ok(v2["openai/widgetCSP"], "v2 has widgetCSP");
 });
 
-test("Area 7b: resources/read returns compact card HTML", async () => {
+test("Area 7b: resources/read returns compact card HTML for v1 and v2", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
-  const response = await server.handleRpc({
+  // Test v1
+  const v1resp = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
     params: { uri: "ui://widget/gptwork-card-v1.html" },
   }, { authorization: "Bearer test-token" });
-  assert.equal(response.result.contents[0].uri, "ui://widget/gptwork-card-v1.html");
-  const html = response.result.contents[0].text;
-  assert.ok(html.includes("<!doctype html>") || html.startsWith("<!doctype html>"), "HTML starts with doctype");
-  assert.ok(html.includes("GPTWork"), "HTML contains GPTWork");
-  assert.ok(html.includes("card"), "HTML contains card structure");
+  assert.equal(v1resp.result.contents[0].uri, "ui://widget/gptwork-card-v1.html");
+  const v1html = v1resp.result.contents[0].text;
+  assert.ok(v1html.includes("<!doctype html>") || v1html.startsWith("<!doctype html>"), "v1 HTML starts with doctype");
+  assert.ok(v1html.includes("GPTWork"), "v1 HTML contains GPTWork");
+  assert.ok(v1html.includes("card"), "v1 HTML contains card structure");
+  // Test v2
+  const v2resp = await server.handleRpc({
+    jsonrpc: "2.0", id: 2, method: "resources/read",
+    params: { uri: "ui://widget/gptwork-card-v2.html" },
+  }, { authorization: "Bearer test-token" });
+  assert.equal(v2resp.result.contents[0].uri, "ui://widget/gptwork-card-v2.html");
+  const v2html = v2resp.result.contents[0].text;
+  assert.ok(v2html.includes("<!doctype html>") || v2html.startsWith("<!doctype html>"), "v2 HTML starts with doctype");
+  assert.ok(v2html.includes("GPTWork"), "v2 HTML contains GPTWork");
+  assert.ok(v2html.includes("badge"), "v2 HTML has badge function");
 });
 
-test("Area 7c: HTML contains status/summary/keyValues/items/warnings/errors/render", async () => {
+test("Area 7c: v2 HTML contains badge/renderCard/keyValues/items/warnings/errors/diff/raw", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
-    params: { uri: "ui://widget/gptwork-card-v1.html" },
+    params: { uri: "ui://widget/gptwork-card-v2.html" },
   }, { authorization: "Bearer test-token" });
   const html = response.result.contents[0].text;
   assert.ok(html.includes("renderCard"), "has renderCard function");
+  assert.ok(html.includes("badge"), "has badge function");
   assert.ok(html.includes("data.status"), "reads status");
   assert.ok(html.includes("data.summary"), "reads summary");
+  assert.ok(html.includes("data.changed_files"), "reads changed_files");
+  assert.ok(html.includes("data.staged_count"), "reads staged_count");
+  assert.ok(html.includes("data.diff_excerpt"), "reads diff_excerpt");
   assert.ok(html.includes("keyValues"), "reads keyValues");
   assert.ok(html.includes("data.items"), "reads items");
   assert.ok(html.includes("data.warnings"), "reads warnings");
@@ -581,25 +603,83 @@ test("Area 7c: HTML contains status/summary/keyValues/items/warnings/errors/rend
   assert.ok(html.includes("Show raw JSON"), "has JSON fallback toggle");
 });
 
-test("Area 7d: tool descriptors have _meta.openai/outputTemplate pointing to widget", async () => {
+test("Area 7d: tool descriptors have _meta with outputTemplate AND resourceUri pointing to v2", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const descriptors = await toolDescriptors(server);
-  const withTemplate = descriptors.filter(d => d._meta?.["openai/outputTemplate"]);
-  assert.ok(withTemplate.length >= 3, `at least 3 tools point to widget template, got ${withTemplate.length}`);
-  withTemplate.forEach(d => {
-    assert.equal(d._meta["openai/outputTemplate"], "ui://widget/gptwork-card-v1.html",
-      `${d.name} has correct outputTemplate`);
+  const withV2 = descriptors.filter(d => {
+    const ot = d._meta?.["openai/outputTemplate"];
+    const ru = d._meta?.ui?.resourceUri;
+    return ot === "ui://widget/gptwork-card-v2.html" || ru === "ui://widget/gptwork-card-v2.html";
   });
+  assert.ok(withV2.length >= 8, `at least 8 tools use v2 card, got ${withV2.length}`);
+  // At least 3 must have both outputTemplate AND resourceUri
+  const withBoth = descriptors.filter(d => {
+    return d._meta?.["openai/outputTemplate"] === "ui://widget/gptwork-card-v2.html" &&
+      d._meta?.ui?.resourceUri === "ui://widget/gptwork-card-v2.html";
+  });
+  assert.ok(withBoth.length >= 3, `at least 3 tools have both outputTemplate and resourceUri, got ${withBoth.length}`);
 });
 
-test("Area 7e: resources/list returns widget even in minimal mode", async () => {
+test("Area 7e: resources/list returns both widget cards even in minimal mode", async () => {
   const { server } = await makeServer({ toolMode: "minimal" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/list", params: {},
   }, { authorization: "Bearer test-token" });
   const resources = response.result.resources;
   const uris = resources.map(r => r.uri);
-  assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "widget visible in minimal mode");
+  assert.ok(uris.includes("ui://widget/gptwork-card-v1.html"), "v1 visible in minimal mode");
+  assert.ok(uris.includes("ui://widget/gptwork-card-v2.html"), "v2 visible in minimal mode");
+});
+
+
+
+test("Area 7f: v2 card has root/status/summary/key-values/items/warnings/errors/raw fallback/render", async () => {
+  const { server } = await makeServer({ toolMode: "standard" });
+  const response = await server.handleRpc({
+    jsonrpc: "2.0", id: 1, method: "resources/read",
+    params: { uri: "ui://widget/gptwork-card-v2.html" },
+  }, { authorization: "Bearer test-token" });
+  const html = response.result.contents[0].text;
+  // root container
+  assert.ok(html.includes('id="root"'), "has root container");
+  // status rendering
+  assert.ok(html.includes("data.status"), "reads status");
+  // summary rendering
+  assert.ok(html.includes("data.summary"), "reads summary");
+  // key-values rendering
+  assert.ok(html.includes("keyValues") || html.includes("key_values"), "reads keyValues or key_values");
+  // items rendering
+  assert.ok(html.includes("data.items"), "reads items");
+  // warnings rendering
+  assert.ok(html.includes("data.warnings"), "reads warnings");
+  // errors rendering
+  assert.ok(html.includes("data.errors"), "reads errors");
+  // raw JSON fallback
+  assert.ok(html.includes("Show raw JSON"), "has raw JSON fallback toggle");
+  // renderCard function
+  assert.ok(html.includes("renderCard"), "has renderCard function");
+  // badge function
+  assert.ok(html.includes("function badge"), "has badge function");
+  // v2-specific: diff stats
+  assert.ok(html.includes("staged_count"), "reads staged_count for diff stats");
+  assert.ok(html.includes("diff_excerpt"), "reads diff_excerpt for diff preview");
+  // dark mode support
+  assert.ok(html.includes("prefers-color-scheme:dark"), "has dark mode support");
+  // v1 backward compat
+  assert.ok(html.includes("keyValues"), "backward compat with keyValues");
+});
+
+test("Area 7g: v1 card remains backward-compatible", async () => {
+  const { server } = await makeServer({ toolMode: "standard" });
+  const v1resp = await server.handleRpc({
+    jsonrpc: "2.0", id: 1, method: "resources/read",
+    params: { uri: "ui://widget/gptwork-card-v1.html" },
+  }, { authorization: "Bearer test-token" });
+  assert.equal(v1resp.result.contents[0].uri, "ui://widget/gptwork-card-v1.html");
+  const html = v1resp.result.contents[0].text;
+  assert.ok(html.includes("renderCard"), "v1 has renderCard");
+  assert.ok(html.includes("data.status"), "v1 reads status");
+  assert.ok(html.includes("Show raw JSON"), "v1 has JSON toggle");
 });
 
 // ===========================================================================

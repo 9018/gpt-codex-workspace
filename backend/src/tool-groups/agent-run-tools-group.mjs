@@ -71,7 +71,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
         task_id: { type: "string", description: "Task ID to link the handoff to." }
       }, ["plan"]),
       ...common,
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async (args) => {
         const result = await handoffToAgent(config, args);
         await eventLogger?.append("handoff.created", { agent: result.handoff.agent, goal_id: result.handoff.goal_id, task_id: result.handoff.task_id });
@@ -98,7 +99,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
         max_diff_bytes: { type: "integer", description: "Maximum diff size in bytes. Larger diffs are truncated.", minimum: 256, maximum: 1048576, default: 65536 }
       }),
       ...common,
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: (args) => showChanges(args, config),
     }),
   };

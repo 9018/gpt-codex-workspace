@@ -1,4 +1,40 @@
 # GPTWork Current Status
+
+
+## 2026-06-22 Apps SDK Card v2 Upgrade
+
+**Implemented**: GPTWork widget card upgraded from v1 to v2 with proper ChatGPT Apps SDK metadata and compact structuredContent rendering.
+
+### What Changed
+
+- New v2 widget resource `ui://widget/gptwork-card-v2.html` with full Apps SDK metadata (`openai/widgetDescription`, `openai/widgetPrefersBorder`, `openai/widgetDomain`, `openai/widgetCSP`).
+- v2 card HTML rendered from `backend/src/widget-card-v2.html` (separate file, easier to maintain).
+- Tool descriptors now include both `_meta["openai/outputTemplate"]` and `_meta.ui.resourceUri`.
+- 12+ high-frequency tools migrated to v2 with compact card formatters.
+- New `docs/widget-card.md` documenting the v2 card contract.
+- v1 card preserved unchanged for backward compatibility.
+
+### v2 Card Features
+
+- Enhanced badge color mapping (ok/warn/fail/cancelled/info).
+- Diff statistics rendering (staged_count, unstaged_count).
+- Diff excerpt preview.
+- Changed files listing (limited to 20).
+- Dark mode via `prefers-color-scheme:dark`.
+- Raw JSON fallback with collapsible toggle.
+
+### New/Updated Tool Card Formatters
+
+- `show_changes` - Git diff summary with file list.
+- `read_handoff` - Handoff status/plan overview.
+- `list_goal_queue` / `get_goal_queue` - Queue items with status breakdown.
+- `start_next_queued_goal` - Queue start result with task ID.
+- `gptwork_self_test` - Self-test results with diagnostics.
+- All existing card formatters (runtime_status, gptwork_doctor, etc.) updated to serve structured data to v2.
+
+### Status
+
+v2 card is default for all high-frequency tools. v1 remains accessible for backward compatibility.
 Date: 2026-06-22
 
 ## 2026-06-22 Goal Queue Execution (New)

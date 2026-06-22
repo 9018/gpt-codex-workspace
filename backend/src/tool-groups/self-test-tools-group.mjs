@@ -56,12 +56,14 @@ function checkE2EScript() {
  */
 function checkWidgetResource() {
   const toolingPath = join(backendRoot(), "src", "mcp-tooling.mjs");
+  let hasV2 = false;
+  let hasV1 = false;
   if (existsSync(toolingPath)) {
     const content = readFileSync(toolingPath, "utf8");
-    const hasCard = content.includes("ui://widget/gptwork-card-v1.html");
-    return { registered: hasCard, source: "mcp-tooling.mjs" };
+    hasV2 = content.includes("ui://widget/gptwork-card-v2.html");
+    hasV1 = content.includes("ui://widget/gptwork-card-v1.html");
   }
-  return { registered: false, source: null };
+  return { registered: hasV2 || hasV1, hasV2, hasV1 };
 }
 
 /**
@@ -96,7 +98,8 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
       modes: ["standard", "operator", "codex", "full"],
       audience: ["chatgpt", "operator"],
       tags: ["system", "diagnostics", "self-test"],
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const results = [];
 
@@ -132,7 +135,7 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
           check: "widget_resource",
           status: widget.registered ? "PASS" : "FAIL",
           detail: widget.registered
-            ? `registered in ${widget.source}`
+            ? `registered (v2: ${widget.hasV2 || false}, v1: ${widget.hasV1 || false})`
             : `widget resource not found`,
         });
 

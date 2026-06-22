@@ -6,7 +6,8 @@ import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
  * Dependencies are passed in to avoid circular imports from gptwork-server.mjs.
  */
 export function createTaskCompletionToolsGroup({ tool, schema, store, github, eventLogger, hookBus }) {
-  const common = { audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v1.html" };
+  const common = { audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html" };
   return {
     complete_task: tool({
       name: "complete_task",

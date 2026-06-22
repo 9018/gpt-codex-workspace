@@ -10,7 +10,8 @@ export function createProjectContextToolsGroup({ tool, schema, config, store, wo
       audience: ["chatgpt", "codex"],
       tags: ["project", "context", "status"],
       outputCard: "projectContextCard",
-      outputTemplate: "ui://widget/gptwork-card-v1.html",
+      outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => collectProjectContext({ config, store, workerState, registry }),
     }),
   };

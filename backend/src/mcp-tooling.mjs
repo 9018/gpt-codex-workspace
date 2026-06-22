@@ -5,6 +5,14 @@
  * No coupling to gptwork-server internals.
  */
 import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __gptworkWidgetV2Html = readFileSync(
+  join(dirname(fileURLToPath(import.meta.url)), "widget-card-v2.html"),
+  "utf8"
+);
 
 export const MCP_PROTOCOL_VERSION = "2025-03-26";
 
@@ -29,25 +37,42 @@ export function toolList(tools) {
     if (value.metadata?.outputTemplate) {
       descriptor._meta = { "openai/outputTemplate": value.metadata.outputTemplate };
     }
+    if (value.metadata?.resourceUri) {
+      if (!descriptor._meta) descriptor._meta = {};
+      descriptor._meta["openai/outputTemplate"] ??= value.metadata.resourceUri;
+      descriptor._meta.ui = { resourceUri: value.metadata.resourceUri };
+    }
     return descriptor;
   });
 }
 
 export function resourceList() {
-  return [{
-    uri: "ui://widget/gptwork-card-v1.html",
-    name: "GPTWork Compact Card",
-    mimeType: "text/html",
-    description: "Compact GPTWork status/result card for ChatGPT Apps SDK clients."
-  }];
+  return [
+    {
+      uri: "ui://widget/gptwork-card-v1.html",
+      name: "GPTWork Compact Card (v1)",
+      mimeType: "text/html",
+      description: "Legacy compact GPTWork status/result card for ChatGPT Apps SDK clients."
+    },
+    {
+      uri: "ui://widget/gptwork-card-v2.html",
+      name: "GPTWork Apps SDK Card (v2)",
+      mimeType: "text/html",
+      description: "GPTWork Apps SDK Card v2 - structured status/result card with key-values, items, changed_files, diff summary, warnings, errors, and raw JSON fallback.",
+      "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
+      "openai/widgetPrefersBorder": true,
+      "openai/widgetDomain": ["runtime_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "read_handoff", "list_goal_queue", "start_next_queued_goal"],
+      "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
+    }
+  ];
 }
 
 export function readResource(uri) {
-  if (uri !== "ui://widget/gptwork-card-v1.html") return null;
-  return {
-    uri,
-    mimeType: "text/html",
-    text: `<!doctype html>
+  if (uri === "ui://widget/gptwork-card-v1.html") {
+    return {
+      uri,
+      mimeType: "text/html",
+      text: `<!doctype html>
 <html lang="en">
 <head><meta charset="utf-8"><style>
 *{box-sizing:border-box}body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;margin:0;padding:12px;color:#17202a;background:transparent}
@@ -153,7 +178,18 @@ function renderCard(data){
 e.innerHTML = renderCard(d);
 })();
 </script></body></html>`
-  };
+    };
+  }
+
+  if (uri === "ui://widget/gptwork-card-v2.html") {
+    return {
+      uri,
+      mimeType: "text/html",
+      text: __gptworkWidgetV2Html
+    };
+  }
+
+  return null;
 }
 
 export function initializeResult() {

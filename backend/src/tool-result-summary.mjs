@@ -141,6 +141,64 @@ export function summarizeToolResult(name, structuredContent) {
             const sy = structuredContent;
             return "GitHub sync: " + (sy.synced_tasks ?? "?") + " tasks, " + (sy.synced_requests ?? "?") + " requests";
           }
+        case "show_changes": {
+          const d = structuredContent;
+          const lines = [
+            formatKeyValue('repo', d.repo || '-'),
+            formatKeyValue('summary', d.summary || '-'),
+            formatKeyValue('staged', d.staged_count ?? 0),
+            formatKeyValue('unstaged', d.unstaged_count ?? 0),
+          ];
+          if (d.changed_files && Array.isArray(d.changed_files)) {
+            const cf = d.changed_files.slice(0, 5).map(function(f) { return '    ' + (f.path || f); }).join('\n');
+            lines.push('');
+            lines.push('  changed files: ' + d.changed_files.length);
+            lines.push(cf);
+          }
+          return formatToolCard('Changes', { lines });
+        }
+        case "read_handoff": {
+          const s = structuredContent.status || {};
+          const lines = [
+            formatKeyValue('agent', s.agent || '-'),
+            formatKeyValue('status', s.status || '-'),
+            formatKeyValue('goal_id', s.goal_id || '-'),
+            formatKeyValue('plan', structuredContent.plan ? (structuredContent.plan.split('\n').length + ' lines') : 'none'),
+          ];
+          return formatToolCard('Handoff', { lines });
+        }
+        case "list_goal_queue":
+        case "get_goal_queue": {
+          const items = structuredContent.items || structuredContent.item || [];
+          const arr = Array.isArray(items) ? items : (items ? [items] : []);
+          const sc = {};
+          for (const i of arr) { const st = i.status || '?'; sc[st] = (sc[st] || 0) + 1; }
+          const sb = Object.entries(sc).map(function(e) { return e[0] + '=' + e[1]; }).join(', ');
+          const lines = [ formatKeyValue('items', arr.length), formatKeyValue('statuses', sb || '-') ];
+          if (arr.length > 0 && arr.length <= 5) {
+            for (const i of arr) { lines.push('  [' + (i.status || '?') + '] ' + (i.goal_id || i.queue_id || '').slice(0, 40)); }
+          }
+          return formatToolCard('Goal Queue', { lines });
+        }
+        case "start_next_queued_goal": {
+          const d = structuredContent;
+          const lines = [ formatKeyValue('started', d.started ? 'yes' : 'no') ];
+          if (d.queue_item) lines.push(formatKeyValue('queue_id', d.queue_item.queue_id || '-'));
+          if (d.task) lines.push(formatKeyValue('task_id', d.task.id || '-'));
+          if (d.dry_run) lines.push(formatKeyValue('dry_run', 'true'));
+          return formatToolCard('Start Next', { lines });
+        }
+        case "gptwork_self_test": {
+          const d = structuredContent;
+          const lines = [ formatKeyValue('summary', d.summary || '-') ];
+          if (Array.isArray(d.results)) {
+            const passed = d.results.filter(function(r) { return r.status === 'PASS'; }).length;
+            const failed = d.results.filter(function(r) { return r.status === 'FAIL'; }).length;
+            lines.push(formatKeyValue('passed', passed));
+            lines.push(formatKeyValue('failed', failed));
+          }
+          return formatToolCard('Self Test', { lines });
+        }
           default:
             return JSON.stringify(structuredContent);
         }

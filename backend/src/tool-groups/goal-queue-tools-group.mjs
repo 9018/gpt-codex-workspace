@@ -16,7 +16,8 @@
  */
 
 export function createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }) {
-  const common = { audience: ["chatgpt", "codex"], tags: ["goal", "queue"], outputTemplate: "ui://widget/gptwork-card-v1.html" };
+  const common = { audience: ["chatgpt", "codex"], tags: ["goal", "queue"], outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html" };
 
   return {
     enqueue_goal: tool({

@@ -7,7 +7,8 @@ import { findTask, updateTask, normalizeLegacyModes } from '../task-lifecycle.mj
  * from gptwork-server.mjs.
  */
 export function createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github, eventLogger, hookBus }) {
-  const common = { modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v1.html" };
+  const common = { modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html" };
   return {
     create_task: tool({
       name: "create_task",

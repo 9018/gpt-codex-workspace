@@ -1,5 +1,6 @@
 export function createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }) {
-  const common = { audience: ["chatgpt", "codex"], tags: ["goal"], outputTemplate: "ui://widget/gptwork-card-v1.html" };
+  const common = { audience: ["chatgpt", "codex"], tags: ["goal"], outputTemplate: "ui://widget/gptwork-card-v2.html",
+      resourceUri: "ui://widget/gptwork-card-v2.html" };
   return {
     create_goal: tool({
       name: "create_goal",
