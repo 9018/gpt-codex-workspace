@@ -69,10 +69,41 @@ function stableStringify(value){
     seen.push(v);
     if(Array.isArray(v)){var arr=[];for(var i=0;i<v.length;i++) arr.push(normalize(v[i]));seen.pop();return arr}
     var out={};var keys=Object.keys(v).sort();
-    for(var k=0;k<keys.length;k++){var key=keys[k];if(key==='savedAt'||key==='loadedAt'||key==='lastEventAt'||key==='renderCount'||key==='renders') continue;out[key]=normalize(v[key])}
+    for(var k=0;k<keys.length;k++){var key=keys[k];if(isVolatileKey(key)) continue;out[key]=normalize(v[key])}
     seen.pop();return out;
   }
   try{return JSON.stringify(normalize(value))}catch(e){return String(value&&value.summary||value&&value.title||'')}
+}
+function isVolatileKey(key){return key==='savedAt'||key==='loadedAt'||key==='lastEventAt'||key==='renderCount'||key==='renders'||key==='timestamp'||key==='current_time'||key==='last_event_time'||key==='random_id'}
+function identityString(value){
+  var s=stableStringify(value);var h=0;
+  for(var i=0;i<s.length;i++){h=((h<<5)-h+s.charCodeAt(i))|0}
+  return ('00000000'+(h>>>0).toString(16)).slice(-8);
+}
+function payloadForHash(data){
+  if(!isObject(data)) return data;
+  var out={};var keys=Object.keys(data).sort();
+  for(var i=0;i<keys.length;i++){var key=keys[i];if(isVolatileKey(key)||key.indexOf('gptwork_')===0) continue;out[key]=data[key]}
+  return out;
+}
+function cardIdentity(data){
+  if(!isObject(data)) return null;
+  var tool=data.gptwork_tool||data.tool||data.name||'';
+  var hash=data.gptwork_payload_hash||data.payload_hash||'';
+  if(!hash&&tool) hash=identityString(payloadForHash(data));
+  var instance=data.gptwork_card_instance_id||data.cardInstanceId||data.card_instance_id||'';
+  if(!instance&&tool&&hash) instance=tool+':'+hash;
+  if(!tool&&!hash&&!instance) return null;
+  return {gptwork_tool:String(tool||''),gptwork_payload_hash:String(hash||''),gptwork_card_instance_id:String(instance||'')};
+}
+function identityKey(identity){return identity&&(identity.gptwork_card_instance_id||(identity.gptwork_tool&&identity.gptwork_payload_hash?identity.gptwork_tool+':'+identity.gptwork_payload_hash:''))}
+function identitiesMatch(expected,data){
+  var actual=cardIdentity(data);if(!expected||!actual) return false;
+  var expectedKey=identityKey(expected);var actualKey=identityKey(actual);
+  if(expectedKey&&actualKey&&expectedKey===actualKey) return true;
+  if(expected.gptwork_tool&&actual.gptwork_tool&&expected.gptwork_tool!==actual.gptwork_tool) return false;
+  if(expected.gptwork_payload_hash&&actual.gptwork_payload_hash&&expected.gptwork_payload_hash!==actual.gptwork_payload_hash) return false;
+  return !!(expected.gptwork_tool&&actual.gptwork_tool&&expected.gptwork_payload_hash&&actual.gptwork_payload_hash);
 }
 function unwrapPayload(value){
   if(!value) return null;
@@ -99,12 +130,29 @@ function firstPayload(candidates){
   return null;
 }
 function readState(openai){return openai&&(openai.widgetState||openai.state||openai.savedState)}
+function currentIdentityFromGlobals(openai,metadata){
+  var current=firstPayload([openai&&openai.toolOutput,metadata&&metadata.mcp_tool_result&&metadata.mcp_tool_result.structuredContent,metadata&&metadata.call_tool_result,openai&&openai.structuredContent,openai&&(openai.output||openai.toolResult||openai.result)]);
+  return cardIdentity(current);
+}
+function stateIdentity(state){return cardIdentity(state&&(state.currentCardIdentity||state.cardIdentity||state.expectedCardIdentity))}
+function findPayloadFromState(state,expected){
+  if(!state||!expected) return null;
+  var key=identityKey(expected);
+  var maps=[state.cardsByInstanceId,state.cardsByToolAndHash,state.cards,state.recentCards];
+  for(var i=0;i<maps.length;i++){
+    var map=maps[i];if(!isObject(map)||!key) continue;
+    var fromMap=unwrapPayload(map[key]);
+    if(fromMap&&hasData(fromMap)&&identitiesMatch(expected,fromMap)) return fromMap;
+  }
+  var legacy=unwrapPayload(state.lastToolResult||state.structuredContent||state.toolOutput);
+  if(legacy&&hasData(legacy)&&identitiesMatch(expected,legacy)) return legacy;
+  return null;
+}
 function findPayloadFromGlobals(){
   var openai=window.openai||{};
   var state=readState(openai);
   var metadata=openai.toolResponseMetadata||{};
   var candidates=[
-    {source:'widgetState',value:state&&(state.lastToolResult||state.structuredContent||state.toolOutput)},
     {source:'toolOutput',value:openai.toolOutput},
     {source:'toolResponseMetadata',value:metadata.mcp_tool_result&&metadata.mcp_tool_result.structuredContent},
     {source:'toolResponseMetadata',value:metadata.call_tool_result},
@@ -114,6 +162,9 @@ function findPayloadFromGlobals(){
   ];
   if(Array.isArray(openai.messages)&&openai.messages.length){for(var i=openai.messages.length-1;i>=0;i--){candidates.push({source:'messages',value:openai.messages[i]})}}
   for(var j=0;j<candidates.length;j++){var payload=unwrapPayload(candidates[j].value);if(payload&&hasData(payload)) return {source:candidates[j].source,payload:payload}}
+  var expected=currentIdentityFromGlobals(openai,metadata)||stateIdentity(state);
+  var fromState=findPayloadFromState(state,expected);
+  if(fromState) return {source:'widgetState',payload:fromState};
   return null;
 }
 function findPayloadFromEvent(data){

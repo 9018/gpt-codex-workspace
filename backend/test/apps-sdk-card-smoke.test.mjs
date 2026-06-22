@@ -387,12 +387,25 @@ test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", as
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
   let persistCount = 0;
+  const snapshot = {
+    summary: "Restored runtime snapshot",
+    status: "ok",
+    gptwork_tool: "runtime_status",
+    gptwork_title: "Runtime status",
+    gptwork_type: "tool_result",
+    gptwork_payload_hash: "runtime-hash-1",
+    gptwork_card_instance_id: "runtime_status:runtime-hash-1",
+    keyValues: { source: "widget-state" },
+  };
   const rendered = renderWidgetHtml(res.result.contents[0].text, {
     widgetState: {
-      lastToolResult: {
-        summary: "Restored runtime snapshot",
-        status: "ok",
-        keyValues: { source: "widget-state" },
+      currentCardIdentity: {
+        gptwork_tool: "runtime_status",
+        gptwork_payload_hash: "runtime-hash-1",
+        gptwork_card_instance_id: "runtime_status:runtime-hash-1",
+      },
+      cardsByToolAndHash: {
+        "runtime_status:runtime-hash-1": snapshot,
       },
     },
     setWidgetState: () => { persistCount += 1; },
@@ -402,6 +415,126 @@ test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", as
   assert.match(rendered.root.innerHTML, /widget-state/);
   assert.match(rendered.root.innerHTML, /source: widgetState/);
   assert.equal(persistCount, 0, "widgetState-only second open must not persist again");
+});
+
+test("SDK-4e1: tool card ignores foreign widgetState when no current identity is available", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    widgetState: {
+      lastToolResult: {
+        summary: "Foreign self-test snapshot",
+        status: "ok",
+        gptwork_tool: "gptwork_self_test",
+        gptwork_payload_hash: "self-test-hash-1",
+        keyValues: { source: "foreign-widget-state" },
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Waiting for tool result/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Foreign self-test snapshot/);
+  assert.match(rendered.root.innerHTML, /source: fallback/);
+});
+
+test("SDK-4e2: fresh toolOutput outranks foreign widgetState", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    widgetState: {
+      currentCardIdentity: {
+        gptwork_tool: "gptwork_self_test",
+        gptwork_payload_hash: "self-test-hash-1",
+      },
+      cardsByToolAndHash: {
+        "gptwork_self_test:self-test-hash-1": {
+          summary: "Foreign self-test snapshot",
+          status: "ok",
+          gptwork_tool: "gptwork_self_test",
+          gptwork_payload_hash: "self-test-hash-1",
+        },
+      },
+    },
+    toolOutput: {
+      summary: "Fresh runtime status",
+      status: "ok",
+      gptwork_tool: "runtime_status",
+      gptwork_payload_hash: "runtime-hash-2",
+      keyValues: { commit: "fresh" },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Fresh runtime status/);
+  assert.match(rendered.root.innerHTML, /fresh/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Foreign self-test snapshot/);
+  assert.match(rendered.root.innerHTML, /source: toolOutput/);
+});
+
+test("SDK-4e3: same-resource multi-card widgetState restores by card identity", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const html = res.result.contents[0].text;
+  const cards = {
+    runtime: {
+      summary: "Runtime card one",
+      status: "ok",
+      gptwork_tool: "runtime_status",
+      gptwork_title: "Runtime status",
+      gptwork_type: "tool_result",
+      gptwork_payload_hash: "runtime-hash-a",
+      gptwork_card_instance_id: "runtime_status:runtime-hash-a",
+      keyValues: { card: "one" },
+    },
+    selfTest: {
+      summary: "Self test card two",
+      status: "pass",
+      gptwork_tool: "gptwork_self_test",
+      gptwork_title: "GPTWork self test",
+      gptwork_type: "tool_result",
+      gptwork_payload_hash: "self-test-hash-a",
+      gptwork_card_instance_id: "gptwork_self_test:self-test-hash-a",
+      keyValues: { card: "two" },
+    },
+    queue: {
+      summary: "Queue card three",
+      status: "ok",
+      gptwork_tool: "list_goal_queue",
+      gptwork_title: "List goal queue",
+      gptwork_type: "tool_result",
+      gptwork_payload_hash: "queue-hash-a",
+      gptwork_card_instance_id: "list_goal_queue:queue-hash-a",
+      keyValues: { card: "three" },
+    },
+  };
+  const sharedState = {
+    cardsByToolAndHash: Object.fromEntries(Object.values(cards).map((card) => [card.gptwork_card_instance_id, card])),
+  };
+
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.runtime });
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.selfTest });
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.queue });
+  const reopenedRuntime = renderWidgetHtml(html, {
+    widgetState: { ...sharedState, currentCardIdentity: cards.runtime },
+  });
+
+  assert.match(reopenedRuntime.root.innerHTML, /Runtime card one/);
+  assert.match(reopenedRuntime.root.innerHTML, /card<\/td><td>one/);
+  assert.doesNotMatch(reopenedRuntime.root.innerHTML, /Self test card two/);
+  assert.doesNotMatch(reopenedRuntime.root.innerHTML, /Queue card three/);
+
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.selfTest });
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.runtime });
+  renderWidgetHtml(html, { widgetState: sharedState, toolOutput: cards.queue });
+  const reopenedSelfTest = renderWidgetHtml(html, {
+    widgetState: { ...sharedState, currentCardIdentity: cards.selfTest },
+  });
+
+  assert.match(reopenedSelfTest.root.innerHTML, /Self test card two/);
+  assert.match(reopenedSelfTest.root.innerHTML, /card<\/td><td>two/);
+  assert.doesNotMatch(reopenedSelfTest.root.innerHTML, /Runtime card one/);
+  assert.doesNotMatch(reopenedSelfTest.root.innerHTML, /Queue card three/);
+  assert.doesNotMatch(reopenedSelfTest.root.innerHTML, /Maximum call stack size exceeded/);
+  assert.doesNotMatch(reopenedSelfTest.root.innerHTML, /renders: [1-9][0-9]{2,}/);
 });
 
 test("SDK-4f: tool card HTML renders toolResponseMetadata mcp_tool_result structuredContent", async () => {
