@@ -414,7 +414,7 @@ async function handleWatchHandoff() {
 }
 async function handleTmp() {
   const { store, config } = await localStore();
-  const [ subcommand, ...rest ] = process.argv.slice(4);
+  const [ subcommand, ...rest ] = args.slice(1);
   if (subcommand === "status") {
     const { scanManagedTmp, scanSystemTmp, getInodePressure } = await import("../src/gptwork-tmp.mjs");
     const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
@@ -452,7 +452,7 @@ async function handleTmp() {
 
 async function handleGoals() {
   const { store, config } = await localStore();
-  const [ subcommand, ...rest ] = process.argv.slice(4);
+  const [ subcommand, ...rest ] = args.slice(1);
   if (subcommand === "storage-status") {
     const { scanGoals, scanEvents } = await import("../src/goal-storage-service.mjs");
     const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
@@ -626,18 +626,14 @@ async function main() {
     throw new Error('Unknown queue subcommand: ' + sub + '. Usage: gptwork queue list|start-next|enqueue <goal_id>|cancel <queue_id>');
   }
 
-  if (command === "watch-handoff")
-
-  if (command === "tmp") {
-    return handleTmp();
-  }
-
-  if (command === "goals") {
-    return handleGoals();
-  } {
+  if (command === "watch-handoff") {
     return handleWatchHandoff();
+  } else if (command === "tmp") {
+    return handleTmp();
+  } else if (command === "goals") {
+    return handleGoals();
   }
-  throw new Error(`Unknown command: ${args.join(" ")}\n${usage()}`);
+  throw new Error(`Unknown command: ${command} ${subcommand}\n${usage()}`);
 }
 
 main().catch((error) => {
