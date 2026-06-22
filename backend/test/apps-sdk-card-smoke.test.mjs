@@ -102,7 +102,7 @@ test("SDK-2: tools/list contains v2 card _meta on tools with outputTemplate", as
 test("SDK-3: resources/list includes v2 with Apps SDK metadata", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/list");
-  const resources = res.result.resources;
+  const resources = res.result.resources || [];
   const uris = resources.map(r => r.uri);
 
   assert.ok(uris.includes("ui://widget/gptwork-card-v2.html"),
@@ -111,7 +111,7 @@ test("SDK-3: resources/list includes v2 with Apps SDK metadata", async () => {
   const v2 = resources.find(r => r.uri === "ui://widget/gptwork-card-v2.html");
   assert.ok(v2, "v2 resource must have an entry");
   assert.ok(v2.mimeType === "text/html;profile=mcp-app",
-    `v2 card mimeType should be 'text/html;profile=mcp-app', got '${v2.mimeType}'`);
+    `v2 card mimeType should be text/html;profile=mcp-app, got ${v2.mimeType}`);
   assert.ok(v2["openai/widgetDescription"],
     "v2 resource must have openai/widgetDescription");
   assert.ok(v2["openai/widgetPrefersBorder"] === true,
@@ -120,6 +120,31 @@ test("SDK-3: resources/list includes v2 with Apps SDK metadata", async () => {
     "v2 resource must have openai/widgetDomain array");
   assert.ok(v2["openai/widgetCSP"],
     "v2 resource must have openai/widgetCSP");
+
+  // Verify widgetDomain includes queue tools
+  const domain = v2["openai/widgetDomain"];
+  assert.ok(domain.includes("enqueue_goal"),
+    "openai/widgetDomain must include enqueue_goal");
+  assert.ok(domain.includes("list_goal_queue"),
+    "openai/widgetDomain must include list_goal_queue");
+  assert.ok(domain.includes("get_goal_queue"),
+    "openai/widgetDomain must include get_goal_queue");
+  assert.ok(domain.includes("start_next_queued_goal"),
+    "openai/widgetDomain must include start_next_queued_goal");
+  assert.ok(domain.includes("update_goal_queue_item"),
+    "openai/widgetDomain must include update_goal_queue_item");
+  assert.ok(domain.includes("cancel_goal_queue_item"),
+    "openai/widgetDomain must include cancel_goal_queue_item");
+
+  // Verify widgetDomain includes key non-queue tools
+  assert.ok(domain.includes("runtime_status"),
+    "openai/widgetDomain must include runtime_status");
+  assert.ok(domain.includes("gptwork_doctor"),
+    "openai/widgetDomain must include gptwork_doctor");
+
+  // Verify total count is reasonable
+  assert.ok(domain.length >= 12,
+    `openai/widgetDomain should have at least 12 entries, got ${domain.length}`);
 });
 
 test("SDK-4: resources/read v2 returns HTML with Apps SDK _meta", async () => {
@@ -228,4 +253,26 @@ test("SDK-9: operator mode shows readonly queue tools (list/get)", async () => {
     "cancel_goal_queue_item should be hidden in operator mode");
   assert.equal(names.includes("update_goal_queue_item"), false,
     "update_goal_queue_item should be hidden in operator mode");
+});
+
+test("SDK-10: resources/read v2 widgetDomain includes all queue tools", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: "ui://widget/gptwork-card-v2.html" });
+  const content = res.result.contents[0];
+
+  assert.ok(content._meta, "v2 resource content should have _meta");
+
+  const domain = content._meta["openai/widgetDomain"];
+  assert.ok(Array.isArray(domain),
+    "readResource v2 _meta must have openai/widgetDomain array");
+
+  // Verify all queue tools are in widgetDomain
+  const queueTools = ["enqueue_goal", "list_goal_queue", "get_goal_queue",
+    "start_next_queued_goal", "update_goal_queue_item", "cancel_goal_queue_item"];
+  for (const tool of queueTools) {
+    assert.ok(domain.includes(tool),
+      `readResource v2 openai/widgetDomain must include ${tool}`);
+  }
+
+  assert.ok(content.text.includes("renderCard"), "v2 HTML must include renderCard function");
 });
