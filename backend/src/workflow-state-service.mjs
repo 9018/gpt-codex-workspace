@@ -1,0 +1,383 @@
+/**
+ * workflow-state-service.mjs
+ *
+ * Manages GPTWork workflow state files, fingerprint idempotency,
+ * proposal generation, and task creation for one-click advance.
+ *
+ * State files are stored at .gptwork/workflows/<workflow_id>.json
+ * outside the source tree, following project convention.
+ */
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+
+// ---------------------------------------------------------------------------
+// Path helpers
+// ---------------------------------------------------------------------------
+
+function workflowsDir(workspaceRoot) {
+  return join(workspaceRoot, ".gptwork", "workflows");
+}
+
+function workflowStatePath(workspaceRoot, workflowId) {
+  return join(workflowsDir(workspaceRoot), `${workflowId}.json`);
+}
+
+// ---------------------------------------------------------------------------
+// Workflow state CRUD
+// ---------------------------------------------------------------------------
+
+function ensureWorkflowsDir(workspaceRoot) {
+  const dir = workflowsDir(workspaceRoot);
+  if (!existsSync(dir)) {
+    mkdirSync(dir, { recursive: true });
+  }
+  return dir;
+}
+
+export function loadWorkflowState(workspaceRoot, workflowId) {
+  const path = workflowStatePath(workspaceRoot, workflowId);
+  if (!existsSync(path)) {
+    return createEmptyWorkflowState(workflowId);
+  }
+  try {
+    return JSON.parse(readFileSync(path, "utf8"));
+  } catch {
+    return createEmptyWorkflowState(workflowId);
+  }
+}
+
+export function saveWorkflowState(workspaceRoot, workflowId, state) {
+  ensureWorkflowsDir(workspaceRoot);
+  state.updated_at = new Date().toISOString();
+  writeFileSync(
+    workflowStatePath(workspaceRoot, workflowId),
+    JSON.stringify(state, null, 2),
+    "utf8"
+  );
+  return state;
+}
+
+export function createEmptyWorkflowState(workflowId) {
+  return {
+    workflow_id: workflowId || "default",
+    name: "Default Workflow",
+    current_phase: "task_execution",
+    last_task_id: null,
+    last_known_good_commit: null,
+    latest_running_commit: null,
+    manual_results: [],
+    proposals: [],
+    created_task_ids: [],
+    updated_at: null,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Stable fingerprint computation (idempotency)
+// ---------------------------------------------------------------------------
+
+export function computeFingerprint({
+  workflowId,
+  taskId,
+  manualVerdict,
+  manualNote,
+  runningCommit,
+  taskResultCommit,
+  nextActionType,
+}) {
+  const h = createHash("sha256");
+  h.update(String(workflowId || "default"));
+  h.update("|");
+  h.update(String(taskId || "none"));
+  h.update("|");
+  h.update(String(manualVerdict || "none"));
+  h.update("|");
+  // Hash the note so content changes produce different fingerprints
+  const noteHash = createHash("sha256").update(String(manualNote || "")).digest("hex");
+  h.update(noteHash);
+  h.update("|");
+  h.update(String(runningCommit || "none"));
+  h.update("|");
+  h.update(String(taskResultCommit || "none"));
+  h.update("|");
+  h.update(String(nextActionType || "none"));
+  return "wf_" + h.digest("hex").slice(0, 24);
+}
+
+// ---------------------------------------------------------------------------
+// Latest task helper
+// ---------------------------------------------------------------------------
+
+export async function getLatestCodexTask(store) {
+  const state = await store.load();
+  const tasks = (state.tasks || [])
+    .filter((t) => t.assignee === "codex" || t.assignee === "")
+    .sort((a, b) => {
+      const aTime = new Date(a.created_at || 0).getTime();
+      const bTime = new Date(b.created_at || 0).getTime();
+      return bTime - aTime;
+    });
+  return tasks[0] || null;
+}
+
+export async function resolveTask(store, taskId) {
+  if (!taskId || taskId === "latest") {
+    return getLatestCodexTask(store);
+  }
+  const state = await store.load();
+  const tasks = state.tasks || [];
+  const task = tasks.find((t) => t.id === taskId);
+  return task || null;
+}
+
+// ---------------------------------------------------------------------------
+// Gather workflow diagnostics state
+// ---------------------------------------------------------------------------
+
+export async function collectWorkflowDiagnostics({
+  store,
+  config,
+  workerState,
+  collectWorkerQueueCounts,
+  task,
+  workflowId,
+}) {
+  const { collectRuntimeGitInfoCached } = await import("./diagnostics-service.mjs");
+  const { getRepoLockSummary } = await import("./repo-lock.mjs");
+  const { workerStatusExtendedSnapshot } = await import("./codex-worker-state.mjs");
+
+  const repoDir = config?.defaultRepoPath || null;
+  const gitInfo = repoDir ? await collectRuntimeGitInfoCached(repoDir) : { repo_head: null, remote_head: null, running_commit: null, worktree_dirty: false, dirty_paths: [] };
+  const lockSummary = await getRepoLockSummary(config?.defaultWorkspaceRoot);
+  const queueCounts = await collectWorkerQueueCounts(store);
+  const workerSnapshot = workerStatusExtendedSnapshot(workerState);
+
+  return {
+    workflow_id: workflowId || "default",
+    latest_task: task
+      ? {
+          id: task.id,
+          title: task.title,
+          status: task.status,
+          mode: task.mode,
+          assignee: task.assignee,
+          created_at: task.created_at,
+          updated_at: task.updated_at,
+          result: task.result || null,
+          changed_files: task.result?.changed_files || null,
+          commit: task.result?.commit || null,
+          tests: task.result?.tests || null,
+          summary: task.result?.summary || null,
+        }
+      : null,
+    runtime: {
+      running_commit: gitInfo.running_commit,
+      repo_head: gitInfo.repo_head,
+      remote_head: gitInfo.remote_head,
+    },
+    worktree: {
+      dirty: gitInfo.worktree_dirty,
+      dirty_paths: gitInfo.dirty_paths || [],
+    },
+    repo_locks: {
+      active: lockSummary.active_repo_locks,
+      stale: lockSummary.stale_repo_locks,
+      details: lockSummary.locks || [],
+    },
+    worker: workerSnapshot,
+    queue: queueCounts,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Proposal generation (decision rules)
+// ---------------------------------------------------------------------------
+
+export function generateProposal({
+  diagnostics,
+  task,
+  manualVerdict,
+  manualNote,
+}) {
+  const isSafe =
+    !diagnostics.worker.running &&
+    diagnostics.repo_locks.active === 0 &&
+    !diagnostics.worktree.dirty;
+
+  // Unsafe state: blocked
+  if (!isSafe) {
+    const reasons = [];
+    if (diagnostics.worker.running) reasons.push("worker is currently running");
+    if (diagnostics.repo_locks.active > 0) reasons.push(`${diagnostics.repo_locks.active} active repo lock(s)`);
+    if (diagnostics.worktree.dirty) reasons.push("worktree is dirty");
+    return {
+      next_action: "blocked",
+      proposed_next_task: null,
+      recommendation: `Cannot advance workflow: ${reasons.join("; ")}.`,
+      needs_gptchat_decision: true,
+    };
+  }
+
+  // No task to evaluate
+  if (!task) {
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: "No task found to evaluate. Define a new task or check for existing tasks.",
+      needs_gptchat_decision: true,
+    };
+  }
+
+  // Task failed during execution (not completed)
+  if (task.status !== "completed" && task.status === "failed") {
+    return {
+      next_action: "create_fix_task",
+      proposed_next_task: {
+        title: `Fix execution failure: ${task.title}`,
+        description: [
+          `Execution-failure investigation for task: ${task.id}`,
+          task.title,
+          "",
+          "Task failed during execution. Investigate and fix based on the result summary below:",
+          task.result?.summary ? `Result summary: ${task.result.summary}` : "No result summary available.",
+          task.result?.warnings && Array.isArray(task.result.warnings) && task.result.warnings.length > 0
+            ? `Warnings: ${task.result.warnings.join("; ")}`
+            : "",
+          "",
+          manualNote ? `User note: ${manualNote}` : "",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        assignee: "codex",
+      },
+      recommendation: "The latest task failed during execution. Proposed a fix/investigation task.",
+      needs_gptchat_decision: false,
+    };
+  }
+
+  // Task completed but verdict was failed or partial
+  if (task.status === "completed" && (manualVerdict === "failed" || manualVerdict === "partial")) {
+    const verb = manualVerdict === "failed" ? "failed" : "was only partially accepted";
+    const taskType = manualVerdict === "failed" ? "修复" : "收敛";
+    return {
+      next_action: "create_fix_task",
+      proposed_next_task: {
+        title: manualVerdict === "failed"
+          ? `Fix issues: ${task.title}`
+          : `Converge remaining issues: ${task.title}`,
+        description: [
+          `User review ${verb} for task: ${task.id}`,
+          task.title,
+          "",
+          `Result commit: ${task.result?.commit || "unknown"}`,
+          task.result?.summary ? `Original summary: ${task.result.summary}` : "",
+          "",
+          manualNote
+            ? `User feedback: ${manualNote}`
+            : `User indicated the task ${verb} but did not provide specific notes.`,
+          "",
+          "Create a targeted ${taskType} task addressing the user's feedback.",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        assignee: "codex",
+      },
+      recommendation: `Task was completed but user review ${verb}. Proposed a targeted ${taskType} task.`,
+      needs_gptchat_decision: false,
+    };
+  }
+
+  // Task completed, passed → advance to next planned goal
+  if (task.status === "completed" && manualVerdict === "passed") {
+    // Check if runtime commit matches task result commit
+    const commitMatch = diagnostics.runtime.running_commit === task.result?.commit;
+    if (!commitMatch) {
+      return {
+        next_action: "needs_gptchat_decision",
+        proposed_next_task: null,
+        recommendation: `Task completed and passed, but runtime running_commit (${diagnostics.runtime.running_commit}) does not match task result commit (${task.result?.commit}). Verify deployment status before advancing.`,
+        needs_gptchat_decision: true,
+      };
+    }
+    // No configured next goal → needs GPTChat decision
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" completed and passed. No next planned goal configured; GPTChat should determine the next task.`,
+      needs_gptchat_decision: true,
+    };
+  }
+
+  // Catch-all: task is in progress or other status
+  return {
+    next_action: "needs_gptchat_decision",
+    proposed_next_task: null,
+    recommendation: `Task "${task.id}" status is "${task.status}". GPTChat should determine the appropriate next action.`,
+    needs_gptchat_decision: true,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Create a task from a proposal (for apply mode)
+// ---------------------------------------------------------------------------
+
+export async function createProposalTask(store, config, proposal, context) {
+  const { createTask } = await import("./goal-task-lifecycle.mjs");
+  if (!proposal.proposed_next_task) {
+    throw new Error("Cannot create task: proposal has no proposed_next_task");
+  }
+  const result = await createTask(store, config, proposal.proposed_next_task, context);
+  return result.task;
+}
+
+// ---------------------------------------------------------------------------
+// Find existing proposal by fingerprint
+// ---------------------------------------------------------------------------
+
+export function findExistingProposal(workflowState, fingerprint) {
+  return (workflowState.proposals || []).find((p) => p.fingerprint === fingerprint) || null;
+}
+
+export function findExistingResult(workflowState, fingerprint) {
+  return (workflowState.manual_results || []).find((r) => r.fingerprint === fingerprint) || null;
+}
+
+// ---------------------------------------------------------------------------
+// Store a manual result
+// ---------------------------------------------------------------------------
+
+export function storeManualResult(workflowState, { taskId, verdict, note, fingerprint }) {
+  workflowState.manual_results = workflowState.manual_results || [];
+  workflowState.manual_results.push({
+    task_id: taskId,
+    verdict,
+    note: note || "",
+    fingerprint,
+    recorded_at: new Date().toISOString(),
+  });
+  workflowState.last_task_id = taskId;
+  return workflowState;
+}
+
+// ---------------------------------------------------------------------------
+// Store a proposal
+// ---------------------------------------------------------------------------
+
+export function storeProposal(workflowState, proposal) {
+  workflowState.proposals = workflowState.proposals || [];
+  workflowState.proposals.push(proposal);
+  return workflowState;
+}
+
+// ---------------------------------------------------------------------------
+// Store a created task id
+// ---------------------------------------------------------------------------
+
+export function storeCreatedTaskId(workflowState, taskId) {
+  workflowState.created_task_ids = workflowState.created_task_ids || [];
+  if (!workflowState.created_task_ids.includes(taskId)) {
+    workflowState.created_task_ids.push(taskId);
+  }
+  return workflowState;
+}

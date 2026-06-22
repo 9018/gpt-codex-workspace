@@ -143,6 +143,10 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "upload_bundle_base64",
   "upload_from_url",
   "worker_status",
+  "workflow_advance",
+  "workflow_apply_proposal",
+  "workflow_record_result",
+  "workflow_status",
   "write_text_file",
 ];
 
@@ -197,7 +201,7 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
     // Also verify total count is 118 (114 public + 4 placeholder)
-    assert.equal(names.length, 118,
+    assert.equal(names.length, 122,
       `Expected 118 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;

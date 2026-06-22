@@ -32,6 +32,7 @@ import { createProjectContextToolsGroup } from "./tool-groups/project-context-to
 import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mjs";
 import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mjs";
 import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.mjs";
+import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -237,6 +238,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
    ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
    ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
 
+  ...createWorkflowToolsGroup({ tool, schema, store, config, workerState, collectWorkerQueueCounts }),
    read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",
