@@ -32,12 +32,14 @@ pre.raw{white-space:pre-wrap;font:11px ui-monospace,SFMono-Regular,Menlo,Consola
 .badge.info,.badge.waiting_for_lock,.badge.waiting_for_review{background:#0c2d6b;color:#58a6ff}.badge.cancelled,.badge.skipped,.badge.timeout,.badge.timed_out{background:#21262d;color:#8b949e}
 .kv-table tr:nth-child(odd){background:#161b22}.item-list li{background:#161b22;border-left-color:#30363d}pre.json,pre.raw{background:#161b22}
 .fold-toggle{border-color:#30363d;color:#8b949e}.fold-toggle:hover{background:#21262d}.errors{background:#3d0b0b;border-color:#792e2e;color:#ff7b72}.warnings{background:#3d2e00;border-color:#705000;color:#d29922}.section{border-top-color:#30363d}}
-</style></head><body><div class="card" id="root"><section class="section"><div class="title">GPTWork Card <span class="badge info">loaded</span></div><p>GPTWork card loaded. Waiting for tool result...</p><p class="muted">resource loaded: ui://widget/gptwork-tool-card-v4.html</p></section></div><script>
+</style></head><body><div class="card" id="root"><section class="section"><div class="title">GPTWork Card <span class="badge info">loaded</span></div><p>GPTWork card loaded. Waiting for tool result...</p><p class="muted">resource loaded: ui://widget/gptwork-tool-card-v5.html</p></section></div><script>
 (function(){
-var RESOURCE_URI='ui://widget/gptwork-tool-card-v4.html';
-var VERSION='gptwork-tool-card-v4';
+var RESOURCE_URI='ui://widget/gptwork-tool-card-v5.html';
+var VERSION='gptwork-tool-card-v5';
 var root=document.getElementById('root');
 var renderCount=0;
+var maxRenders=5;
+var stopped=false;
 var loadedAt=new Date().toISOString();
 var lastEventAt='none';
 var lastSource='fallback';
@@ -137,6 +139,9 @@ function renderFallback(){
 function renderError(err){
   return '<div class="section"><div class="title">GPTWork Card '+badge('error')+'</div><div class="errors">Renderer error: '+esc(err&&err.message?err.message:err)+'</div></div>'+diagnostics('error');
 }
+function renderLoopPrevented(){
+  return '<div class="section"><div class="title">GPTWork Card '+badge('blocked')+'</div><div class="errors">Render loop prevented.</div></div>'+diagnostics('blocked');
+}
 function renderCard(data,source){
   if(!isObject(data)) return renderFallback();
   var parts=[];var title=data.title||data.summary||data.name||data.gptwork_title||'GPTWork Result';
@@ -171,26 +176,15 @@ function saveWidgetState(payload,source){
   return;
 }
 function renderFrom(found){
+  if(stopped) return;
+  if(renderCount>=maxRenders){stopped=true;root.innerHTML=renderLoopPrevented();return;}
   try{
     renderCount++;
     if(found&&found.payload){lastSource=found.source||'unknown';root.innerHTML=renderCard(found.payload,lastSource);saveWidgetState(found.payload,lastSource)}
     else{lastSource='fallback';root.innerHTML=renderFallback()}
-  }catch(err){renderCount++;root.innerHTML=renderError(err)}
+  }catch(err){renderCount++;stopped=true;root.innerHTML=renderError(err)}
 }
 function hydrate(){renderFrom(findPayloadFromGlobals())}
-window.addEventListener('openai:set_globals',function(event){
-  lastEventAt=new Date().toISOString();
-  try{
-    if(event&&event.detail&&window.openai&&typeof window.openai==='object'){
-      for(var k in event.detail){if(Object.prototype.hasOwnProperty.call(event.detail,k)) window.openai[k]=event.detail[k]}
-    }
-    hydrate();
-  }catch(err){renderCount++;root.innerHTML=renderError(err)}
-});
-window.addEventListener('message',function(event){
-  lastEventAt=new Date().toISOString();
-  try{renderFrom(findPayloadFromEvent(event&&event.data)||findPayloadFromEvent(event))}catch(err){renderCount++;root.innerHTML=renderError(err)}
-});
-try{hydrate()}catch(err){renderCount++;root.innerHTML=renderError(err)}
+try{hydrate()}catch(err){renderCount++;stopped=true;root.innerHTML=renderError(err)}
 })();
 </script></body></html>

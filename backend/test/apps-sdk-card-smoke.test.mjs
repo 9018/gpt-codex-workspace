@@ -19,9 +19,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 
-const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v4.html";
+const TOOL_CARD_URI = "ui://widget/gptwork-tool-card-v5.html";
 const LEGACY_TOOL_CARD_V2_URI = "ui://widget/gptwork-tool-card-v2.html";
 const LEGACY_TOOL_CARD_V3_URI = "ui://widget/gptwork-tool-card-v3.html";
+const LEGACY_TOOL_CARD_V4_URI = "ui://widget/gptwork-tool-card-v4.html";
 const TOOL_CARD_MIME_TYPE = "text/html;profile=mcp-app";
 
 // ---------------------------------------------------------------------------
@@ -190,6 +191,8 @@ test("SDK-3: resources/list includes tool card with Apps SDK metadata", async ()
     "resources/list must keep the v2 card URI readable for legacy clients");
   assert.ok(uris.includes(LEGACY_TOOL_CARD_V3_URI),
     "resources/list must keep the v3 card URI readable for legacy clients");
+  assert.ok(uris.includes(LEGACY_TOOL_CARD_V4_URI),
+    "resources/list must keep the v4 card URI readable for legacy clients");
 
   const card = resources.find(r => r.uri === TOOL_CARD_URI);
   assert.ok(card, "tool card resource must have an entry");
@@ -207,7 +210,7 @@ test("SDK-3: resources/list includes tool card with Apps SDK metadata", async ()
   assert.deepEqual(card["openai/widgetCSP"], { connect_domains: [], resource_domains: [] });
 });
 
-test("SDK-3b: primary tool descriptors use a cache-busting v4 card URI", async () => {
+test("SDK-3b: primary tool descriptors use a cache-busting v5 card URI", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "tools/list");
   const runtime = res.result.tools.find((tool) => tool.name === "runtime_status");
@@ -218,6 +221,8 @@ test("SDK-3b: primary tool descriptors use a cache-busting v4 card URI", async (
     "primary descriptor must not keep pointing at the cached v2 widget URI");
   assert.notEqual(runtime?._meta?.["openai/outputTemplate"], LEGACY_TOOL_CARD_V3_URI,
     "primary descriptor must not keep pointing at the cached v3 widget URI");
+  assert.notEqual(runtime?._meta?.["openai/outputTemplate"], LEGACY_TOOL_CARD_V4_URI,
+    "primary descriptor must not keep pointing at the cached v4 widget URI");
 });
 
 test("SDK-4: resources/read tool card returns HTML with Apps SDK _meta", async () => {
@@ -317,6 +322,19 @@ test("SDK-4c: tool card HTML renders visible fallback with no window.openai", as
   assert.match(root.innerHTML, /source: fallback/);
   assert.match(root.innerHTML, /renders: 1/);
   assert.doesNotMatch(root.innerHTML, /Loading\.\.\./);
+});
+
+test("SDK-4c1: tool card does not register host rehydrate event listeners", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    toolOutput: { summary: "Single render runtime", status: "ok" },
+  });
+
+  assert.equal(rendered.listeners.get("openai:set_globals")?.length || 0, 0,
+    "card must not subscribe to openai:set_globals; host events can recurse indefinitely");
+  assert.equal(rendered.listeners.get("message")?.length || 0, 0,
+    "card must not subscribe to message events; host notifications can recurse indefinitely");
 });
 
 test("SDK-4c2: tool card HTML renders visible fallback when payload access throws", async () => {
@@ -419,7 +437,7 @@ test("SDK-4g: tool card HTML does not persist widgetState after successful rende
     "tool card must not call setWidgetState; host echo can still recursively re-enter the renderer");
 });
 
-test("SDK-4g2: setWidgetState echo does not trigger a render loop", async () => {
+test("SDK-4g2: host set_globals echo does not trigger a render loop", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
   let persistCount = 0;
@@ -433,15 +451,18 @@ test("SDK-4g2: setWidgetState echo does not trigger a render loop", async () => 
   const rendered = renderWidgetHtml(res.result.contents[0].text, openai);
   assert.equal(persistCount, 0, "tool card must not persist widgetState on initial render");
 
+  const beforeEcho = rendered.root.innerHTML;
   openai.toolOutput = undefined;
   rendered.windowObject.dispatchEvent({ type: "openai:set_globals", detail: { toolOutput: { summary: "Echo-safe runtime", status: "ok", keyValues: { id: "echo-1" } } } });
 
   assert.match(rendered.root.innerHTML, /Echo-safe runtime/);
+  assert.equal(rendered.root.innerHTML, beforeEcho,
+    "tool card must ignore host set_globals echoes after the initial render");
   assert.doesNotMatch(rendered.root.innerHTML, /Maximum call stack size exceeded/);
   assert.doesNotMatch(rendered.root.innerHTML, /Renderer error/);
-  assert.ok(persistCount <= 1, `setWidgetState echo must not persist recursively; got ${persistCount}`);
+  assert.equal(persistCount, 0, "set_globals echo must not persist recursively");
   assert.doesNotMatch(rendered.root.innerHTML, /renders: [1-9][0-9]{2,}/,
-    "render count must remain bounded after setWidgetState echo");
+    "render count must remain bounded after host echo");
 });
 
 test("SDK-4g3: cyclic payload can render without widgetState persistence", async () => {
@@ -465,25 +486,27 @@ test("SDK-4g3: cyclic payload can render without widgetState persistence", async
   assert.equal(persistCount, 0, "cyclic payload must not be persisted into widgetState");
 });
 
-test("SDK-4h: delayed openai:set_globals event rehydrates the card", async () => {
+test("SDK-4h: delayed openai:set_globals event does not rehydrate the card", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
   const openai = {};
   const rendered = renderWidgetHtml(res.result.contents[0].text, openai);
   assert.match(rendered.root.innerHTML, /Waiting for tool result/);
+  const beforeEvent = rendered.root.innerHTML;
 
   openai.toolOutput = { summary: "Delayed runtime", status: "ok", keyValues: { event: "set_globals" } };
   dispatchWidgetEvent(rendered, "openai:set_globals", { detail: { toolOutput: openai.toolOutput } });
 
-  assert.match(rendered.root.innerHTML, /Delayed runtime/);
-  assert.match(rendered.root.innerHTML, /set_globals/);
-  assert.match(rendered.root.innerHTML, /source: toolOutput/);
+  assert.equal(rendered.root.innerHTML, beforeEvent,
+    "tool card must not subscribe to openai:set_globals rehydrate events");
+  assert.doesNotMatch(rendered.root.innerHTML, /Delayed runtime/);
 });
 
-test("SDK-4i: ui notifications tool-result message rehydrates the card", async () => {
+test("SDK-4i: ui notifications tool-result message does not rehydrate the card", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
   const rendered = renderWidgetHtml(res.result.contents[0].text, {});
+  const beforeEvent = rendered.root.innerHTML;
 
   dispatchWidgetEvent(rendered, "message", {
     data: {
@@ -500,9 +523,9 @@ test("SDK-4i: ui notifications tool-result message rehydrates the card", async (
     },
   });
 
-  assert.match(rendered.root.innerHTML, /Notification runtime/);
-  assert.match(rendered.root.innerHTML, /tool-result/);
-  assert.match(rendered.root.innerHTML, /source: event/);
+  assert.equal(rendered.root.innerHTML, beforeEvent,
+    "tool card must not subscribe to message rehydrate events");
+  assert.doesNotMatch(rendered.root.innerHTML, /Notification runtime/);
 });
 
 test("SDK-5: tools/call result includes structuredContent for card renderer", async () => {

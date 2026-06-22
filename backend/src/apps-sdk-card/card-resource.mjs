@@ -6,6 +6,7 @@ import {
   GPTWORK_LEGACY_TOOL_CARD_V1_URI,
   GPTWORK_LEGACY_TOOL_CARD_V2_URI,
   GPTWORK_LEGACY_TOOL_CARD_V3_URI,
+  GPTWORK_LEGACY_TOOL_CARD_V4_URI,
   GPTWORK_TOOL_CARD_MIME_TYPE,
   GPTWORK_TOOL_CARD_URI,
 } from "./constants.mjs";
@@ -32,21 +33,28 @@ export function resourceList() {
       uri: GPTWORK_LEGACY_TOOL_CARD_V1_URI,
       name: "GPTWork Tool Card (v1 legacy)",
       mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      description: "Legacy GPTWork tool card URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v4 URI.",
+      description: "Legacy GPTWork tool card URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v5 URI.",
       ...toolCardResourceMeta(),
     },
     {
       uri: GPTWORK_LEGACY_TOOL_CARD_V2_URI,
       name: "GPTWork Tool Card (v2 legacy)",
       mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      description: "Legacy GPTWork tool card v2 URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v4 URI.",
+      description: "Legacy GPTWork tool card v2 URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v5 URI.",
       ...toolCardResourceMeta(),
     },
     {
       uri: GPTWORK_LEGACY_TOOL_CARD_V3_URI,
       name: "GPTWork Tool Card (v3 legacy)",
       mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
-      description: "Legacy GPTWork tool card v3 URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v4 URI.",
+      description: "Legacy GPTWork tool card v3 URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v5 URI.",
+      ...toolCardResourceMeta(),
+    },
+    {
+      uri: GPTWORK_LEGACY_TOOL_CARD_V4_URI,
+      name: "GPTWork Tool Card (v4 legacy)",
+      mimeType: GPTWORK_TOOL_CARD_MIME_TYPE,
+      description: "Legacy GPTWork tool card v4 URI kept for older cached clients. New tool descriptors use the GPTWork Tool Card v5 URI.",
       ...toolCardResourceMeta(),
     },
     {
@@ -73,5 +81,6 @@ export function canReadToolCardResource(uri) {
     uri === GPTWORK_LEGACY_TOOL_CARD_V1_URI ||
     uri === GPTWORK_LEGACY_TOOL_CARD_V2_URI ||
     uri === GPTWORK_LEGACY_TOOL_CARD_V3_URI ||
+    uri === GPTWORK_LEGACY_TOOL_CARD_V4_URI ||
     uri === GPTWORK_LEGACY_CARD_V2_URI;
 }
