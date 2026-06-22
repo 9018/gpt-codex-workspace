@@ -32,10 +32,10 @@ pre.raw{white-space:pre-wrap;font:11px ui-monospace,SFMono-Regular,Menlo,Consola
 .badge.info,.badge.waiting_for_lock,.badge.waiting_for_review{background:#0c2d6b;color:#58a6ff}.badge.cancelled,.badge.skipped,.badge.timeout,.badge.timed_out{background:#21262d;color:#8b949e}
 .kv-table tr:nth-child(odd){background:#161b22}.item-list li{background:#161b22;border-left-color:#30363d}pre.json,pre.raw{background:#161b22}
 .fold-toggle{border-color:#30363d;color:#8b949e}.fold-toggle:hover{background:#21262d}.errors{background:#3d0b0b;border-color:#792e2e;color:#ff7b72}.warnings{background:#3d2e00;border-color:#705000;color:#d29922}.section{border-top-color:#30363d}}
-</style></head><body><div class="card" id="root"><section class="section"><div class="title">GPTWork Card <span class="badge info">loaded</span></div><p>GPTWork card loaded. Waiting for tool result...</p><p class="muted">resource loaded: ui://widget/gptwork-tool-card-v3.html</p></section></div><script>
+</style></head><body><div class="card" id="root"><section class="section"><div class="title">GPTWork Card <span class="badge info">loaded</span></div><p>GPTWork card loaded. Waiting for tool result...</p><p class="muted">resource loaded: ui://widget/gptwork-tool-card-v4.html</p></section></div><script>
 (function(){
-var RESOURCE_URI='ui://widget/gptwork-tool-card-v3.html';
-var VERSION='gptwork-tool-card-v3';
+var RESOURCE_URI='ui://widget/gptwork-tool-card-v4.html';
+var VERSION='gptwork-tool-card-v4';
 var root=document.getElementById('root');
 var renderCount=0;
 var loadedAt=new Date().toISOString();
@@ -168,15 +168,7 @@ function renderCard(data,source){
   return parts.join('');
 }
 function saveWidgetState(payload,source){
-  try{
-    var openai=window.openai;if(!openai||typeof openai.setWidgetState!=='function'||!payload) return;
-    if(source==='widgetState') return;
-    var snapshot=compactSnapshot(payload);
-    var hash=stableStringify(snapshot);
-    if(hash&&hash===lastPersistedHash) return;
-    lastPersistedHash=hash;
-    openai.setWidgetState({lastToolResult:snapshot,lastSource:source||lastSource,resourceUri:RESOURCE_URI,version:VERSION});
-  }catch(e){}
+  return;
 }
 function renderFrom(found){
   try{
