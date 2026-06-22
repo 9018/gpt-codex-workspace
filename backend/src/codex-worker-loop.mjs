@@ -1,4 +1,5 @@
 import { appendFileSync } from "node:fs";
+import { runIdleMaintenance } from "./worker-maintenance.mjs";
 import {
   createWorkerState,
   markWorkerStarted,
@@ -48,12 +49,14 @@ export function startCodexWorker(server, {
   backoffFactor = Number(process.env.GPTWORK_CODEX_WORKER_BACKOFF_FACTOR || 2),
   githubSyncIntervalMs = Number(process.env.GPTWORK_GITHUB_SYNC_INTERVAL_MS || 30000),
   githubSyncFailureRetryMs = Number(process.env.GPTWORK_GITHUB_SYNC_FAILURE_RETRY_MS || 5000),
+  maintenanceIntervalMs = Number(process.env.GPTWORK_MAINTENANCE_INTERVAL_MS || 21600000),
 } = {}) {
   let stopped = false;
   let running = false;
   let timer = null;
   let consecutiveIdleTicks = 0;
   let lastGithubSyncTime = 0;
+  let lastMaintenanceTime = 0;
 
   // Initialize module-level worker state tracking
   markWorkerStarted(workerState, { intervalMs, limit, concurrency });
@@ -63,6 +66,17 @@ export function startCodexWorker(server, {
     running = true;
     markWorkerTickStarted(workerState);
     try {
+      // Throttled idle maintenance: goal / tmp pressure check (log-only)
+      if (typeof server.getDefaultWorkspaceRoot === "function") {
+        const now = Date.now();
+        if (now - lastMaintenanceTime >= maintenanceIntervalMs) {
+          lastMaintenanceTime = Date.now();
+          server.getDefaultWorkspaceRoot().then(wsRoot => {
+            if (wsRoot) runIdleMaintenance(wsRoot).catch(() => {});
+          }).catch(() => {});
+        }
+      }
+
       // Throttled GitHub sync: successful syncs use the normal interval;
       // failures retry sooner so issue state does not feel stale to operators.
       let githubSync = null;
@@ -131,6 +145,16 @@ export function startCodexWorker(server, {
       }
     } catch (e) {
       // Non-fatal: reconciliation errors should not prevent normal operation
+    }
+    // Run startup idle maintenance (log-only)
+    try {
+      const wsRoot = server.getDefaultWorkspaceRoot ? await server.getDefaultWorkspaceRoot() : null;
+      if (wsRoot) {
+        runIdleMaintenance(wsRoot).catch(() => {});
+        lastMaintenanceTime = Date.now();
+      }
+    } catch {
+      // Non-fatal
     }
     // Start regular tick cycle
     if (!stopped) tick();

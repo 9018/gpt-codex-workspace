@@ -71,7 +71,22 @@ test("default standard tool mode exposes bounded ChatGPT-first tools", async () 
   assert.ok(names.includes("runtime_status"));
   assert.equal(names.includes("schedule_service_restart"), false);
   assert.equal(names.includes("shell_exec"), false);
-  assert.ok(names.length < 70, `standard mode should be bounded, got ${names.length} tools`);
+  assert.ok(names.length > 60, `standard mode should include the full curated ChatGPT surface, got ${names.length} tools`);
+  assert.ok(names.length < 120, `standard mode should remain bounded, got ${names.length} tools`);
+
+  // P0 cleanup tools (cleanup-tools-group)
+  assert.ok(names.includes("cleanup_goals"), "standard mode includes cleanup_goals (P0.1)");
+  assert.ok(names.includes("goal_storage_status"), "standard mode includes goal_storage_status (P0.1)");
+  assert.ok(names.includes("cleanup_tmp"), "standard mode includes cleanup_tmp (P0.1)");
+  assert.ok(names.includes("tmp_status"), "standard mode includes tmp_status (P0.1)");
+  assert.ok(names.includes("clear_repo_lock"), "standard mode includes clear_repo_lock (P0.2)");
+  // list_repo_locks uses the legacy tool API so it only appears in operator/full, not standard
+
+  // P0 workflow tools (workflow-tools-group)
+  assert.ok(names.includes("workflow_status"), "standard mode includes workflow_status (P0.2)");
+  assert.ok(names.includes("workflow_advance"), "standard mode includes workflow_advance (P0.2)");
+  assert.ok(names.includes("workflow_record_result"), "standard mode includes workflow_record_result (P0.2)");
+  assert.ok(names.includes("workflow_apply_proposal"), "standard mode includes workflow_apply_proposal (P0.2)");
 });
 
 test("minimal tool mode exposes only its explicit safe subset", async () => {

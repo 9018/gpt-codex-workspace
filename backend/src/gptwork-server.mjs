@@ -153,6 +153,10 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
       };
     },
 
+    getDefaultWorkspaceRoot() {
+      return config.defaultWorkspaceRoot;
+    },
+
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {
       return reconciler.reconcileStaleTasks(context);
     },    // P2.1: Generate a human-readable summary from structured tool results
