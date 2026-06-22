@@ -192,13 +192,13 @@ test("widget card resource is listed and returns proper compact HTML", () => {
   const list = resourceList();
   assert.ok(list.length > 0);
   const entry = list.find((r) => r.uri === "ui://widget/gptwork-card-v2.html");
-  assert.ok(entry, "gptwork-card-v1.html should be in resource list");
-  assert.equal(entry.mimeType, "text/html");
-  assert.match(entry.name, /GPTWork/);
-
-  const resource = readResource("ui://widget/gptwork-card-v2.html");
-  assert.ok(resource, "readResource should return content");
-  assert.equal(resource.mimeType, "text/html");
+ assert.ok(entry, "gptwork-card-v1.html should be in resource list");
+  assert.equal(entry.mimeType, "text/html;profile=mcp-app");
+ assert.match(entry.name, /GPTWork/);
+ 
+ const resource = readResource("ui://widget/gptwork-card-v2.html");
+ assert.ok(resource, "readResource should return content");
+  assert.equal(resource.mimeType, "text/html;profile=mcp-app");
   // Root card container
   assert.ok(resource.text.includes("class=\"card\""), "should have card element");
   // Title/status/summary section
@@ -231,9 +231,9 @@ test("widget card render function produces correct sections", () => {
   const resource = readResource("ui://widget/gptwork-card-v2.html");
   const html = resource.text;
 
-  // Verify sections
-  assert.ok(html.includes("card-section"), "should have card-section class");
-  assert.ok(html.includes("class=\"json\""), "should have JSON fallback pre");
+ // Verify sections
+  assert.ok(html.includes("class=\"section\""), "should have section class");
+ assert.ok(html.includes("class=\"json\""), "should have JSON fallback pre");
   assert.ok(html.includes("class=\"json collapsed\""), "should support collapsed raw JSON");
   assert.ok(html.includes("Show raw JSON"), "should have show raw JSON toggle text");
   assert.ok(html.includes("Hide raw JSON"), "should have hide raw JSON toggle text");

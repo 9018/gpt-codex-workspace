@@ -24,7 +24,7 @@ Exposed via `resources/list` for ChatGPT Apps SDK discovery:
 |---|---|
 | `uri` | `ui://widget/gptwork-card-v2.html` |
 | `name` | `GPTWork Apps SDK Card (v2)` |
-| `mimeType` | `text/html` |
+| `mimeType` | `text/html;profile=mcp-app` |
 | `openai/widgetDescription` | Description of the card's rendering purpose |
 | `openai/widgetPrefersBorder` | `true` |
 | `openai/widgetDomain` | Array of tool names that use this card |
@@ -118,3 +118,21 @@ The v1 card HTML is inline in:
 ```text
 backend/src/mcp-tooling.mjs (readResource function)
 ```
+
+## Troubleshooting: Card Not Displaying in ChatGPT
+
+If the v2 card doesn't display in ChatGPT:
+
+1. **Reconnect the MCP connector**: Refresh/reconnect the ChatGPT MCP connector to force re-initialization.
+2. **Check tool descriptor `_meta`**: Call `tools/list` and verify high-frequency tools have:
+   - `_meta["openai/outputTemplate"] === "ui://widget/gptwork-card-v2.html"`
+   - `_meta.ui.resourceUri === "ui://widget/gptwork-card-v2.html"`
+3. **Check resource registration**: Call `resources/list` and verify v2 card is present with:
+   - `uri === "ui://widget/gptwork-card-v2.html"`
+   - `mimeType === "text/html;profile=mcp-app"`
+4. **Check resource content**: Call `resources/read` with `uri: "ui://widget/gptwork-card-v2.html"` and verify it returns valid HTML with `mimeType: "text/html;profile=mcp-app"`.
+5. **Verify structured content**: When calling a tool, the response should include `structuredContent` at the top level of the result object (alongside `content` and `isError`).
+6. **ChatGPT Apps SDK support**: Ensure your ChatGPT client supports Apps SDK widget rendering. The `text/html;profile=mcp-app` mime type with the `io.modelcontextprotocol/ui` extension capability is required for card recognition.
+7. **Fallback**: Even if the card doesn't render, tools should still return `content[0].text` with a readable text summary.
+
+If all checks pass but the card still doesn't display, the issue is likely on the ChatGPT platform side (e.g., Apps SDK widget rendering not enabled for your session). In this case, the text fallback in `content[0].text` provides a readable summary.

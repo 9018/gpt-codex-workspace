@@ -233,10 +233,12 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createBrowserToolsGroup({ tool, schema, browser }),
     ...createBrowserInteractionToolsGroup({ tool, schema, browser }),
     ...createGitRemoteToolsGroup({ tool, schema, registry, defaultWorkspaceRoot: config.defaultWorkspaceRoot, defaultRepo: config.defaultRepo, defaultBranch: config.defaultBranch, defaultRepoPath: config.defaultRepoPath, defaultRemote: config.defaultRemote }),
-    ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
-    ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
+   ...createRuntimeStatusToolsGroup({ tool, schema, config, sources, envLoadResult, bark, github, registry, store, workerState, PROCESS_STARTED_AT: processStartedAt, collectWorkerQueueCounts }),
+   ...createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary }),
 
-    read_events: tool({
+    ...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }),
+
+   read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",
       inputSchema: schema({

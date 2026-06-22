@@ -55,10 +55,10 @@ export function resourceList() {
       description: "Legacy compact GPTWork status/result card for ChatGPT Apps SDK clients."
     },
     {
-      uri: "ui://widget/gptwork-card-v2.html",
-      name: "GPTWork Apps SDK Card (v2)",
-      mimeType: "text/html",
-      description: "GPTWork Apps SDK Card v2 - structured status/result card with key-values, items, changed_files, diff summary, warnings, errors, and raw JSON fallback.",
+     uri: "ui://widget/gptwork-card-v2.html",
+     name: "GPTWork Apps SDK Card (v2)",
+      mimeType: "text/html;profile=mcp-app",
+     description: "GPTWork Apps SDK Card v2 - structured status/result card with key-values, items, changed_files, diff summary, warnings, errors, and raw JSON fallback.",
       "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
       "openai/widgetPrefersBorder": true,
       "openai/widgetDomain": ["runtime_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "read_handoff", "list_goal_queue", "start_next_queued_goal"],
@@ -181,13 +181,19 @@ e.innerHTML = renderCard(d);
     };
   }
 
-  if (uri === "ui://widget/gptwork-card-v2.html") {
-    return {
-      uri,
-      mimeType: "text/html",
-      text: __gptworkWidgetV2Html
-    };
-  }
+ if (uri === "ui://widget/gptwork-card-v2.html") {
+   return {
+     uri,
+      mimeType: "text/html;profile=mcp-app",
+      _meta: {
+        "openai/widgetDescription": "Apps SDK Card v2 for GPTWork tool results - renders runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.",
+        "openai/widgetPrefersBorder": true,
+        "openai/widgetDomain": ["runtime_status", "gptwork_doctor", "gptwork_self_test", "show_changes", "get_task", "list_tasks", "create_encoded_goal", "get_goal_context", "list_goals", "enqueue_goal", "list_goal_queue", "get_goal_queue", "start_next_queued_goal", "read_handoff"],
+        "openai/widgetCSP": "style-src 'unsafe-inline'; script-src 'unsafe-inline' 'self' https:; img-src 'self' data:;"
+      },
+     text: __gptworkWidgetV2Html
+   };
+ }
 
   return null;
 }

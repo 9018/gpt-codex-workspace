@@ -3,6 +3,8 @@
 # GPT-Codex Workspace
 
 ## 新功能：目标队列执行
+队列工具已修复并暴露在 standard/codex/full 模式。
+卡片 v2（`text/html;profile=mcp-app`）已修复，确保 ChatGPT 侧正确显示。
 
 参见 `docs/goal-queue.md` 了解真实的目标执行队列能力。
 

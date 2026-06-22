@@ -8,6 +8,8 @@ A bidirectional coordination system between **ChatGPT** and **Codex** for collab
 ## Current Status
 
 See `docs/current-status.md` for the latest operational state and `docs/goal-queue.md` for the goal queue execution, known blockers, and cleanup notes.
+Queue tools (`enqueue_goal`, `list_goal_queue`, `start_next_queued_goal`, etc.) are now fully exposed in standard/codex/full modes.
+See `docs/widget-card.md` for Apps SDK card v2 rendering.
 
 ## Product Acceptance / Verification
 
@@ -532,6 +534,8 @@ GPTWork uses two levels of environment configuration:
 - Do not put secrets into `project.md`; use `project.env` for key/value configuration
 
 See `docs/current-status.md` for the latest operational state and `docs/goal-queue.md` for the goal queue execution.
+Queue tools (`enqueue_goal`, `list_goal_queue`, `start_next_queued_goal`, etc.) are now fully exposed in standard/codex/full modes.
+See `docs/widget-card.md` for Apps SDK card v2 rendering.
 
 
 

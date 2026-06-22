@@ -1,5 +1,50 @@
 # GPTWork Current Status
 
+## 2026-06-22 Queue Tool Exposure + Card v2 Display Fix
+
+**Fixed**: Queue MCP tools were imported but never registered in `createTools()` — tools/list didn't include them. v2 card `mimeType` was `text/html` instead of `text/html;profile=mcp-app`, preventing ChatGPT Apps SDK from recognizing it as a card.
+
+### What Changed
+
+- **server-tools.mjs**: Added `...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue })` to `createTools()` — queue tools now registered.
+- **mcp-tooling.mjs**: Changed v2 card `mimeType` from `text/html` to `text/html;profile=mcp-app` in both `resourceList()` and `readResource()`. Added Apps SDK `_meta` to resource content response.
+- **test/public-tool-names.test.mjs**: Added 6 queue tools to expected snapshot list.
+- **test/apps-sdk-card-smoke.test.mjs**: New verification test covering all SDK card requirements and tool mode exposure.
+- **test/productization-p2.test.mjs**: Updated to expect `text/html;profile=mcp-app` mime type and `section` class.
+- **test/e2e-product-acceptance.test.mjs**: Area 7d count now includes queue tools.
+
+### Verification Results
+
+- `npm test` — PASS (all unit tests)
+- `npm run test:e2e-acceptance` — PASS (all 38+ acceptance tests)
+- `npm run check:syntax` — PASS
+- `npm run check:imports` — PASS
+- Apps SDK card smoke test — PASS (9 tests)
+- CLI queue commands work:
+  - `gptwork queue list` — displays empty queue
+  - `gptwork queue start-next --dry-run` — shows no eligible items
+
+### Exposure Rules After Fix
+
+| Tool | minimal | standard | operator | codex | full |
+|------|---------|----------|----------|-------|------|
+| enqueue_goal | — | ✓ | — | ✓ | ✓ |
+| list_goal_queue | — | ✓ | ✓ | ✓ | ✓ |
+| get_goal_queue | — | ✓ | ✓ | ✓ | ✓ |
+| start_next_queued_goal | — | ✓ | — | ✓ | ✓ |
+| update_goal_queue_item | — | ✓ | — | ✓ | ✓ |
+| cancel_goal_queue_item | — | ✓ | — | ✓ | ✓ |
+
+### User-Side Verification
+
+1. Reconnect/refresh the ChatGPT MCP connector.
+2. Call `tools/list` — look for `enqueue_goal`, `list_goal_queue`, `start_next_queued_goal`.
+3. Call a high-frequency tool like `runtime_status` or `gptwork_self_test` — should see the v2 compact card instead of raw JSON.
+4. If card still doesn't display, check:
+   - The tool descriptor has `_meta.openai/outputTemplate === "ui://widget/gptwork-card-v2.html"`.
+   - `resources/list` includes v2 with `mimeType: "text/html;profile=mcp-app"`.
+   - The ChatGPT MCP connector supports Apps SDK widgets.
+
 
 ## 2026-06-22 Apps SDK Card v2 Upgrade
 
