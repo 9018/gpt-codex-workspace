@@ -6,7 +6,7 @@ import { buildTaskResult } from "./codex-result-parser.mjs";
 import { prepareCodexTaskRun } from "./task-run-setup.mjs";
 import { executeCodexTaskRun } from "./task-codex-execution.mjs";
 import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
-import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult } from "./task-result-status.mjs";
+import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle } from "./task-result-status.mjs";
 import { updateTask } from "./task-lifecycle.mjs";
 import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
 
@@ -174,6 +174,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     parsedResult,
     workspaceRoot: config.defaultWorkspaceRoot,
     taskId: task.id,
+    isP0Task: isP0TaskTitle(task.title),
   });
 
   return finalizeCodexTaskRun({

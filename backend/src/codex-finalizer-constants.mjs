@@ -37,6 +37,14 @@ export const RESULT_FIELDS = [
  */
 export const RUNTIME_SRC_PATTERNS = [
   /^backend\/src\/.*\.mjs$/,
+  /^backend\/bin\/gptwork\.mjs$/,
+  /^backend\/package\.json$/,
+  /^backend\/src\/server-tools\.mjs$/,
+  /^backend\/src\/tool-groups\/.*\.mjs$/,
+  /^backend\/src\/.*runtime.*\.mjs$/,
+  /^backend\/src\/.*worker.*\.mjs$/,
+  /^backend\/src\/.*mcp.*\.mjs$/,
+  /^backend\/src\/codex-finalizer-contract\.mjs$/,
 ];
 
 // ===========================================================================

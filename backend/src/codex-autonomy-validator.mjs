@@ -1,3 +1,4 @@
+import { RUNTIME_SRC_PATTERNS } from "./codex-finalizer-constants.mjs";
 const ROLE_ALIASES = {
   'escalation_judgment': 'escalation_judge',
   'escalation-judge': 'escalation_judge',
@@ -20,15 +21,6 @@ export function normalizeRoleName(name) {
 // ---------------------------------------------------------------------------
 // Runtime code change detection (P0 hotfix: safe-restart gating)
 // ---------------------------------------------------------------------------
-
-/**
- * Runtime server file patterns -- files loaded by the running gptwork-mcp.service.
- * Changes to these files require a safe restart to take effect.
- * Matches any .mjs file under backend/src/.
- */
-const RUNTIME_SRC_PATTERNS = [
-  /^backend\/src\/.*\.mjs$/,
-];
 
 /**
  * Check if a list of changed files contains any runtime server source files.
