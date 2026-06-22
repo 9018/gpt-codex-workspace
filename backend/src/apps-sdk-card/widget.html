@@ -41,6 +41,7 @@ var renderCount=0;
 var loadedAt=new Date().toISOString();
 var lastEventAt='none';
 var lastSource='fallback';
+var lastPersistedHash='';
 function esc(s){return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;')}
 function ownKeys(value){return value&&typeof value==='object'?Object.keys(value):[]}
 function isObject(value){return value&&typeof value==='object'&&!Array.isArray(value)}
@@ -53,10 +54,23 @@ function compactSnapshot(data){
   var keys=['summary','title','name','status','ok','gptwork_tool','gptwork_title','gptwork_type','keyValues','key_values','items','list','queue','worker','goal','task','item','warnings','errors','changed_files','staged_count','unstaged_count','total_changes','diff_truncated'];
   for(var i=0;i<keys.length;i++){var k=keys[i];if(data[k]!==undefined) out[k]=compactClone(data[k])}
   if(data.diff_excerpt) out.diff_excerpt=limitString(data.diff_excerpt,1200);
-  if(!ownKeys(out).length) out=compactClone(data);
+  if(!ownKeys(out).length) out={summary:data.summary||data.title||data.name||'GPTWork result',status:data.status||''};
   var json=JSON.stringify(out);
   if(json&&json.length>16000){out={summary:data.summary||data.title||data.name||'GPTWork result',status:data.status||'',gptwork_tool:data.gptwork_tool||'',truncated:true}}
   return out;
+}
+function stableStringify(value){
+  var seen=[];
+  function normalize(v){
+    if(v===null||typeof v!=='object') return v;
+    if(seen.indexOf(v)>=0) return '[Circular]';
+    seen.push(v);
+    if(Array.isArray(v)){var arr=[];for(var i=0;i<v.length;i++) arr.push(normalize(v[i]));seen.pop();return arr}
+    var out={};var keys=Object.keys(v).sort();
+    for(var k=0;k<keys.length;k++){var key=keys[k];if(key==='savedAt'||key==='loadedAt'||key==='lastEventAt'||key==='renderCount'||key==='renders') continue;out[key]=normalize(v[key])}
+    seen.pop();return out;
+  }
+  try{return JSON.stringify(normalize(value))}catch(e){return String(value&&value.summary||value&&value.title||'')}
 }
 function unwrapPayload(value){
   if(!value) return null;
@@ -147,7 +161,7 @@ function renderCard(data,source){
   if(Array.isArray(data.warnings)&&data.warnings.length){parts.push('<div class="section"><div class="warnings">'+data.warnings.map(function(w){return esc(typeof w==='string'?w:(w.message||w.code||String(w)))}).join('<br>')+'</div></div>')}
   if(Array.isArray(data.errors)&&data.errors.length){parts.push('<div class="section"><div class="errors">'+data.errors.map(function(e){return esc(typeof e==='string'?e:(e.message||e.code||String(e)))}).join('<br>')+'</div></div>')}
   var hasContent=data.status!==undefined||data.ok!==undefined||data.summary||kv||(items&&items.length)||data.changed_files||data.errors||data.warnings||data.staged_count!=null||data.diff_excerpt;
-  var jsonStr=JSON.stringify(data,null,2);
+  var jsonStr=stableStringify(data);
   if(!hasContent){parts.push('<pre class="json">'+esc(jsonStr)+'</pre>')}
   else{parts.push('<div class="section"><button class="fold-toggle" onclick="(function(b){var p=b.nextElementSibling;if(p){p.classList.toggle(\'collapsed\');b.textContent=p.classList.contains(\'collapsed\')?\'Show raw JSON\':\'Hide raw JSON\'}})(this)">Show raw JSON</button><pre class="json collapsed">'+esc(jsonStr)+'</pre></div>')}
   parts.push(diagnostics(source));
@@ -156,7 +170,12 @@ function renderCard(data,source){
 function saveWidgetState(payload,source){
   try{
     var openai=window.openai;if(!openai||typeof openai.setWidgetState!=='function'||!payload) return;
-    openai.setWidgetState({lastToolResult:compactSnapshot(payload),lastSource:source||lastSource,resourceUri:RESOURCE_URI,version:VERSION,savedAt:new Date().toISOString()});
+    if(source==='widgetState') return;
+    var snapshot=compactSnapshot(payload);
+    var hash=stableStringify(snapshot);
+    if(hash&&hash===lastPersistedHash) return;
+    lastPersistedHash=hash;
+    openai.setWidgetState({lastToolResult:snapshot,lastSource:source||lastSource,resourceUri:RESOURCE_URI,version:VERSION});
   }catch(e){}
 }
 function renderFrom(found){

@@ -349,6 +349,7 @@ test("SDK-4d: tool card HTML renders structuredContent and toolOutput payloads",
 test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", async () => {
   const server = await makeServer({ toolMode: "standard" });
   const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  let persistCount = 0;
   const rendered = renderWidgetHtml(res.result.contents[0].text, {
     widgetState: {
       lastToolResult: {
@@ -357,11 +358,13 @@ test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", as
         keyValues: { source: "widget-state" },
       },
     },
+    setWidgetState: () => { persistCount += 1; },
   });
 
   assert.match(rendered.root.innerHTML, /Restored runtime snapshot/);
   assert.match(rendered.root.innerHTML, /widget-state/);
   assert.match(rendered.root.innerHTML, /source: widgetState/);
+  assert.equal(persistCount, 0, "widgetState-only second open must not persist again");
 });
 
 test("SDK-4f: tool card HTML renders toolResponseMetadata mcp_tool_result structuredContent", async () => {
@@ -396,6 +399,58 @@ test("SDK-4g: tool card HTML persists compact widgetState after successful rende
   assert.equal(savedState?.lastToolResult?.summary, "Persist me");
   assert.equal(savedState?.lastToolResult?.keyValues?.id, "snapshot-1");
   assert.equal(savedState?.lastSource, "toolOutput");
+});
+
+test("SDK-4g2: setWidgetState echo does not trigger a render loop", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  let persistCount = 0;
+  let savedState = null;
+  const openai = {
+    toolOutput: { summary: "Echo-safe runtime", status: "ok", keyValues: { id: "echo-1" } },
+    setWidgetState: (next) => {
+      persistCount += 1;
+      savedState = next;
+    },
+  };
+
+  const rendered = renderWidgetHtml(res.result.contents[0].text, openai);
+  assert.equal(persistCount, 1, "initial real tool output should persist once");
+
+  openai.toolOutput = undefined;
+  openai.widgetState = savedState;
+  rendered.windowObject.dispatchEvent({ type: "openai:set_globals", detail: { widgetState: savedState } });
+
+  assert.match(rendered.root.innerHTML, /Echo-safe runtime/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Maximum call stack size exceeded/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Renderer error/);
+  assert.ok(persistCount <= 1, `setWidgetState echo must not persist recursively; got ${persistCount}`);
+  assert.doesNotMatch(rendered.root.innerHTML, /renders: [1-9][0-9]{2,}/,
+    "render count must remain bounded after setWidgetState echo");
+});
+
+test("SDK-4g3: cyclic payload can render and persist a compact acyclic snapshot", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  let savedState = null;
+  const cyclic = {
+    summary: "Cyclic runtime",
+    status: "ok",
+    keyValues: { id: "cyclic-1" },
+  };
+  cyclic.self = cyclic;
+
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    toolOutput: cyclic,
+    setWidgetState: (next) => { savedState = next; },
+  });
+
+  assert.match(rendered.root.innerHTML, /Cyclic runtime/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Renderer error/);
+  assert.equal(savedState?.lastToolResult?.summary, "Cyclic runtime");
+  assert.equal(savedState?.lastToolResult?.keyValues?.id, "cyclic-1");
+  assert.equal(savedState?.lastToolResult?.self, undefined,
+    "persisted widgetState snapshot must not include cyclic metadata");
 });
 
 test("SDK-4h: delayed openai:set_globals event rehydrates the card", async () => {
