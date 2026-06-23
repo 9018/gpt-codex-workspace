@@ -35,11 +35,11 @@ async function loadTranscriptIfExists(workspaceRoot, transcriptPath) {
 /**
  * Load prior goal result summaries from the workspace.
  * @param {object} store
- * @param {object} state
+ * @param {string} workspaceRoot
  * @param {object} goal
  * @returns {Promise<Array<{ summary: string }>>}
  */
-async function loadPriorResults(store, goal) {
+export async function loadPriorResults(store, workspaceRoot, goal) {
   try {
     const state = await store.load();
     const priorGoals = (state.goals || [])
@@ -52,7 +52,7 @@ async function loadPriorResults(store, goal) {
       try {
         const resultPath = `.gptwork/goals/${prior.id}/result.md`;
         const absPath = join(
-          process.cwd(),
+          workspaceRoot || process.cwd(),
           resultPath
         );
         if (existsSync(absPath)) {
@@ -149,7 +149,7 @@ export async function maybeBuildContextBundle(
     // Load prior results for context
     let priorResults = [];
     try {
-      priorResults = await loadPriorResults(store, goal);
+      priorResults = await loadPriorResults(store, workspaceRoot, goal);
     } catch {
       // Prior results not available
     }

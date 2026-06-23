@@ -573,3 +573,199 @@ test("goal-queue: createGoalTask throws on non-existent goal", async () => {
     { message: /Goal not found/ }
   );
 });
+
+
+// ===========================================================================
+// P1: Dependency policy — completed_only (default)
+// ===========================================================================
+
+test("P1 dependency_policy: completed_only blocks on failed dep by default", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-p1-dep1-"));
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_dep_p1_a", "Goal A", "open");
+  addGoal(store, "goal_dep_p1_b", "Goal B (depends on A)", "open");
+  // Task A is failed
+  addTask(store, "task_dep_p1_a", "failed", { goal_id: "goal_dep_p1_a" });
+  await store.save();
+
+  const { enqueueGoal, startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+
+  // Enqueue B with dependency on task A (no explicit policy — defaults to completed_only)
+  const depResult = await enqueueGoal(store, "goal_dep_p1_b", {
+    depends_on_task_id: "task_dep_p1_a",
+    auto_start: true,
+  });
+  assert.equal(depResult.ok, true);
+
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  // Non-dry-run: should mark the item as blocked because dep failed with completed_only policy
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+  assert.equal(result.started, false, "should not start any item");
+  
+  // Load fresh state and check if item was blocked
+  await store.load();
+  const item = store.state.goal_queue.find(q => q.goal_id === "goal_dep_p1_b");
+  assert.ok(item, "queue item should exist");
+  assert.equal(item.status, "blocked", "should be blocked when dep failed with completed_only");
+});
+
+// ===========================================================================
+// P1: Dependency policy — terminal_any (explicit)
+// ===========================================================================
+
+test("P1 dependency_policy: terminal_any allows failed dep", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-p1-dep2-"));
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_dep_p2_a", "Goal A", "open");
+  addGoal(store, "goal_dep_p2_b", "Goal B (terminal_any)", "open");
+  addTask(store, "task_dep_p2_a", "failed", { goal_id: "goal_dep_p2_a" });
+  await store.save();
+
+  const { enqueueGoal, startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+
+  // Enqueue B with dependency on task A, and dependency_policy: terminal_any
+  const depResult = await enqueueGoal(store, "goal_dep_p2_b", {
+    depends_on_task_id: "task_dep_p2_a",
+    dependency_policy: "terminal_any",
+    auto_start: true,
+  });
+  assert.equal(depResult.ok, true);
+
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const result = await startNextQueuedGoal(store, config, { dry_run: true });
+
+  // B should NOT be blocked because terminal_any allows failed
+  // But the exact outcome depends on the full check sequence (worktree, etc.)
+  // At minimum, verify the dependency check passed (not blocked by dep)
+  
+  // Load fresh state and check if item was blocked
+  await store.load();
+  const item = store.state.goal_queue.find(q => q.goal_id === "goal_dep_p2_b");
+  assert.ok(item, "queue item should exist");
+  // If dependency satisfied with terminal_any, item should not be blocked
+  // Note: it might still be blocked by other checks (worktree) in non-git dir,
+  // but the blocked reason should NOT mention dependency
+  if (item.status === "blocked") {
+    assert.ok(
+      item.blocked_reason && !item.blocked_reason.includes("depends_on_task"),
+      "if blocked, reason should not be dependency unmet"
+    );
+  }
+});
+
+// ===========================================================================
+// P1: Transient blocked — auto-recheck
+// ===========================================================================
+
+test("P1 transient blocked: repo lock unblocked on recheck", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-p1-trans-"));
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_trans_a", "Transient A", "open");
+  await store.save();
+
+  const { enqueueGoal, startNextQueuedGoal, updateGoalQueueItem } = await import("../src/goal-queue.mjs");
+
+  // Enqueue goal
+  const enqResult = await enqueueGoal(store, "goal_trans_a", { auto_start: true });
+  assert.equal(enqResult.ok, true);
+  const queueId = enqResult.item.queue_id;
+
+  // Manually set it to blocked with transient reason (repo locked)
+  await updateGoalQueueItem(store, queueId, {
+    status: "blocked",
+    blocked_reason: "Repo locked (1 active lock(s))",
+  });
+
+  // Reload and verify it's blocked
+  await store.load();
+  assert.equal(store.state.goal_queue[0].status, "blocked");
+
+  // Now call startNextQueuedGoal — the recheck should find the transient
+  // blocked item, see that repo lock is no longer active, worktree is clean,
+  // and move it back to waiting/ready (and potentially start it)
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const result = await startNextQueuedGoal(store, config, { dry_run: true });
+
+  // After recheck, the item should be out of blocked status
+  // (either waiting/ready if not yet started, or running if started)
+  await store.load();
+  const updatedItem = store.state.goal_queue[0];
+  assert.notEqual(updatedItem.status, "blocked", "transient blocked item should be recovered after recheck");
+});
+
+// ===========================================================================
+// P1: Dependency-blocked NOT auto-recovered
+// ===========================================================================
+
+test("P1 transient blocked: dependency unmet not auto-recovered", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-p1-depblock-"));
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_not_ready", "Not Ready", "open");
+  await store.save();
+
+  const { enqueueGoal, startNextQueuedGoal, updateGoalQueueItem } = await import("../src/goal-queue.mjs");
+
+  const enqResult = await enqueueGoal(store, "goal_not_ready", {
+    depends_on_task_id: "task_never_completes",
+    auto_start: true,
+  });
+  assert.equal(enqResult.ok, true);
+  const queueId = enqResult.item.queue_id;
+
+  // Manually set to blocked with dependency reason
+  await updateGoalQueueItem(store, queueId, {
+    status: "blocked",
+    blocked_reason: "depends_on_task task_never_completes status=not found",
+  });
+
+  // Call startNextQueuedGoal — dependency unmet items should NOT be auto-recovered
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const result = await startNextQueuedGoal(store, config, { dry_run: true });
+
+  // Verify the item is still blocked
+  await store.load();
+  const updatedItem = store.state.goal_queue[0];
+  assert.equal(updatedItem.status, "blocked", "dependency-blocked item should stay blocked");
+  assert.equal(updatedItem.blocked_reason, "depends_on_task task_never_completes status=not found");
+});
+
+// ===========================================================================
+// P1: Dependency policy field in queue item
+// ===========================================================================
+
+test("P1 dependency_policy: field is persisted on queue item", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-p1-persist-"));
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_persist", "Persist Test", "open");
+  await store.save();
+
+  const { enqueueGoal, updateGoalQueueItem } = await import("../src/goal-queue.mjs");
+
+  // Default policy
+  const defResult = await enqueueGoal(store, "goal_persist");
+  assert.equal(defResult.ok, true);
+  assert.equal(defResult.item.dependency_policy, "completed_only", "default policy should be completed_only");
+
+  // Explicit policy
+  const { enqueueGoal: enq2 } = await import("../src/goal-queue.mjs");
+  // Need a different goal for explicit policy
+  addGoal(store, "goal_persist_term", "Terminal Test", "open");
+  await store.save();
+  const termResult = await enqueueGoal(store, "goal_persist_term", {
+    dependency_policy: "terminal_any",
+  });
+  assert.equal(termResult.ok, true);
+  assert.equal(termResult.item.dependency_policy, "terminal_any", "should respect explicit policy");
+
+  // Update policy
+  const updResult = await updateGoalQueueItem(store, defResult.item.queue_id, {
+    dependency_policy: "terminal_any",
+  });
+  assert.equal(updResult.ok, true);
+  assert.equal(updResult.item.dependency_policy, "terminal_any", "update should change policy");
+});

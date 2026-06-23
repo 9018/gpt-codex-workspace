@@ -123,7 +123,7 @@ export function createLocalStore(options = {}) {
     name: "local-json-store",
     available: true,
 
-    async addChunks(chunks, vectors) {
+    async addChunks(chunks, vectors, options = {}) {
       if (chunks.length !== vectors.length) {
         throw new Error(`addChunks: chunks.length (${chunks.length}) !== vectors.length (${vectors.length})`);
       }
@@ -137,8 +137,34 @@ export function createLocalStore(options = {}) {
       }
       for (const [goalId, data] of byGoal) {
         const entry = await loadGoalIndex(goalId);
-        entry.chunks.push(...data.chunks);
-        entry.vectors.push(...data.vectors);
+        if (options.replace) {
+          // Replace mode: clear existing chunks for this goal and use new data
+          entry.chunks = data.chunks;
+          entry.vectors = data.vectors;
+        } else {
+          // Dedup mode: avoid duplicate chunks by (source_type, chunk_index)
+          // Only dedup when chunk_index is explicitly defined to avoid false matches
+          for (let i = 0; i < data.chunks.length; i++) {
+            const newChunkIndex = data.chunks[i].metadata?.chunk_index;
+            if (newChunkIndex === undefined || newChunkIndex === null || newChunkIndex === -1) {
+              entry.chunks.push(data.chunks[i]);
+              entry.vectors.push(data.vectors[i]);
+              continue;
+            }
+            const existingIdx = entry.chunks.findIndex(
+              (c) =>
+                c.metadata?.source_type === data.chunks[i].metadata?.source_type &&
+                c.metadata?.chunk_index === newChunkIndex
+            );
+            if (existingIdx >= 0) {
+              entry.chunks[existingIdx] = data.chunks[i];
+              entry.vectors[existingIdx] = data.vectors[i];
+            } else {
+              entry.chunks.push(data.chunks[i]);
+              entry.vectors.push(data.vectors[i]);
+            }
+          }
+        }
         await persistGoalIndex(goalId, entry);
       }
     },
@@ -235,14 +261,21 @@ export async function tryCreateZvecStore(options = {}) {
       name: "zvec-store",
       available: true,
 
-      async addChunks(chunks, vectors) {
+      async addChunks(chunks, vectors, options = {}) {
         if (chunks.length !== vectors.length) {
           throw new Error(`addChunks: chunks.length (${chunks.length}) !== vectors.length (${vectors.length})`);
+        }
+        if (options.replace) {
+          // In replace mode, remove existing chunks for all affected goals first
+          const goals = new Set(chunks.map(c => c.metadata?.goal_id || "unknown"));
+          for (const gid of goals) {
+            await this.removeGoalChunks(gid);
+          }
         }
         for (let i = 0; i < chunks.length; i++) {
           const goalId = chunks[i].metadata?.goal_id || "unknown";
           const idx = await getIndex(goalId);
-          await idx.add(chunks[i].id, vectors[i], chunks[i].metadata);
+          await idx.add(chunks[i].id, vectors[i], { ...chunks[i].metadata, text: chunks[i].text, tokens: chunks[i].tokens });
         }
       },
 

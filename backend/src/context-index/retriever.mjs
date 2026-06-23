@@ -139,7 +139,7 @@ export async function indexGoalContext(ctx) {
     prefer: ctx.storePrefer,
   });
 
-  await store.addChunks(chunks, vectors);
+  await store.addChunks(chunks, vectors, { replace: true });
 
   return {
     storeName: store.name,

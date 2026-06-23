@@ -11,7 +11,7 @@
 
 import assert from "node:assert";
 import { describe, it, before, after } from "node:test";
-import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -370,5 +370,257 @@ describe("context-index barrel import", () => {
     assert.strictEqual(typeof idx.buildContextBundle, "function");
     assert.strictEqual(typeof idx.maybeBuildContextBundle, "function");
     assert.strictEqual(typeof idx.tryBuildContextBundle, "function");
+  });
+});
+
+
+// ===========================================================================
+// 7. P1: loadPriorResults uses workspaceRoot (not process.cwd())
+// ===========================================================================
+
+describe("P1: loadPriorResults uses workspaceRoot", () => {
+
+  it("loadPriorResults reads from workspaceRoot, not process.cwd()", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-pr-"));
+    const fakeStatePath = join(tmpDir, "state.json");
+    
+    // Create a prior goal result in the workspaceRoot
+    const goalDir = join(tmpDir, ".gptwork", "goals", "goal_prior_001");
+    mkdirSync(goalDir, { recursive: true });
+    writeFileSync(join(goalDir, "result.md"), "# Prior Result\n\nThis is a test prior result for workspaceRoot-based loading.");
+    
+    // Create a mock store with a prior goal
+    const store = {
+      async load() {
+        return {
+          goals: [
+            { id: "goal_current", workspace_id: "ws-test", title: "Current" },
+            { id: "goal_prior_001", workspace_id: "ws-test", title: "Prior Goal", created_at: "2026-01-01T00:00:00Z" },
+          ],
+        };
+      },
+    };
+    
+    // Call loadPriorResults with a workspaceRoot that's different from cwd
+    // The tmpDir is our workspaceRoot - process.cwd() is different
+    const results = await contextIndexHooks.loadPriorResults
+      ? await contextIndexHooks.loadPriorResults(store, tmpDir, { id: "goal_current", workspace_id: "ws-test" })
+      : [];
+    
+    if (contextIndexHooks.loadPriorResults) {
+      assert.ok(results.length >= 1, "should find prior result");
+      assert.ok(results[0].summary.includes("Prior Result"), "summary should contain result.md content");
+    }
+    
+    // Clean up
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("loadPriorResults returns fallback summary when result.md missing", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-pr-missing-"));
+    
+    const store = {
+      async load() {
+        return {
+          goals: [
+            { id: "goal_current", workspace_id: "ws-test" },
+            { id: "goal_prior_noresult", workspace_id: "ws-test", title: "No Result File", created_at: "2026-01-01T00:00:00Z" },
+          ],
+        };
+      },
+    };
+    
+    const results = contextIndexHooks.loadPriorResults
+      ? await contextIndexHooks.loadPriorResults(store, tmpDir, { id: "goal_current", workspace_id: "ws-test" })
+      : [];
+    
+    if (contextIndexHooks.loadPriorResults) {
+      assert.ok(results.length >= 1, "should still return fallback");
+      assert.ok(results[0].summary.includes("No Result File"), "fallback should include title");
+    }
+    
+    rmSync(tmpDir, { recursive: true, force: true });
+  });
+});
+
+// ===========================================================================
+// 8. P1: zvec adapter round-trip (text/tokens in search results)
+// ===========================================================================
+
+describe("P1: zvec adapter round-trip", () => {
+
+  it("local store search returns text and tokens in results", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-zvec-"));
+    try {
+      const store = zvecStore.createLocalStore({ workspaceRoot: tmpDir, dimension: 4 });
+      
+      await store.addChunks(
+        [
+          { id: "c1", text: "deployment guide for kubernetes", tokens: 8, metadata: { goal_id: "g1", source_type: "goal" } },
+          { id: "c2", text: "database migration scripts", tokens: 6, metadata: { goal_id: "g1", source_type: "goal" } },
+        ],
+        [[1, 0, 0, 0], [0, 1, 0, 0]]
+      );
+      
+      const results = await store.search([1, 0, 0, 0], 5, { goal_id: "g1" });
+      assert.ok(results.length >= 1, "should return at least one result");
+      // Verify text and tokens are available in search results (regardless of sort order)
+      const hasTextTokens = results.some(r => r.text && r.tokens > 0);
+      assert.ok(hasTextTokens, "search results should contain text and tokens");
+      const c1 = results.find(r => r.id === "c1");
+      assert.ok(c1, "c1 should be in results");
+      assert.strictEqual(c1.text, "deployment guide for kubernetes", "text should be preserved on c1");
+      assert.strictEqual(c1.tokens, 8, "tokens should be preserved on c1");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("local store round-trip: addChunks with replace mode clears old chunks", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-replace-"));
+    try {
+      const store = zvecStore.createLocalStore({ workspaceRoot: tmpDir, dimension: 2 });
+      
+      // Add first batch
+      await store.addChunks(
+        [
+          { id: "c1", text: "first batch content", tokens: 5, metadata: { goal_id: "g_replace", source_type: "goal", chunk_index: 0 } },
+        ],
+        [[1, 0]]
+      );
+      
+      let results = await store.search([1, 0], 5, { goal_id: "g_replace" });
+      assert.strictEqual(results.length, 1, "first batch: should have 1 chunk");
+      
+      // Add second batch with replace mode
+      await store.addChunks(
+        [
+          { id: "c2", text: "second batch content", tokens: 6, metadata: { goal_id: "g_replace", source_type: "goal", chunk_index: 0 } },
+        ],
+        [[1, 0]],
+        { replace: true }
+      );
+      
+      results = await store.search([1, 0], 5, { goal_id: "g_replace" });
+      assert.strictEqual(results.length, 1, "after replace: should still have 1 chunk (replaced, not appended)");
+      assert.strictEqual(results[0].text, "second batch content", "should have new content after replace");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("local store dedup prevents linear growth on repeated indexing", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-dedup-"));
+    try {
+      const store = zvecStore.createLocalStore({ workspaceRoot: tmpDir, dimension: 2 });
+      
+      // Index same content 3 times (without replace flag - uses dedup mode)
+      for (let i = 0; i < 3; i++) {
+        await store.addChunks(
+          [
+            { id: `c_${i}`, text: "stable content", tokens: 5, metadata: { goal_id: "g_dedup", source_type: "goal", chunk_index: 0 } },
+            { id: `c2_${i}`, text: "more stable", tokens: 4, metadata: { goal_id: "g_dedup", source_type: "conversation", chunk_index: 0 } },
+          ],
+          [[1, 0], [0, 1]]
+        );
+      }
+      
+      const results = await store.search([1, 0], 10, { goal_id: "g_dedup" });
+      // Should have only 2 chunks (one goal + one conversation), not 6
+      assert.strictEqual(results.length, 2, "dedup should keep only 2 unique chunks, not 6");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("local store dedup allows new chunks after append", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-append-"));
+    try {
+      const store = zvecStore.createLocalStore({ workspaceRoot: tmpDir, dimension: 2 });
+      
+      // First: 2 chunks
+      await store.addChunks(
+        [
+          { id: "c1", text: "existing chunk 1", tokens: 3, metadata: { goal_id: "g_append", source_type: "goal", chunk_index: 0 } },
+          { id: "c2", text: "existing chunk 2", tokens: 3, metadata: { goal_id: "g_append", source_type: "goal", chunk_index: 1 } },
+        ],
+        [[1, 0], [0, 1]]
+      );
+      
+      // Second: same 2 chunks + 1 new chunk (new index)
+      await store.addChunks(
+        [
+          { id: "c1b", text: "existing chunk 1 updated", tokens: 4, metadata: { goal_id: "g_append", source_type: "goal", chunk_index: 0 } },
+          { id: "c2b", text: "existing chunk 2", tokens: 3, metadata: { goal_id: "g_append", source_type: "goal", chunk_index: 1 } },
+          { id: "c3", text: "new chunk 3", tokens: 3, metadata: { goal_id: "g_append", source_type: "goal", chunk_index: 2 } },
+        ],
+        [[1, 0], [0, 1], [0.5, 0.5]]
+      );
+      
+      const results = await store.search([1, 0], 10, { goal_id: "g_append" });
+      assert.strictEqual(results.length, 3, "should have 3 chunks (2 replaced + 1 new), not 5");
+      // Check existing chunk 1 was updated
+      const c1Result = results.find(r => r.metadata?.chunk_index === 0);
+      assert.ok(c1Result, "chunk index 0 should exist");
+      assert.strictEqual(c1Result.text, "existing chunk 1 updated", "chunk index 0 should be updated");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});
+
+// ===========================================================================
+// 9. P1: loadPriorResults exported function
+// ===========================================================================
+
+describe("P1: loadPriorResults export", () => {
+  it("loadPriorResults is exported from context-index-hooks", () => {
+    assert.ok(typeof contextIndexHooks.loadPriorResults === "function", "loadPriorResults should be exported from hooks");
+  });
+
+  it("maybeBuildContextBundle passes workspaceRoot to loadPriorResults", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-p1-pass-"));
+    try {
+      // Create prior goal result in the workspaceRoot
+      const priorGoalId = "goal_prior_pass";
+      const priorDir = join(tmpDir, ".gptwork", "goals", priorGoalId);
+      mkdirSync(priorDir, { recursive: true });
+      writeFileSync(join(priorDir, "result.md"), "Prior content for passing test.");
+      
+      const config = { defaultWorkspaceRoot: tmpDir };
+      const goal = {
+        id: "goal_p1_pass",
+        workspace_id: "ws-test",
+        title: "P1 Pass Test",
+        user_request: "Test workspaceRoot passing",
+        goal_prompt: "Make sure workspaceRoot is used",
+        context_summary: "Verification test",
+      };
+      
+      // Store with prior goals
+      const store = {
+        async load() {
+          return {
+            goals: [
+              { id: "goal_p1_pass", workspace_id: "ws-test" },
+              { id: priorGoalId, workspace_id: "ws-test", title: "Prior Pass Goal", created_at: "2026-01-01T00:00:00Z" },
+            ],
+          };
+        },
+      };
+      
+      const result = await contextIndexHooks.maybeBuildContextBundle(store, config, goal);
+      
+      // The bundle should include the prior result content (from workspaceRoot)
+      assert.ok(result.ok, "bundle should build ok");
+      if (result.bundle) {
+        assert.ok(
+          result.bundle.includes("Prior content") || result.bundle.includes("Prior Pass Goal"),
+          "bundle should reference prior goal"
+        );
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });

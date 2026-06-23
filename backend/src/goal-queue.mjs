@@ -130,14 +130,21 @@ function getTaskStatus(state, taskId) {
 }
 
 function isDependencySatisfied(state, item) {
+  const policy = item.dependency_policy || "completed_only";
   if (item.depends_on_goal_id) {
     const status = getGoalStatus(state, item.depends_on_goal_id);
     if (status === "completed") return { satisfied: true };
+    if (policy === "terminal_any" && (status === "failed" || status === "timed_out")) {
+      return { satisfied: true, reason: `policy=${policy} allows ${item.depends_on_goal_id} status=${status}` };
+    }
     return { satisfied: false, reason: `depends_on_goal ${item.depends_on_goal_id} status=${status || "not found"}` };
   }
   if (item.depends_on_task_id) {
     const status = getTaskStatus(state, item.depends_on_task_id);
-    if (status === "completed" || status === "failed") return { satisfied: true };
+    if (status === "completed") return { satisfied: true };
+    if (policy === "terminal_any" && (status === "failed" || status === "timed_out")) {
+      return { satisfied: true, reason: `policy=${policy} allows ${item.depends_on_task_id} status=${status}` };
+    }
     return { satisfied: false, reason: `depends_on_task ${item.depends_on_task_id} status=${status || "not found"}` };
   }
   return { satisfied: true };
@@ -183,6 +190,7 @@ export async function enqueueGoal(store, goalId, opts = {}) {
     status: QUEUE_STATUS_WAITING,
     depends_on_goal_id: opts.depends_on_goal_id || null,
     depends_on_task_id: opts.depends_on_task_id || null,
+    dependency_policy: opts.dependency_policy || "completed_only",
     blocked_reason: null,
     auto_start: opts.auto_start !== false,
     created_at: timestamp,
@@ -257,9 +265,65 @@ export async function getGoalQueueItem(store, queueId) {
  * status whose dependency is satisfied, repo is not locked for a different
  * task, and worktree is clean.
  */
+export 
+/**
+ * Re-check transiently blocked items (repo lock, dirty worktree) and
+ * move them back to waiting if conditions have resolved.
+ * Items blocked by dependency unmet are NOT auto-recovered.
+ */
+async function recheckTransientBlockedItems(state, repoPath, workspaceRoot) {
+  const items = ensureQueueArray(state);
+  const TRANSIENT_PATTERNS = ["repo lock", "repo locked", "worktree dirty", "dirty worktree"];
+  let changed = 0;
+
+  for (const item of items) {
+    if (item.status !== QUEUE_STATUS_BLOCKED) continue;
+    if (!item.blocked_reason) continue;
+
+    const isTransient = TRANSIENT_PATTERNS.some(
+      (p) => item.blocked_reason.toLowerCase().includes(p)
+    );
+    if (!isTransient) continue;
+
+    // Re-check dependency (should still be satisfied)
+    const depResult = isDependencySatisfied(state, item);
+    if (!depResult.satisfied) continue;
+
+    // Re-check repo lock
+    let activeLocks = 0;
+    try {
+      activeLocks = await getActiveRepoLocks(workspaceRoot);
+    } catch {
+      // non-fatal
+    }
+    if (activeLocks > 0) continue;
+
+    // Re-check worktree
+    let dirtyFiles = [];
+    try {
+      dirtyFiles = checkWorktreeDirty(repoPath);
+    } catch {
+      dirtyFiles = ["(unable to check)"];
+    }
+    if (dirtyFiles.length > 0 && dirtyFiles[0] !== "") continue;
+
+    // All transient conditions resolved — move back to waiting
+    item.status = QUEUE_STATUS_WAITING;
+    item.blocked_reason = null;
+    item.updated_at = now();
+    changed++;
+  }
+
+  return changed;
+}
+
 export async function startNextQueuedGoal(store, config, opts = {}) {
   const dryRun = opts.dry_run === true;
   const state = await store.load();
+  const repoPath = config.defaultRepoPath || config.defaultWorkspaceRoot;
+  const workspaceRoot = config.defaultWorkspaceRoot;
+  // Re-check transiently blocked items before scanning eligible items
+  await recheckTransientBlockedItems(state, repoPath, workspaceRoot);
   const items = ensureQueueArray(state);
 
   // Sort by position
@@ -270,9 +334,6 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
   if (sorted.length === 0) {
     return { started: false, item: null, task: null, reason: "No eligible queue items (status=waiting|ready)", checks: [] };
   }
-
-  const repoPath = config.defaultRepoPath || config.defaultWorkspaceRoot;
-  const workspaceRoot = config.defaultWorkspaceRoot;
 
   for (const candidate of sorted) {
     const checks = [];
@@ -388,7 +449,7 @@ export async function updateGoalQueueItem(store, queueId, updater = {}) {
 
   const allowedKeys = new Set([
     "status", "blocked_reason", "auto_start", "position",
-    "depends_on_goal_id", "depends_on_task_id", "repo_id",
+    "depends_on_goal_id", "depends_on_task_id", "dependency_policy", "repo_id",
   ]);
 
   for (const [key, value] of Object.entries(updater)) {
