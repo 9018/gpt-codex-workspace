@@ -38,7 +38,7 @@ export function loadRuntimeEnv(workspaceRoot, overridePath) {
   return { loadedPath: filePath, keys };
 }
 
-function resolveEnvFilePath(workspaceRoot, overridePath) {
+export function resolveEnvFilePath(workspaceRoot, overridePath) {
   if (overridePath) {
     // If absolute, use directly; otherwise resolve relative to workspace root
     if (overridePath.startsWith("/")) return overridePath;

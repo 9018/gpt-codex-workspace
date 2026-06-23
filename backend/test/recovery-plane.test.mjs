@@ -44,6 +44,7 @@ const RECOVERY_TOOLS = [
   "recovery_file_write",
   "recovery_apply_patch",
   "recovery_command_runner",
+  "recovery_stale_queue_unblock",
   "recovery_tool_exposure_self_test",
 ];
 
@@ -282,7 +283,8 @@ test("11. tool exposure self-test reports correct tool count", async () => {
     assert.equal(response.error, undefined, JSON.stringify(response.error));
     const result = response.result.structuredContent;
     assert.ok(result.status === "PASS" || result.status === "FAIL");
-    assert.equal(result.expected_count, RECOVERY_TOOLS.length);
+    assert.equal(result.expected_count, RECOVERY_TOOLS.length,
+      "Expected " + RECOVERY_TOOLS.length + " tools, got " + result.present_count);
     assert.ok(result.present_count >= result.expected_count - 1, // allow 1 missing for command_runner
       "Expected at least " + (RECOVERY_TOOLS.length - 1) + " tools, got " + result.present_count);
   } finally {
@@ -374,6 +376,227 @@ test("17. recovery_apply_patch returns error for invalid target", async () => {
       const result = response.result.structuredContent;
       assert.equal(result.ok, false);
     }
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+// ================================================================
+// Helper: create a server with pre-seeded state for stale_queue_unblock tests
+// ================================================================
+
+async function makeServerWithSeed(seedState = {}, extra = {}) {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-stale-unblock-"));
+  const gptworkDir = join(root, ".gptwork");
+  await mkdir(gptworkDir, { recursive: true });
+  if (Object.keys(seedState).length > 0) {
+    await writeFile(join(root, "state.json"), JSON.stringify(seedState, null, 2));
+  }
+  const defaultWorkspaceRoot = join(root, "workspace");
+  await mkdir(defaultWorkspaceRoot, { recursive: true });
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot,
+    tokens: ["test-token"],
+    requireAuth: true,
+    ...extra,
+  });
+  return { server, root, defaultWorkspaceRoot };
+}
+
+// ================================================================
+// recovery_stale_queue_unblock tests
+// ================================================================
+
+test("18. stale_queue_unblock: repairs stale blocked item with no active locks", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_001", goal_id: "goal_1", task_id: null,
+      status: "blocked", blocked_reason: "Repo locked (1 active lock(s))",
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    const resp = await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_001",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+    });
+
+    assert.equal(resp.error, undefined, JSON.stringify(resp.error));
+    const r = resp.result.structuredContent;
+    assert.equal(r.ok, true);
+    assert.equal(r.before.status, "blocked");
+    assert.equal(r.after.status, "waiting");
+    assert.equal(r.after.blocked_reason, null);
+    assert.ok(r.audit_id, "should have audit_id: " + JSON.stringify(r));
+    assert.equal(r.no_task_start, true);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("19. stale_queue_unblock: refuses if active locks dont match", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_002", goal_id: "goal_1", task_id: null,
+      status: "blocked", blocked_reason: "Repo locked (1 active lock(s))",
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server, defaultWorkspaceRoot } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    // Create a lock file to simulate active lock
+    const lockDir = join(defaultWorkspaceRoot, ".gptwork", "locks", "repos");
+    await mkdir(lockDir, { recursive: true });
+    await writeFile(join(lockDir, "test-lock.json"), JSON.stringify({
+      safe_repo_id: "test-repo", task_id: "task_test", status: "held",
+      last_heartbeat_at: new Date().toISOString(), acquired_at: new Date().toISOString(),
+    }));
+
+    const resp = await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_002",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+    });
+
+    assert.equal(resp.error, undefined);
+    const r = resp.result.structuredContent;
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes("PRECONDITION_FAILED"), "Should report PRECONDITION_FAILED: " + r.error);
+    assert.ok(r.preconditions.active_locks_match === false, "active_locks_match should be false");
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("20. stale_queue_unblock: refuses if blocked_reason does not match", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_003", goal_id: "goal_1", task_id: null,
+      status: "blocked", blocked_reason: "Depends on task not completed",
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    const resp = await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_003",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+    });
+
+    assert.equal(resp.error, undefined);
+    const r = resp.result.structuredContent;
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes("PRECONDITION_FAILED"));
+    assert.ok(r.preconditions.blocked_reason_contains === false, "blocked_reason_contains should be false");
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("21. stale_queue_unblock: refuses if item status is not blocked", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_004", goal_id: "goal_1", task_id: null,
+      status: "waiting", blocked_reason: null,
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    const resp = await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_004",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+    });
+
+    assert.equal(resp.error, undefined);
+    const r = resp.result.structuredContent;
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes("PRECONDITION_FAILED"));
+    assert.ok(r.preconditions.status_match === false, "status_match should be false");
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("22. stale_queue_unblock: enforces no_task_start flag", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_005", goal_id: "goal_1", task_id: null,
+      status: "blocked", blocked_reason: "Repo locked (1 active lock(s))",
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    const resp = await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_005",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+      no_task_start: false,
+    });
+
+    assert.equal(resp.error, undefined);
+    const r = resp.result.structuredContent;
+    assert.equal(r.ok, false);
+    assert.ok(r.error.includes("no_task_start must be true"), "Should reject no_task_start=false: " + r.error);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("23. stale_queue_unblock: audit log is written on successful unblock", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "test_sq_006", goal_id: "goal_1", task_id: null,
+      status: "blocked", blocked_reason: "Repo locked (1 active lock(s))",
+      auto_start: true, position: 1,
+      created_at: new Date().toISOString(), updated_at: new Date().toISOString(),
+    };
+    const { server, defaultWorkspaceRoot } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    await callTool(server, "recovery_stale_queue_unblock", {
+      queue_id: "test_sq_006",
+      expected_current_status: "blocked",
+      expected_blocked_reason_contains: "Repo locked",
+      expected_active_repo_locks: 0,
+    });
+
+    // Check the audit log
+    const auditLogger = createAdminAuditLogger({
+      workspaceRoot: defaultWorkspaceRoot,
+      logPath: ".gptwork/admin-audit.jsonl",
+    });
+    const recent = await auditLogger.readRecent(5);
+    const hasAudit = recent.some(r => r.tool === "recovery_stale_queue_unblock" && r.action === "queue_unblock");
+    assert.equal(hasAudit, true, "Should have audit record for recovery_stale_queue_unblock");
   } finally {
     delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
   }

@@ -15,7 +15,8 @@
  *   "default"        - code-defined default (no explicit value anywhere)
  */
 
-import { loadRuntimeEnv } from "./runtime-env.mjs";
+import { loadRuntimeEnv, resolveEnvFilePath } from "./runtime-env.mjs";
+import { existsSync, readFileSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -58,6 +59,25 @@ function _getBool(key, defaultVal) {
 export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = []) {
   const envLoadResult = loadRuntimeEnv(workspaceRoot, overridePath);
   envLoadResult.keys = [...new Set([...envLoadResult.keys, ...preloadedKeys])];
+  // Also collect all keys from the file directly (handles preloading by cli.mjs)
+  try {
+    const filePath = resolveEnvFilePath(workspaceRoot, overridePath);
+    if (filePath && existsSync(filePath)) {
+      const text = readFileSync(filePath, "utf8");
+      const fileKeys = [];
+      const rawLines = text.split(String.fromCharCode(10));
+      for (const rawLine of rawLines) {
+        const line = rawLine.trim();
+        if (!line || line.startsWith("#")) continue;
+        const eqIdx = line.indexOf("=");
+        if (eqIdx === -1) continue;
+        const k = line.slice(0, eqIdx).trim();
+        if (!k) continue;
+        fileKeys.push(k);
+      }
+      envLoadResult.keys = [...new Set([...envLoadResult.keys, ...fileKeys])];
+    }
+  } catch { /* non-fatal */ }
   const loadedKeys = envLoadResult.keys;
 
   // Source resolver: runtime.env set this key? process.env had it already? default.

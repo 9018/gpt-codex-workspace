@@ -26,6 +26,7 @@
  *  13. recovery_apply_patch
  *  14. recovery_command_runner
  *  15. recovery_tool_exposure_self_test
+ *  16. recovery_stale_queue_unblock
  */
 
 import { execSync } from "node:child_process";
@@ -928,12 +929,158 @@ export function createRecoveryToolsGroup({
     },
   });
 
+
+  // ================================================================
+  // 16. recovery_stale_queue_unblock
+  // ================================================================
+  tools.recovery_stale_queue_unblock = tool({
+    name: "recovery_stale_queue_unblock",
+    description: "Narrowly scoped queue unblock action with full precondition validation. " +
+      "Checks: item exists in queue, current status matches expected, blocked_reason contains expected string, " +
+      "active repo locks match expected count, no running task or active worker owns the item. " +
+      "On pass: changes status to waiting, clears blocked_reason. " +
+      "Never starts a task. Always writes audit log.",
+    inputSchema: schema({
+      queue_id: { type: "string", description: "Target queue item ID to unblock." },
+      expected_current_status: { type: "string", description: "Expected current status of the queue item. Default: blocked.", default: "blocked" },
+      expected_blocked_reason_contains: { type: "string", description: "Expected substring in blocked_reason. Example: 'Repo locked'." },
+      expected_active_repo_locks: { type: "integer", description: "Expected count of active repo locks. Must match current state.", default: 0 },
+      new_status: { type: "string", description: "New status after unblock. Default: waiting.", default: "waiting" },
+      no_task_start: { type: "boolean", description: "MUST be true. Prevents automatic task start after unblock.", default: true },
+      audit: { type: "boolean", description: "MUST be true. Writes audit log record.", default: true },
+    }, ["queue_id"]),
+    ...common,
+    handler: async ({ queue_id, expected_current_status, expected_blocked_reason_contains, expected_active_repo_locks, new_status, no_task_start, audit: doAudit }) => {
+      const start = Date.now();
+      const safeStatuses = ["waiting", "ready"];
+      const newSt = new_status || "waiting";
+      const noStart = no_task_start !== false;
+      const mustAudit = doAudit !== false;
+
+      // Validate new_status
+      if (!safeStatuses.includes(newSt)) {
+        return {
+          ok: false, error: "Invalid new_status: " + newSt + ". Allowed: " + safeStatuses.join(", "),
+          queue_id, preconditions: {}, audit_id: null,
+        };
+      }
+
+      // Validate no_task_start
+      if (!noStart) {
+        return {
+          ok: false, error: "no_task_start must be true. This action never starts tasks.",
+          queue_id, preconditions: {}, audit_id: null,
+        };
+      }
+
+      // Load state
+      const state = await store.load();
+      const queue = state.goal_queue || [];
+
+      // Precondition 1: item exists
+      const item = queue.find(i => i.queue_id === queue_id);
+      if (!item) {
+        return {
+          ok: false, error: "PRECONDITION_FAILED: Queue item not found: " + queue_id,
+          queue_id, preconditions: { item_exists: false }, actual_status: null, actual_blocked_reason: null, actual_active_locks: 0, audit_id: null,
+        };
+      }
+
+      const preconditions = {
+        item_exists: true,
+        status_match: item.status === (expected_current_status || "blocked"),
+        blocked_reason_contains: !expected_blocked_reason_contains || (item.blocked_reason && item.blocked_reason.includes(expected_blocked_reason_contains)),
+        active_locks_match: false,
+        no_running_task: !item.task_id || (() => {
+          const t = (state.tasks || []).find(x => x.id === item.task_id);
+          return t && (t.status === "completed" || t.status === "failed" || t.status === "cancelled" || t.status === "timed_out");
+        })(),
+      };
+
+      // Precondition: active repo locks
+      const lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+      const expectedLocks = typeof expected_active_repo_locks === "number" ? expected_active_repo_locks : 0;
+      preconditions.active_locks_match = lockSummary.active_repo_locks === expectedLocks;
+
+      // Check all preconditions
+      const failedChecks = Object.entries(preconditions)
+        .filter(([, v]) => v !== true)
+        .map(([k]) => k);
+
+      if (failedChecks.length > 0) {
+        return {
+          ok: false,
+          error: "PRECONDITION_FAILED: " + failedChecks.join(", "),
+          queue_id,
+          preconditions: {
+            ...preconditions,
+            current_status: item.status,
+            current_blocked_reason: item.blocked_reason,
+            current_active_locks: lockSummary.active_repo_locks,
+          },
+          audit_id: null,
+        };
+      }
+
+      // All preconditions passed — apply the change
+      const before = {
+        queue_id: item.queue_id,
+        status: item.status,
+        blocked_reason: item.blocked_reason,
+        updated_at: item.updated_at,
+      };
+
+      item.status = newSt;
+      item.blocked_reason = null;
+      item.updated_at = now();
+      await store.save();
+
+      const after = {
+        queue_id: item.queue_id,
+        status: item.status,
+        blocked_reason: item.blocked_reason,
+        updated_at: item.updated_at,
+      };
+
+      // Write audit log
+      let auditId = null;
+      if (mustAudit) {
+        const auditRec = await audit({
+          tool: "recovery_stale_queue_unblock",
+          action: "queue_unblock",
+          queue_id,
+          new_status: newSt,
+          expected_status: expected_current_status,
+          result: "ok",
+          before_status: before.status,
+          after_status: after.status,
+          before_blocked_reason: before.blocked_reason,
+          after_blocked_reason: after.blocked_reason,
+          elapsed_ms: Date.now() - start,
+        });
+        auditId = auditRec.auditId;
+      }
+
+      return {
+        ok: true,
+        queue_id,
+        before,
+        after,
+        reason: "Stale queue item unblocked via precondition-validated recovery action",
+        audit_id: auditId,
+        preconditions,
+        no_task_start: true,
+        elapsed_ms: Date.now() - start,
+      };
+    },
+  });
+
   // ================================================================
   // 15. recovery_tool_exposure_self_test
   // ================================================================
   tools.recovery_tool_exposure_self_test = tool({
     name: "recovery_tool_exposure_self_test",
-    description: "Verify recovery plane visibility from final MCP tool registry. Checks that all 15 recovery tools are visible when recovery plane is enabled. Also checks that they would be hidden if disabled. Updates gptwork_self_test expectations.",
+    description: "Verify recovery plane visibility from final MCP tool registry. Checks that all 16 recovery tools are visible when recovery plane is enabled. Also checks that they would be hidden if disabled. Updates gptwork_self_test expectations.",
     inputSchema: schema({}),
     ...common,
     handler: async () => {
@@ -943,7 +1090,7 @@ export function createRecoveryToolsGroup({
         "recovery_worker_recover", "recovery_api_failure_control", "recovery_storage_maintenance",
         "recovery_runtime_env_fix_plan", "recovery_safe_restart", "recovery_state_patch",
         "recovery_file_read", "recovery_file_write", "recovery_apply_patch",
-        "recovery_command_runner", "recovery_tool_exposure_self_test",
+        "recovery_command_runner", "recovery_stale_queue_unblock", "recovery_tool_exposure_self_test",
       ];
       const actualTools = Object.keys(tools).sort();
       const present = expectedTools.filter(t => actualTools.includes(t));
