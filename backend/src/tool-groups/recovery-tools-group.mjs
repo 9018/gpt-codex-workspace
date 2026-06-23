@@ -43,6 +43,7 @@ import { forceReleaseRepoLock } from "../repo-lock-lifecycle.mjs";
 import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
 import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart } from "../safe-restart.mjs";
+import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 
 // ---------------------------------------------------------------------------
 // Secret redaction
@@ -644,7 +645,23 @@ export function createRecoveryToolsGroup({
       }
 
       // Dry run
-      return { marker_id: markerId, old_pid: oldPid, target_commit: expected_commit || gitInfoR.running_commit, status: "dry_run", message: "Would create restart marker and trigger service restart." };
+      const restartStrategy = getRestartStrategy(config);
+      const restartSummary = getRestartSummary(restartStrategy);
+      return {
+        marker_id: markerId,
+        old_pid: oldPid,
+        target_commit: expected_commit || gitInfoR.running_commit,
+        status: "dry_run",
+        message: "Would create restart marker and trigger service restart.",
+        restart_strategy: {
+          mode: restartStrategy.mode,
+          marker_kind: restartStrategy.markerKind,
+          command: restartStrategy.mode === "npm" ? "npm run start" : (restartStrategy.command || ""),
+          cwd: restartStrategy.cwd,
+          instruction: restartSummary.restart_instruction,
+        },
+        systemctl_used: false,
+      };
     },
   });
 

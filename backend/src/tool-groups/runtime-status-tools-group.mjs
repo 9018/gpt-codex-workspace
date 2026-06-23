@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
-import { scanPendingRestartMarkersSync } from "../safe-restart.mjs";
+import { scanPendingRestartMarkersSync, scanPendingRestartMarkers, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 
 /**
@@ -121,7 +121,24 @@ export function createRuntimeStatusToolsGroup({
             const s = getRestartSummary(getRestartStrategy(config));
             return s;
           })(),
+          restart_mode: (() => {
+            const s = getRestartStrategy(config);
+            return s.mode || "npm";
+          })(),
           restart_marker_kind: config.restartMarkerKind || "npm",
+          expected_commit_matches: (() => {
+            try {
+              const activeMarkers = scanPendingRestartMarkersSync(config.defaultWorkspaceRoot)
+                .filter(m => ["pending","scheduled","restarted"].includes(m.status));
+              if (activeMarkers.length > 0) {
+                const ec = activeMarkers[0].expected_commit;
+                if (ec && gitInfo.running_commit) {
+                  return ec === gitInfo.running_commit;
+                }
+              }
+              return null;
+            } catch (e) { return null; }
+          })(),
 
           config_sources: {
             codex_exec_timeout: sources.codexExecTimeout,
@@ -214,6 +231,22 @@ export function createRuntimeStatusToolsGroup({
           pid: process.pid,
           started_at: PROCESS_STARTED_AT.toISOString(),
           running_commit: gitInfo.running_commit,
+          restart_mode: (() => {
+            const s = getRestartStrategy(config);
+            return s.mode || "npm";
+          })(),
+          restart_marker_kind: (() => {
+            const s = getRestartStrategy(config);
+            return s.markerKind || "npm";
+          })(),
+          restart_command_summary: (() => {
+            const s = getRestartSummary(getRestartStrategy(config));
+            return s.restart_command_summary || "";
+          })(),
+          restart_strategy_source: (() => {
+            const s = getRestartSummary(getRestartStrategy(config));
+            return s.restart_strategy_source || "default";
+          })(),
           runtime_env_loaded: envLoadResult.keys.length > 0,
           runtime_env_configured: isRuntimeEnvConfigured(),
           runtime_env_file_path: envLoadResult.loadedPath || null,

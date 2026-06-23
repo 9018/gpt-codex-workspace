@@ -32,7 +32,17 @@ export function getRestartStrategy(config = {}) {
   const command = _resolveCommand(config, mode, cwd);
   const markerKind = _resolveMarkerKind(config);
 
-  return { mode, command, cwd, markerKind };
+  const restartModeSource = _source("GPTWORK_RESTART_MODE", config && config.restartMode, DEFAULT_RESTART_MODE);
+  const restartCwdSource = _source("GPTWORK_RESTART_CWD", config?.restartCwd, "/home/a9017/mcp/workspace/gpt-codex-workspace/backend");
+  const restartCommandSource = _source("GPTWORK_RESTART_COMMAND", config?.restartCommand, null);
+  const restartMarkerKindSource = _source("GPTWORK_RESTART_MARKER_KIND", config?.restartMarkerKind, "npm");
+
+  return { mode, command, cwd, markerKind, sources: {
+    restart_mode: restartModeSource,
+    restart_cwd: restartCwdSource,
+    restart_command: restartCommandSource,
+    restart_marker_kind: restartMarkerKindSource,
+  }};
 }
 
 /**
@@ -91,6 +101,13 @@ export function getRestartSummary(strategy) {
     restart_cwd: strategy.cwd || "",
     restart_command_summary: "",
     restart_instruction: "",
+    restart_strategy_source: (() => {
+      const srcs = strategy.sources || {};
+      if (srcs.restart_mode === "explicit_config") return "runtime_config";
+      if (srcs.restart_mode === "process.env") return "process.env";
+      return "default";
+    })(),
+    restart_mode_source: (strategy.sources && strategy.sources.restart_mode) || "default",
   };
 
   switch (strategy.mode) {
@@ -147,4 +164,18 @@ function _resolveMarkerKind(config) {
   return (config && config.restartMarkerKind) ||
     process.env.GPTWORK_RESTART_MARKER_KIND ||
     "npm";
+}
+
+/**
+ * Determine the source of a config value.
+ * Returns "explicit_config" if set via config object, "process.env" if set via env var, or "default".
+ */
+function _source(envVar, configValue, defaultValue) {
+  if (configValue !== undefined && configValue !== null) {
+    return "explicit_config";
+  }
+  if (process.env[envVar] !== undefined) {
+    return "process.env";
+  }
+  return "default";
 }

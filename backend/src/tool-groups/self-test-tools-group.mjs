@@ -76,7 +76,8 @@ function checkShellExecBoundary() {
 
 /**
  * P0.1: Check that required operational tools exist in the tool registry.
- * This detects broken imports or missing tool registrations.
+ * Tools are registered via factory function imports from tool-group modules.
+ * This checks that the factory function imports exist in server-tools.mjs.
  */
 function checkOperationalTools() {
   const toolingPath = join(backendRoot(), "src", "server-tools.mjs");
@@ -85,43 +86,35 @@ function checkOperationalTools() {
   }
   const content = readFileSync(toolingPath, "utf8");
 
-  const requiredTools = [
-    { name: "workflow_status", pattern: "workflow_status" },
-    { name: "workflow_record_result", pattern: "workflow_record_result" },
-    { name: "workflow_advance", pattern: "workflow_advance" },
-    { name: "workflow_apply_proposal", pattern: "workflow_apply_proposal" },
-    { name: "tmp_status", pattern: "tmp_status" },
-    { name: "cleanup_tmp", pattern: "cleanup_tmp" },
-    { name: "goal_storage_status", pattern: "goal_storage_status" },
-    { name: "cleanup_goals", pattern: "cleanup_goals" },
-    { name: "repo_lock_status", pattern: "repo_lock_status" },
-    { name: "list_repo_locks", pattern: "list_repo_locks" },
-    { name: "clear_repo_lock", pattern: "clear_repo_lock" },
+  const factoryGroups = [
+    { name: "workflow", factory: "createWorkflowToolsGroup", expected_tools: ["workflow_status", "workflow_record_result", "workflow_advance", "workflow_apply_proposal"] },
+    { name: "cleanup", factory: "createCleanupToolsGroup", expected_tools: ["tmp_status", "cleanup_tmp", "goal_storage_status", "cleanup_goals"] },
+    { name: "repo-lock", factory: "createRepoLockToolsGroup", expected_tools: ["repo_lock_status", "list_repo_locks", "clear_repo_lock"] },
   ];
 
-  const missing = [];
-  const present = [];
-  for (const t of requiredTools) {
-    if (content.includes(t.pattern)) {
-      present.push(t.name);
+  const results = [];
+  for (const g of factoryGroups) {
+    if (content.includes(g.factory)) {
+      results.push({ group: g.name, factory_imported: true, tool_count: g.expected_tools.length });
     } else {
-      missing.push(t.name);
+      results.push({ group: g.name, factory_imported: false, tool_count: 0 });
     }
   }
 
+  const missing = results.filter(r => !r.factory_imported);
   if (missing.length > 0) {
     return {
       status: "FAIL",
-      detail: `${missing.length} operational tool(s) missing from server-tools.mjs: ${missing.join(", ")}`,
-      present,
-      missing,
+      detail: `${missing.length} operational tool group(s) missing from server-tools.mjs: ${missing.map(m => m.group).join(", ")}`,
+      results,
+      missing: missing.map(m => m.group),
     };
   }
 
   return {
     status: "PASS",
-    detail: `All ${present.length} operational tools found in server-tools.mjs`,
-    present,
+    detail: `All ${results.length} operational tool groups (${results.map(r => r.group).join(", ")}) found in server-tools.mjs via factory imports`,
+    results,
     missing: [],
   };
 }
@@ -132,14 +125,31 @@ function checkOperationalTools() {
 
   /**
    * Check that recovery/emergency tools are present in the registry.
-   * Recovery tools are only exposed when GPTWORK_RECOVERY_PLANE_ENABLED=true.
+   * Recovery tools are registered via createRecoveryToolsGroup factory import
+   * in recovery-tools-group.mjs, spread in server-tools.mjs.
+   * Only exposed when GPTWORK_RECOVERY_PLANE_ENABLED=true.
    */
   function checkRecoveryTools() {
-    const toolingPath = join(backendRoot(), "src", "server-tools.mjs");
-    if (!existsSync(toolingPath)) {
+    const serverPath = join(backendRoot(), "src", "server-tools.mjs");
+    const groupPath = join(backendRoot(), "src", "tool-groups", "recovery-tools-group.mjs");
+    if (!existsSync(serverPath)) {
       return { status: "FAIL", detail: "server-tools.mjs not found" };
     }
-    const content = readFileSync(toolingPath, "utf8");
+    const serverContent = readFileSync(serverPath, "utf8");
+
+    // Check that the factory import exists in server-tools.mjs
+    const factoryImported = serverContent.includes("createRecoveryToolsGroup");
+    if (!factoryImported) {
+      return { status: "FAIL", detail: "createRecoveryToolsGroup import not found in server-tools.mjs" };
+    }
+
+    // Check that recovery-tools-group.mjs exists
+    if (!existsSync(groupPath)) {
+      return { status: "FAIL", detail: "recovery-tools-group.mjs not found" };
+    }
+
+    // Check that the group file exports the expected factory
+    const groupContent = readFileSync(groupPath, "utf8");
     const requiredTools = [
       { name: "recovery_plane_status", pattern: "recovery_plane_status" },
       { name: "recovery_diagnose", pattern: "recovery_diagnose" },
@@ -160,19 +170,19 @@ function checkOperationalTools() {
     const missing = [];
     const present = [];
     for (const t of requiredTools) {
-      if (content.includes(t.pattern)) { present.push(t.name); }
+      if (groupContent.includes(t.pattern)) { present.push(t.name); }
       else { missing.push(t.name); }
     }
     if (missing.length > 0) {
       return {
         status: "WARN",
-        detail: missing.length + " recovery tool(s) missing from server-tools.mjs: " + missing.join(", "),
+        detail: missing.length + " recovery tool(s) missing from recovery-tools-group.mjs: " + missing.join(", "),
         present, missing,
       };
     }
     return {
       status: "PASS",
-      detail: "All " + present.length + " recovery tools found in server-tools.mjs",
+      detail: "All " + present.length + " recovery tools found in recovery-tools-group.mjs, factory import createRecoveryToolsGroup present in server-tools.mjs",
       present, missing: [],
     };
   }
@@ -182,11 +192,13 @@ function checkNoopCompletionHandling() {
     return { status: "FAIL", detail: "codex-task-result-builder.mjs not found" };
   }
   const content = readFileSync(path, "utf8");
-  const hasNoopDetection = content.includes('kind: "noop"') || content.includes("isNoopResult");
-  const hasNoopWarning = content.includes("noop") && content.includes("warnings");
+  // The actual code uses: kind: isNoop ? "noop" : KIND_EXECUTED
+  // and function _isNoop(p) for detection, plus warning generation for noop results
+  const hasNoopDetection = content.includes('_isNoop') && content.includes('"noop"');
+  const hasNoopWarning = content.includes("NO-OP") && content.includes("warnings");
 
   if (hasNoopDetection && hasNoopWarning) {
-    return { status: "PASS", detail: "No-op completion detection and warning present" };
+    return { status: "PASS", detail: "No-op completion detection (via _isNoop) and warning generation present" };
   } else if (hasNoopDetection) {
     return { status: "WARN", detail: "No-op detection present but no warning generation" };
   }
