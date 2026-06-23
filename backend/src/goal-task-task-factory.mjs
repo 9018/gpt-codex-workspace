@@ -66,3 +66,59 @@ export function normalizeAssignedTaskMode(task, requestedMode = "") {
   if (isCodexSessionInventoryTaskKind({ ...task, assignee: "codex" })) return "readonly";
   return task.mode && task.mode !== "readonly" ? task.mode : "builder";
 }
+
+/**
+ * Create a Codex task for a given goal and persist it to state.
+ *
+ * Designed to be called from goal-queue.mjs startNextQueuedGoal() so that
+ * queue items can be promoted from waiting/ready to running with a real task.
+ *
+ * This function:
+ * 1. Loads the goal and its associated conversation from state.
+ * 2. Calls buildGoalTask() to construct the task object.
+ * 3. Pushes the task into state.tasks and links goal.task_id to task.id.
+ * 4. Persists the mutation atomically via store.mutate().
+ *
+ * @param {object} store   - StateStore instance.
+ * @param {object} config  - Server config (needed for workspaceFiles).
+ * @param {string} goalId  - ID of the goal to create a task for.
+ * @param {object} [opts]  - Optional overrides.
+ * @param {string} [opts.assignee='codex']  - Task assignee.
+ * @param {string} [opts.status='assigned'] - Initial task status.
+ * @param {string} [opts.mode='builder']    - Task mode.
+ * @returns {Promise<object>} The created task object.
+ */
+export async function createGoalTask(store, config, goalId, opts = {}) {
+  // Use store.mutate for atomic read-write
+  const result = await store.mutate((state) => {
+    // Find the goal
+    const goal = (state.goals || []).find((g) => g.id === goalId);
+    if (!goal) {
+      throw new Error(`Goal not found: ${goalId}`);
+    }
+
+    // Find the conversation
+    const convId = goal.conversation_id;
+    const conversation = (state.conversations || []).find((c) => c.id === convId);
+    if (!conversation) {
+      throw new Error(`Conversation not found for goal ${goalId}: ${convId}`);
+    }
+
+    const assignee = opts.assignee || 'codex';
+    const createdBy = opts.created_by || 'system';
+    const task = buildGoalTask(goal, conversation, createdBy);
+
+    // Apply overrides
+    task.assignee = assignee;
+    task.status = opts.status || 'assigned';
+    task.mode = opts.mode || task.mode || 'builder';
+    task.updated_at = new Date().toISOString();
+
+    state.tasks = state.tasks || [];
+    state.tasks.push(task);
+    goal.task_id = task.id;
+
+    return { task };
+  });
+  return result.task;
+}

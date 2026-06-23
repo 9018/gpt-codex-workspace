@@ -417,3 +417,159 @@ test("goal-queue: cancel running queue item fails gracefully", async () => {
   assert.equal(result.ok, false);
   assert.ok(result.warnings.length > 0);
 });
+
+// ===========================================================================
+// Test 13: startNextQueuedGoal with dry_run:false creates task (real createGoalTask)
+// ===========================================================================
+
+test("goal-queue: startNextQueuedGoal creates task via createGoalTask (non-dry-run)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-test13-"));
+  const store = await makeStore(dir);
+
+  const goalId = "goal_create_task_test";
+  const now = new Date().toISOString();
+  store.state.goals.push({
+    id: goalId,
+    title: "Create Task Test",
+    description: "Test goal for createGoalTask",
+    workspace_id: "hosted-default",
+    project_id: "default",
+    conversation_id: "conv_create_task_test",
+    status: "assigned",
+    mode: "builder",
+    task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
+  store.state.conversations.push({
+    id: "conv_create_task_test",
+    goal_id: goalId,
+    project_id: "default",
+    workspace_id: "hosted-default",
+    messages: [{ role: "user", content: "test" }],
+    created_at: now,
+    updated_at: now,
+  });
+  await store.save();
+
+  // Enqueue the goal
+  const { enqueueGoal } = await import("../src/goal-queue.mjs");
+  await enqueueGoal(store, goalId, { auto_start: true });
+  await store.save();
+
+  // Verify queue item exists
+  assert.equal(store.state.goal_queue.length, 1);
+  assert.equal(store.state.goal_queue[0].goal_id, goalId);
+  assert.equal(store.state.goal_queue[0].status, "waiting");
+
+  // Attempt non-dry-run start
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+
+  // Should succeed and create a task
+  assert.equal(result.started, true, `Expected started=true, got reason: ${result.reason}`);
+  assert.ok(result.task, "Expected task object");
+  assert.ok(result.item, "Expected queue item");
+
+  // Verify task fields
+  assert.match(result.task.id, /^task_/, `Task ID should start with task_, got: ${result.task.id}`);
+  assert.equal(result.task.goal_id, goalId, "task.goal_id should match goal ID");
+  assert.equal(result.task.conversation_id, "conv_create_task_test", "task.conversation_id should match conversation ID");
+
+  // Verify queue item state
+  assert.equal(result.item.status, "running", "Queue item should be in running status");
+  assert.equal(result.item.task_id, result.task.id, "Queue item should link to task");
+
+  // Verify state persistence
+  await store.load();
+  const goal = store.state.goals.find((g) => g.id === goalId);
+  assert.ok(goal, "Goal should exist in state");
+  assert.equal(goal.task_id, result.task.id, "goal.task_id should match created task");
+
+  const task = store.state.tasks.find((t) => t.id === result.task.id);
+  assert.ok(task, "Task should exist in state");
+  assert.equal(task.goal_id, goalId);
+  assert.equal(task.conversation_id, "conv_create_task_test");
+});
+
+// ===========================================================================
+// Test 14: createGoalTask imported directly works
+// ===========================================================================
+
+test("goal-queue: createGoalTask function creates task and links correctly", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-test14-"));
+  const store = await makeStore(dir);
+
+  const goalId = "goal_direct_test";
+  const convId = "conv_direct_test";
+  const now = new Date().toISOString();
+  store.state.goals.push({
+    id: goalId,
+    title: "Direct Create Goal Task Test",
+    description: "",
+    workspace_id: "hosted-default",
+    project_id: "default",
+    conversation_id: convId,
+    status: "assigned",
+    mode: "builder",
+    task_id: null,
+    created_at: now,
+    updated_at: now,
+  });
+  store.state.conversations.push({
+    id: convId,
+    goal_id: goalId,
+    project_id: "default",
+    workspace_id: "hosted-default",
+    messages: [{ role: "user", content: "test" }],
+    created_at: now,
+    updated_at: now,
+  });
+  await store.save();
+
+  // Call createGoalTask directly
+  const { createGoalTask } = await import("../src/goal-task-task-factory.mjs");
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const task = await createGoalTask(store, config, goalId, {
+    assignee: "codex",
+    status: "assigned",
+    mode: "builder",
+  });
+
+  assert.ok(task, "Task should be created");
+  assert.match(task.id, /^task_/, `Task ID should start with task_, got: ${task.id}`);
+  assert.equal(task.goal_id, goalId);
+  assert.equal(task.conversation_id, convId);
+  assert.equal(task.assignee, "codex");
+  assert.equal(task.status, "assigned");
+  assert.equal(task.mode, "builder");
+
+  // Goal should have task_id linked
+  await store.load();
+  const goal = store.state.goals.find((g) => g.id === goalId);
+  assert.equal(goal.task_id, task.id, "goal.task_id should be set");
+
+  // Task should be in state
+  const storedTask = store.state.tasks.find((t) => t.id === task.id);
+  assert.ok(storedTask, "Task should be persisted in state");
+  assert.equal(storedTask.description, task.description, "Task description should include goal metadata");
+});
+
+// ===========================================================================
+// Test 15: createGoalTask throws on missing goal
+// ===========================================================================
+
+test("goal-queue: createGoalTask throws on non-existent goal", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-test15-"));
+  const store = await makeStore(dir);
+
+  const { createGoalTask } = await import("../src/goal-task-task-factory.mjs");
+  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+
+  await assert.rejects(
+    () => createGoalTask(store, config, "goal_nonexistent"),
+    { message: /Goal not found/ }
+  );
+});

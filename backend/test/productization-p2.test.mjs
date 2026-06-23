@@ -358,15 +358,15 @@ test("run_agent_pipeline has rich JSON Schema descriptor", () => {
     goal_id: { type: "string", description: "Goal ID to link the pipeline runs to." },
     task_id: { type: "string", description: "Task ID to link the pipeline runs to." },
     agent: { type: "string", description: "Agent name to run the pipeline.", default: "codex" },
-    roles: { type: "array", items: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] }, examples: [["analyst", "architect", "implementer", "tester", "reviewer"]] },
-    review_gate_after: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] },
+    roles: { type: "array", items: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer", "finalizer", "escalation_judge"] }, examples: [["analyst", "architect", "implementer", "tester", "reviewer", "finalizer", "escalation_judge"]] },
+    review_gate_after: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer", "finalizer", "escalation_judge"] },
     execution_order: { type: "array", items: { type: "string" } }
   });
 
   assert.equal(inputSchema.properties.agent.default, "codex");
   assert.equal(inputSchema.properties.roles.type, "array");
   assert.equal(inputSchema.properties.roles.items.enum[0], "analyst");
-  assert.equal(inputSchema.properties.review_gate_after.enum.length, 5);
+  assert.equal(inputSchema.properties.review_gate_after.enum.length, 7);
   assert.ok(Array.isArray(inputSchema.properties.roles.examples));
 });
 

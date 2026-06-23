@@ -74,7 +74,13 @@ export async function finalizeCodexTaskRun({
     if (typeof store.mutate !== "function") {
       await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
     }
-    const statusLabel = taskStatus === "timed_out" ? "Timed out" : "Completed";
+    const statusLabels = {
+      "completed": "Completed",
+      "failed": "Failed",
+      "timed_out": "Timed out",
+      "waiting_for_review": "Waiting for review",
+    };
+    const statusLabel = statusLabels[taskStatus] || taskStatus;
     await writeWorkspaceTextInternalFn(store, config, goal.workspace_id, workspaceFiles.result_md,
       "# Result\n\n" + summary + "\n\n" + statusLabel + " at: " + doneAt + "\n", context);
     await appendGoalMessageFn(store, config, {

@@ -54,8 +54,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
         goal_id: { type: "string", description: "Goal ID to link the pipeline runs to." },
         task_id: { type: "string", description: "Task ID to link the pipeline runs to." },
         agent: { type: "string", description: "Agent name to run the pipeline.", default: "codex" },
-        roles: { type: "array", description: "Roles in execution order, e.g. [\"analyst\",\"architect\",\"implementer\",\"tester\",\"reviewer\"].", items: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] }, examples: [["analyst", "architect", "implementer", "tester", "reviewer"]] },
-        review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: ["analyst", "architect", "implementer", "tester", "reviewer"] },
+        roles: { type: "array", description: "Roles in execution order, e.g. [\"analyst\",\"architect\",\"implementer\",\"tester\",\"reviewer\"].", items: { type: "string", enum: ["analyst", "architect", "implementer", "tester", "reviewer", "finalizer", "escalation_judge"] }, examples: [["analyst", "architect", "implementer", "tester", "reviewer"]] },
+        review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: ["analyst", "architect", "implementer", "tester", "reviewer", "finalizer", "escalation_judge"] },
         execution_order: { type: "array", description: "Custom execution order override.", items: { type: "string" } }
       }),
       ...common,

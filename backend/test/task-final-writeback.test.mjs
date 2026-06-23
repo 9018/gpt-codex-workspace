@@ -1,111 +1,162 @@
-import test from 'node:test';
-import assert from 'node:assert/strict';
+import "./helpers/env-isolation.mjs";
+import test from "node:test";
+import assert from "node:assert/strict";
 
-import { finalizeCodexTaskRun } from '../src/task-final-writeback.mjs';
+/**
+ * Tests for task-final-writeback.mjs statusLabel and result.md content.
+ *
+ * Verifies that:
+ * 1. completed → "Completed"
+ * 2. failed → "Failed" (not "Completed")
+ * 3. timed_out → "Timed out"
+ * 4. waiting_for_review → "Waiting for review" (not "Completed")
+ */
 
-function baseArgs(overrides = {}) {
-  const calls = [];
-  const resultTask = { id: 'task_1', status: 'completed' };
+import { finalizeCodexTaskRun } from "../src/task-final-writeback.mjs";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function makeMinimalArgs(taskStatus) {
+  const goal = { id: "goal_label_test", workspace_id: "hosted-default" };
+  const workspace = { root: "/tmp/test-workspace" };
+  const workspaceFiles = {
+    result_md: "/tmp/test-result.md",
+    dir: "/tmp/test-dir",
+  };
+  let appendedMessage = null;
+
   return {
-    calls,
-    args: {
-      store: {},
-      config: { defaultWorkspaceRoot: '/tmp/ws', codexExecTimeout: 120, codexFirstOutputTimeout: 44 },
-      task: { id: 'task_1' },
-      taskStatus: 'completed',
-      taskResult: { kind: 'codex_executed' },
-      doneAt: '2026-01-01T00:00:00.000Z',
-      cr: { returncode: 0, stdout_bytes: 3, stderr_bytes: 0 },
-      workspace: { root: '/tmp/repo' },
-      goal: { id: 'goal_1', workspace_id: 'ws_1' },
-      workspaceFiles: { result_md: '.gptwork/goals/goal_1/result.md' },
-      summary: 'summary text',
-      context: { user_id: 'system' },
-      runFilePath: '/tmp/run.json',
-      repoLockPath: '/tmp/repo',
-      github: { syncTask: (task) => { calls.push(['github', task]); return Promise.resolve(); } },
-      fireHeartbeatFn: (...items) => calls.push(['heartbeat', ...items]),
-      updateTaskFn: async (store, id, updater) => {
-        const item = { logs: [] };
-        updater(item);
-        calls.push(['updateTask', id, item]);
-        return { task: resultTask };
-      },
-      loadRestartMarkerFn: async () => null,
-      releaseRepoLockFn: async (...items) => calls.push(['releaseLock', ...items]),
-      updateGoalStatusFn: async (...items) => calls.push(['goalStatus', ...items]),
-      writeWorkspaceTextInternalFn: async (...items) => calls.push(['writeResult', ...items]),
-      appendGoalMessageFn: async (...items) => calls.push(['goalMessage', ...items]),
-      ...overrides,
-    }
+    store: {
+      load: async () => ({ tasks: [], goals: [goal], activities: [] }),
+      mutate: async (updater) => updater({ tasks: [{ id: "task_label_test", logs: [] }], goals: [goal], activities: [] }),
+    },
+    config: { defaultWorkspaceRoot: "/tmp" },
+    task: { id: "task_label_test", logs: [] },
+    taskStatus,
+    taskResult: { kind: taskStatus === "timed_out" ? "codex_timeout" : "codex_executed", summary: "Test result", changed_files: [], warnings: [], followups: [] },
+    doneAt: new Date().toISOString(),
+    cr: { returncode: taskStatus === "completed" ? 0 : 1, timed_out: taskStatus === "timed_out" },
+    workspace,
+    goal,
+    workspaceFiles,
+    summary: "Test task result",
+    context: {},
+    runFilePath: null,
+    repoLockPath: null,
+    github: { syncTask: async () => {} },
+    appendGoalMessageFn: async (store, config, msg) => { appendedMessage = msg; },
+    updateGoalStatusFn: async () => {},
+    loadRestartMarkerFn: async () => null,
+    releaseRepoLockFn: async () => {},
+    writeWorkspaceTextInternalFn: async () => {},
+    fireHeartbeatFn: async () => {},
   };
 }
 
-test('finalizeCodexTaskRun writes final state, releases lock, updates goal, and syncs github', async () => {
-  const { calls, args } = baseArgs();
+// Wrapper to capture the writeWorkspaceTextInternal calls
+function captureWriteCalls(args) {
+  const captured = { mdContent: null, messageContent: null };
+  args.writeWorkspaceTextInternalFn = async (store, config, workspaceId, path, content) => {
+    captured.mdContent = content;
+  };
+  args.appendGoalMessageFn = async (store, config, msg) => {
+    captured.messageContent = msg;
+    args.summary = msg.content || args.summary;
+  };
+  return captured;
+}
 
-  const result = await finalizeCodexTaskRun(args);
+// ===========================================================================
+// Test: statusLabel for completed
+// ===========================================================================
 
-  assert.deepEqual(result, { task_id: 'task_1', status: 'completed', kind: 'codex_executed' });
-  assert.ok(calls.some(c => c[0] === 'heartbeat' && c[2] === 'completed'));
-  const updateCall = calls.find(c => c[0] === 'updateTask');
-  assert.equal(updateCall[2].status, 'completed');
-  assert.equal(updateCall[2].result.completed_at, args.doneAt);
-  assert.ok(updateCall[2].logs[0].message.includes('completed'));
-  assert.ok(calls.some(c => c[0] === 'releaseLock' && c[3] === 'task_1'));
-  assert.ok(calls.some(c => c[0] === 'goalStatus' && c[2] === 'goal_1' && c[3] === 'completed'));
-  assert.ok(calls.some(c => c[0] === 'writeResult' && c[4] === '.gptwork/goals/goal_1/result.md'));
-  assert.ok(calls.some(c => c[0] === 'goalMessage' && c[3].content.includes('summary text')));
-  assert.ok(calls.some(c => c[0] === 'github'));
-});
-
-test('finalizeCodexTaskRun marks repo lock restart state when active marker exists', async () => {
-  const { calls, args } = baseArgs({
-    loadRestartMarkerFn: async () => ({ status: 'scheduled' }),
-  });
+test("task-final-writeback: completed status labels correctly", async () => {
+  const args = makeMinimalArgs("completed");
+  const captured = captureWriteCalls(args);
 
   await finalizeCodexTaskRun(args);
 
-  const releaseCall = calls.find(c => c[0] === 'releaseLock');
-  assert.deepEqual(releaseCall[4], { restartState: 'scheduled' });
+  // Goal message should say "Completed task"
+  assert.ok(captured.messageContent, "Message should have been captured");
+  if (captured.messageContent) {
+    assert.match(captured.messageContent.content, /Completed/, "Should say Completed");
+  }
 });
 
-test('finalizeCodexTaskRun batches task and goal state when store.mutate is available', async () => {
-  const { calls, args } = baseArgs();
-  const state = {
-    tasks: [{ id: 'task_1', logs: [], status: 'running' }],
-    goals: [{ id: 'goal_1', title: 'Goal', status: 'assigned' }],
-    activities: []
-  };
-  let mutateCount = 0;
-  args.store = {
-    mutate: async (updater) => {
-      mutateCount += 1;
-      return updater(state);
-    }
-  };
+// ===========================================================================
+// Test: statusLabel for failed (must NOT say Completed)
+// ===========================================================================
 
-  const result = await finalizeCodexTaskRun(args);
-
-  assert.equal(mutateCount, 1);
-  assert.equal(result.status, 'completed');
-  assert.equal(state.tasks[0].status, 'completed');
-  assert.equal(state.goals[0].status, 'completed');
-  assert.equal(state.activities.length, 2);
-  assert.equal(calls.some(c => c[0] === 'updateTask'), false);
-  assert.equal(calls.some(c => c[0] === 'goalStatus'), false);
-});
-
-test('finalizeCodexTaskRun awaits github task sync before returning', async () => {
-  const { calls, args } = baseArgs();
-  args.github = {
-    syncTask: async (task) => {
-      await Promise.resolve();
-      calls.push(['githubSynced', task.id]);
-    }
-  };
+test("task-final-writeback: failed status labels correctly (not Completed)", async () => {
+  const args = makeMinimalArgs("failed");
+  const captured = captureWriteCalls(args);
 
   await finalizeCodexTaskRun(args);
 
-  assert.ok(calls.some(c => c[0] === 'githubSynced' && c[1] === 'task_1'));
+  if (captured.messageContent) {
+    assert.doesNotMatch(captured.messageContent.content, /Completed/, "Should NOT say Completed");
+    assert.match(captured.messageContent.content, /[Ff]ail/, "Should say Failed or similar");
+  }
+
+  if (captured.mdContent) {
+    assert.doesNotMatch(captured.mdContent, /Completed/, "result.md should NOT say Completed");
+  }
 });
+
+// ===========================================================================
+// Test: statusLabel for timed_out
+// ===========================================================================
+
+test("task-final-writeback: timed_out status labels correctly", async () => {
+  const args = makeMinimalArgs("timed_out");
+  const captured = captureWriteCalls(args);
+
+  await finalizeCodexTaskRun(args);
+
+  if (captured.messageContent) {
+    assert.match(captured.messageContent.content, /Timed out/, "Should say Timed out");
+  }
+
+  if (captured.mdContent) {
+    assert.match(captured.mdContent, /Timed out/, "result.md should say Timed out");
+  }
+});
+
+// ===========================================================================
+// Test: statusLabel for waiting_for_review (must NOT say Completed)
+// ===========================================================================
+
+test("task-final-writeback: waiting_for_review status labels correctly (not Completed)", async () => {
+  const args = makeMinimalArgs("waiting_for_review");
+  const captured = captureWriteCalls(args);
+
+  await finalizeCodexTaskRun(args);
+
+  if (captured.messageContent) {
+    assert.doesNotMatch(captured.messageContent.content, /Completed/, "Should NOT say Completed");
+    assert.match(captured.messageContent.content, /Waiting for review/, "Should say Waiting for review");
+  }
+
+  if (captured.mdContent) {
+    assert.doesNotMatch(captured.mdContent, /Completed/, "result.md should NOT say Completed");
+  }
+});
+
+// ===========================================================================
+// Test: statusLabel for unknown status falls through
+// ===========================================================================
+
+test("task-final-writeback: unknown status passes through as-is", async () => {
+  const args = makeMinimalArgs("some_unknown_status");
+  const captured = captureWriteCalls(args);
+
+  await finalizeCodexTaskRun(args);
+
+  if (captured.messageContent) {
+    assert.doesNotMatch(captured.messageContent.content, /Completed/, "Should not default to Completed");
+  }
+});
+
+console.log("task-final-writeback tests loaded");

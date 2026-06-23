@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 
-const ROLES = new Set(["planner", "architect", "implementer", "tester", "reviewer", "finalizer"]);
+const ROLES = new Set(["planner", "architect", "implementer", "tester", "reviewer", "finalizer", "analyst", "escalation_judge"]);
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
 function now() {
