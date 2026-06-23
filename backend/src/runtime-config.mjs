@@ -153,6 +153,13 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     recoveryUnrestrictedLocalCommandEnabled: _getBool("GPTWORK_RECOVERY_UNRESTRICTED_LOCAL_COMMAND_ENABLED", false),
 
     // Derive allowed roots array
+
+    // Retention / compaction
+    retentionEnabled: _getBool("GPTWORK_RETENTION_ENABLED", true),
+    retentionLimit: _getNum("GPTWORK_RETENTION_LIMIT", 50),
+    retentionDryRunDefault: _getBool("GPTWORK_RETENTION_DRY_RUN_DEFAULT", true),
+    retentionArchiveBeforeDelete: _getBool("GPTWORK_RETENTION_ARCHIVE_BEFORE_DELETE", true),
+
     _recoveryAllowedRootsArr: (() => {
       const raw = _get("GPTWORK_RECOVERY_ALLOWED_ROOTS", "");
       if (!raw) return [];

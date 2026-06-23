@@ -96,6 +96,13 @@ export async function createGptWorkServer(options = {}) {
     recoveryDryRunDefault: rcc.recoveryDryRunDefault,
     recoveryAuditLog: rcc.recoveryAuditLog,
     recoveryUnrestrictedLocalCommandEnabled: rcc.recoveryUnrestrictedLocalCommandEnabled,
+
+    // Retention / compaction
+    retentionEnabled: rcc.retentionEnabled,
+    retentionLimit: rcc.retentionLimit,
+    retentionDryRunDefault: rcc.retentionDryRunDefault,
+    retentionArchiveBeforeDelete: rcc.retentionArchiveBeforeDelete,
+
     _recoveryAllowedRootsArr: rcc._recoveryAllowedRootsArr,
 
     // Config sources for diagnostics

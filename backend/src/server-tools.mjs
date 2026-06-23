@@ -34,6 +34,7 @@ import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mj
 import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.mjs";
 import { createCleanupToolsGroup } from "./tool-groups/cleanup-tools-group.mjs";
 import { createRecoveryToolsGroup } from "./tool-groups/recovery-tools-group.mjs";
+import { createRetentionToolsGroup } from "./tool-groups/retention-tools-group.mjs";
 import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-service.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
@@ -103,6 +104,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_tmp",
     "goal_storage_status",
     "cleanup_goals",
+    "retention_status",
+    "retention_cleanup",
     "create_chatgpt_request",
     "answer_chatgpt_request",
     "get_chatgpt_request",
@@ -122,6 +125,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_tmp",
     "goal_storage_status",
     "cleanup_goals",
+    "retention_status",
+    "retention_cleanup",
   ]),
   operator: new Set([
     "gptwork_self_test",
@@ -151,6 +156,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_tmp",
     "goal_storage_status",
     "cleanup_goals",
+    "retention_status",
+    "retention_cleanup",
   ]),
   codex: new Set([
     "gptwork_self_test",
@@ -198,6 +205,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_tmp",
     "goal_storage_status",
     "cleanup_goals",
+    "retention_status",
+    "retention_cleanup",
   ]),
 };
 
@@ -263,6 +272,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
 
   ...createWorkflowToolsGroup({ tool, schema, store, config, workerState, collectWorkerQueueCounts }),
   ...createCleanupToolsGroup({ tool, schema, config }),
+  ...createRetentionToolsGroup({ tool, schema, store, config }),
   ...createRecoveryToolsGroup({ tool, schema, store, config, envLoadResult, sources, registry, workerState, collectWorkerQueueCounts, repoDir, gitInfo: {}, PROCESS_STARTED_AT: processStartedAt }),
    read_events: tool({
       name: "read_events",

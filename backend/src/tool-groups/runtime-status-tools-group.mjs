@@ -309,6 +309,16 @@ export function createRuntimeStatusToolsGroup({
                 }
               } catch (e) {}
             })();
+            (() => {
+              try {
+                const tasks = store.state?.tasks?.length || 0;
+                const goals = store.state?.goals?.length || 0;
+                if (tasks > 150 || goals > 100) {
+                  actions.push("Storage pressure detected: " + tasks + " tasks, " + goals + " goals — run retention_status to see growth and retention_cleanup to compact");
+                }
+              } catch (e) {}
+            })();
+
             return actions;
           })(),
           elapsed_ms: Date.now() - startTime,
