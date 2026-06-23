@@ -226,6 +226,10 @@ export function createRuntimeStatusToolsGroup({
           bark_configured: bark ? (bark.getStatus ? bark.getStatus().configured : false) : false,
           bark_enabled: bark ? (bark.isEnabled ? bark.isEnabled() : false) : false,
           placeholder_tools_exposed: exposePlaceholder || false,
+          emergency_tools_exposed: config.recoveryPlaneEnabled || false,
+          emergency_shell_exec_exposed: config.recoveryUnrestrictedLocalCommandEnabled || false,
+          emergency_file_tools_exposed: config.recoveryPlaneEnabled || false,
+          admin_allowed_roots: config._recoveryAllowedRootsArr || [],
           suggested_next_actions: (() => {
             const actions = [];
             if (!isRuntimeEnvConfigured()) actions.push('Set up runtime.env with GPTWORK_* variables or configure via process.env');

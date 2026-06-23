@@ -89,6 +89,15 @@ export async function createGptWorkServer(options = {}) {
     githubRepo: rcc.githubRepo,
     githubToken: rcc.githubToken,
     toolMode: options.toolMode || rcc.toolMode,
+    // Recovery / break-glass plane
+    recoveryPlaneEnabled: rcc.recoveryPlaneEnabled,
+    breakGlassEnabled: rcc.breakGlassEnabled,
+    recoveryAllowedRoots: rcc.recoveryAllowedRoots,
+    recoveryDryRunDefault: rcc.recoveryDryRunDefault,
+    recoveryAuditLog: rcc.recoveryAuditLog,
+    recoveryUnrestrictedLocalCommandEnabled: rcc.recoveryUnrestrictedLocalCommandEnabled,
+    _recoveryAllowedRootsArr: rcc._recoveryAllowedRootsArr,
+
     // Config sources for diagnostics
     _sources: sources,
   };

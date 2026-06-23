@@ -33,6 +33,8 @@ import { createAgentRunToolsGroup } from "./tool-groups/agent-run-tools-group.mj
 import { createSelfTestToolsGroup } from "./tool-groups/self-test-tools-group.mjs";
 import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.mjs";
 import { createCleanupToolsGroup } from "./tool-groups/cleanup-tools-group.mjs";
+import { createRecoveryToolsGroup } from "./tool-groups/recovery-tools-group.mjs";
+import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-service.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
@@ -218,6 +220,7 @@ export function filterToolsForMode(tools, mode) {
 }
 
 export function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt, notifyCreatedTaskIfNeeded, eventLogger, hookBus }) {
+  const repoDir = resolveRepoDir();
   const tool = createTool;
 
   const tools = {
@@ -260,6 +263,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
 
   ...createWorkflowToolsGroup({ tool, schema, store, config, workerState, collectWorkerQueueCounts }),
   ...createCleanupToolsGroup({ tool, schema, config }),
+  ...createRecoveryToolsGroup({ tool, schema, store, config, envLoadResult, sources, registry, workerState, collectWorkerQueueCounts, repoDir, gitInfo: {}, PROCESS_STARTED_AT: processStartedAt }),
    read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",

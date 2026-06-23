@@ -124,6 +124,21 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     tokens: _get("GPTWORK_TOKENS", "dev-token,test"),
     sshSocksProxy: _get("GPTWORK_SSH_SOCKS_PROXY", "10.0.1.105:20177"),
     tokenContexts: _get("GPTWORK_TOKEN_CONTEXTS", ""),
+    // Recovery / break-glass plane
+    recoveryPlaneEnabled: _getBool("GPTWORK_RECOVERY_PLANE_ENABLED", false),
+    breakGlassEnabled: _getBool("GPTWORK_BREAK_GLASS_ENABLED", false),
+    recoveryAllowedRoots: _get("GPTWORK_RECOVERY_ALLOWED_ROOTS", ""),
+    recoveryDryRunDefault: _getBool("GPTWORK_RECOVERY_DRY_RUN_DEFAULT", true),
+    recoveryAuditLog: _get("GPTWORK_RECOVERY_AUDIT_LOG", ".gptwork/admin-audit.jsonl"),
+    recoveryUnrestrictedLocalCommandEnabled: _getBool("GPTWORK_RECOVERY_UNRESTRICTED_LOCAL_COMMAND_ENABLED", false),
+
+    // Derive allowed roots array
+    _recoveryAllowedRootsArr: (() => {
+      const raw = _get("GPTWORK_RECOVERY_ALLOWED_ROOTS", "");
+      if (!raw) return [];
+      return raw.split(",").map(s => s.trim()).filter(Boolean);
+    })(),
+
   };
 
   // ── Per-key source tracking ──────────────────────────────────────

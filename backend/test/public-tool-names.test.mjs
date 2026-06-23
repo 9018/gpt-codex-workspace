@@ -188,6 +188,63 @@ test("tools/list excludes placeholder tools by default", async () => {
   }
 });
 
+
+test("tools/list includes recovery tools when GPTWORK_RECOVERY_PLANE_ENABLED is set", async () => {
+  const oldVal = process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer();
+    const response = await server.handleRpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/list",
+      params: {}
+    }, { authorization: "Bearer test-token" });
+
+    const names = response.result.tools.map((t) => t.name);
+    const recoveryTools = [
+      "recovery_plane_status",
+      "recovery_diagnose",
+      "recovery_queue_reconcile",
+      "recovery_lock_reconcile",
+      "recovery_worker_recover",
+      "recovery_api_failure_control",
+      "recovery_storage_maintenance",
+      "recovery_runtime_env_fix_plan",
+      "recovery_safe_restart",
+      "recovery_state_patch",
+      "recovery_file_read",
+      "recovery_file_write",
+      "recovery_apply_patch",
+      "recovery_command_runner",
+      "recovery_tool_exposure_self_test",
+    ];
+    for (const tool of recoveryTools) {
+      assert.equal(names.includes(tool), true,
+        "Recovery tool  + tool +  SHOULD be visible when GPTWORK_RECOVERY_PLANE_ENABLED=true");
+    }
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+    if (oldVal !== undefined) process.env.GPTWORK_RECOVERY_PLANE_ENABLED = oldVal;
+  }
+});
+
+test("tools/list excludes recovery tools by default", async () => {
+  const server = await makeServer();
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {}
+  }, { authorization: "Bearer test-token" });
+
+  const names = response.result.tools.map((t) => t.name);
+  for (const recovery of ["recovery_plane_status", "recovery_diagnose", "recovery_queue_reconcile", "recovery_lock_reconcile", "recovery_worker_recover", "recovery_api_failure_control", "recovery_command_runner"]) {
+    assert.equal(names.includes(recovery), false,
+      "Recovery tool  + recovery +  should NOT be in default tools/list");
+  }
+});
+
 test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOLS is set", async () => {
   const oldVal = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
   process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = "true";

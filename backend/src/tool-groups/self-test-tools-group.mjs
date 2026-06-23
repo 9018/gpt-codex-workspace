@@ -129,6 +129,53 @@ function checkOperationalTools() {
 /**
  * P0.1: Check that no-op completion handling code exists.
  */
+
+  /**
+   * Check that recovery/emergency tools are present in the registry.
+   * Recovery tools are only exposed when GPTWORK_RECOVERY_PLANE_ENABLED=true.
+   */
+  function checkRecoveryTools() {
+    const toolingPath = join(backendRoot(), "src", "server-tools.mjs");
+    if (!existsSync(toolingPath)) {
+      return { status: "FAIL", detail: "server-tools.mjs not found" };
+    }
+    const content = readFileSync(toolingPath, "utf8");
+    const requiredTools = [
+      { name: "recovery_plane_status", pattern: "recovery_plane_status" },
+      { name: "recovery_diagnose", pattern: "recovery_diagnose" },
+      { name: "recovery_queue_reconcile", pattern: "recovery_queue_reconcile" },
+      { name: "recovery_lock_reconcile", pattern: "recovery_lock_reconcile" },
+      { name: "recovery_worker_recover", pattern: "recovery_worker_recover" },
+      { name: "recovery_api_failure_control", pattern: "recovery_api_failure_control" },
+      { name: "recovery_storage_maintenance", pattern: "recovery_storage_maintenance" },
+      { name: "recovery_runtime_env_fix_plan", pattern: "recovery_runtime_env_fix_plan" },
+      { name: "recovery_safe_restart", pattern: "recovery_safe_restart" },
+      { name: "recovery_state_patch", pattern: "recovery_state_patch" },
+      { name: "recovery_file_read", pattern: "recovery_file_read" },
+      { name: "recovery_file_write", pattern: "recovery_file_write" },
+      { name: "recovery_apply_patch", pattern: "recovery_apply_patch" },
+      { name: "recovery_command_runner", pattern: "recovery_command_runner" },
+      { name: "recovery_tool_exposure_self_test", pattern: "recovery_tool_exposure_self_test" },
+    ];
+    const missing = [];
+    const present = [];
+    for (const t of requiredTools) {
+      if (content.includes(t.pattern)) { present.push(t.name); }
+      else { missing.push(t.name); }
+    }
+    if (missing.length > 0) {
+      return {
+        status: "WARN",
+        detail: missing.length + " recovery tool(s) missing from server-tools.mjs: " + missing.join(", "),
+        present, missing,
+      };
+    }
+    return {
+      status: "PASS",
+      detail: "All " + present.length + " recovery tools found in server-tools.mjs",
+      present, missing: [],
+    };
+  }
 function checkNoopCompletionHandling() {
   const path = join(backendRoot(), "src", "codex-task-result-builder.mjs");
   if (!existsSync(path)) {
@@ -253,6 +300,14 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
           check: "operational_tools",
           status: opTools.status,
           detail: opTools.detail,
+        });
+
+        // 12. Recovery tools present
+        const recoveryTools = checkRecoveryTools();
+        results.push({
+          check: "recovery_tools",
+          status: recoveryTools.status,
+          detail: recoveryTools.detail,
         });
 
         // 11. P0.1: No-op completion handling
