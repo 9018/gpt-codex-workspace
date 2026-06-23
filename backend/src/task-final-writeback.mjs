@@ -1,3 +1,4 @@
+import { writeFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
@@ -83,6 +84,22 @@ export async function finalizeCodexTaskRun({
       memory_key: "codex_last_result",
       memory_value: summary.slice(0, 4000),
     }, context);
+
+    // Write fallback result.json so it always exists for subsequent parses.
+    const _rjPath = workspace.root + "/.gptwork/goals/" + goal.id + "/result.json";
+    try {
+      const _rjData = {
+        status: taskStatus,
+        summary: taskResult.summary || summary || "",
+        changed_files: Array.isArray(taskResult.changed_files) ? taskResult.changed_files : [],
+        tests: taskResult.tests || null,
+        commit: taskResult.commit || null,
+        remote_head: taskResult.remote_head || null,
+        warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
+        followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+      };
+      await writeFile(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
+    } catch {}
   }
 
   try { await github.syncTask(result.task); } catch {}

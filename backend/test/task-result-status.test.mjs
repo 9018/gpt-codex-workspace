@@ -18,6 +18,7 @@ test('deriveTaskStatusFromTaskResult maps task result kinds to task statuses', (
   assert.equal(deriveTaskStatusFromTaskResult({ kind: 'codex_executed' }), 'completed');
   assert.equal(deriveTaskStatusFromTaskResult({ kind: 'codex_timeout' }), 'timed_out');
   assert.equal(deriveTaskStatusFromTaskResult({ kind: 'no_first_output_timeout' }), 'timed_out');
+  assert.equal(deriveTaskStatusFromTaskResult({ kind: 'noop' }), 'waiting_for_review');
   assert.equal(deriveTaskStatusFromTaskResult({ kind: 'codex_failed' }), 'failed');
 });
 

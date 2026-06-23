@@ -22,7 +22,8 @@ export async function executeCodexTaskRun({
   let parsedResult = null;
   let cr = null;
 
-  const cmd = "codex exec " + config.codexExecArgs + " < " + promptFile;
+  const lastMessagePath = workspaceRoot + "/.gptwork/tmp/codex-lastmsg-" + task.id + ".txt";
+  const cmd = "codex exec " + config.codexExecArgs + " --output-last-message " + lastMessagePath + " < " + promptFile;
 
   // P1.1: Create throttled heartbeat for run
   const throttledHb = runFilePath ? createThrottledHeartbeat(runFilePath, 1000, updateRunHeartbeatFn) : null;

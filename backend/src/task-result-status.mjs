@@ -6,6 +6,7 @@ const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restart
 export function deriveTaskStatusFromTaskResult(taskResult) {
   if (taskResult?.kind === "codex_executed") return "completed";
   if (taskResult?.kind === "codex_timeout" || taskResult?.kind === "no_first_output_timeout") return "timed_out";
+  if (taskResult?.kind === "noop") return "waiting_for_review";
   return "failed";
 }
 

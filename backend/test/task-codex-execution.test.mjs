@@ -36,7 +36,7 @@ test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and retu
   assert.equal(result.summary, 'ok');
   assert.equal(result.parsedResult.status, 'completed');
   assert.equal(result.cr.returncode, 0);
-  assert.equal(calls.find(c => c.type === 'run').cmd, 'codex exec --sandbox read-only < /tmp/prompt.txt');
+  assert.equal(calls.find(c => c.type === 'run').cmd, 'codex exec --sandbox read-only --output-last-message /tmp/repo/.gptwork/tmp/codex-lastmsg-task_exec.txt < /tmp/prompt.txt');
   assert.equal(calls.find(c => c.type === 'run').cwd, '/tmp/repo');
   assert.equal(calls.find(c => c.type === 'parse').resultJsonPath, '/tmp/repo/.gptwork/goals/goal_exec/result.json');
   const runCall = calls.find(c => c.type === 'run');
