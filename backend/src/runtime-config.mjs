@@ -152,6 +152,12 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     recoveryAuditLog: _get("GPTWORK_RECOVERY_AUDIT_LOG", ".gptwork/admin-audit.jsonl"),
     recoveryUnrestrictedLocalCommandEnabled: _getBool("GPTWORK_RECOVERY_UNRESTRICTED_LOCAL_COMMAND_ENABLED", false),
 
+    // Restart strategy
+    restartMode: _get("GPTWORK_RESTART_MODE", "npm"),
+    restartCommand: _get("GPTWORK_RESTART_COMMAND", "npm --prefix /home/a9017/mcp/workspace/gpt-codex-workspace/backend run start"),
+    restartCwd: _get("GPTWORK_RESTART_CWD", "/home/a9017/mcp/workspace/gpt-codex-workspace/backend"),
+    restartMarkerKind: _get("GPTWORK_RESTART_MARKER_KIND", "npm"),
+
     // Derive allowed roots array
 
     // Retention / compaction
@@ -213,6 +219,11 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     tokens: "GPTWORK_TOKENS",
     sshSocksProxy: "GPTWORK_SSH_SOCKS_PROXY",
     tokenContexts: "GPTWORK_TOKEN_CONTEXTS",
+    restartMode: "GPTWORK_RESTART_MODE",
+    restartCommand: "GPTWORK_RESTART_COMMAND",
+    restartCwd: "GPTWORK_RESTART_CWD",
+    restartMarkerKind: "GPTWORK_RESTART_MARKER_KIND",
+
   };
 
   const sources = {};

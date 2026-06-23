@@ -93,7 +93,7 @@ GPTWork will read result.json first when available, falling back to the stdout r
 ${separator}
 ${separator}
 ## Safe Restart Rule
-If you need to restart the gptwork-mcp.service (the service running this worker), you MUST NOT run "systemctl --user restart gptwork-mcp.service" directly inline for a self-restart. Doing so will kill the worker before the task can complete, causing the task to get stuck.
+If you need to restart GPTWork (the service running this worker), you MUST NOT run the restart command directly inline for a self-restart. Doing so will kill the worker before the task can complete, causing the task to get stuck. Use schedule_service_restart to perform a safe two-phase restart.
 Instead:
 1. Write result.json with your final result first.
 2. Call schedule_service_restart with your task_id, expected_commit (the HEAD you committed/pushed), and optional expected_remote_head.

@@ -4,6 +4,7 @@ import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
 import { scanPendingRestartMarkersSync } from "../safe-restart.mjs";
+import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 
 /**
  * Scoped MCP tool group: runtime/status diagnostic tools.
@@ -116,6 +117,12 @@ export function createRuntimeStatusToolsGroup({
           worktree_dirty: gitInfo.worktree_dirty,
           dirty_paths: gitInfo.dirty_paths,
           restart_markers: restartMarkerData,
+          restart_strategy: (() => {
+            const s = getRestartSummary(getRestartStrategy(config));
+            return s;
+          })(),
+          restart_marker_kind: config.restartMarkerKind || "npm",
+
           config_sources: {
             codex_exec_timeout: sources.codexExecTimeout,
             codex_first_output_timeout: sources.codexFirstOutputTimeout,

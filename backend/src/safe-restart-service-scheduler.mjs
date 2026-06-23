@@ -17,7 +17,8 @@ export async function scheduleServiceRestart(options = {}) {
     repoPath = null,
     store = null,
     dryRun = false,
-    restartScheduler = scheduleDetachedRestart
+    restartScheduler = scheduleDetachedRestart,
+    restartConfig = null
   } = options;
 
   if (!workspaceRoot) throw new Error("workspaceRoot is required");
@@ -159,6 +160,8 @@ export async function scheduleServiceRestart(options = {}) {
     expected_commit: resolvedCommit,
     expected_remote_head: expectedRemoteHead,
     repo_path: repoPath,
+    restart_kind: restartConfig ? restartConfig.markerKind || "npm" : "npm",
+    old_pid: process.pid,
   };
   if (resultJsonCommitRejected) {
     markerFields.result_json_commit_rejected = resultJsonCommitRejected;
@@ -189,12 +192,15 @@ export async function scheduleServiceRestart(options = {}) {
     serviceName,
     taskId,
     dryRun,
+    strategy: restartConfig
   });
 
   // Step 4: Update marker status based on scheduling result
   if (restart.scheduled) {
     await updateRestartMarkerStatus(workspaceRoot, taskId, "scheduled", {
       restart_method: restart.method,
+    restart_mode: restart.restart_mode || (restartConfig ? restartConfig.mode : "npm"),
+    restart_marker_kind: restartConfig ? restartConfig.markerKind : "npm",
       scheduled_at: new Date().toISOString()
     });
   } else {
@@ -211,6 +217,8 @@ export async function scheduleServiceRestart(options = {}) {
     service_name: serviceName,
     restart_scheduled: restart.scheduled,
     restart_method: restart.method,
+    restart_mode: restart.restart_mode || (restartConfig ? restartConfig.mode : "npm"),
+    restart_marker_kind: restartConfig ? restartConfig.markerKind : "npm",
     expected_commit: resolvedCommit,
     expected_commit_source: expectedCommitSource,
     expected_remote_head: expectedRemoteHead,

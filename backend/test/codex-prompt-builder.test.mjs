@@ -81,7 +81,8 @@ test("buildCodexPrompt contains Safe Restart Rule section", () => {
 
   assert.ok(fullPrompt.includes("Safe Restart Rule"), "should contain Safe Restart Rule heading");
   assert.ok(fullPrompt.includes("MUST NOT run"), "should contain MUST NOT run");
-  assert.ok(fullPrompt.includes("systemctl"), "should mention systemctl");
+  assert.ok(fullPrompt.includes("MUST NOT run"), "should forbid direct restart");
+  assert.ok(fullPrompt.includes("schedule_service_restart"), "should recommend schedule_service_restart");
   assert.ok(fullPrompt.includes("schedule_service_restart"), "should mention schedule_service_restart tool");
 });
 

@@ -633,7 +633,7 @@ export function createRecoveryToolsGroup({
               store,
             });
           } catch (e) {
-            restartResult = { ok: false, reason: "scheduler error: " + e.message, instruction: "Run: systemctl restart gptwork-mcp.service" };
+            restartResult = { ok: false, reason: "scheduler error: " + e.message, instruction: "Run: cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend && npm run start (or check GPTWORK_RESTART_MODE)" };
           }
 
           await audit({ tool: "recovery_safe_restart", action: "restart", apply: true, result: restartResult.ok ? "ok" : "needs_external", marker_id: markerId, summary: "restart triggered", elapsed_ms: Date.now() - start });

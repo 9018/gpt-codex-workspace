@@ -149,7 +149,7 @@ test("writePendingRestartMarker creates marker file with correct fields", async 
   assert.equal(marker.expected_commit, "abc123def456");
   assert.equal(marker.expected_remote_head, "def789abc012");
   assert.equal(marker.repo_path, workspaceRoot);
-  assert.equal(marker.restart_kind, "systemd");
+  assert.equal(marker.restart_kind, "npm");
   assert.equal(marker.status, "pending");
   assert.ok(marker.requested_at);
   assert.ok(Array.isArray(marker.logs));
@@ -294,7 +294,7 @@ test("scheduleServiceRestart writes marker and returns structured info", async (
   assert.ok(marker);
   assert.equal(marker.task_id, "task_sched_1");
   assert.equal(marker.expected_commit, "abc123");
-  // Status should be "scheduled" or "failed" depending on systemd-run availability
+  // Status should be "scheduled" or "failed" depending on configured restart strategy
   assert.ok(marker.status === "scheduled" || marker.status === "failed");
 });
 
@@ -553,7 +553,7 @@ test("generated prompt file explicitly contains the Safe Restart Rule section", 
   assert.match(source, /Safe Restart Rule/i, "prompt should contain Safe Restart Rule section");
   
   // It should explicitly discourage direct systemctl restart
-  assert.match(source, /MUST NOT run.*systemctl.*restart/i, "prompt should forbid direct systemctl restart");
+  assert.match(source, /MUST NOT run.*restart command directly.*self-restart/i, "prompt should forbid direct self-restart");
   
   // It should mention schedule_service_restart as the alternative
   assert.match(source, /schedule_service_restart/i, "prompt should mention schedule_service_restart tool");
@@ -631,7 +631,7 @@ test("Phase C startup reconciliation for restart markers - happy path", async ()
 // ================================================================
 
 test("scheduleDetachedRestart returns method info", () => {
-  // This is tested in a non-destructive way - if systemd-run is available, it will use it
+  // This is tested in a non-destructive way - the strategy default (npm) is used for dry-run
   const result = scheduleDetachedRestart({
     serviceName: "gptwork-mcp.service",
     taskId: "task_detach_1",

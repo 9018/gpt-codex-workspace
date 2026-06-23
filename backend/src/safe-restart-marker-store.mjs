@@ -48,7 +48,7 @@ export function getRestartMarkerPath(workspaceRoot, taskId) {
  * @param {string|null} [fields.expected_commit=null] - SHA of the commit we expect after restart
  * @param {string|null} [fields.expected_remote_head=null] - SHA of the remote HEAD we expect
  * @param {string|null} [fields.repo_path=null]
- * @param {string} [fields.restart_kind="systemd"]
+ * @param {string} [fields.restart_kind="npm"]
  * @returns {Promise<object>} the written marker
  */
 export async function writePendingRestartMarker(workspaceRoot, taskId, fields = {}) {
@@ -67,7 +67,7 @@ export async function writePendingRestartMarker(workspaceRoot, taskId, fields = 
     expected_commit: fields.expected_commit || null,
     expected_remote_head: fields.expected_remote_head || null,
     repo_path: fields.repo_path || null,
-    restart_kind: fields.restart_kind || "systemd",
+    restart_kind: fields.restart_kind || "npm",
     status: "pending",
     logs: [
       { time: now, message: `Restart marker created by ${fields.requested_by || "codex"} with status=pending` }
