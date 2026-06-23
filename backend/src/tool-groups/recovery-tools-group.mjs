@@ -614,9 +614,7 @@ export function createRecoveryToolsGroup({
       if (isApply) {
         try {
           // Write restart marker
-          await writePendingRestartMarker({
-            workspaceRoot: config.defaultWorkspaceRoot,
-            taskId: markerId,
+          await writePendingRestartMarker(config.defaultWorkspaceRoot, markerId, {
             requestedBy: "recovery_plane",
             expectedCommit: expected_commit || gitInfoR.running_commit || null,
             repoPath: config.defaultRepoPath,
@@ -631,6 +629,7 @@ export function createRecoveryToolsGroup({
               requestedBy: "recovery_plane",
               expectedCommit: expected_commit || gitInfoR.running_commit || null,
               repoPath: config.defaultRepoPath,
+              store,
             });
           } catch (e) {
             restartResult = { ok: false, reason: "scheduler error: " + e.message, instruction: "Run: systemctl restart gptwork-mcp.service" };
