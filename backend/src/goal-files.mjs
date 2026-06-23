@@ -1,9 +1,11 @@
 import { basename } from "node:path";
+import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 
 /**
  * Build the workspace file paths for a given goal.
  * @param {object} goal
- * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string }}
+ * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string, context_bundle_md: string, context_retrieval_json: string }}
  */
 export function goalWorkspaceFiles(goal) {
   const dir = `.gptwork/goals/${goal.id}`;
@@ -16,7 +18,9 @@ export function goalWorkspaceFiles(goal) {
     payload_json: `${dir}/payload.json`,
     payload_base64: `${dir}/payload.base64`,
     bundle_zip: `${dir}/bundle.zip`,
-    attachments_dir: `${dir}/attachments`
+    attachments_dir: `${dir}/attachments`,
+    context_bundle_md: `${dir}/context.bundle.md`,
+    context_retrieval_json: `${dir}/context.retrieval.json`
   };
 }
 
@@ -48,6 +52,8 @@ export function internalGoalWorkspaceFiles(goal, payload = {}) {
   const internal = {
     context_json: files.context_json,
     transcript_md: files.transcript_md,
+    context_bundle_md: files.context_bundle_md,
+    context_retrieval_json: files.context_retrieval_json,
     payload_json: files.payload_json,
     payload_base64: files.payload_base64
   };
@@ -74,7 +80,7 @@ export function hasGoalBundles(payload = {}) {
  * @returns {string}
  */
 export function renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) {
-  return [
+  const lines = [
     `# GPTWork Goal ${goal.id}`,
     "",
     `Title: ${goal.title}`,
@@ -104,29 +110,60 @@ export function renderGoalMarkdown(goal, conversation, memories, task, workspace
     `- context: ${workspaceFiles.context_json}`,
     `- transcript: ${workspaceFiles.transcript_md}`,
     `- result: ${workspaceFiles.result_md}`,
+  ];
+
+  // Add context bundle reference if available
+  if (workspaceFiles.context_bundle_md) {
+    lines.push(`- context bundle: ${workspaceFiles.context_bundle_md} (prefer over transcript for initial context)`);
+  }
+
+  lines.push(
     "",
     "## Memories",
     "",
     ...(memories.length ? memories.map((memory) => `- ${memory.key}: ${memory.value}`) : ["(none)"]),
     "",
-    '## Autonomy Policy',
-    '',
+    "## Autonomy Policy",
+    "",
     `Mode: ${goal.autonomy_policy?.mode || 'subagent_first'}`,
     `GPT question budget: ${goal.autonomy_policy?.gpt_question_budget ?? 0}`,
     `Default decision rule: ${goal.autonomy_policy?.default_decision_rule || 'choose the smallest reversible goal-aligned change.'}`,
-    '',
-    'Do not ask ChatGPT for implementation decisions.',
-    'Use Codex subagents to resolve uncertainty.',
-    '',
-    '## Subagent Policy',
-    '',
-    'Required roles:',
-    ...(Array.isArray(goal.subagent_policy?.roles) ? goal.subagent_policy.roles.map(r => `- ${r}`) : ['- analyst', '- architect', '- implementer', '- tester', '- reviewer', '- escalation_judge']),
-    '',
+    "",
+    "Do not ask ChatGPT for implementation decisions.",
+    "Use Codex subagents to resolve uncertainty.",
+    "",
+    "## Subagent Policy",
+    "",
+    "Required roles:",
+    ...(Array.isArray(goal.subagent_policy?.roles) ? goal.subagent_policy.roles.map(r => `- ${r}`) : ["- analyst", "- architect", "- implementer", "- tester", "- reviewer", "- escalation_judge"]),
+    "",
     "## Execution Contract",
     "",
-    "Read context.json and transcript.md before acting. Execute the goal prompt, update result.md, and append progress with append_goal_message."
-  ].join("\n");
+    "Read context.json and goal.md before acting. Prefer context.bundle.md over transcript.md for initial context.",
+    "Execute the goal prompt, update result.md, and append progress with append_goal_message."
+  );
+
+  return lines.join("\n");
+}
+
+/**
+ * Try to load an existing context.bundle.md for inspection.
+ * Returns null if the file does not exist or is unreadable.
+ *
+ * @param {string} workspaceRoot - Absolute workspace root.
+ * @param {object} goal - Goal object.
+ * @returns {Promise<string|null>}
+ */
+export async function loadContextBundle(workspaceRoot, goal) {
+  if (!goal || !goal.id) return null;
+  const path = `.gptwork/goals/${goal.id}/context.bundle.md`;
+  const abs = workspaceRoot ? `${workspaceRoot.replace(/\/+$/, "")}/${path}` : path;
+  try {
+    if (!existsSync(abs)) return null;
+    return await readFile(abs, "utf8");
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -167,7 +204,8 @@ export function codexInstruction(goal) {
   const files = goalWorkspaceFiles(goal);
   const ap = goal.autonomy_policy || {};
   return [
-    "You are executing a GPTWork encoded/shared goal.",
+    "You are executing a GPTWork encoded/shared goal. A context bundle may be available",
+    `at ${files.context_bundle_md} \u2014 prefer it over the full transcript for initial context.`,
     `Read ${files.goal_md}, ${files.context_json}, and ${files.transcript_md} before acting.`,
     "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message.",
     "",

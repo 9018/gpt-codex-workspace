@@ -7,6 +7,8 @@
  *
  * Extracted from the inline prompt construction in processGeneralTask (gptwork-server.mjs)
  * as a preparatory refactor for later context slimming.
+ *
+ * P0.5: Includes context.bundle.md reference when workspaceFiles provides it.
  */
 
 // ---------------------------------------------------------------------------
@@ -30,8 +32,29 @@ export function buildCodexPrompt({ task, goal, workspaceFiles, workspaceRoot, de
   const separator = "=".repeat(60);
   const resultPath = `${workspaceRoot}/.gptwork/goals/${goal ? goal.id : task.id}/result.json`;
 
-  // The full prompt template — exact same structure as the original inline
-  // template in processGeneralTask (gptwork-server.mjs).
+  // Build workspace file references section
+  let goalContextBlock = "";
+  if (goal) {
+    const files = workspaceFiles || {};
+    const bundleRef = files.context_bundle_md
+      ? `- ${files.context_bundle_md} (if present — preferred over full transcript for initial context)`
+      : null;
+
+    goalContextBlock = [
+      `Read these files before acting:`,
+      `- ${files.goal_md}`,
+      `- ${files.context_json}`,
+      bundleRef,
+      `- .gptwork/project.md (if present — project-level context)`,
+      `- .gptwork/project.env (if present — project-level env vars, do not commit or print secrets)`,
+      ``,
+      `Follow ${files.goal_md} exactly.`,
+      `Use ${files.context_json} only for metadata you need.`,
+      `If a context bundle exists at ${files.context_bundle_md || `${files.dir}/context.bundle.md`}, prefer it over the full transcript for initial context.`,
+      `Do not dump or re-read ${files.transcript_md} unless the goal explicitly requires prior conversation details or the context bundle is insufficient.`,
+    ].filter(Boolean).join("\n");
+  }
+
   const fullPrompt = `# Task: ${task.title}
 
 ${task.description || ""}
@@ -40,15 +63,7 @@ ${goal ? `# GPTWork Goal Context
 
 You are executing a GPTWork encoded/shared goal.
 
-Read these files before acting:
-- ${workspaceFiles.goal_md}
-- ${workspaceFiles.context_json}
-- .gptwork/project.md (if present — project-level context)
-- .gptwork/project.env (if present — project-level env vars, do not commit or print secrets)
-
-Follow ${workspaceFiles.goal_md} exactly.
-Use ${workspaceFiles.context_json} only for metadata you need.
-Do not dump or re-read ${workspaceFiles.transcript_md} unless the goal explicitly requires prior conversation details.
+${goalContextBlock}
 
 Write final results to ${workspaceFiles.result_md}.
 When complete, write a concise structured report in TWO formats:

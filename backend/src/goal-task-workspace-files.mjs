@@ -3,6 +3,14 @@ import { defaultTokenContext } from "./auth-context.mjs";
 import { goalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { workspaceUploadBundleBase64, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
+/**
+ * Write initial workspace files for a goal/task.
+ *
+ * After writing the core files (goal.md, context.json, transcript, payload, result),
+ * attempts to build a context bundle via the context-index hooks.
+ * If context-index module is not available or fails, the bundle step is skipped
+ * silently — it does not break existing behavior.
+ */
 export async function writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, extras = {}, context = defaultTokenContext("system")) {
   const workspaceFiles = goalWorkspaceFiles(goal);
   const appendTranscript = extras.append_transcript === true;
@@ -52,5 +60,39 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
     const zipPath = `${workspaceFiles.attachments_dir}/${name}`;
     await workspaceUploadBundleBase64(store, config, { path: zipPath, zip_base64: bundle.zip_base64, overwrite: true, extract: true, target_dir: `${workspaceFiles.attachments_dir}/${name.replace(/\.zip$/i, "")}`, sha256_expected: bundle.sha256, workspace_id: goal.workspace_id }, context);
   }
+
+  // ---------------------------------------------------------------
+  // P0.5: Attempt to build context bundle via context-index hooks.
+  // This is best-effort — failures are logged but do not propagate.
+  // ---------------------------------------------------------------
+  try {
+    const { maybeBuildContextBundle } = await import("./context-index/context-index-hooks.mjs");
+    const bundleResult = await maybeBuildContextBundle(
+      store, config, goal, conversation, task, workspaceFiles, context
+    );
+    if (bundleResult.ok && bundleResult.bundle) {
+      await writeWorkspaceTextInternal(
+        store, config, goal.workspace_id,
+        workspaceFiles.context_bundle_md,
+        bundleResult.bundle,
+        context
+      );
+      if (bundleResult.retrievalJson) {
+        await writeWorkspaceTextInternal(
+          store, config, goal.workspace_id,
+          workspaceFiles.context_retrieval_json,
+          JSON.stringify(bundleResult.retrievalJson, null, 2),
+          context
+        );
+      }
+    } else if (bundleResult.warning) {
+      console.warn("[context-index] bundle build skipped:", bundleResult.warning);
+    }
+  } catch (err) {
+    // Context-index is optional; if the module or any dep is missing,
+    // or if bundle generation itself fails, log a warning and continue.
+    console.warn("[context-index] bundle build unavailable or failed:", err.message);
+  }
+
   return workspaceFiles;
 }
