@@ -304,3 +304,77 @@ test("12. runtime_env_fix_plan returns expected structure", async () => {
     delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
   }
 });
+
+
+
+test("13. recovery_file tools exist and respond", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full" });
+    // Just verify the tools exist in the tool list
+    const names = await toolList(server);
+    assert.ok(names.includes("recovery_file_read"), "recovery_file_read should exist");
+    assert.ok(names.includes("recovery_file_write"), "recovery_file_write should exist");
+    assert.ok(names.includes("recovery_apply_patch"), "recovery_apply_patch should exist");
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("14. recovery_command_runner returns error for unknown command", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full" });
+    const response = await callTool(server, "recovery_command_runner", { command: "nonexistent_cmd" });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, false);
+    assert.ok(result.error.includes("Unknown command") || result.error.includes("unknown"));
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("15. recovery_safe_restart dry_run returns marker_id and dry_run status", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full" });
+    const response = await callTool(server, "recovery_safe_restart", { dry_run: true });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.status, "dry_run");
+    assert.ok(result.marker_id);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("16. recovery_state_patch validates patch_type", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full" });
+    const response = await callTool(server, "recovery_state_patch", { patch_type: "invalid_type" });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, false);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("17. recovery_apply_patch returns error for invalid target", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full" });
+    const response = await callTool(server, "recovery_apply_patch", { target_file: "/nonexistent/path", patch_content: "dummy" });
+    // Should return an error (either MCP-level or application-level)
+    if (response.error) {
+      assert.ok(response.error.message.includes("outside allowed") || response.error.message.includes("not found"));
+    } else {
+      const result = response.result.structuredContent;
+      assert.equal(result.ok, false);
+    }
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
