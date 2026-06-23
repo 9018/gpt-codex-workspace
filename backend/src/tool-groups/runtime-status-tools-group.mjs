@@ -1,6 +1,6 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, withCache } from "../diagnostics-service.mjs";
+import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, reconcilePendingRestartMarkers, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
 import { scanPendingRestartMarkersSync, scanPendingRestartMarkers, getPendingRestartsDir } from "../safe-restart.mjs";
@@ -85,7 +85,9 @@ export function createRuntimeStatusToolsGroup({
           } catch (e) {}
         }
 
-        const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
+        // Auto-verify pending restart markers where expected_commit matches running_commit
+try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.defaultRepoPath); } catch {}
+const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
 
         const queueCounts = await collectWorkerQueueCounts(store);
         return {

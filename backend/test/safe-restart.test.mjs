@@ -2407,3 +2407,182 @@ test("P4.2q: scheduleServiceRestart with matching result.json commit uses result
   assert.equal(marker.result_json_commit_rejected, undefined,
     "marker should not have result_json_commit_rejected when commit matches HEAD");
 });
+
+// ================================================================
+// P4.5: reconcilePendingRestartMarkers auto-verification
+// ================================================================
+
+import { reconcilePendingRestartMarkers } from "../src/diagnostics-restart-markers.mjs";
+import { collectRestartMarkerStatus } from "../src/diagnostics-restart-markers.mjs";
+import { invalidateCache } from "../src/diagnostics-cache.mjs";
+
+test("P4.5: pending marker with matching expected_commit is auto-verified", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p45-match-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+  const headCommit = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  // Create a pending restart marker with matching expected_commit
+  await writePendingRestartMarker(workspaceRoot, "task_p45_match_1", {
+    expected_commit: headCommit,
+    repo_path: repoPath,
+  });
+
+  // Verify marker is pending before reconciliation
+  const preMarker = await loadRestartMarker(workspaceRoot, "task_p45_match_1");
+  assert.equal(preMarker.status, "pending");
+
+  // Run auto-verification
+  const result = await reconcilePendingRestartMarkers(workspaceRoot, repoPath);
+
+  assert.equal(result.verified, 1, "should have verified 1 marker");
+  assert.equal(result.skipped, 0, "should have skipped 0 markers");
+  assert.equal(result.active_after, 0, "should have 0 active markers after");
+
+  // Verify marker is now verified with pre_verified_pending
+  const postMarker = await loadRestartMarker(workspaceRoot, "task_p45_match_1");
+  assert.equal(postMarker.status, "verified");
+  assert.equal(postMarker.pre_verified_pending, true);
+  assert.equal(postMarker.running_commit, headCommit);
+  assert.ok(postMarker.verified_at);
+
+  // Verify collectRestartMarkerStatus now shows 0 active
+  invalidateCache();
+  const statusAfter = await collectRestartMarkerStatus(workspaceRoot);
+  assert.equal(statusAfter.active_count, 0, "active_count should be 0 after auto-verification");
+});
+
+test("P4.5: pending marker with mismatched expected_commit is NOT auto-verified", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p45-mismatch-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+
+  // Create a pending restart marker with WRONG expected_commit
+  await writePendingRestartMarker(workspaceRoot, "task_p45_mismatch_1", {
+    expected_commit: "0000000000000000000000000000000000000000",
+    repo_path: repoPath,
+  });
+
+  // Verify marker is pending before reconciliation
+  const preMarker = await loadRestartMarker(workspaceRoot, "task_p45_mismatch_1");
+  assert.equal(preMarker.status, "pending");
+
+  // Run auto-verification
+  const result = await reconcilePendingRestartMarkers(workspaceRoot, repoPath);
+
+  assert.equal(result.verified, 0, "should have verified 0 markers");
+  assert.equal(result.skipped, 1, "should have skipped 1 marker");
+  assert.equal(result.active_after, 1, "should still have 1 active marker");
+
+  // Verify marker is STILL pending (not verified)
+  const postMarker = await loadRestartMarker(workspaceRoot, "task_p45_mismatch_1");
+  assert.equal(postMarker.status, "pending", "marker should remain pending when expected_commit mismatches");
+  assert.equal(postMarker.pre_verified_pending, undefined);
+});
+
+test("P4.5: reconcilePendingRestartMarkers is a no-op when no markers exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p45-clean-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const result = await reconcilePendingRestartMarkers(workspaceRoot);
+  assert.equal(result.verified, 0);
+  assert.equal(result.skipped, 0);
+  assert.equal(result.active_after, 0);
+});
+
+test("P4.5: reconcilePendingRestartMarkers handles missing repoDir gracefully", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p45-norepo-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  // Create a pending marker
+  await writePendingRestartMarker(workspaceRoot, "task_p45_norepo_1", {
+    expected_commit: "abc123",
+  });
+
+  // Run without repoDir — should skip (no running_commit available)
+  const result = await reconcilePendingRestartMarkers(workspaceRoot, null);
+  assert.equal(result.verified, 0, "should not verify without repoDir");
+  assert.equal(result.skipped, 1, "should skip marker without running_commit");
+
+  // Marker should remain pending
+  const marker = await loadRestartMarker(workspaceRoot, "task_p45_norepo_1");
+  assert.equal(marker.status, "pending");
+});
+
+test("P4.5: runtime_status triggers auto-verification via runtime_status handler", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-p45-rtstatus-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoPath = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoPath, { recursive: true });
+
+  // Init git repo with a commit
+  execSync("git init", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.email test@test.com", { cwd: repoPath, timeout: 5000 });
+  execSync("git config user.name Test", { cwd: repoPath, timeout: 5000 });
+  execSync("git commit --allow-empty -m init", { cwd: repoPath, timeout: 5000 });
+  const headCommit = execSync("git rev-parse HEAD", {
+    cwd: repoPath, timeout: 5000, encoding: "utf8"
+  }).trim();
+
+  // Create a pending marker with matching expected_commit
+  await writePendingRestartMarker(workspaceRoot, "task_p45_rtstatus_1", {
+    expected_commit: headCommit,
+    repo_path: repoPath,
+  });
+
+  // Verify pending before
+  assert.equal((await loadRestartMarker(workspaceRoot, "task_p45_rtstatus_1")).status, "pending");
+
+  // Create a server that will auto-verify via runtime_status
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: repoPath,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+
+  // Call runtime_status (should trigger auto-verification)
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: { name: "runtime_status", arguments: {} }
+  }, { authorization: "Bearer test-token" });
+
+  assert.equal(response.error, undefined);
+  const result = response.result.structuredContent;
+
+  // Verify marker was auto-verified
+  const postMarker = await loadRestartMarker(workspaceRoot, "task_p45_rtstatus_1");
+  assert.equal(postMarker.status, "verified", "runtime_status should auto-verify matching markers");
+  assert.equal(postMarker.pre_verified_pending, true);
+
+  // Verify restart_markers active_count is 0
+  assert.equal(result.restart_markers.active_count, 0, "runtime_status should report 0 active markers after auto-verification");
+
+  // Verify expected_commit_matches field
+  // expected_commit_matches is null because the marker was already auto-verified (becomes inactive)
+  assert.equal(result.expected_commit_matches, null, "expected_commit_matches should be null after auto-verification (no active markers)");
+});

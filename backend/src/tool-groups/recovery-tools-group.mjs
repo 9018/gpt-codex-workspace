@@ -42,7 +42,7 @@ import { getRepoLockSummary, listRepoLocks } from "../repo-lock.mjs";
 import { forceReleaseRepoLock } from "../repo-lock-lifecycle.mjs";
 import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
-import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart } from "../safe-restart.mjs";
+import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 
 // ---------------------------------------------------------------------------
@@ -748,11 +748,47 @@ export function createRecoveryToolsGroup({
         } else { patchResult = { ok: false, error: "Task not found: " + target_id }; }
       }
 
-      // Restart marker cleanup
+      // Restart marker cleanup — auto-verify pending markers where expected_commit matches running commit
       if (patch_type === "restart_marker_cleanup") {
-        before = { marker_count: (await scanPendingRestartMarkers(config.defaultWorkspaceRoot)).length };
-        patchResult = { ok: true, info: "Restart marker cleanup must be done via filesystem (rm .gptwork/pending-restarts/*.json)" };
-        after = { instruction: "Manual: rm .gptwork/pending-restarts/*.json" };
+        const allMarkers = await scanPendingRestartMarkers(config.defaultWorkspaceRoot);
+        const activeMarkers = target_id
+          ? allMarkers.filter(m => m.task_id === target_id && ["pending","scheduled","restarted"].includes(m.status))
+          : allMarkers.filter(m => ["pending","scheduled","restarted"].includes(m.status));
+        const repoDir = config.defaultRepoPath;
+        let runningCommit = null;
+        if (repoDir) {
+          try {
+            runningCommit = execSync("git rev-parse HEAD", { cwd: repoDir, timeout: 5000, encoding: "utf8" }).trim();
+          } catch {}
+        }
+        const markerResults = [];
+        let verifiedCount = 0;
+        let skippedCount = 0;
+        for (const m of activeMarkers) {
+          const commitMatches = runningCommit && m.expected_commit && runningCommit === m.expected_commit;
+          if (commitMatches) {
+            markerResults.push({ task_id: m.task_id, action: "verify", expected_commit: m.expected_commit });
+            if (isApply) {
+              await updateRestartMarkerStatus(config.defaultWorkspaceRoot, m.task_id, "verified", {
+                verified_at: new Date().toISOString(),
+                running_commit: runningCommit,
+                pre_verified_pending: true,
+              });
+            }
+            verifiedCount++;
+          } else {
+            markerResults.push({ task_id: m.task_id, action: "skip", reason: runningCommit ? "expected_commit mismatch" : "no running_commit" });
+            skippedCount++;
+          }
+        }
+        before = { marker_count: allMarkers.length, active_marker_count: activeMarkers.length };
+        patchResult = { ok: true, verified_count: verifiedCount, skipped_count: skippedCount };
+        after = {
+          running_commit: runningCommit,
+          markers: markerResults,
+          total_verified: verifiedCount,
+          total_skipped: skippedCount,
+        };
       }
 
       if (patchResult.ok && isApply) {
