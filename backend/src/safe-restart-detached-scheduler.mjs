@@ -59,12 +59,13 @@ export function scheduleDetachedRestart(options = {}) {
       mkdirSync(logDir, { recursive: true });
 
       const logFile = join(logDir, "gptwork-npm-restart.log");
+      const oldPid = process.pid;
 
       let cmd;
       if (existsSync(scriptPath)) {
-        cmd = `nohup bash "${scriptPath}" --cwd "${cwd}" --log "${logFile}" >/dev/null 2>&1 &`;
+        cmd = `nohup bash "${scriptPath}" --cwd "${cwd}" --pid ${oldPid} --log "${logFile}" >/dev/null 2>&1 &`;
       } else {
-        cmd = `cd "${cwd}" && nohup ${command} >> "${logFile}" 2>&1 &`;
+        cmd = `(sleep 3 && kill ${oldPid} 2>/dev/null; sleep 1; cd "${cwd}" && nohup ${command} >> "${logFile}" 2>&1 &) >/dev/null 2>&1 &`;
       }
 
       try {
@@ -80,6 +81,7 @@ export function scheduleDetachedRestart(options = {}) {
           scheduled: true,
           output: `npm restart scheduled (cwd: ${cwd}, log: ${logFile})`,
           restart_mode: mode,
+          old_pid: oldPid,
         };
       } catch (e) {
         return {
@@ -88,6 +90,7 @@ export function scheduleDetachedRestart(options = {}) {
           scheduled: false,
           error: `Cannot schedule npm restart: ${e.message}`,
           restart_mode: mode,
+          old_pid: oldPid,
         };
       }
     }

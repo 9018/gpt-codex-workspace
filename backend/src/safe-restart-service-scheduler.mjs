@@ -217,6 +217,7 @@ export async function scheduleServiceRestart(options = {}) {
     service_name: serviceName,
     restart_scheduled: restart.scheduled,
     restart_method: restart.method,
+    old_pid: restart.old_pid || null,
     restart_mode: restart.restart_mode || (restartConfig ? restartConfig.mode : "npm"),
     restart_marker_kind: restartConfig ? restartConfig.markerKind : "npm",
     expected_commit: resolvedCommit,
