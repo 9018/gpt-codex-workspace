@@ -25,6 +25,8 @@ export function createRetentionToolsGroup({ tool, schema, store, config }) {
     modes: ["standard", "operator", "full"],
     audience: ["chatgpt", "operator"],
     tags: ["system", "maintenance", "retention"],
+    outputTemplate: "ui://widget/gptwork-card-v2.html",
+    resourceUri: "ui://widget/gptwork-card-v2.html",
   };
 
   const wsRoot = config.defaultWorkspaceRoot;

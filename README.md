@@ -117,9 +117,7 @@ The canonical repo is at `/home/a9017/mcp/workspace/gpt-codex-workspace`, with g
 
 ```bash
 cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend
-cp systemd/gptwork-mcp.service ~/.config/systemd/user/
-systemctl --user daemon-reload
-systemctl --user enable --now gptwork-mcp.service
+npm run start
 ```
 
 The `.gptwork/runtime.env` file in the workspace root configures all GPTWORK_* variables.
@@ -410,12 +408,25 @@ gpt-codex-workspace/                    - Backend code repo (canonical)
 
 ## Deploy
 
+### Default (npm-managed)
+
+```bash
+cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend
+npm run start
+```
+
+The process runs in the foreground. Use a process manager (systemd, supervisor, tmux, etc.) for background persistence.
+
+### Legacy: systemd (optional)
+
 ```bash
 cd backend
 cp systemd/gptwork-mcp.service ~/.config/systemd/user/
 systemctl --user daemon-reload
 systemctl --user enable --now gptwork-mcp.service
 ```
+
+> Note: systemd is **not** the default restart strategy. The npm restart protocol (`schedule_service_restart`) uses `restart_mode=npm`. If using systemd, ensure the safe-restart protocol accounts for the different restart mechanism.
 
 ## Tests
 
@@ -476,7 +487,7 @@ The server reads `result.json` first when present, falling back to the existing 
 ### Problem
 
 `gptwork-mcp.service` runs the worker that updates task state. If a task directly runs
-`systemctl --user restart gptwork-mcp.service` before writing a durable checkpoint, the
+a direct inline restart (e.g., killing the process or `systemctl restart`) before writing a durable checkpoint, the
 worker can be killed before it records the final task result. The replacement process cannot
 resume the old in-memory promise or child-process handle.
 
@@ -494,7 +505,7 @@ Self-restarts use a two-phase marker protocol instead of direct inline restarts:
 
 | Tool | Description |
 |---|---|
-| `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached restart of `gptwork-mcp.service`. Use this instead of direct inline `systemctl --user restart gptwork-mcp.service`. |
+| `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached npm restart using `restart_mode=npm`. Use this instead of a direct inline restart (e.g., killing the process or running `systemctl restart`). |
 | `list_pending_restarts()` | Lists pending restart markers waiting for startup verification. |
 
 ### Minimal Safety Net

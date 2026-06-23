@@ -774,3 +774,24 @@ test("SDK-10: resources/read tool card widgetDomain includes all queue tools", a
   assert.equal(callRes.result.structuredContent?.gptwork_tool, "list_goal_queue");
   assert.ok(callRes.result.content?.[0]?.text, "list_goal_queue must remain callable");
 });
+
+test("SDK-11: retention tools expose tool card _meta with outputTemplate/resourceUri", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/list");
+  const tools = res.result.tools;
+
+  const retentionStatus = tools.find(t => t.name === "retention_status");
+  const retentionCleanup = tools.find(t => t.name === "retention_cleanup");
+
+  assert.ok(retentionStatus, "retention_status must be in tools/list");
+  assert.ok(retentionCleanup, "retention_cleanup must be in tools/list");
+
+  assert.deepEqual(retentionStatus._meta, {
+    ui: { resourceUri: TOOL_CARD_URI },
+    "openai/outputTemplate": TOOL_CARD_URI,
+  }, "retention_status must have tool card _meta");
+  assert.deepEqual(retentionCleanup._meta, {
+    ui: { resourceUri: TOOL_CARD_URI },
+    "openai/outputTemplate": TOOL_CARD_URI,
+  }, "retention_cleanup must have tool card _meta");
+});
