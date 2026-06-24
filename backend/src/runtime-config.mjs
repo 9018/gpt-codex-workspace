@@ -114,6 +114,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     defaultBranch: _get("GPTWORK_DEFAULT_BRANCH", "main"),
     defaultRepoPath: _get("GPTWORK_DEFAULT_REPO_PATH", ""),
     defaultRemote: _get("GPTWORK_DEFAULT_REMOTE", "origin"),
+    enableTaskWorktrees: _getBool("GPTWORK_ENABLE_TASK_WORKTREES", true),
 
     // Bark
     barkEnabled: _get("GPTWORK_BARK_ENABLED", ""),
@@ -200,6 +201,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     defaultBranch: "GPTWORK_DEFAULT_BRANCH",
     defaultRepoPath: "GPTWORK_DEFAULT_REPO_PATH",
     defaultRemote: "GPTWORK_DEFAULT_REMOTE",
+    enableTaskWorktrees: "GPTWORK_ENABLE_TASK_WORKTREES",
     barkEnabled: "GPTWORK_BARK_ENABLED",
     barkUrl: "GPTWORK_BARK_URL",
     barkKey: "GPTWORK_BARK_KEY",

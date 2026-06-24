@@ -1,6 +1,7 @@
 import { buildCodexPrompt } from "./codex-prompt-builder.mjs";
 import { fireHeartbeat, initRun } from "./codex-run-metadata.mjs";
 import { writeTaskPromptFile } from "./gptwork-tmp.mjs";
+import { updateRepoLock } from "./repo-lock.mjs";
 
 export async function prepareCodexTaskRun({
   task,
@@ -8,6 +9,8 @@ export async function prepareCodexTaskRun({
   workspaceFiles,
   workspaceRoot,
   config,
+  repoLockPath = null,
+  updateRepoLockFn = updateRepoLock,
 }) {
   const { fullPrompt } = buildCodexPrompt({
     task,
@@ -36,6 +39,11 @@ export async function prepareCodexTaskRun({
     });
     runFilePath = initResult.runFilePath;
     runId = initResult.runId;
+    if (repoLockPath && runId) {
+      try {
+        await updateRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id, { run_id: runId });
+      } catch {}
+    }
     let promptBytes = 0;
     try { const { stat } = await import("node:fs/promises"); promptBytes = (await stat(promptFile)).size; } catch {}
     fireHeartbeat(runFilePath, "running_codex", {

@@ -89,3 +89,40 @@ test('executeCodexTaskRun falls back to stdout after separator when parsed summa
 
   assert.equal(result.summary, '='.repeat(60) + '\nfinal summary');
 });
+
+test('executeCodexTaskRun uses task worktree cwd and writes child pid to repo lock', async () => {
+  const calls = [];
+  const result = await executeCodexTaskRun({
+    config: { defaultWorkspaceRoot: '/workspace', codexExecArgs: '', codexExecTimeout: 5 },
+    workspaceRoot: '/workspace',
+    executionCwd: '/workspace/worktrees/repo/task_1',
+    task: { id: 'task_1' },
+    goal: { id: 'goal_1' },
+    promptFile: '/tmp/prompt.txt',
+    runFilePath: '/runs/run.json',
+    runId: 'run_1',
+    repoLockPath: '/canonical/repo',
+    updateRepoLockFn: async (workspaceRoot, repoPath, taskId, fields) => {
+      calls.push({ type: 'lock', workspaceRoot, repoPath, taskId, fields });
+    },
+    runLocalShellFn: async (cmd, cwd, timeout, maxBuffer, onPid) => {
+      calls.push({ type: 'shell', cmd, cwd, timeout, maxBuffer });
+      onPid(4321);
+      return { stdout: 'STATUS=completed\nSUMMARY=ok', stderr: '', returncode: 0 };
+    },
+    parseCodexResultFn: async () => ({ status: 'completed', summary: 'ok', structured: true }),
+    writeRunLogsFn: async () => {},
+    fireHeartbeatFn: () => {},
+    updateRunHeartbeatFn: async () => {},
+  });
+
+  assert.equal(result.summary, 'ok');
+  assert.equal(calls.find((call) => call.type === 'shell').cwd, '/workspace/worktrees/repo/task_1');
+  assert.deepEqual(calls.find((call) => call.type === 'lock'), {
+    type: 'lock',
+    workspaceRoot: '/workspace',
+    repoPath: '/canonical/repo',
+    taskId: 'task_1',
+    fields: { child_pid: 4321 },
+  });
+});

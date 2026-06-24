@@ -51,6 +51,18 @@ export async function processGeneralTask(store, config, task, context, github) {
   }
   const resolvedRepo = await resolveTaskRepository({ task, goal, config, registry: config.registry || null });
   const repoLockPath = resolvedRepo.lock_repo_path || config.defaultRepoPath;
+  const executionCwd = resolvedRepo.worktree_lifecycle?.ok === true
+    ? resolvedRepo.task_worktree_path
+    : workspace.root;
+  if (resolvedRepo.worktree_lifecycle?.ok === false) {
+    const failMsg = `[worker] failed to prepare task worktree: ${resolvedRepo.worktree_lifecycle.error || "unknown worktree error"}`;
+    await updateTask(store, task.id, (item) => {
+      item.status = "failed";
+      item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
+      item.logs.push({ time: new Date().toISOString(), message: failMsg });
+    });
+    return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
+  }
   if (repoLockPath) {
     const lockResult = await acquireRepoLock(config.defaultWorkspaceRoot, repoLockPath, {
       taskId: task.id,
@@ -93,6 +105,7 @@ export async function processGeneralTask(store, config, task, context, github) {
       workspaceFiles,
       workspaceRoot: workspace.root,
       config,
+      repoLockPath,
     });
     promptFile = prepResult.promptFile;
     runFilePath = prepResult.runFilePath;
@@ -140,6 +153,8 @@ export async function processGeneralTask(store, config, task, context, github) {
       promptFile,
       runFilePath,
       runId,
+      repoLockPath,
+      executionCwd,
     }));
   } catch (e) {
     summary = "[ERROR] " + e.message;
@@ -204,7 +219,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     }
   }
 
-  if (resolvedRepo.worktree_lifecycle?.git_worktree_created !== true) {
+  if (resolvedRepo.worktree_lifecycle?.mode !== "git_worktree" || resolvedRepo.worktree_lifecycle?.ok !== true) {
     acceptanceFindings.push({
       severity: "followup",
       code: "git_worktree_lifecycle_metadata_only",
@@ -252,6 +267,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     context,
     runFilePath,
     repoLockPath,
+    resolvedRepo,
     github,
     appendGoalMessageFn: appendGoalMessage,
   });

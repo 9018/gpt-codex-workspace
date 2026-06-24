@@ -434,6 +434,8 @@ test("goal-queue: cancel running queue item fails gracefully", async () => {
 
 test("goal-queue: startNextQueuedGoal creates task via createGoalTask (non-dry-run)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-test13-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
   const store = await makeStore(dir);
 
   const goalId = "goal_create_task_test";
@@ -474,7 +476,7 @@ test("goal-queue: startNextQueuedGoal creates task via createGoalTask (non-dry-r
 
   // Attempt non-dry-run start
   const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
-  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const config = { defaultRepoPath: repo, defaultWorkspaceRoot: dir };
 
   const result = await startNextQueuedGoal(store, config, { dry_run: false });
 
@@ -671,6 +673,8 @@ test("P1 dependency_policy: terminal_any allows failed dep", async () => {
 
 test("P1 transient blocked: repo lock unblocked on recheck", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-p1-trans-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
   const store = await makeStore(dir);
 
   addGoal(store, "goal_trans_a", "Transient A", "open");
@@ -696,7 +700,7 @@ test("P1 transient blocked: repo lock unblocked on recheck", async () => {
   // Now call startNextQueuedGoal — the recheck should find the transient
   // blocked item, see that repo lock is no longer active, worktree is clean,
   // and move it back to waiting/ready (and potentially start it)
-  const config = { defaultRepoPath: dir, defaultWorkspaceRoot: dir };
+  const config = { defaultRepoPath: repo, defaultWorkspaceRoot: dir };
   const result = await startNextQueuedGoal(store, config, { dry_run: true });
 
   // After recheck, the item should be out of blocked status
@@ -838,4 +842,62 @@ test("goal-queue: repo resolver falls back to default repo path when repo_id is 
   assert.equal(result.checks.find((check) => check.check === "worktree_dirty").repo_path, defaultRepo);
   await store.load();
   assert.equal(store.state.goal_queue[0].status, "blocked");
+});
+
+test("goal-queue: git status failure blocks fail-closed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-status-fail-"));
+  const nonRepo = join(dir, "not-a-git-repo");
+  await mkdir(nonRepo, { recursive: true });
+
+  const store = await makeStore(dir);
+  addGoal(store, "goal_status_fail", "Status failure", "open");
+  addGoalToQueue(store, "queue_status_fail", "goal_status_fail", 1, "waiting");
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const result = await startNextQueuedGoal(store, {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: nonRepo,
+  }, { dry_run: false });
+
+  assert.equal(result.started, false);
+  const dirtyCheck = result.checks.find((check) => check.check === "worktree_dirty");
+  assert.equal(dirtyCheck.passed, false);
+  assert.equal(dirtyCheck.status, "error");
+  assert.match(result.reason, /Worktree status unknown|git status/i);
+
+  await store.load();
+  assert.equal(store.state.goal_queue[0].status, "blocked");
+  assert.match(store.state.goal_queue[0].blocked_reason, /Worktree status unknown/);
+});
+
+test("goal-queue: blocked dirty/unknown item only auto-recovers after fail-closed check becomes clean", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-recheck-clean-"));
+  const repo = join(dir, "repo");
+
+  const store = await makeStore(dir);
+  addGoal(store, "goal_recheck_unknown", "Recheck unknown", "open");
+  addGoalToQueue(store, "queue_recheck_unknown", "goal_recheck_unknown", 1, "blocked", {
+    blocked_reason: "Worktree status unknown: git status failed",
+  });
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+
+  let result = await startNextQueuedGoal(store, {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: repo,
+  }, { dry_run: true });
+  await store.load();
+  assert.equal(store.state.goal_queue[0].status, "blocked", "unknown status must remain blocked before repo is clean/checkable");
+  assert.equal(result.started, false);
+
+  await initGitRepo(repo);
+  result = await startNextQueuedGoal(store, {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: repo,
+  }, { dry_run: true });
+  await store.load();
+  assert.notEqual(store.state.goal_queue[0].status, "blocked", "clean repo and no lock should recover transient block");
+  assert.match(result.reason, /Dry run/);
 });

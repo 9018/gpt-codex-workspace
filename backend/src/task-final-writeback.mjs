@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
+import { removeTaskWorktree } from "./task-worktree-manager.mjs";
 import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
@@ -22,6 +23,7 @@ export async function finalizeCodexTaskRun({
   context,
   runFilePath,
   repoLockPath,
+  resolvedRepo = null,
   github,
   appendGoalMessageFn,
   fireHeartbeatFn = fireHeartbeat,
@@ -67,6 +69,15 @@ export async function finalizeCodexTaskRun({
     if (!keptForRestart) {
       await releaseRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id);
     }
+  }
+
+  if (resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {
+    await removeTaskWorktree(task.id, {
+      workspaceRoot: config.defaultWorkspaceRoot,
+      repoId: resolvedRepo.repo_id,
+      canonicalRepoPath: resolvedRepo.canonical_repo_path,
+      worktreePath: resolvedRepo.task_worktree_path,
+    }).catch(() => {});
   }
 
   if (goal) {

@@ -109,10 +109,14 @@ function checkWorktreeDirty(repoPath) {
       maxBuffer: 1024 * 1024,
       timeout: 10000,
     });
-    return stdout.trim().split("\n").filter(Boolean);
+    const dirty_paths = stdout.trim().split("\n").filter(Boolean);
+    return { status: dirty_paths.length > 0 ? "dirty" : "clean", dirty_paths, error: null };
   } catch (err) {
-    // If not a git repo or other error, treat as clean (not dirty)
-    return [];
+    return {
+      status: "error",
+      dirty_paths: [],
+      error: String(err?.stderr || err?.message || "git status failed").trim(),
+    };
   }
 }
 
@@ -303,7 +307,7 @@ async function resolveQueueItemRepository(item, config) {
 
 async function recheckTransientBlockedItems(state, config, workspaceRoot) {
   const items = ensureQueueArray(state);
-  const TRANSIENT_PATTERNS = ["repo lock", "repo locked", "worktree dirty", "dirty worktree"];
+  const TRANSIENT_PATTERNS = ["repo lock", "repo locked", "worktree dirty", "dirty worktree", "worktree status unknown", "git status failed"];
   let changed = 0;
 
   for (const item of items) {
@@ -332,13 +336,8 @@ async function recheckTransientBlockedItems(state, config, workspaceRoot) {
     if (activeLocks > 0) continue;
 
     // Re-check worktree
-    let dirtyFiles = [];
-    try {
-      dirtyFiles = checkWorktreeDirty(repoPath);
-    } catch {
-      dirtyFiles = ["(unable to check)"];
-    }
-    if (dirtyFiles.length > 0 && dirtyFiles[0] !== "") continue;
+    const worktreeStatus = checkWorktreeDirty(repoPath);
+    if (worktreeStatus.status !== "clean") continue;
 
     // All transient conditions resolved — move back to waiting
     item.status = QUEUE_STATUS_WAITING;
@@ -387,13 +386,22 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     const repoPath = resolvedRepo.lock_repo_path || resolvedRepo.canonical_repo_path;
     checks.push({
       check: "repo_resolution",
-      passed: Boolean(repoPath),
+      passed: Boolean(repoPath) && resolvedRepo.worktree_lifecycle?.ok !== false,
       repo_id: resolvedRepo.repo_id,
       repo_path: repoPath,
       worktree_path: resolvedRepo.task_worktree_path || null,
       worktree_lifecycle: resolvedRepo.worktree_lifecycle || null,
-      detail: resolvedRepo.uses_default_fallback ? "default repo fallback" : "resolved repo",
+      detail: resolvedRepo.worktree_lifecycle?.ok === false
+        ? `worktree error: ${resolvedRepo.worktree_lifecycle.error || "unknown"}`
+        : resolvedRepo.uses_default_fallback ? "default repo fallback" : "resolved repo",
     });
+    if (resolvedRepo.worktree_lifecycle?.ok === false) {
+      candidate.blocked_reason = `Worktree status unknown: ${resolvedRepo.worktree_lifecycle.error || "worktree preparation failed"}`;
+      candidate.status = QUEUE_STATUS_BLOCKED;
+      candidate.updated_at = now();
+      if (!dryRun) await store.save();
+      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
+    }
 
     // 2. Repo lock check
     let activeLocks = 0;
@@ -413,16 +421,24 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     }
 
     // 3. Worktree dirty check
-    let dirtyFiles = [];
-    try {
-      dirtyFiles = checkWorktreeDirty(repoPath);
-    } catch {
-      dirtyFiles = ["(unable to check)"];
-    }
-    const isDirty = dirtyFiles.length > 0 && dirtyFiles[0] !== "";
-    checks.push({ check: "worktree_dirty", passed: !isDirty, repo_path: repoPath, detail: isDirty ? `Dirty files: ${dirtyFiles.join(", ")}` : "clean" });
-    if (isDirty) {
-      candidate.blocked_reason = `Worktree dirty (${dirtyFiles.length} file(s))`;
+    const worktreeStatus = checkWorktreeDirty(repoPath);
+    const isDirty = worktreeStatus.status === "dirty";
+    const isUnknown = worktreeStatus.status !== "clean" && !isDirty;
+    checks.push({
+      check: "worktree_dirty",
+      passed: worktreeStatus.status === "clean",
+      status: worktreeStatus.status,
+      repo_path: repoPath,
+      detail: isDirty
+        ? `Dirty files: ${worktreeStatus.dirty_paths.join(", ")}`
+        : isUnknown
+          ? `git status failed: ${worktreeStatus.error || "unknown error"}`
+          : "clean",
+    });
+    if (isDirty || isUnknown) {
+      candidate.blocked_reason = isDirty
+        ? `Worktree dirty (${worktreeStatus.dirty_paths.length} file(s))`
+        : `Worktree status unknown: ${worktreeStatus.error || "git status failed"}`;
       candidate.status = QUEUE_STATUS_BLOCKED;
       candidate.updated_at = now();
       if (!dryRun) await store.save();

@@ -28,7 +28,7 @@ test('resolveTaskRepository uses explicit task repo_id and returns worktree meta
   assert.equal(resolved.uses_default_fallback, false);
   assert.equal(resolved.worktree_lifecycle.mode, 'metadata_only');
   assert.equal(resolved.worktree_lifecycle.git_worktree_created, false);
-  assert.equal(resolved.task_worktree_path, join(workspaceRoot, 'worktrees/github.com/acme/target/task_123'));
+  assert.equal(resolved.task_worktree_path, join(workspaceRoot, 'worktrees/github.com-acme-target/task_123'));
 });
 
 test('resolveTaskRepository falls back to default repo path for single-repo tasks', async () => {
@@ -62,4 +62,3 @@ test('resolveTaskRepository can use a single registered repo when repo_id is abs
   assert.equal(resolved.canonical_repo_path, '/repos/single');
   assert.equal(resolved.uses_default_fallback, false);
 });
-

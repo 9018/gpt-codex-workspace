@@ -1,4 +1,4 @@
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getLockFilePath, getLocksDir, safeRepoId } from "./repo-lock-paths.mjs";
@@ -49,35 +49,21 @@ export async function acquireRepoLock(workspaceRoot, repoPath, opts = {}) {
     status: "held"
   };
 
-  try {
-    await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
-    return { acquired: true, lock: lockData };
-  } catch (err) {
-    if (err?.code !== "EEXIST") throw err;
-  }
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
+      return { acquired: true, lock: lockData };
+    } catch (err) {
+      if (err?.code !== "EEXIST") throw err;
+    }
 
-  // Existing lock path won the atomic create race. Inspect it without ever
-  // treating read-before-write as the acquisition protocol.
-  let existingLock = null;
-  try {
-    existingLock = JSON.parse(await readFile(lockPath, "utf8"));
-  } catch {
-    return {
-      acquired: false,
-      heldByTask: null,
-      heldByRunId: null,
-      reason: "Repo lock exists but could not be read"
-    };
-  }
+    const existingLock = await readLockFile(lockPath);
+    if (!existingLock) {
+      return { acquired: false, heldByTask: null, heldByRunId: null, reason: "Repo lock exists but could not be read" };
+    }
 
-  if (existingLock) {
-    // Check if lock is still valid
-    if (existingLock.status === "released") {
-      // Previous lock was released, can overwrite
-    } else if (existingLock.status === "held") {
-      // Lock is active — check if it's the same task (re-entrant)
+    if (existingLock.status === "held") {
       if (existingLock.task_id === taskId) {
-        // Same task re-acquiring — update heartbeat and return acquired
         existingLock.last_heartbeat_at = now;
         existingLock.pid = pid ?? existingLock.pid;
         existingLock.child_pid = childPid ?? existingLock.child_pid;
@@ -85,20 +71,54 @@ export async function acquireRepoLock(workspaceRoot, repoPath, opts = {}) {
         await writeFile(lockPath, JSON.stringify(existingLock, null, 2) + "\n", "utf8");
         return { acquired: true, lock: existingLock };
       }
-      // Lock held by another task
-      return {
-        acquired: false,
-        heldByTask: existingLock.task_id,
-        heldByRunId: existingLock.run_id,
-        reason: `Repo lock held by task ${existingLock.task_id}`
-      };
-    } else if (existingLock.status === "stale") {
-      // Stale lock can be overwritten (handled below)
+      return { acquired: false, heldByTask: existingLock.task_id, heldByRunId: existingLock.run_id, reason: `Repo lock held by task ${existingLock.task_id}` };
     }
+
+    if (existingLock.status === "released" || existingLock.status === "stale") {
+      const archived = await archiveInactiveLock(lockPath, existingLock.status);
+      if (archived) continue;
+    }
+
+    return { acquired: false, heldByTask: existingLock.task_id || null, heldByRunId: existingLock.run_id || null, reason: `Repo lock status ${existingLock.status || "unknown"} is not acquirable` };
   }
 
+  return { acquired: false, heldByTask: null, heldByRunId: null, reason: "Repo lock contention while acquiring" };
+}
+
+async function readLockFile(lockPath) {
+  try {
+    return JSON.parse(await readFile(lockPath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function archiveInactiveLock(lockPath, status) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const archivePath = `${lockPath}.${status}.${stamp}.${process.pid}.audit`;
+  try {
+    await rename(lockPath, archivePath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function updateRepoLock(workspaceRoot, repoPath, taskId, fields = {}) {
+  if (!workspaceRoot || !repoPath || !taskId) return { updated: false, reason: "missing required arguments" };
+  const lockPath = getLockFilePath(workspaceRoot, repoPath);
+  const lockData = await readLockFile(lockPath);
+  if (!lockData) return { updated: false, reason: "lock file not found or unreadable" };
+  if (lockData.task_id !== taskId) return { updated: false, reason: `lock held by different task ${lockData.task_id}` };
+  if (lockData.status === "released") return { updated: false, reason: "lock already released" };
+
+  const allowed = new Set(["run_id", "child_pid", "pid", "restart_state", "mode"]);
+  for (const [key, value] of Object.entries(fields || {})) {
+    if (allowed.has(key)) lockData[key] = value;
+  }
+  lockData.last_heartbeat_at = new Date().toISOString();
   await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", "utf8");
-  return { acquired: true, lock: lockData };
+  return { updated: true, lock: lockData };
 }
 
 /**

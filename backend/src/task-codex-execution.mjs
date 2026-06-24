@@ -1,5 +1,6 @@
 import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, createThrottledHeartbeat, removeThrottledHeartbeat, getStdoutLogPath, getStderrLogPath } from "./codex-run-metadata.mjs";
 import { parseCodexResultWithFallback } from "./codex-result-parser.mjs";
+import { updateRepoLock } from "./repo-lock.mjs";
 import { runLocalShell } from "./workspace-service.mjs";
 
 const RESULT_SEPARATOR = "=".repeat(60);
@@ -9,14 +10,17 @@ export async function executeCodexTaskRun({
   workspaceRoot,
   task,
   goal,
+  executionCwd = null,
   promptFile,
   runFilePath = null,
   runId = null,
+  repoLockPath = null,
   runLocalShellFn = runLocalShell,
   parseCodexResultFn = parseCodexResultWithFallback,
   writeRunLogsFn = writeRunLogs,
   fireHeartbeatFn = fireHeartbeat,
   updateRunHeartbeatFn = updateRunHeartbeat,
+  updateRepoLockFn = updateRepoLock,
 }) {
   let summary = "";
   let parsedResult = null;
@@ -36,7 +40,11 @@ export async function executeCodexTaskRun({
   }
   const hasStreamingLogs = Boolean(streamOpts.streamStdoutPath || streamOpts.streamStderrPath);
 
-  cr = await runLocalShellFn(cmd, workspaceRoot, config.codexExecTimeout, 1000000, (pid) => {
+  const cwd = executionCwd || workspaceRoot;
+  cr = await runLocalShellFn(cmd, cwd, config.codexExecTimeout, 1000000, (pid) => {
+    if (repoLockPath) {
+      updateRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id, { child_pid: pid }).catch(() => {});
+    }
     if (throttledHb) {
       throttledHb("running_codex", { codex_child_pid: pid });
     } else {

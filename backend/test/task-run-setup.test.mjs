@@ -37,3 +37,32 @@ test('prepareCodexTaskRun writes prompt and initializes running heartbeat metada
   assert.equal(runData.first_output_timeout_seconds, 77);
   assert.ok(runData.prompt_bytes > 0);
 });
+
+test('prepareCodexTaskRun writes run id back to repo lock immediately', async (t) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'gptwork-task-run-lock-'));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const calls = [];
+  const task = { id: 'task_lock_setup', title: 'Setup task', description: 'Prepare run', workspace_id: 'ws_1' };
+  const result = await prepareCodexTaskRun({
+    task,
+    goal: null,
+    workspaceFiles: null,
+    workspaceRoot,
+    repoLockPath: '/canonical/repo',
+    updateRepoLockFn: async (root, repoPath, taskId, fields) => calls.push({ root, repoPath, taskId, fields }),
+    config: {
+      defaultWorkspaceRoot: workspaceRoot,
+      defaultRepoPath: workspaceRoot,
+      codexFirstOutputTimeout: 77,
+    },
+  });
+
+  assert.ok(result.runId);
+  assert.deepEqual(calls, [{
+    root: workspaceRoot,
+    repoPath: '/canonical/repo',
+    taskId: 'task_lock_setup',
+    fields: { run_id: result.runId },
+  }]);
+});

@@ -13,6 +13,7 @@ export {
   releaseRepoLock,
   forceReleaseRepoLock,
   releaseLockForTask,
+  updateRepoLock,
 } from "./repo-lock-lifecycle.mjs";
 
 export {
