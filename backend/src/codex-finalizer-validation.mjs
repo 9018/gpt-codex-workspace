@@ -40,6 +40,18 @@ export function validateFinalizerResult(result) {
     errors.push('followups must be an array');
   }
 
+  if (result.reviewer_decision !== undefined && result.reviewer_decision !== null && typeof result.reviewer_decision !== 'object') {
+    errors.push('reviewer_decision must be an object or null');
+  }
+
+  if (result.acceptance_findings !== undefined && !Array.isArray(result.acceptance_findings)) {
+    errors.push('acceptance_findings must be an array');
+  }
+
+  if (result.next_tasks !== undefined && !Array.isArray(result.next_tasks)) {
+    errors.push('next_tasks must be an array');
+  }
+
   if (result.completed_at !== undefined && result.completed_at !== null && typeof result.completed_at !== 'string') {
     errors.push('completed_at must be a string or null');
   }

@@ -140,6 +140,7 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
     workspaceRoot: config.defaultWorkspaceRoot,
   });
   await registry.load().catch(function() {});
+  config.registry = registry;
   const eventLogger = createEventLogger({ workspaceRoot: config.defaultWorkspaceRoot });
   const hookBus = createHookBus();
   hookBus.on("onAgentRunCompleted", async ({ agent_run }) => {
@@ -171,6 +172,10 @@ setTerminalNotifier(notifyTerminalTaskIfNeeded);
 
     getDefaultWorkspaceRoot() {
       return config.defaultWorkspaceRoot;
+    },
+
+    getStoreForTests() {
+      return store;
     },
 
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {

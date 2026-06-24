@@ -3,6 +3,14 @@ import { KIND_EXECUTED, KIND_FAILED, KIND_TIMEOUT } from "./codex-finalizer-cont
 /** Max chars of raw output to include in no-op diagnostics. */
 const DIAGNOSTIC_EXCERPT_MAX = 2000;
 
+function acceptanceFields(parsed = {}) {
+  return {
+    reviewer_decision: parsed.reviewer_decision || null,
+    acceptance_findings: Array.isArray(parsed.acceptance_findings) ? parsed.acceptance_findings : [],
+    next_tasks: Array.isArray(parsed.next_tasks) ? parsed.next_tasks : [],
+  };
+}
+
 /**
  * Build a standardized task result from parsed Codex output.
  *
@@ -75,6 +83,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       changed_files: parsed.changed_files || [],
       warnings: parsed.warnings || [],
       followups: parsed.followups || [],
+      ...acceptanceFields(parsed),
       diagnostics: cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
       completed_at: now,
     };
@@ -93,6 +102,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       remote_head: parsed.remote_head,
       warnings: parsed.warnings || [],
       followups: parsed.followups || [],
+      ...acceptanceFields(parsed),
       completed_at: now,
       timed_out: false,
     };
@@ -126,6 +136,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       remote_head: parsed.remote_head,
       warnings,
       followups: parsed.followups || [],
+      ...acceptanceFields(parsed),
       completed_at: now,
       noop: isNoop || undefined,
     };
@@ -144,6 +155,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       remote_head: parsed.remote_head,
       warnings: parsed.warnings || [],
       followups: parsed.followups || [],
+      ...acceptanceFields(parsed),
       diagnostics: cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
       completed_at: now,
       timed_out: false,
@@ -193,6 +205,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     remote_head: parsed.remote_head,
     warnings,
     followups: parsed.followups || [],
+    ...acceptanceFields(parsed),
     completed_at: now,
     noop: isNoop || undefined,
   };

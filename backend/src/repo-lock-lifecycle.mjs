@@ -33,15 +33,42 @@ export async function acquireRepoLock(workspaceRoot, repoPath, opts = {}) {
   await mkdir(lockDir, { recursive: true });
   const lockPath = getLockFilePath(workspaceRoot, repoPath);
 
-  // Read existing lock if any
+  const now = new Date().toISOString();
+
+  const lockData = {
+    canonical_repo_path: repoPath,
+    safe_repo_id: safeRepoId(repoPath),
+    task_id: taskId,
+    run_id: runId || null,
+    pid: pid || process.pid || null,
+    child_pid: childPid || null,
+    acquired_at: now,
+    last_heartbeat_at: now,
+    mode: mode || "builder",
+    restart_state: null,
+    status: "held"
+  };
+
+  try {
+    await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", { encoding: "utf8", flag: "wx" });
+    return { acquired: true, lock: lockData };
+  } catch (err) {
+    if (err?.code !== "EEXIST") throw err;
+  }
+
+  // Existing lock path won the atomic create race. Inspect it without ever
+  // treating read-before-write as the acquisition protocol.
   let existingLock = null;
   try {
     existingLock = JSON.parse(await readFile(lockPath, "utf8"));
   } catch {
-    // No existing lock, safe to acquire
+    return {
+      acquired: false,
+      heldByTask: null,
+      heldByRunId: null,
+      reason: "Repo lock exists but could not be read"
+    };
   }
-
-  const now = new Date().toISOString();
 
   if (existingLock) {
     // Check if lock is still valid
@@ -69,21 +96,6 @@ export async function acquireRepoLock(workspaceRoot, repoPath, opts = {}) {
       // Stale lock can be overwritten (handled below)
     }
   }
-
-  // Acquire new lock
-  const lockData = {
-    canonical_repo_path: repoPath,
-    safe_repo_id: safeRepoId(repoPath),
-    task_id: taskId,
-    run_id: runId || null,
-    pid: pid || process.pid || null,
-    child_pid: childPid || null,
-    acquired_at: now,
-    last_heartbeat_at: now,
-    mode: mode || "builder",
-    restart_state: null,
-    status: "held"
-  };
 
   await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", "utf8");
   return { acquired: true, lock: lockData };

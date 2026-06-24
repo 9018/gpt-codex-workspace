@@ -9,6 +9,8 @@ import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
 import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle, validateResultContract, DIAGNOSIS_CODES } from "./task-result-status.mjs";
 import { updateTask } from "./task-lifecycle.mjs";
 import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
+import { resolveTaskRepository } from "./task-repo-resolution.mjs";
+import { buildReviewerDecision } from "./acceptance-policy.mjs";
 
 export async function processGeneralTask(store, config, task, context, github) {
   const now = new Date().toISOString();
@@ -47,7 +49,8 @@ export async function processGeneralTask(store, config, task, context, github) {
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
-  const repoLockPath = config.defaultRepoPath;
+  const resolvedRepo = await resolveTaskRepository({ task, goal, config, registry: config.registry || null });
+  const repoLockPath = resolvedRepo.lock_repo_path || config.defaultRepoPath;
   if (repoLockPath) {
     const lockResult = await acquireRepoLock(config.defaultWorkspaceRoot, repoLockPath, {
       taskId: task.id,
@@ -164,6 +167,15 @@ export async function processGeneralTask(store, config, task, context, github) {
         ...(timedOut ? { timed_out: true, timeout_seconds: cr?.no_first_output_timeout ? cr?.first_output_timeout_seconds : config.codexExecTimeout } : { timed_out: false })
       };
 
+  taskResult.repo_resolution = {
+    repo_id: resolvedRepo.repo_id,
+    canonical_repo_path: resolvedRepo.canonical_repo_path,
+    lock_repo_path: resolvedRepo.lock_repo_path,
+    task_worktree_path: resolvedRepo.task_worktree_path,
+    uses_default_fallback: resolvedRepo.uses_default_fallback,
+    worktree_lifecycle: resolvedRepo.worktree_lifecycle,
+  };
+
   const doneAt = new Date().toISOString();
   let taskStatus = deriveTaskStatusFromTaskResult(taskResult);
   taskStatus = applyAutonomyValidation(taskStatus, taskResult, goal, parsedResult);
@@ -178,14 +190,51 @@ export async function processGeneralTask(store, config, task, context, github) {
   });
 
   // P0: result contract validation — escalate to review on contract violation
+  const acceptanceFindings = Array.isArray(parsedResult?.acceptance_findings) ? [...parsedResult.acceptance_findings] : [];
   if (taskStatus === "completed" && parsedResult) {
-    const contractValidation = validateResultContract(parsedResult, { repoPath: config.defaultRepoPath || config.defaultWorkspaceRoot });
+    const contractValidation = validateResultContract(parsedResult, { repoPath: resolvedRepo.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot });
     if (!contractValidation.valid) {
       taskStatus = "waiting_for_review";
       const diagnosisMsg = "Contract violation: " + contractValidation.diagnosis_codes.join(", ");
       taskResult.warnings = taskResult.warnings || [];
       taskResult.warnings.push(diagnosisMsg);
+      for (const code of contractValidation.diagnosis_codes) {
+        acceptanceFindings.push({ severity: "major", code, message: diagnosisMsg, source: "result_contract" });
+      }
     }
+  }
+
+  if (resolvedRepo.worktree_lifecycle?.git_worktree_created !== true) {
+    acceptanceFindings.push({
+      severity: "followup",
+      code: "git_worktree_lifecycle_metadata_only",
+      message: "Task repo resolution records a future worktree path, but git worktree add/remove lifecycle is not enabled yet.",
+      source: "worktree_reliability_policy",
+    });
+  }
+
+  if (taskStatus === "failed" || taskStatus === "timed_out") {
+    acceptanceFindings.push({
+      severity: "blocker",
+      code: `codex_${taskStatus}`,
+      message: taskResult.summary || `Codex task ended with status ${taskStatus}`,
+      source: "acceptance_agent",
+    });
+  }
+
+  const reviewer = buildReviewerDecision({
+    result: { status: taskStatus, summary: taskResult.summary },
+    findings: acceptanceFindings,
+    needs_gpt_review: taskStatus === "waiting_for_review",
+    review_reason: taskStatus === "waiting_for_review" ? "result_contract_or_operational_guard" : null,
+  });
+  taskResult.reviewer_decision = parsedResult?.reviewer_decision || reviewer.decision;
+  taskResult.acceptance_findings = acceptanceFindings;
+  taskResult.next_tasks = Array.isArray(parsedResult?.next_tasks) && parsedResult.next_tasks.length > 0
+    ? parsedResult.next_tasks
+    : reviewer.next_tasks;
+  if (reviewer.decision.repair_proposals.length > 0) {
+    taskResult.repair_proposals = reviewer.decision.repair_proposals;
   }
 
   return finalizeCodexTaskRun({

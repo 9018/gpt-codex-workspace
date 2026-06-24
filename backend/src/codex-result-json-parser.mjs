@@ -19,6 +19,9 @@ export async function parseResultJson(resultJsonPath) {
     const remoteHead = typeof data.remote_head === "string" ? data.remote_head : null;
     const warnings = Array.isArray(data.warnings) ? data.warnings.filter(w => typeof w === "string") : [];
     const followups = Array.isArray(data.followups) ? data.followups.filter(f => typeof f === "string") : [];
+    const reviewerDecision = data.reviewer_decision && typeof data.reviewer_decision === "object" ? data.reviewer_decision : null;
+    const acceptanceFindings = Array.isArray(data.acceptance_findings) ? data.acceptance_findings.filter(f => f && typeof f === "object") : [];
+    const nextTasks = Array.isArray(data.next_tasks) ? data.next_tasks.filter(t => t && typeof t === "object") : [];
 
     if (!status) return null;
 
@@ -40,6 +43,9 @@ export async function parseResultJson(resultJsonPath) {
       remote_head: remoteHead,
       warnings,
       followups,
+      reviewer_decision: reviewerDecision,
+      acceptance_findings: acceptanceFindings,
+      next_tasks: nextTasks,
       subagents_used: subagentsUsed,
       subagents,
       gpt_questions_used: gptQuestionsUsed,

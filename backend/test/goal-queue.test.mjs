@@ -17,11 +17,21 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { StateStore } from "../src/state-store.mjs";
+
+async function initGitRepo(dir) {
+  await mkdir(dir, { recursive: true });
+  execFileSync("git", ["init"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), "initial\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+}
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_BIN = resolve(TEST_DIR, "../bin/gptwork.mjs");
@@ -768,4 +778,64 @@ test("P1 dependency_policy: field is persisted on queue item", async () => {
   });
   assert.equal(updResult.ok, true);
   assert.equal(updResult.item.dependency_policy, "terminal_any", "update should change policy");
+});
+
+test("goal-queue: dirty check uses queue item repo_id canonical path", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-repoid-dirty-"));
+  const defaultRepo = join(dir, "default-repo");
+  const targetRepo = join(dir, "target-repo");
+  await initGitRepo(defaultRepo);
+  await initGitRepo(targetRepo);
+  await writeFile(join(targetRepo, "dirty.txt"), "dirty\n", "utf8");
+
+  const store = await makeStore(dir);
+  addGoal(store, "goal_repoid_dirty", "Repo ID dirty check", "open");
+  addGoalToQueue(store, "queue_repoid_dirty", "goal_repoid_dirty", 1, "waiting", {
+    repo_id: "github.com/acme/target",
+  });
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const config = {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: defaultRepo,
+    repoResolver: async (taskLike) => ({
+      repo_id: taskLike.repo_id,
+      canonical_repo_path: targetRepo,
+      task_worktree_path: join(dir, "worktrees", taskLike.repo_id, taskLike.task_id || taskLike.goal_id),
+      uses_default_fallback: false,
+      worktree_lifecycle: { mode: "metadata_only", git_worktree_created: false },
+    }),
+  };
+
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+  assert.equal(result.started, false);
+  assert.equal(result.item.queue_id, "queue_repoid_dirty");
+  assert.equal(result.checks.find((check) => check.check === "worktree_dirty").repo_path, targetRepo);
+
+  await store.load();
+  const item = store.state.goal_queue.find((candidate) => candidate.queue_id === "queue_repoid_dirty");
+  assert.equal(item.status, "blocked");
+  assert.match(item.blocked_reason, /Worktree dirty/);
+});
+
+test("goal-queue: repo resolver falls back to default repo path when repo_id is absent", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-default-fallback-"));
+  const defaultRepo = join(dir, "default-repo");
+  await initGitRepo(defaultRepo);
+  await writeFile(join(defaultRepo, "dirty.txt"), "dirty\n", "utf8");
+
+  const store = await makeStore(dir);
+  addGoal(store, "goal_default_dirty", "Default repo dirty check", "open");
+  addGoalToQueue(store, "queue_default_dirty", "goal_default_dirty", 1, "waiting");
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const config = { defaultWorkspaceRoot: dir, defaultRepoPath: defaultRepo };
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+
+  assert.equal(result.started, false);
+  assert.equal(result.checks.find((check) => check.check === "worktree_dirty").repo_path, defaultRepo);
+  await store.load();
+  assert.equal(store.state.goal_queue[0].status, "blocked");
 });

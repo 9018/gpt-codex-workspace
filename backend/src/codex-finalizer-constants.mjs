@@ -28,6 +28,9 @@ export const RESULT_FIELDS = [
   'remote_head',
   'warnings',
   'followups',
+  'reviewer_decision',
+  'acceptance_findings',
+  'next_tasks',
   'completed_at',
 ];
 

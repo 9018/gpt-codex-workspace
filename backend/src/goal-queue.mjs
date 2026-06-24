@@ -17,6 +17,7 @@
 
 import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
+import { resolveTaskRepository } from "./task-repo-resolution.mjs";
 
 // ---------------------------------------------------------------------------
 // Queue item status constants
@@ -82,11 +83,15 @@ function findDependentItems(state, completedGoalId, completedTaskId) {
  * Check if a repo lock is active (held by a non-released lock).
  * Uses the existing repo-lock-diagnostics module.
  */
-async function getActiveRepoLocks(workspaceRoot) {
+async function getActiveRepoLocks(workspaceRoot, repoPath = null) {
   try {
-    const { getRepoLockSummary } = await import("./repo-lock-diagnostics.mjs");
-    const summary = await getRepoLockSummary(workspaceRoot);
-    return summary.active_repo_locks || 0;
+    const { getRepoLockSummary, listRepoLocks } = await import("./repo-lock-diagnostics.mjs");
+    if (!repoPath) {
+      const summary = await getRepoLockSummary(workspaceRoot);
+      return summary.active_repo_locks || 0;
+    }
+    const locks = await listRepoLocks(workspaceRoot);
+    return locks.filter((lock) => lock.canonical_repo_path === repoPath && lock.status !== "released").length;
   } catch {
     return 0;
   }
@@ -271,7 +276,32 @@ export
  * move them back to waiting if conditions have resolved.
  * Items blocked by dependency unmet are NOT auto-recovered.
  */
-async function recheckTransientBlockedItems(state, repoPath, workspaceRoot) {
+async function resolveQueueItemRepository(item, config) {
+  if (typeof config.repoResolver === "function") {
+    const resolved = await config.repoResolver({
+      id: item.task_id || item.goal_id,
+      task_id: item.task_id,
+      goal_id: item.goal_id,
+      repo_id: item.repo_id || "",
+    });
+    return {
+      repo_id: resolved.repo_id || item.repo_id || "default",
+      canonical_repo_path: resolved.canonical_repo_path || resolved.lock_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot,
+      lock_repo_path: resolved.lock_repo_path || resolved.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot,
+      task_worktree_path: resolved.task_worktree_path || null,
+      uses_default_fallback: resolved.uses_default_fallback === true,
+      worktree_lifecycle: resolved.worktree_lifecycle || null,
+    };
+  }
+  return resolveTaskRepository({
+    task: { id: item.task_id || item.goal_id, repo_id: item.repo_id || "" },
+    goal: { id: item.goal_id, repo_id: item.repo_id || "" },
+    config,
+    registry: config.registry || null,
+  });
+}
+
+async function recheckTransientBlockedItems(state, config, workspaceRoot) {
   const items = ensureQueueArray(state);
   const TRANSIENT_PATTERNS = ["repo lock", "repo locked", "worktree dirty", "dirty worktree"];
   let changed = 0;
@@ -289,10 +319,13 @@ async function recheckTransientBlockedItems(state, repoPath, workspaceRoot) {
     const depResult = isDependencySatisfied(state, item);
     if (!depResult.satisfied) continue;
 
+    const resolvedRepo = await resolveQueueItemRepository(item, config);
+    const repoPath = resolvedRepo.lock_repo_path || resolvedRepo.canonical_repo_path;
+
     // Re-check repo lock
     let activeLocks = 0;
     try {
-      activeLocks = await getActiveRepoLocks(workspaceRoot);
+      activeLocks = await getActiveRepoLocks(workspaceRoot, repoPath);
     } catch {
       // non-fatal
     }
@@ -320,10 +353,9 @@ async function recheckTransientBlockedItems(state, repoPath, workspaceRoot) {
 export async function startNextQueuedGoal(store, config, opts = {}) {
   const dryRun = opts.dry_run === true;
   const state = await store.load();
-  const repoPath = config.defaultRepoPath || config.defaultWorkspaceRoot;
   const workspaceRoot = config.defaultWorkspaceRoot;
   // Re-check transiently blocked items before scanning eligible items
-  await recheckTransientBlockedItems(state, repoPath, workspaceRoot);
+  await recheckTransientBlockedItems(state, config, workspaceRoot);
   const items = ensureQueueArray(state);
 
   // Sort by position
@@ -351,21 +383,33 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
       continue;
     }
 
+    const resolvedRepo = await resolveQueueItemRepository(candidate, config);
+    const repoPath = resolvedRepo.lock_repo_path || resolvedRepo.canonical_repo_path;
+    checks.push({
+      check: "repo_resolution",
+      passed: Boolean(repoPath),
+      repo_id: resolvedRepo.repo_id,
+      repo_path: repoPath,
+      worktree_path: resolvedRepo.task_worktree_path || null,
+      worktree_lifecycle: resolvedRepo.worktree_lifecycle || null,
+      detail: resolvedRepo.uses_default_fallback ? "default repo fallback" : "resolved repo",
+    });
+
     // 2. Repo lock check
     let activeLocks = 0;
     try {
-      activeLocks = await getActiveRepoLocks(workspaceRoot);
+      activeLocks = await getActiveRepoLocks(workspaceRoot, repoPath);
     } catch {
       // non-fatal
     }
     const repoLocked = activeLocks > 0;
-    checks.push({ check: "repo_lock", passed: !repoLocked, detail: repoLocked ? `Active locks: ${activeLocks}` : "no active lock" });
+    checks.push({ check: "repo_lock", passed: !repoLocked, repo_path: repoPath, detail: repoLocked ? `Active locks: ${activeLocks}` : "no active lock" });
     if (repoLocked) {
       candidate.blocked_reason = `Repo locked (${activeLocks} active lock(s))`;
       candidate.status = QUEUE_STATUS_BLOCKED;
       candidate.updated_at = now();
       if (!dryRun) await store.save();
-      continue;
+      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
     }
 
     // 3. Worktree dirty check
@@ -376,13 +420,13 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
       dirtyFiles = ["(unable to check)"];
     }
     const isDirty = dirtyFiles.length > 0 && dirtyFiles[0] !== "";
-    checks.push({ check: "worktree_dirty", passed: !isDirty, detail: isDirty ? `Dirty files: ${dirtyFiles.join(", ")}` : "clean" });
+    checks.push({ check: "worktree_dirty", passed: !isDirty, repo_path: repoPath, detail: isDirty ? `Dirty files: ${dirtyFiles.join(", ")}` : "clean" });
     if (isDirty) {
       candidate.blocked_reason = `Worktree dirty (${dirtyFiles.length} file(s))`;
       candidate.status = QUEUE_STATUS_BLOCKED;
       candidate.updated_at = now();
       if (!dryRun) await store.save();
-      continue;
+      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
     }
 
     // All checks passed — this item is eligible

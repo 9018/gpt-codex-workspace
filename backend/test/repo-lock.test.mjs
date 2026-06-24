@@ -168,6 +168,26 @@ test("acquireRepoLock blocks second task for same repo", async () => {
   assert.match(second.reason, /task_001/);
 });
 
+test("acquireRepoLock is atomic under concurrent acquisition", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-atomic-"));
+  const repoPath = "/test/repo-atomic";
+
+  const attempts = await Promise.all(
+    Array.from({ length: 16 }, (_, i) => acquireRepoLock(root, repoPath, {
+      taskId: `task_atomic_${i}`,
+      mode: "builder",
+    }))
+  );
+
+  const acquired = attempts.filter((result) => result.acquired);
+  const blocked = attempts.filter((result) => !result.acquired);
+  assert.equal(acquired.length, 1, "only one concurrent acquire should win");
+  assert.equal(blocked.length, 15, "all other concurrent acquires should be blocked");
+
+  const onDisk = JSON.parse(await readFile(getLockFilePath(root, repoPath), "utf8"));
+  assert.equal(onDisk.task_id, acquired[0].lock.task_id);
+});
+
 test("acquireRepoLock allows different repos concurrently", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-lock-diff-"));
   const repo1 = "/repo/alpha";
@@ -742,6 +762,59 @@ test("waiting_for_lock task does not trigger Bark waiting_for_review notificatio
 
   const listResult = await callTool(server, "list_repo_locks", {});
   assert.ok(Array.isArray(listResult.locks), "list_repo_locks should return locks array");
+});
+
+test("task processor locks resolved repo_id canonical path instead of default repo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-repoid-"));
+  const workspaceRoot = join(root, "workspace");
+  const defaultRepo = join(root, "default-repo");
+  const targetRepo = join(root, "target-repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(defaultRepo, { recursive: true });
+  await mkdir(targetRepo, { recursive: true });
+
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: defaultRepo,
+    codexHome: root,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=repoid\\nTESTS=passed 1/1')"`,
+    codexExecTimeout: 5,
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "full"
+  });
+
+  await callTool(server, "register_repository", {
+    remote_url: "https://github.com/acme/target.git",
+    canonical_path: targetRepo,
+  });
+  const lockAcquire = await acquireRepoLock(workspaceRoot, targetRepo, {
+    taskId: "task_target_holder",
+    mode: "builder",
+  });
+  assert.equal(lockAcquire.acquired, true);
+
+  const created = await callTool(server, "create_task", {
+    title: "Repo id task",
+    description: "Should lock target repo",
+    mode: "builder",
+  });
+  const store = server.getStoreForTests ? server.getStoreForTests() : null;
+  assert.ok(store, "server should expose test store");
+  await store.load();
+  const task = store.state.tasks.find((candidate) => candidate.id === created.task.id);
+  task.repo_id = "github.com/acme/target";
+  await store.save();
+  await callTool(server, "assign_task_to_codex", { task_id: created.task.id });
+
+  const run = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 1 });
+  const result = run.tasks.find((candidate) => candidate.task_id === created.task.id);
+  assert.equal(result.status, "waiting_for_lock");
+  assert.match(result.reason, /repo locked/);
+
+  const updated = await callTool(server, "get_task", { task_id: created.task.id });
+  assert.equal(updated.task.lock_blocked_by, "task_target_holder");
 });
 
 test("repo_lock_status and list_repo_locks still report locks correctly with waiting_for_lock tasks", async () => {

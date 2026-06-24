@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
@@ -307,6 +307,29 @@ test("parseResultJson parses valid result.json", async () => {
   assert.equal(result.from_json, true);
 });
 
+test("parseResultJson extracts reviewer decision acceptance findings and next tasks", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "result-json-acceptance-"));
+  const jsonPath = join(dir, "result.json");
+  await writeFile(jsonPath, JSON.stringify({
+    status: "completed",
+    summary: "done",
+    changed_files: ["a.js"],
+    tests: "passed",
+    commit: "abc",
+    remote_head: "def",
+    warnings: [],
+    followups: [],
+    reviewer_decision: { status: "accepted", passed: true },
+    acceptance_findings: [{ severity: "minor", code: "docs", message: "docs later" }],
+    next_tasks: [{ priority: "P1", title: "Docs followup" }],
+  }), "utf8");
+
+  const result = await parseResultJson(jsonPath);
+  assert.deepEqual(result.reviewer_decision, { status: "accepted", passed: true });
+  assert.equal(result.acceptance_findings[0].severity, "minor");
+  assert.equal(result.next_tasks[0].priority, "P1");
+});
+
 test("parseResultJson returns null for invalid status", async () => {
   const dir = join(tmpdir(), "gptwork-test-" + randomUUID());
   await mkdir(dir, { recursive: true });
@@ -436,6 +459,29 @@ test("buildTaskResult propagates warnings and followups from JSON result", () =>
   assert.deepEqual(result.warnings, ["Warning 1", "Warning 2"]);
   assert.deepEqual(result.followups, ["Follow up 1"]);
   assert.equal(result.from_json, true);
+});
+
+test("buildTaskResult propagates acceptance agent fields", () => {
+  const parsed = {
+    status: "completed",
+    summary: "Done",
+    structured: true,
+    from_json: true,
+    changed_files: ["a.js"],
+    tests: "passed",
+    commit: "abc",
+    remote_head: "def",
+    warnings: [],
+    followups: [],
+    reviewer_decision: { status: "accepted", passed: true },
+    acceptance_findings: [{ severity: "followup", code: "later", message: "later" }],
+    next_tasks: [{ priority: "P2", title: "Later" }],
+  };
+
+  const result = buildTaskResult(parsed);
+  assert.deepEqual(result.reviewer_decision, parsed.reviewer_decision);
+  assert.deepEqual(result.acceptance_findings, parsed.acceptance_findings);
+  assert.deepEqual(result.next_tasks, parsed.next_tasks);
 });
 
 test("buildTaskResult with failure includes warnings and followups", () => {

@@ -48,6 +48,9 @@ test('RESULT_FIELDS contains expected contract fields', () => {
     'remote_head',
     'warnings',
     'followups',
+    'reviewer_decision',
+    'acceptance_findings',
+    'next_tasks',
     'completed_at',
   ]);
 });
@@ -344,6 +347,9 @@ test('validateFinalizerResult rejects wrong types', () => {
     remote_head: ['not-a-string'],
     warnings: 'not-array',
     followups: 'not-array',
+    reviewer_decision: 'not-object',
+    acceptance_findings: 'not-array',
+    next_tasks: 'not-array',
     completed_at: 0,
   };
   const { valid, errors } = validateFinalizerResult(result);

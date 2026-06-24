@@ -103,6 +103,9 @@ export async function finalizeCodexTaskRun({
         remote_head: taskResult.remote_head || null,
         warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
         followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+        reviewer_decision: taskResult.reviewer_decision || null,
+        acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
+        next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
       };
       await writeFile(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
     } catch {}

@@ -11,6 +11,9 @@ export function createSuccessResult(fields = {}) {
     remote_head: fields.remote_head || null,
     warnings: Array.isArray(fields.warnings) ? fields.warnings : [],
     followups: Array.isArray(fields.followups) ? fields.followups : [],
+    reviewer_decision: fields.reviewer_decision || null,
+    acceptance_findings: Array.isArray(fields.acceptance_findings) ? fields.acceptance_findings : [],
+    next_tasks: Array.isArray(fields.next_tasks) ? fields.next_tasks : [],
     completed_at: fields.completed_at || new Date().toISOString(),
   };
 }
@@ -40,6 +43,9 @@ export function createNoopResult(fields = {}) {
     remote_head: null,
     warnings: Array.isArray(fields.warnings) ? fields.warnings : [],
     followups: Array.isArray(fields.followups) ? fields.followups : [],
+    reviewer_decision: fields.reviewer_decision || null,
+    acceptance_findings: Array.isArray(fields.acceptance_findings) ? fields.acceptance_findings : [],
+    next_tasks: Array.isArray(fields.next_tasks) ? fields.next_tasks : [],
     completed_at: fields.completed_at || new Date().toISOString(),
     noop: true,
   };
@@ -70,6 +76,9 @@ export function createFailedResult(fields = {}) {
     remote_head: fields.remote_head || null,
     warnings: Array.isArray(fields.warnings) ? fields.warnings : [],
     followups: Array.isArray(fields.followups) ? fields.followups : [],
+    reviewer_decision: fields.reviewer_decision || null,
+    acceptance_findings: Array.isArray(fields.acceptance_findings) ? fields.acceptance_findings : [],
+    next_tasks: Array.isArray(fields.next_tasks) ? fields.next_tasks : [],
     completed_at: fields.completed_at || new Date().toISOString(),
     timed_out: false,
   };
@@ -95,6 +104,9 @@ export function createTimeoutResult(fields = {}) {
     changed_files: Array.isArray(fields.changed_files) ? fields.changed_files : [],
     warnings: Array.isArray(fields.warnings) ? fields.warnings : [],
     followups: Array.isArray(fields.followups) ? fields.followups : [],
+    reviewer_decision: fields.reviewer_decision || null,
+    acceptance_findings: Array.isArray(fields.acceptance_findings) ? fields.acceptance_findings : [],
+    next_tasks: Array.isArray(fields.next_tasks) ? fields.next_tasks : [],
     completed_at: fields.completed_at || new Date().toISOString(),
     timed_out: true,
     timeout_seconds: typeof fields.timeoutSeconds === 'number' ? fields.timeoutSeconds : 0,
