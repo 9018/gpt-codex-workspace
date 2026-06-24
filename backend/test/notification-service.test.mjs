@@ -130,6 +130,48 @@ test("notifyCreatedTaskIfNeeded catches errors from barkNotifier.send gracefully
   assert.equal(task.notifications[0].channel, "bark");
 });
 
+test("suppressed Test task does not call barkNotifier.send for created or completed notifications", async () => {
+  let sendCount = 0;
+  const bark = {
+    isEnabled: () => true,
+    getStatus: () => ({ source: "test", group: "gptwork", key_set: true }),
+    send: async () => {
+      sendCount++;
+      return { ok: true, bark_id: "sent" };
+    }
+  };
+  const svc = createNotificationService(bark);
+  const task = { status: "assigned", title: "Test task", mode: "builder", assignee: "codex" };
+
+  await svc.notifyCreatedTaskIfNeeded(task);
+  task.status = "completed";
+  await svc.notifyTerminalTaskIfNeeded(task);
+
+  assert.equal(sendCount, 0);
+  assert.equal(task.notifications, undefined);
+  assert.equal(task.last_notification_policy, "suppressed:test_task");
+});
+
+test("suppressed notification policy does not call barkNotifier.send for waiting_for_review", async () => {
+  let sendCount = 0;
+  const bark = {
+    isEnabled: () => true,
+    getStatus: () => ({ source: "test", group: "gptwork", key_set: true }),
+    send: async () => {
+      sendCount++;
+      return { ok: true, bark_id: "sent" };
+    }
+  };
+  const svc = createNotificationService(bark);
+  const task = { status: "waiting_for_review", title: "Review quiet task", mode: "builder", assignee: "codex", notification_policy: "silent" };
+
+  await svc.notifyTerminalTaskIfNeeded(task);
+
+  assert.equal(sendCount, 0);
+  assert.equal(task.notifications, undefined);
+  assert.equal(task.last_notification_policy, "suppressed:task_policy");
+});
+
 // ================================================================
 // Tests: global notifier pattern (setCreatedTaskNotifier / notifyCreatedTask)
 // ================================================================

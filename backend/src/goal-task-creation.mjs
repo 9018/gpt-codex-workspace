@@ -6,6 +6,15 @@ import { ensureTaskGoal } from "./goal-task-ensure.mjs";
 import { normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 
+function copyNotificationPolicyFields(task, args) {
+  for (const key of ["notify", "silent", "suppress_notifications", "notification_policy"]) {
+    if (args[key] !== undefined) task[key] = args[key];
+  }
+  if (args.metadata && typeof args.metadata === "object" && !Array.isArray(args.metadata)) {
+    task.metadata = { ...args.metadata };
+  }
+}
+
 export async function createTask(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
   const state = await store.load();
@@ -29,6 +38,7 @@ export async function createTask(store, config, args, context = defaultTokenCont
     created_at: now,
     updated_at: now
   };
+  copyNotificationPolicyFields(task, args);
   state.tasks.push(task);
   state.activities.push({ time: now, type: "task.created", task_id: task.id, title: task.title });
   await store.save();

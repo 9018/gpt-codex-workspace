@@ -385,6 +385,82 @@ test("complete_task triggers bark notification for completed task", async (t) =>
   assert.equal(completed.task.status, "completed");
 });
 
+test("Test task created and completed runtime path suppresses ordinary bark notifications", async (t) => {
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", {
+    title: "Test task",
+    description: "Synthetic runtime smoke task",
+    assignee: "codex"
+  });
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Synthetic test finished",
+    admin_override: true
+  });
+
+  assert.equal(fetchCount, 0, "Test task must not call Bark fetch for created or completed notifications");
+  assert.equal(created.task.last_notification_policy, "suppressed:test_task");
+  assert.equal(completed.task.last_notification_policy, "suppressed:test_task");
+});
+
+test("explicit suppress_notifications task suppresses created and completed bark notifications", async (t) => {
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", {
+    title: "Quiet runtime task",
+    description: "Explicitly silent task",
+    assignee: "codex",
+    suppress_notifications: true
+  });
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Quiet task finished",
+    admin_override: true
+  });
+
+  assert.equal(fetchCount, 0, "Explicitly suppressed task must not call Bark fetch");
+  assert.equal(created.task.suppress_notifications, true);
+  assert.equal(created.task.last_notification_policy, "suppressed:task_policy");
+  assert.equal(completed.task.last_notification_policy, "suppressed:task_policy");
+});
+
+test("explicit notify false task suppresses created and completed bark notifications", async (t) => {
+  let fetchCount = 0;
+  t.mock.method(globalThis, "fetch", async () => {
+    fetchCount++;
+    return { ok: true, json: async () => ({ code: 200, message: "sent" }) };
+  });
+  const server = await makeServer({ barkKey: "integration-key" });
+
+  const created = await callTool(server, "create_task", {
+    title: "Notify false runtime task",
+    description: "Explicit notify false task",
+    assignee: "codex",
+    notify: false
+  });
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Notify false task finished",
+    admin_override: true
+  });
+
+  assert.equal(fetchCount, 0, "notify:false task must not call Bark fetch");
+  assert.equal(created.task.notify, false);
+  assert.equal(created.task.last_notification_policy, "suppressed:task_policy");
+  assert.equal(completed.task.last_notification_policy, "suppressed:task_policy");
+});
+
 test("complete_task does not notify bark without key", async (t) => {
   let fetchCount = 0;
   t.mock.method(globalThis, "fetch", async (url) => {

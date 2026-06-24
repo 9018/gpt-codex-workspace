@@ -1,3 +1,50 @@
+const SILENT_NOTIFICATION_POLICIES = new Set(["silent", "suppress", "suppressed", "none", "off", "disabled"]);
+
+function isTruthyFlag(value) {
+  if (value === true) return true;
+  if (typeof value === "string") return ["true", "1", "yes", "on"].includes(value.trim().toLowerCase());
+  return false;
+}
+
+function isFalseFlag(value) {
+  if (value === false) return true;
+  if (typeof value === "string") return ["false", "0", "no", "off"].includes(value.trim().toLowerCase());
+  return false;
+}
+
+function normalizeTitle(title) {
+  return String(title || "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+
+export function classifyTaskNotificationSuppression(task = {}) {
+  const metadata = task.metadata && typeof task.metadata === "object" ? task.metadata : {};
+  const notificationPolicy = task.notification_policy ?? metadata.notification_policy;
+  if (
+    isFalseFlag(task.notify ?? metadata.notify) ||
+    isTruthyFlag(task.silent ?? metadata.silent) ||
+    isTruthyFlag(task.suppress_notifications ?? metadata.suppress_notifications) ||
+    SILENT_NOTIFICATION_POLICIES.has(String(notificationPolicy || "").trim().toLowerCase())
+  ) {
+    return { suppressed: true, reason: "suppressed:task_policy" };
+  }
+
+  const title = normalizeTitle(task.title);
+  const syntheticKinds = ["test", "demo", "diagnostic", "synthetic"];
+  for (const kind of syntheticKinds) {
+    if (
+      title === `${kind} task` ||
+      title.startsWith(`[${kind}]`) ||
+      title.startsWith(`${kind} task:`) ||
+      title.startsWith(`${kind} task -`) ||
+      title.startsWith(`${kind} task `)
+    ) {
+      return { suppressed: true, reason: kind === "test" ? "suppressed:test_task" : "suppressed:synthetic_task" };
+    }
+  }
+
+  return { suppressed: false, reason: "not suppressed" };
+}
+
 export function classifyNotification(task, policy = {}) {
   const notifyTasks = policy.notifyTasks ?? process.env.GPTWORK_BARK_NOTIFY_TASKS !== "false";
   const notifyReadonly = policy.notifyReadonly ?? process.env.GPTWORK_BARK_NOTIFY_READONLY === "true";
@@ -16,6 +63,11 @@ export function classifyNotification(task, policy = {}) {
   const mode = (task.mode || "").toLowerCase();
   const status = (task.status || "").toLowerCase();
   const title = (task.title || "").toLowerCase();
+
+  const suppression = classifyTaskNotificationSuppression(task);
+  if (suppression.suppressed) {
+    return { should_notify: false, reason: suppression.reason };
+  }
 
   // Suppress readonly tasks by default
   if (mode === "readonly" && !notifyReadonly) {
@@ -98,6 +150,11 @@ export function classifyCreatedNotification(task, policy = {}) {
   const mode = (task.mode || "").toLowerCase();
   const status = (task.status || "").toLowerCase();
   const title = (task.title || "").toLowerCase();
+
+  const suppression = classifyTaskNotificationSuppression(task);
+  if (suppression.suppressed) {
+    return { should_notify: false, reason: suppression.reason };
+  }
 
   // Suppress draft tasks
   if (status === "draft") {
