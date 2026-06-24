@@ -7,7 +7,7 @@
  */
 
 import { mkdir, readFile, writeFile, readdir } from "node:fs/promises";
-import { join, basename } from "node:path";
+import { join } from "node:path";
 import { existsSync } from "node:fs";
 
 // ---------------------------------------------------------------------------
@@ -15,6 +15,7 @@ import { existsSync } from "node:fs";
 // ---------------------------------------------------------------------------
 
 const DEFAULT_INDEX_DIR = ".gptwork/context-index";
+const ZVEC_COLLECTION_PATH = ".gptwork/context-index/zvec/goal_context_chunks";
 const CHUNKS_FILE = "chunks.json";
 const VECTORS_FILE = "vectors.json";
 
@@ -65,6 +66,39 @@ function cosineSimilarity(a, b) {
   }
   const denom = Math.sqrt(na) * Math.sqrt(nb);
   return denom === 0 ? 0 : dot / denom;
+}
+
+function normalizeStoreMode(value) {
+  if (value && typeof value === "object" && typeof value.addChunks === "function") return value;
+  const mode = String(value || "auto").trim().toLowerCase();
+  return ["auto", "zvec", "local"].includes(mode) ? mode : "auto";
+}
+
+function assertZvecStatus(status, operation) {
+  const statuses = Array.isArray(status) ? status : [status];
+  const failed = statuses.find((s) => s && s.ok === false);
+  if (failed) {
+    throw new Error(`Zvec ${operation} failed: ${failed.code || "UNKNOWN"} ${failed.message || ""}`.trim());
+  }
+}
+
+function escapeZvecString(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+function buildZvecFilter(filters = {}) {
+  const clauses = [];
+  for (const key of ["goal_id", "workspace_id", "source_type"]) {
+    if (filters[key] !== undefined && filters[key] !== null && filters[key] !== "") {
+      clauses.push(`${key} = "${escapeZvecString(filters[key])}"`);
+    }
+  }
+  return clauses.length > 0 ? clauses.join(" AND ") : undefined;
+}
+
+function metadataValue(metadata, key, fallback = "") {
+  const value = metadata?.[key];
+  return value === undefined || value === null ? fallback : value;
 }
 
 // ---------------------------------------------------------------------------
@@ -253,9 +287,9 @@ export function createLocalStore(options = {}) {
 // ---------------------------------------------------------------------------
 
 /**
- * Try to load zvec and create a zvec-backed store adapter.
+ * Try to load @zvec/zvec and create a collection-backed store adapter.
  *
- * If zvec is not installed or fails to load, returns null so callers
+ * If @zvec/zvec is not installed or fails to load, returns null so callers
  * can fall back to createLocalStore.
  *
  * @param {object} options
@@ -265,39 +299,57 @@ export function createLocalStore(options = {}) {
  */
 export async function tryCreateZvecStore(options = {}) {
   try {
-    const zvec = await import("zvec");
-    if (!zvec || typeof zvec.createIndex !== "function") return null;
+    const importZvec = options.importZvec || (() => import("@zvec/zvec"));
+    const zvec = await importZvec();
+    const {
+      ZVecCollectionSchema,
+      ZVecCreateAndOpen,
+      ZVecDataType,
+      ZVecIndexType,
+      ZVecMetricType,
+    } = zvec || {};
+    if (
+      typeof ZVecCollectionSchema !== "function" ||
+      typeof ZVecCreateAndOpen !== "function" ||
+      !ZVecDataType
+    ) {
+      throw new Error("@zvec/zvec does not expose the expected collection API");
+    }
     // NB: process.cwd() fallback is non-blocking — same reasoning as createLocalStore above.
     // In production, workspaceRoot is always provided from config.defaultWorkspaceRoot.
     const workspaceRoot = options.workspaceRoot || process.cwd();
     const dimension = options.dimension || 64;
-    const indexDir = join(workspaceRoot, DEFAULT_INDEX_DIR);
+    const collectionPath = join(workspaceRoot, ZVEC_COLLECTION_PATH);
+    await mkdir(join(workspaceRoot, DEFAULT_INDEX_DIR, "zvec"), { recursive: true });
 
-    // Zvec integration — using a minimal subset of zvec API
-    // zvec.createIndex(name, options) → index handle
-    // index.add(id, vector, metadata)
-    // index.search(queryVector, topK, filterFn) → results
-
-    // Per-goal indices stored under .gptwork/context-index/zvec/
-    const zvecDir = join(indexDir, "zvec");
-    await mkdir(zvecDir, { recursive: true });
-
-    /** @type {Map<string, any>} */
-    const indices = new Map();
-
-    async function getIndex(goalId) {
-      if (indices.has(goalId)) return indices.get(goalId);
-      const idx = await zvec.createIndex(`goal-${goalId}`, {
+    const schema = new ZVecCollectionSchema({
+      name: "goal_context_chunks",
+      vectors: {
+        name: "embedding",
+        dataType: ZVecDataType.VECTOR_FP32,
         dimension,
-        persistPath: join(zvecDir, `goal-${goalId}`),
-        metric: "cosine",
-      });
-      indices.set(goalId, idx);
-      return idx;
-    }
+        indexParams: ZVecIndexType && ZVecMetricType
+          ? { indexType: ZVecIndexType.FLAT, metricType: ZVecMetricType.COSINE }
+          : undefined,
+      },
+      fields: [
+        { name: "workspace_id", dataType: ZVecDataType.STRING },
+        { name: "goal_id", dataType: ZVecDataType.STRING },
+        { name: "task_id", dataType: ZVecDataType.STRING },
+        { name: "source_type", dataType: ZVecDataType.STRING },
+        { name: "role", dataType: ZVecDataType.STRING, nullable: true },
+        { name: "source_path", dataType: ZVecDataType.STRING, nullable: true },
+        { name: "chunk_index", dataType: ZVecDataType.INT64 },
+        { name: "tokens", dataType: ZVecDataType.INT64 },
+        { name: "created_at", dataType: ZVecDataType.STRING },
+        { name: "text", dataType: ZVecDataType.STRING },
+      ],
+    });
+
+    const collection = ZVecCreateAndOpen(collectionPath, schema);
 
     return {
-      name: "zvec-store",
+      name: "zvec-collection-store",
       available: true,
 
       async addChunks(chunks, vectors, options = {}) {
@@ -311,64 +363,72 @@ export async function tryCreateZvecStore(options = {}) {
             await this.removeGoalChunks(gid);
           }
         }
-        for (let i = 0; i < chunks.length; i++) {
-          const goalId = chunks[i].metadata?.goal_id || "unknown";
-          const idx = await getIndex(goalId);
-          await idx.add(chunks[i].id, vectors[i], { ...chunks[i].metadata, text: chunks[i].text, tokens: chunks[i].tokens });
+        const docs = chunks.map((chunk, i) => ({
+          id: chunk.id,
+          vectors: { embedding: vectors[i] },
+          fields: {
+            workspace_id: String(metadataValue(chunk.metadata, "workspace_id", "")),
+            goal_id: String(metadataValue(chunk.metadata, "goal_id", "unknown")),
+            task_id: String(metadataValue(chunk.metadata, "task_id", "")),
+            source_type: String(metadataValue(chunk.metadata, "source_type", "unknown")),
+            role: metadataValue(chunk.metadata, "role", ""),
+            source_path: metadataValue(chunk.metadata, "source_path", ""),
+            chunk_index: Number(metadataValue(chunk.metadata, "chunk_index", chunk.index ?? 0)),
+            tokens: Number(chunk.tokens || 0),
+            created_at: String(metadataValue(chunk.metadata, "created_at", "")),
+            text: chunk.text || "",
+          },
+        }));
+        if (docs.length > 0) {
+          assertZvecStatus(collection.upsertSync(docs), "upsert");
         }
       },
 
       async search(queryVector, topK = 5, filters = {}) {
-        const goalId = filters.goal_id;
-        if (!goalId) return [];
-
-        const idx = indices.has(goalId)
-          ? indices.get(goalId)
-          : await (async () => {
-              try {
-                const idx = await zvec.createIndex(`goal-${goalId}`, {
-                  dimension,
-                  persistPath: join(zvecDir, `goal-${goalId}`),
-                  metric: "cosine",
-                  loadExisting: true,
-                });
-                indices.set(goalId, idx);
-                return idx;
-              } catch {
-                return null;
-              }
-            })();
-
-        if (!idx) return [];
-
-        const filterFn = filters.source_type
-          ? (meta) => meta.source_type === filters.source_type
-          : undefined;
-
-        const results = await idx.search(queryVector, topK, filterFn);
+        const results = collection.querySync({
+          fieldName: "embedding",
+          vector: queryVector,
+          topk: topK,
+          filter: buildZvecFilter(filters),
+          outputFields: [
+            "workspace_id",
+            "goal_id",
+            "task_id",
+            "source_type",
+            "role",
+            "source_path",
+            "chunk_index",
+            "tokens",
+            "created_at",
+            "text",
+          ],
+        });
         return results.map((r) => ({
           id: r.id,
-          text: r.metadata?.text || "",
-          tokens: r.metadata?.tokens || 0,
-          index: r.metadata?.chunk_index || 0,
-          metadata: r.metadata || {},
+          text: r.fields?.text || "",
+          tokens: Number(r.fields?.tokens || 0),
+          index: Number(r.fields?.chunk_index || 0),
+          metadata: {
+            workspace_id: r.fields?.workspace_id || "",
+            goal_id: r.fields?.goal_id || "",
+            task_id: r.fields?.task_id || "",
+            source_type: r.fields?.source_type || "unknown",
+            role: r.fields?.role || "",
+            source_path: r.fields?.source_path || "",
+            chunk_index: Number(r.fields?.chunk_index || 0),
+            created_at: r.fields?.created_at || "",
+          },
           score: r.score || 0,
         }));
       },
 
       async removeGoalChunks(goalId) {
-        indices.delete(goalId);
-        try {
-          const dir = join(zvecDir, `goal-${goalId}`);
-          const { rm } = await import("node:fs/promises");
-          await rm(dir, { recursive: true, force: true });
-        } catch {
-          // Ignore cleanup failures
-        }
+        assertZvecStatus(collection.deleteByFilterSync(`goal_id = "${escapeZvecString(goalId)}"`), "deleteByFilter");
       },
     };
-  } catch {
-    // zvec not available
+  } catch (err) {
+    options.zvecFailureReason = err?.message || String(err);
+    // @zvec/zvec not available or collection initialization failed.
     return null;
   }
 }
@@ -386,13 +446,23 @@ export async function tryCreateZvecStore(options = {}) {
  * @returns {Promise<VectorStoreAdapter>}
  */
 export async function createVectorStore(options = {}) {
-  // Allow explicit preference for testing
-  if (options.prefer === "local") {
+  // Reuse an already-created adapter when hooks pass indexResult.store to retrieval.
+  if (options.prefer && typeof options.prefer === "object" && typeof options.prefer.search === "function") {
+    return options.prefer;
+  }
+
+  const mode = normalizeStoreMode(options.prefer || options.contextVectorStore || process.env.GPTWORK_CONTEXT_VECTOR_STORE);
+  if (mode === "local") {
     return createLocalStore(options);
   }
 
   const zvec = await tryCreateZvecStore(options);
   if (zvec) return zvec;
+
+  if (mode === "zvec") {
+    const detail = options.zvecFailureReason ? `: ${options.zvecFailureReason}` : "";
+    throw new Error(`Zvec vector store requested but unavailable${detail}`);
+  }
 
   return createLocalStore(options);
 }

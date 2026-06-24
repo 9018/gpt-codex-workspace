@@ -1,0 +1,60 @@
+{
+  "task": "P0: integrate Alibaba Zvec as context-index backend",
+  "goal_id": "goal_5c40315c-8b25-4691-8bf3-4ff7fcadc0e9",
+  "task_id": "task_3adac16f-2509-4903-b982-6406ac713a8a",
+  "modified_files": [
+    "backend/package.json",
+    "backend/package-lock.json",
+    "backend/src/context-index/context-index-hooks.mjs",
+    "backend/src/context-index/retriever.mjs",
+    "backend/src/context-index/zvec-store.mjs",
+    "backend/src/runtime-config.mjs",
+    "backend/test/context-index.test.mjs",
+    "result.json"
+  ],
+  "implementation_summary": [
+    "Replaced obsolete zvec/createIndex/add/search assumptions with dynamic import(\"@zvec/zvec\") and collection-backed adapter logic.",
+    "Added GPTWORK_CONTEXT_VECTOR_STORE=auto|zvec|local runtime configuration and wired it through createVectorStore, indexGoalContext, retrieveContext, and context bundle hooks.",
+    "Implemented zvec-collection-store with required schema fields, VECTOR_FP32 embedding, goal/workspace/source filters, retriever-compatible result shape, and removeGoalChunks by goal_id filter.",
+    "Added tests for local mode, auto fallback when @zvec/zvec cannot load, zvec fail-fast behavior, runtime config, and removal of obsolete API assumptions.",
+    "Added @zvec/zvec to optionalDependencies because the package uses platform-native optional binding packages and local/auto fallback must remain usable on unsupported CI platforms."
+  ],
+  "test_results": [
+    {
+      "command": "cd backend && node --test --test-reporter=dot test/context-index.test.mjs",
+      "result": "passed"
+    },
+    {
+      "command": "cd backend && npm run check:syntax && npm run check:imports",
+      "result": "passed"
+    },
+    {
+      "command": "grep -R --line-number 'import(\"zvec\")\\|createIndex\\|idx\\.add\\|idx\\.search' backend/src backend/test backend/package.json || true",
+      "result": "passed; no obsolete API usage found"
+    },
+    {
+      "command": "cd backend && node -e 'import(\"@zvec/zvec\").then(...)'",
+      "result": "passed; @zvec/zvec imports and exposes ZVecCollectionSchema, ZVecCreateAndOpen, ZVecDataType, ZVecIndexType, ZVecMetricType"
+    },
+    {
+      "command": "cd backend && node --input-type=module zvec adapter smoke script",
+      "result": "passed; store=zvec-collection-store, filtered search returned expected chunk, removeGoalChunks deleted goal chunks"
+    }
+  ],
+  "zvec_environment": {
+    "available_in_current_environment": true,
+    "notes": [
+      "@zvec/zvec installed and ran successfully on the current linux-x64 environment.",
+      "npm may emit allow-scripts warnings for @zvec/zvec native install scripts in this environment, but import and runtime smoke tests succeeded.",
+      "auto mode falls back to local-json-store when @zvec/zvec import/init fails; zvec mode fails clearly instead of falling back."
+    ]
+  },
+  "acceptance": {
+    "GPTWORK_CONTEXT_VECTOR_STORE=local": "uses local-json-store",
+    "GPTWORK_CONTEXT_VECTOR_STORE=auto_without_zvec": "falls back to local-json-store",
+    "GPTWORK_CONTEXT_VECTOR_STORE=zvec_without_zvec": "throws a clear unavailable error",
+    "zvec_available": "uses zvec-collection-store",
+    "context_retrieval_storeName": "wired to report actual storeName through retriever output",
+    "context_bundle_generation": "covered by existing context-index tests"
+  }
+}

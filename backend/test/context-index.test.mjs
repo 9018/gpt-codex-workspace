@@ -19,7 +19,7 @@ import { tmpdir } from "node:os";
 // Module imports
 // ---------------------------------------------------------------------------
 
-let chunker, embeddings, zvecStore, retriever, bundleBuilder, contextIndexHooks;
+let chunker, embeddings, zvecStore, retriever, bundleBuilder, contextIndexHooks, runtimeConfig;
 
 before(async () => {
   chunker = await import("../src/context-index/chunker.mjs");
@@ -28,6 +28,7 @@ before(async () => {
   retriever = await import("../src/context-index/retriever.mjs");
   bundleBuilder = await import("../src/context-index/context-bundle-builder.mjs");
   contextIndexHooks = await import("../src/context-index/context-index-hooks.mjs");
+  runtimeConfig = await import("../src/runtime-config.mjs");
 });
 
 // ---------------------------------------------------------------------------
@@ -152,16 +153,59 @@ describe("embeddings — fallback provider determinism", () => {
 
 describe("zvec-store — adapter fallback", () => {
 
-  it("createVectorStore returns local store when zvec unavailable", async () => {
+  it("createVectorStore returns local store when local mode is requested", async () => {
     const store = await zvecStore.createVectorStore({
       workspaceRoot: "/tmp",
       prefer: "local",
+      importZvec: async () => {
+        throw new Error("local mode should not import zvec");
+      },
     });
     assert.ok(store.available);
     assert.strictEqual(store.name, "local-json-store");
     assert.strictEqual(typeof store.addChunks, "function");
     assert.strictEqual(typeof store.search, "function");
     assert.strictEqual(typeof store.removeGoalChunks, "function");
+  });
+
+  it("createVectorStore auto mode falls back to local when @zvec/zvec cannot load", async () => {
+    const store = await zvecStore.createVectorStore({
+      workspaceRoot: "/tmp",
+      prefer: "auto",
+      importZvec: async () => {
+        throw new Error("simulated missing @zvec/zvec");
+      },
+    });
+    assert.ok(store.available);
+    assert.strictEqual(store.name, "local-json-store");
+  });
+
+  it("createVectorStore zvec mode fails clearly when @zvec/zvec cannot load", async () => {
+    await assert.rejects(
+      () => zvecStore.createVectorStore({
+        workspaceRoot: "/tmp",
+        prefer: "zvec",
+        importZvec: async () => {
+          throw new Error("simulated missing @zvec/zvec");
+        },
+      }),
+      /Zvec vector store requested but unavailable.*simulated missing @zvec\/zvec/
+    );
+  });
+
+  it("zvec-store source uses @zvec/zvec collection API, not the obsolete package/index API", () => {
+    const source = readFileSync(join(process.cwd(), "src", "context-index", "zvec-store.mjs"), "utf8");
+    assert.ok(source.includes("@zvec/zvec"), "should dynamically import @zvec/zvec");
+    assert.ok(source.includes("ZVecCollectionSchema"), "should build a Zvec collection schema");
+    assert.ok(source.includes("ZVecCreateAndOpen") || source.includes("ZVecOpen"), "should open a Zvec collection");
+    const obsoletePackageImport = 'import("' + 'zvec' + '")';
+    const obsoleteIndexCreation = ".create" + "Index(";
+    const obsoleteAddCall = "idx" + ".add";
+    const obsoleteSearchCall = "idx" + ".search";
+    assert.ok(!source.includes(obsoletePackageImport), "should not import the obsolete package");
+    assert.ok(!source.includes(obsoleteIndexCreation), "should not use the obsolete index-creation API");
+    assert.ok(!source.includes(obsoleteAddCall), "should not use the obsolete index add API");
+    assert.ok(!source.includes(obsoleteSearchCall), "should not use the obsolete index search API");
   });
 
   it("local store round-trip: addChunks and search", async () => {
@@ -222,8 +266,45 @@ describe("zvec-store — adapter fallback", () => {
   });
 
   it("tryCreateZvecStore returns null gracefully", async () => {
-    const store = await zvecStore.tryCreateZvecStore({ workspaceRoot: "/tmp" });
+    const store = await zvecStore.tryCreateZvecStore({
+      workspaceRoot: "/tmp",
+      importZvec: async () => {
+        throw new Error("simulated missing @zvec/zvec");
+      },
+    });
     assert.strictEqual(store, null);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Runtime config for vector store selection
+// ---------------------------------------------------------------------------
+
+describe("runtime-config — context vector store selection", () => {
+  it("defaults GPTWORK_CONTEXT_VECTOR_STORE to auto", () => {
+    const previous = process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+    delete process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+    try {
+      const { config, sources } = runtimeConfig.buildRuntimeConfig(process.cwd());
+      assert.strictEqual(config.contextVectorStore, "auto");
+      assert.strictEqual(sources.contextVectorStore, "default");
+    } finally {
+      if (previous === undefined) delete process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+      else process.env.GPTWORK_CONTEXT_VECTOR_STORE = previous;
+    }
+  });
+
+  it("reads GPTWORK_CONTEXT_VECTOR_STORE from process.env", () => {
+    const previous = process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+    process.env.GPTWORK_CONTEXT_VECTOR_STORE = "local";
+    try {
+      const { config, sources } = runtimeConfig.buildRuntimeConfig(process.cwd());
+      assert.strictEqual(config.contextVectorStore, "local");
+      assert.strictEqual(sources.contextVectorStore, "process.env");
+    } finally {
+      if (previous === undefined) delete process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+      else process.env.GPTWORK_CONTEXT_VECTOR_STORE = previous;
+    }
   });
 });
 

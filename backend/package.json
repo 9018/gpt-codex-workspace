@@ -16,5 +16,8 @@
     "test:perf-smoke": "node --test --test-reporter=dot 'test/perf-smoke.test.mjs'",
     "test:e2e-acceptance": "node --test --test-reporter=dot test/e2e-product-acceptance.test.mjs",
     "release:check": "npm run check:syntax && npm run check:imports && npm run test:e2e-acceptance"
+  },
+  "optionalDependencies": {
+    "@zvec/zvec": "^0.5.0"
   }
 }

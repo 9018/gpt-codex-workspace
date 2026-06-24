@@ -136,7 +136,7 @@ export async function indexGoalContext(ctx) {
   const store = await createVectorStore({
     workspaceRoot,
     dimension: embedder.dimension,
-    prefer: ctx.storePrefer,
+    prefer: ctx.storePrefer ?? config?.contextVectorStore,
   });
 
   await store.addChunks(chunks, vectors, { replace: true });
@@ -159,7 +159,7 @@ export async function indexGoalContext(ctx) {
  * @param {object} params
  * @param {string}   params.goalId
  * @param {string}   params.queryText          - The query text to search for.
- * @param {{ workspaceRoot?: string, dimension?: number, storePrefer?: string, embeddingConfig?: object }} [params.options]
+ * @param {{ workspaceRoot?: string, dimension?: number, storePrefer?: string, contextVectorStore?: string, embeddingConfig?: object }} [params.options]
  * @param {number}   [params.topK=5]
  * @param {object}   [params.filters={}]
  * @returns {Promise<Array<{ id: string, text: string, tokens: number, metadata: object, score: number }>>}
@@ -172,7 +172,7 @@ export async function retrieveContext(params) {
   const store = await createVectorStore({
     workspaceRoot,
     dimension: embedder.dimension,
-    prefer: options.storePrefer,
+    prefer: options.storePrefer ?? options.contextVectorStore,
   });
 
   const [queryVector] = await embedder.embed([queryText]);

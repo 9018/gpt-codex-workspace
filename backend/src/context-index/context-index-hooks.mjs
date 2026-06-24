@@ -198,6 +198,7 @@ export async function maybeBuildContextBundle(
       options: {
         workspaceRoot,
         storePrefer: indexResult.store,
+        contextVectorStore: config?.contextVectorStore,
         embeddingConfig: { provider: "fallback" },
       },
       filters: { goal_id: goal.id },

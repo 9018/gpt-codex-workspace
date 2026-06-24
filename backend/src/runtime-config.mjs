@@ -167,6 +167,9 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     retentionDryRunDefault: _getBool("GPTWORK_RETENTION_DRY_RUN_DEFAULT", true),
     retentionArchiveBeforeDelete: _getBool("GPTWORK_RETENTION_ARCHIVE_BEFORE_DELETE", true),
 
+    // Context index
+    contextVectorStore: _get("GPTWORK_CONTEXT_VECTOR_STORE", "auto"),
+
     _recoveryAllowedRootsArr: (() => {
       const raw = _get("GPTWORK_RECOVERY_ALLOWED_ROOTS", "");
       if (!raw) return [];
@@ -224,6 +227,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     restartCommand: "GPTWORK_RESTART_COMMAND",
     restartCwd: "GPTWORK_RESTART_CWD",
     restartMarkerKind: "GPTWORK_RESTART_MARKER_KIND",
+    contextVectorStore: "GPTWORK_CONTEXT_VECTOR_STORE",
 
   };
 
