@@ -216,7 +216,7 @@ test("processGeneralTask no longer contains inline prompt template", async () =>
     "separator definition should not move into task-general-processor.mjs");
 
   // processGeneralTask should now delegate prompt/run setup to the setup helper.
-  assert.ok(processorSource.includes("prepareCodexTaskRun({"),
+  assert.ok(processorSource.includes("prepareCodexTaskRunFn({"),
     "processGeneralTask should use the run setup helper");
 });
 

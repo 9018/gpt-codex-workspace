@@ -42,7 +42,10 @@ test('resolveTaskRepository uses explicit task repo_id and creates a real task w
   assert.equal(resolved.worktree_lifecycle.mode, 'git_worktree');
   assert.equal(resolved.worktree_lifecycle.ok, true);
   assert.equal(resolved.worktree_lifecycle.git_worktree_created, true);
+  assert.equal(resolved.worktree_lifecycle.created_during_run, true);
   assert.equal(resolved.worktree_lifecycle.cleanup_supported, true);
+  assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].event, 'git_worktree_add');
+  assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].ok, true);
   assert.equal(resolved.task_worktree_path, join(workspaceRoot, 'worktrees/github.com-acme-target/task_123'));
 });
 

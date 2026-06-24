@@ -75,7 +75,16 @@ export function buildWorktreeReliabilityFindings(signals = {}) {
   const findings = [];
   const add = (severity, code, message) => findings.push({ severity, code, message, source: 'worktree_reliability_policy' });
 
-  if (signals.git_worktree_created !== true) {
+  const lifecycle = signals.worktree_lifecycle || signals.repo_resolution?.worktree_lifecycle || null;
+  if (lifecycle) {
+    if (lifecycle.mode !== 'git_worktree') {
+      add('major', 'git_worktree_lifecycle_metadata_only', 'Task repo resolution must record a real git_worktree lifecycle, not metadata-only isolation.');
+    } else if (lifecycle.ok !== true) {
+      add('blocker', 'git_worktree_lifecycle_failed', lifecycle.error || 'git worktree lifecycle failed before task execution.');
+    } else if (lifecycle.cleanup_supported !== true) {
+      add('major', 'worktree_cleanup_lifecycle_missing', 'Real git worktree lifecycle must advertise cleanup support.');
+    }
+  } else if (signals.git_worktree_created !== true) {
     add('followup', 'git_worktree_not_created', 'Task worktree lifecycle is metadata-only; implement git worktree add/remove before claiming per-task isolation.');
   }
   if (signals.repo_lock_atomic !== true) {
@@ -87,7 +96,7 @@ export function buildWorktreeReliabilityFindings(signals = {}) {
   if (signals.task_processor_lock_repo_id_driven !== true) {
     add('blocker', 'task_processor_lock_not_repo_id_driven', 'Task processor lock scope must use the resolved repo/worktree path.');
   }
-  if (signals.worktree_cleanup_lifecycle !== true) {
+  if (!lifecycle && signals.worktree_cleanup_lifecycle !== true) {
     add('major', 'worktree_cleanup_lifecycle_missing', 'Worktree cleanup/prune lifecycle is required beyond prompt-file cleanup.');
   }
   if (signals.crash_recovery_supported !== true) {

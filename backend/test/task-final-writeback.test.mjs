@@ -193,4 +193,62 @@ test("task-final-writeback: git worktree cleanup failure is fail-closed and reco
   assert.ok(savedTask.result.acceptance_findings.some((finding) => finding.code === "git_worktree_cleanup_failed"));
 });
 
+test("task-final-writeback: git worktree cleanup does not overwrite repo_resolution lifecycle with metadata-only data", async () => {
+  let savedTask = null;
+  let fallbackJson = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.workspace = { root: "/tmp/workspace-root" };
+  args.taskResult.repo_resolution = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical-repo",
+    lock_repo_path: "/tmp/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    worktree_lifecycle: {
+      mode: "git_worktree",
+      ok: true,
+      git_worktree_created: true,
+      cleanup_supported: true,
+      created_during_run: true,
+    },
+  };
+  args.taskResult.worktree_lifecycle = args.taskResult.repo_resolution.worktree_lifecycle;
+  args.taskResult.execution_cwd = "/tmp/worktrees/repo/task_label_test";
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical-repo",
+    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    worktree_lifecycle: args.taskResult.repo_resolution.worktree_lifecycle,
+  };
+  args.removeTaskWorktreeFn = async () => ({
+    ok: true,
+    removed: true,
+    worktree_path: "/tmp/worktrees/repo/task_label_test",
+  });
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  await finalizeCodexTaskRun(args);
+
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.worktree_lifecycle.mode, "git_worktree");
+  assert.equal(savedTask.result.worktree_lifecycle.ok, true);
+  assert.equal(savedTask.result.worktree_lifecycle.cleanup_supported, true);
+  assert.equal(savedTask.result.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.mode, "git_worktree");
+  assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.created_during_run, true);
+  assert.equal(fallbackJson.repo_resolution.worktree_lifecycle.mode, "git_worktree");
+  assert.equal(fallbackJson.repo_resolution.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(fallbackJson.execution_cwd_proof.used_task_worktree_path, true);
+});
+
 console.log("task-final-writeback tests loaded");

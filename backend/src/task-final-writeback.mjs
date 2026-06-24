@@ -1,4 +1,4 @@
-import { writeFile } from "node:fs/promises";
+import { writeFile as nodeWriteFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
@@ -33,6 +33,7 @@ export async function finalizeCodexTaskRun({
   updateGoalStatusFn = updateGoalStatus,
   writeWorkspaceTextInternalFn = writeWorkspaceTextInternal,
   removeTaskWorktreeFn = removeTaskWorktree,
+  writeFileFn = nodeWriteFile,
 }) {
   if (runFilePath) {
     const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
@@ -57,11 +58,18 @@ export async function finalizeCodexTaskRun({
     removeTaskWorktreeFn,
   });
   if (cleanup) {
-    taskResult.worktree_lifecycle = {
+    const updatedLifecycle = {
       ...(taskResult.worktree_lifecycle || resolvedRepo?.worktree_lifecycle || {}),
       cleanup_supported: true,
       cleanup,
     };
+    taskResult.worktree_lifecycle = updatedLifecycle;
+    if (taskResult.repo_resolution && typeof taskResult.repo_resolution === "object") {
+      taskResult.repo_resolution = {
+        ...taskResult.repo_resolution,
+        worktree_lifecycle: updatedLifecycle,
+      };
+    }
     if (cleanup.ok === false) {
       taskStatus = "failed";
       taskResult.kind = taskResult.kind || "worktree_cleanup_failed";
@@ -134,18 +142,50 @@ export async function finalizeCodexTaskRun({
         remote_head: taskResult.remote_head || null,
         warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
         followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+        repo_resolution: taskResult.repo_resolution || null,
         worktree_lifecycle: taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null,
+        worktree_lifecycle_proof: taskResult.worktree_lifecycle_proof || buildWorktreeLifecycleProof(taskResult),
+        execution_cwd: taskResult.execution_cwd || null,
+        execution_cwd_proof: taskResult.execution_cwd_proof || buildExecutionCwdProof(taskResult),
         queue_autostart_fix: taskResult.queue_autostart_fix || null,
         reviewer_decision: taskResult.reviewer_decision || null,
         acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
         next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
       };
-      await writeFile(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
+      await writeFileFn(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
     } catch {}
   }
 
   try { await github.syncTask(result.task); } catch {}
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
+}
+
+function buildWorktreeLifecycleProof(taskResult = {}) {
+  const lifecycle = taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null;
+  if (!lifecycle) return null;
+  return {
+    mode: lifecycle.mode || null,
+    ok: lifecycle.ok === true,
+    git_worktree_created: lifecycle.git_worktree_created === true,
+    existing: lifecycle.existing === true,
+    cleanup_supported: lifecycle.cleanup_supported === true,
+    cleanup_ok: lifecycle.cleanup ? lifecycle.cleanup.ok === true : null,
+    task_worktree_path: taskResult.repo_resolution?.task_worktree_path || lifecycle.worktree_path || null,
+    created_during_run: lifecycle.created_during_run === true || lifecycle.git_worktree_created === true,
+  };
+}
+
+function buildExecutionCwdProof(taskResult = {}) {
+  const cwd = taskResult.execution_cwd || taskResult.execution_cwd_proof?.cwd || null;
+  const taskWorktreePath = taskResult.repo_resolution?.task_worktree_path || taskResult.execution_cwd_proof?.task_worktree_path || null;
+  const canonicalRepoPath = taskResult.repo_resolution?.canonical_repo_path || taskResult.execution_cwd_proof?.canonical_repo_path || null;
+  if (!cwd && !taskWorktreePath && !canonicalRepoPath) return null;
+  return {
+    cwd,
+    task_worktree_path: taskWorktreePath,
+    canonical_repo_path: canonicalRepoPath,
+    used_task_worktree_path: Boolean(cwd && taskWorktreePath && cwd === taskWorktreePath),
+  };
 }
 
 async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorktreeFn }) {

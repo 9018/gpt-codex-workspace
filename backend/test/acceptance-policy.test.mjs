@@ -84,3 +84,41 @@ test('worktree reliability checks are first-class acceptance findings', () => {
   assert.equal(findings[1].severity, 'blocker');
   assert.equal(findings[2].severity, 'major');
 });
+
+test('worktree reliability accepts reused real git worktree lifecycle without metadata-only finding', () => {
+  const findings = buildWorktreeReliabilityFindings({
+    worktree_lifecycle: {
+      mode: 'git_worktree',
+      ok: true,
+      git_worktree_created: false,
+      existing: true,
+      cleanup_supported: true,
+    },
+    repo_lock_atomic: true,
+    queue_dirty_check_repo_id_driven: true,
+    task_processor_lock_repo_id_driven: true,
+    worktree_cleanup_lifecycle: true,
+    crash_recovery_supported: true,
+  });
+
+  assert.deepEqual(findings, []);
+});
+
+test('worktree reliability blocks failed git worktree lifecycle instead of auto-accepting metadata-only followup', () => {
+  const findings = buildWorktreeReliabilityFindings({
+    worktree_lifecycle: {
+      mode: 'git_worktree',
+      ok: false,
+      error: 'worktree add failed: fatal',
+      cleanup_supported: true,
+    },
+    repo_lock_atomic: true,
+    queue_dirty_check_repo_id_driven: true,
+    task_processor_lock_repo_id_driven: true,
+    worktree_cleanup_lifecycle: true,
+    crash_recovery_supported: true,
+  });
+
+  assert.deepEqual(findings.map((finding) => finding.code), ['git_worktree_lifecycle_failed']);
+  assert.equal(findings[0].severity, 'blocker');
+});

@@ -13,27 +13,41 @@ import { resolveTaskRepository } from "./task-repo-resolution.mjs";
 import { buildReviewerDecision } from "./acceptance-policy.mjs";
 
 export async function processGeneralTask(store, config, task, context, github) {
+  return processGeneralTaskWithDeps(store, config, task, context, github, {});
+}
+
+export async function processGeneralTaskWithDeps(store, config, task, context, github, deps = {}) {
+  const resolveTaskRepositoryFn = deps.resolveTaskRepositoryFn || resolveTaskRepository;
+  const acquireRepoLockFn = deps.acquireRepoLockFn || acquireRepoLock;
+  const releaseLockForTaskFn = deps.releaseLockForTaskFn || releaseLockForTask;
+  const prepareCodexTaskRunFn = deps.prepareCodexTaskRunFn || prepareCodexTaskRun;
+  const executeCodexTaskRunFn = deps.executeCodexTaskRunFn || executeCodexTaskRun;
+  const finalizeCodexTaskRunFn = deps.finalizeCodexTaskRunFn || finalizeCodexTaskRun;
+  const updateTaskFn = deps.updateTaskFn || updateTask;
+  const appendGoalMessageFn = deps.appendGoalMessageFn || appendGoalMessage;
+  const ensureTaskGoalFn = deps.ensureTaskGoalFn || ensureTaskGoal;
+  const selectWorkspaceFn = deps.selectWorkspaceFn || selectWorkspace;
   const now = new Date().toISOString();
-  await updateTask(store, task.id, (item) => {
+  await updateTaskFn(store, task.id, (item) => {
     delete item.lock_blocked_at;
     delete item.lock_blocked_by;
     item.logs.push({ time: now, message: `[worker] started: ${task.title}` });
   });
 
   // Ensure goal early so we can append transcript messages for non-hosted workspaces
-  const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: true });
+  const linked = await ensureTaskGoalFn(store, config, task.id, context, { assign_to_codex: true });
   const goal = linked.goal;
   const workspaceFiles = linked.workspace_files || (goal ? goalWorkspaceFiles(goal) : { dir: '.gptwork/goals/unknown' });
 
-  const workspace = await selectWorkspace(store, task.workspace_id, context);
+  const workspace = await selectWorkspaceFn(store, task.workspace_id, context);
   if (workspace.type !== "hosted") {
     const msg = `[worker] paused: unsupported workspace type "${workspace.type}" — moving to waiting_for_review. This workspace type does not support builder/deploy/admin execution.`;
-    await updateTask(store, task.id, (item) => {
+    await updateTaskFn(store, task.id, (item) => {
       item.status = "waiting_for_review";
       item.logs.push({ time: new Date().toISOString(), message: msg });
     });
     if (goal) {
-      await appendGoalMessage(store, config, {
+      await appendGoalMessageFn(store, config, {
         goal_id: goal.id,
         role: "codex",
         content: msg
@@ -43,20 +57,20 @@ export async function processGeneralTask(store, config, task, context, github) {
   }
 
   if (goal) {
-    await appendGoalMessage(store, config, {
+    await appendGoalMessageFn(store, config, {
       goal_id: goal.id,
       role: "codex",
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
-  const resolvedRepo = await resolveTaskRepository({ task, goal, config, registry: config.registry || null });
+  const resolvedRepo = await resolveTaskRepositoryFn({ task, goal, config, registry: config.registry || null });
   const repoLockPath = resolvedRepo.lock_repo_path || config.defaultRepoPath;
   const executionCwd = resolvedRepo.worktree_lifecycle?.ok === true
     ? resolvedRepo.task_worktree_path
     : workspace.root;
   if (resolvedRepo.worktree_lifecycle?.ok === false) {
     const failMsg = `[worker] failed to prepare task worktree: ${resolvedRepo.worktree_lifecycle.error || "unknown worktree error"}`;
-    await updateTask(store, task.id, (item) => {
+    await updateTaskFn(store, task.id, (item) => {
       item.status = "failed";
       item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
       item.logs.push({ time: new Date().toISOString(), message: failMsg });
@@ -64,21 +78,21 @@ export async function processGeneralTask(store, config, task, context, github) {
     return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
   }
   if (repoLockPath) {
-    const lockResult = await acquireRepoLock(config.defaultWorkspaceRoot, repoLockPath, {
+    const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, {
       taskId: task.id,
       runId: null,
       mode: task.mode || "builder"
     });
     if (!lockResult.acquired) {
       const lockMsg = "[worker] repo locked by task " + lockResult.heldByTask + ", retry after completion. Skipping.";
-      await updateTask(store, task.id, (item) => {
+      await updateTaskFn(store, task.id, (item) => {
         item.status = "waiting_for_lock";
         item.lock_blocked_at = new Date().toISOString();
         item.lock_blocked_by = lockResult.heldByTask;
         item.logs.push({ time: new Date().toISOString(), message: lockMsg });
       });
       if (goal) {
-        await appendGoalMessage(store, config, {
+        await appendGoalMessageFn(store, config, {
           goal_id: goal.id,
           role: "codex",
           content: lockMsg
@@ -87,7 +101,7 @@ export async function processGeneralTask(store, config, task, context, github) {
       return { task_id: task.id, status: "waiting_for_lock", skipped: true, reason: lockMsg };
     }
   }
-  await updateTask(store, task.id, (item) => {
+  await updateTaskFn(store, task.id, (item) => {
     item.status = "running";
     item.logs.push({ time: new Date().toISOString(), message: "[worker] codex exec started" });
   });
@@ -99,7 +113,7 @@ export async function processGeneralTask(store, config, task, context, github) {
   let runFilePath = null;
   let runId = null;
   try {
-    const prepResult = await prepareCodexTaskRun({
+    const prepResult = await prepareCodexTaskRunFn({
       task,
       goal,
       workspaceFiles,
@@ -115,9 +129,9 @@ export async function processGeneralTask(store, config, task, context, github) {
     // the task as failed so it doesn't remain in "running" state with the lock held.
     const failMsg = `[worker] failed during prompt preparation: ${prepErr.message}`;
     if (repoLockPath) {
-      try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
+      try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch {}
     }
-    await updateTask(store, task.id, (item) => {
+    await updateTaskFn(store, task.id, (item) => {
       item.status = "failed";
       item.result = {
         kind: "operational_error",
@@ -129,7 +143,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     });
     if (goal) {
       try {
-        await appendGoalMessage(store, config, {
+        await appendGoalMessageFn(store, config, {
           goal_id: goal.id,
           role: "codex",
           content: failMsg,
@@ -145,7 +159,7 @@ export async function processGeneralTask(store, config, task, context, github) {
   let cr = null;
 
   try {
-    ({ cr, parsedResult, summary } = await executeCodexTaskRun({
+    ({ cr, parsedResult, summary } = await executeCodexTaskRunFn({
       config,
       workspaceRoot: workspace.root,
       task,
@@ -191,6 +205,13 @@ export async function processGeneralTask(store, config, task, context, github) {
     worktree_lifecycle: resolvedRepo.worktree_lifecycle,
   };
   taskResult.worktree_lifecycle = resolvedRepo.worktree_lifecycle;
+  taskResult.execution_cwd = executionCwd;
+  taskResult.execution_cwd_proof = {
+    cwd: executionCwd,
+    task_worktree_path: resolvedRepo.task_worktree_path || null,
+    canonical_repo_path: resolvedRepo.canonical_repo_path || null,
+    used_task_worktree_path: Boolean(resolvedRepo.task_worktree_path) && executionCwd === resolvedRepo.task_worktree_path,
+  };
 
   const doneAt = new Date().toISOString();
   let taskStatus = deriveTaskStatusFromTaskResult(taskResult);
@@ -253,7 +274,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     taskResult.repair_proposals = reviewer.decision.repair_proposals;
   }
 
-  return finalizeCodexTaskRun({
+  return finalizeCodexTaskRunFn({
     store,
     config,
     task,
@@ -270,6 +291,6 @@ export async function processGeneralTask(store, config, task, context, github) {
     repoLockPath,
     resolvedRepo,
     github,
-    appendGoalMessageFn: appendGoalMessage,
+    appendGoalMessageFn,
   });
 }

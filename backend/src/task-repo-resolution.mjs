@@ -43,6 +43,7 @@ export async function resolveTaskRepository({ task = {}, goal = {}, config = {},
     worktreeLifecycle = {
       mode: 'git_worktree',
       git_worktree_created: ensured.git_worktree_created === true,
+      created_during_run: ensured.git_worktree_created === true,
       existing: ensured.existing === true,
       cleanup_supported: true,
       recoverable_after_crash: true,
@@ -50,6 +51,15 @@ export async function resolveTaskRepository({ task = {}, goal = {}, config = {},
       error: ensured.error || null,
       branch_name: ensured.branch_name || null,
       base_ref: ensured.base_ref || null,
+      lifecycle_events: [
+        {
+          event: ensured.git_worktree_created === true ? 'git_worktree_add' : ensured.existing === true ? 'git_worktree_reuse' : 'git_worktree_prepare_failed',
+          ok: ensured.ok === true,
+          worktree_path: ensured.worktree_path || taskWorktreePath,
+          branch_name: ensured.branch_name || null,
+          base_ref: ensured.base_ref || null,
+        },
+      ],
     };
     if (ensured.ok) {
       lockRepoPath = ensured.worktree_path;
