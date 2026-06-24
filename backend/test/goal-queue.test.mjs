@@ -804,7 +804,7 @@ test("P1 dependency_policy: field is persisted on queue item", async () => {
   assert.equal(updResult.item.dependency_policy, "terminal_any", "update should change policy");
 });
 
-test("goal-queue: dirty check uses queue item repo_id canonical path", async () => {
+test("goal-queue: queue no longer blocks on dirty canonical repo — defers to execution", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-repoid-dirty-"));
   const defaultRepo = join(dir, "default-repo");
   const targetRepo = join(dir, "target-repo");
@@ -823,27 +823,31 @@ test("goal-queue: dirty check uses queue item repo_id canonical path", async () 
   const config = {
     defaultWorkspaceRoot: dir,
     defaultRepoPath: defaultRepo,
+    enableTaskWorktrees: false,
     repoResolver: async (taskLike) => ({
       repo_id: taskLike.repo_id,
       canonical_repo_path: targetRepo,
       task_worktree_path: join(dir, "worktrees", taskLike.repo_id, taskLike.task_id || taskLike.goal_id),
       uses_default_fallback: false,
-      worktree_lifecycle: { mode: "metadata_only", git_worktree_created: false },
+      worktree_lifecycle: null,
     }),
   };
 
   const result = await startNextQueuedGoal(store, config, { dry_run: false });
-  assert.equal(result.started, false);
-  assert.equal(result.item.queue_id, "queue_repoid_dirty");
-  assert.equal(result.checks.find((check) => check.check === "worktree_dirty").repo_path, targetRepo);
 
+  // Queue no longer blocks on dirty — item should proceed and attempt task creation
+  // (may still fail at repoResolver resolution but NOT due to dirty)
+  const dirtyCheck = result.checks.find((check) => check.check === "execution_guards_deferred");
+  assert.ok(dirtyCheck, "should have execution_guards_deferred check");
+  assert.equal(dirtyCheck.passed, true, "dirty check should be deferred, not blocking");
+
+  // Item should not be blocked (status may be waiting or running, not blocked due to dirty)
   await store.load();
   const item = store.state.goal_queue.find((candidate) => candidate.queue_id === "queue_repoid_dirty");
-  assert.equal(item.status, "blocked");
-  assert.match(item.blocked_reason, /Worktree dirty/);
+  assert.notEqual(item.status, "blocked", "should not be blocked by dirty canonical repo");
 });
 
-test("goal-queue: repo resolver falls back to default repo path when repo_id is absent", async () => {
+test("goal-queue: default repo fallback does not block on dirty at queue time", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-default-fallback-"));
   const defaultRepo = join(dir, "default-repo");
   await initGitRepo(defaultRepo);
@@ -859,13 +863,18 @@ test("goal-queue: repo resolver falls back to default repo path when repo_id is 
   config.enableTaskWorktrees = false;
   const result = await startNextQueuedGoal(store, config, { dry_run: false });
 
-  assert.equal(result.started, false);
-  assert.equal(result.checks.find((check) => check.check === "worktree_dirty").repo_path, defaultRepo);
+  // Queue no longer blocks on dirty canonical repo
+  const dirtyCheck = result.checks.find((check) => check.check === "execution_guards_deferred");
+  assert.ok(dirtyCheck, "should have execution_guards_deferred check");
+  assert.equal(dirtyCheck.passed, true, "should not block on dirty");
+
   await store.load();
-  assert.equal(store.state.goal_queue[0].status, "blocked");
+  // Item should NOT be blocked (could be waiting, ready, running — just not blocked by dirty)
+  const item = store.state.goal_queue[0];
+  assert.notEqual(item.status, "blocked", "default repo fallback should not block at queue time");
 });
 
-test("goal-queue: git status failure blocks fail-closed", async () => {
+test("goal-queue: git status does not block at queue time — deferred to execution", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-status-fail-"));
   const nonRepo = join(dir, "not-a-git-repo");
   await mkdir(nonRepo, { recursive: true });
@@ -882,20 +891,21 @@ test("goal-queue: git status failure blocks fail-closed", async () => {
     enableTaskWorktrees: false,
   }, { dry_run: false });
 
-  assert.equal(result.started, false);
-  const dirtyCheck = result.checks.find((check) => check.check === "worktree_dirty");
-  assert.equal(dirtyCheck.passed, false);
-  assert.equal(dirtyCheck.status, "error");
-  assert.match(result.reason, /Worktree status unknown|git status/i);
+  // Queue does not check git status — the execution_guards_deferred check should pass
+  const deferredCheck = result.checks.find((check) => check.check === "execution_guards_deferred");
+  assert.ok(deferredCheck, "should have execution_guards_deferred check");
+  assert.equal(deferredCheck.passed, true, "git status check should be deferred");
 
+  // Item should NOT be blocked by git status failure
   await store.load();
-  assert.equal(store.state.goal_queue[0].status, "blocked");
-  assert.match(store.state.goal_queue[0].blocked_reason, /Worktree status unknown/);
+  const item = store.state.goal_queue[0];
+  assert.notEqual(item.status, "blocked", "should not be blocked by git status at queue time");
 });
 
-test("goal-queue: blocked dirty/unknown item only auto-recovers after fail-closed check becomes clean", async () => {
+test("goal-queue: transient blocked item auto-recovers via recheckTransientBlockedItems", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-recheck-clean-"));
   const repo = join(dir, "repo");
+  await initGitRepo(repo);
 
   const store = await makeStore(dir);
   addGoal(store, "goal_recheck_unknown", "Recheck unknown", "open");
@@ -906,22 +916,18 @@ test("goal-queue: blocked dirty/unknown item only auto-recovers after fail-close
 
   const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
 
-  let result = await startNextQueuedGoal(store, {
+  // recheckTransientBlockedItems now only checks dependency, not worktree dirty.
+  // Since dependency is satisfied, the item should be moved back to waiting.
+  const result = await startNextQueuedGoal(store, {
     defaultWorkspaceRoot: dir,
     defaultRepoPath: repo,
-  }, { dry_run: true });
-  await store.load();
-  assert.equal(store.state.goal_queue[0].status, "blocked", "unknown status must remain blocked before repo is clean/checkable");
-  assert.equal(result.started, false);
+    enableTaskWorktrees: false,
+  }, { dry_run: false });
 
-  await initGitRepo(repo);
-  result = await startNextQueuedGoal(store, {
-    defaultWorkspaceRoot: dir,
-    defaultRepoPath: repo,
-  }, { dry_run: true });
   await store.load();
-  assert.notEqual(store.state.goal_queue[0].status, "blocked", "clean repo and no lock should recover transient block");
-  assert.match(result.reason, /Dry run/);
+  const item = store.state.goal_queue[0];
+  assert.notEqual(item.status, "blocked", "transient blocked item should be recovered by recheck");
+  assert.equal(item.blocked_reason, null, "blocked reason should be cleared");
 });
 
 test("goal-queue: dependency-satisfied waiting auto_start item starts even if completion hook was missed", async () => {
@@ -951,3 +957,39 @@ test("goal-queue: dependency-satisfied waiting auto_start item starts even if co
   assert.equal(result.item.status, "running");
   assert.ok(result.task?.id, "should create a Codex task for the queue item");
 });
+
+// ===========================================================================
+// P0: dry_run must NOT write state
+// ===========================================================================
+
+test("goal-queue: dry_run does not write any state changes", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-dryrun-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_dryrun", "Dry-run test", "open");
+  await store.save();
+
+  const { enqueueGoal, startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+
+  await enqueueGoal(store, "goal_dryrun", { auto_start: true });
+  await store.save();
+  const originalQueueLength = store.state.goal_queue.length;
+
+  // Run dry-run — should NOT persist any state changes
+  const config = { defaultWorkspaceRoot: dir, defaultRepoPath: repo, enableTaskWorktrees: false };
+  const result = await startNextQueuedGoal(store, config, { dry_run: true });
+  
+  assert.equal(result.started, false, "dry_run should not start (return started=false)");
+  assert.equal(result.reason, "Dry run: would start goal goal_dryrun", "dry_run should return clear reason");
+
+  // Reload state and verify nothing changed
+  await store.load();
+  assert.equal(store.state.goal_queue.length, originalQueueLength, "queue length should not change");
+  assert.equal(store.state.goal_queue[0].status, "waiting", "item status should still be waiting (not running)");
+  assert.equal(store.state.goal_queue[0].task_id, null, "task_id should not be set in dry_run");
+  assert.equal(store.state.tasks.length, 0, "no tasks should be created in dry_run");
+});
+
+

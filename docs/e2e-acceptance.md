@@ -1,5 +1,9 @@
 # E2E Product Acceptance
 
+> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → complete) is **integrated** into the main flow. Multi-task concurrency, worktree isolation, queue scheduling, and acceptance verification all function as built-in capabilities. The repair loop and serial integration queue remain **experimental** — acceptance failures currently require manual review rather than auto-repair, and serial integration is still being hardened.
+
+---
+
 **Date**: 2026-06-22
 **Commit**: f376e85 (starting point)
 **Status**: PASS / 38 tests passed

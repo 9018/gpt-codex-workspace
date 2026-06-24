@@ -28,9 +28,23 @@
  * @param {string}  [options.defaultRepoPath] - Canonical repo path (optional).
  * @returns {{ fullPrompt: string, promptBytes: number }}
  */
-export function buildCodexPrompt({ task, goal, workspaceFiles, workspaceRoot, defaultRepoPath }) {
+export function buildCodexPrompt({
+  task, goal, workspaceFiles, workspaceRoot, defaultRepoPath,
+  executionRepoPath,
+  goalStateDir,
+  resultJsonPath,
+  resultMdPath,
+  canonicalRepoPath,
+  taskWorktreePath,
+} = {}) {
   const separator = "=".repeat(60);
-  const resultPath = `${workspaceRoot}/.gptwork/goals/${goal ? goal.id : task.id}/result.json`;
+  // Resolve paths with fallbacks for backward compatibility
+  const _executionRepoPath = executionRepoPath || defaultRepoPath || workspaceRoot;
+  const _goalStateDir = goalStateDir || (workspaceRoot + "/.gptwork/goals/" + (goal ? goal.id : task?.id || "unknown"));
+  const _resultJsonPath = resultJsonPath || (_goalStateDir + "/result.json");
+  const _resultMdPath = resultMdPath || (_goalStateDir + "/result.md");
+  const _canonicalRepoPath = canonicalRepoPath || defaultRepoPath || "(not configured)";
+  const worktreeLine = taskWorktreePath ? `- **Task worktree path**: ${taskWorktreePath}` : '';
 
   // Build workspace file references section
   let goalContextBlock = "";
@@ -57,6 +71,14 @@ export function buildCodexPrompt({ task, goal, workspaceFiles, workspaceRoot, de
 
   const fullPrompt = `# Task: ${task.title}
 
+## Execution Path Contract
+- **Edit code only under**: ${_executionRepoPath}
+- **Read goal/state files from**: ${_goalStateDir}
+- **Write result.json exactly to**: ${_resultJsonPath}
+- **Write result.md to**: ${_resultMdPath}
+- **Canonical repository**: ${_canonicalRepoPath}
+${worktreeLine}
+
 ${task.description || ""}
 
 ${goal ? `# GPTWork Goal Context
@@ -68,7 +90,7 @@ ${goalContextBlock}
 Write final results to ${workspaceFiles.result_md}.
 When complete, write a concise structured report in TWO formats:
 
-1. result.json — write to the task workspace directory with this exact structure:
+    1. result.json — write to ${_resultJsonPath} with this exact structure:
    {
      "status": "completed|failed|timed_out",
      "summary": "one-line summary",
@@ -123,11 +145,12 @@ Instead:
 
 ${separator}
 Execute the EXACT steps above, in order. Do not skip, substitute, or improvise.
-Use ${workspaceRoot} as the base directory for all file operations.
-The canonical repository is at ${defaultRepoPath || "(not configured)"}.
+All code changes must be made within the execution repo path.
+Read goal/state files from the specified goal state directory.
+The canonical repository is at ${_canonicalRepoPath}.
 Project context files (.gptwork/project.md, .gptwork/project.env) live under the canonical repo.
 
-Write result.json to ${resultPath}
+Write result.json to ${_resultJsonPath}
 
 After completing ALL steps, also output the structured report to stdout (legacy format):
 STATUS=<completed|failed|timed_out>

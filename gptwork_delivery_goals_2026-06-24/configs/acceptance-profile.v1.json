@@ -1,0 +1,54 @@
+{
+  "version": "acceptance-profile.v1",
+  "profiles": {
+    "default": {
+      "required": [
+        "result_json_valid",
+        "summary_present",
+        "changed_files_safe_paths",
+        "verification_present_for_non_noop",
+        "verification_passed",
+        "worktree_clean",
+        "no_blocker_or_major_findings"
+      ]
+    },
+    "code_change": {
+      "extends": "default",
+      "required": [
+        "tests_present",
+        "commit_or_patch_evidence",
+        "changed_files_match_git"
+      ]
+    },
+    "docs_only": {
+      "extends": "default",
+      "relaxed": [
+        "tests_present"
+      ],
+      "required": [
+        "docs_paths_only"
+      ]
+    },
+    "deploy": {
+      "extends": "code_change",
+      "required": [
+        "safe_restart_evidence",
+        "post_restart_verification"
+      ]
+    },
+    "noop": {
+      "required": [
+        "result_json_valid",
+        "summary_present",
+        "noop_reason_present"
+      ]
+    }
+  },
+  "severity_policy": {
+    "blocker": "must_repair_or_review",
+    "major": "must_repair_or_review",
+    "minor": "accepted_with_followups",
+    "followup": "accepted_with_followups"
+  },
+  "default_max_repair_attempts": 2
+}

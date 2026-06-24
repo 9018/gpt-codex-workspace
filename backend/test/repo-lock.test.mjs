@@ -599,7 +599,7 @@ test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_
       "second task must NOT be waiting_for_review. Got: " + t2result.status);
     if (t2result.status === "waiting_for_lock") {
       assert.ok(t2result.skipped, "blocked task should be skipped");
-      assert.match(t2result.reason || "", /repo locked/, "reason should mention repo lock");
+      assert.match(t2result.reason || "", /locked/, "reason should mention repo lock");
     }
   }
 
@@ -817,7 +817,7 @@ test("task processor locks resolved repo_id canonical path instead of default re
   const run = await callTool(server, "run_assigned_codex_tasks", { limit: 5, concurrency: 1 });
   const result = run.tasks.find((candidate) => candidate.task_id === created.task.id);
   assert.equal(result.status, "waiting_for_lock");
-  assert.match(result.reason, /repo locked/);
+  assert.match(result.reason, /locked/);
 
   const updated = await callTool(server, "get_task", { task_id: created.task.id });
   assert.equal(updated.task.lock_blocked_by, "task_target_holder");

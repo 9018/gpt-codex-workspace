@@ -15,9 +15,8 @@
  * autoStartNextOnTaskCompleted when the previous task completes.
  */
 
-import { execFileSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { resolveTaskRepository } from "./task-repo-resolution.mjs";
+import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
 
 // ---------------------------------------------------------------------------
 // Queue item status constants
@@ -79,46 +78,10 @@ function findDependentItems(state, completedGoalId, completedTaskId) {
 // Repo lock / worktree checks
 // ---------------------------------------------------------------------------
 
-/**
- * Check if a repo lock is active (held by a non-released lock).
- * Uses the existing repo-lock-diagnostics module.
- */
-async function getActiveRepoLocks(workspaceRoot, repoPath = null) {
-  try {
-    const { getRepoLockSummary, listRepoLocks } = await import("./repo-lock-diagnostics.mjs");
-    if (!repoPath) {
-      const summary = await getRepoLockSummary(workspaceRoot);
-      return summary.active_repo_locks || 0;
-    }
-    const locks = await listRepoLocks(workspaceRoot);
-    return locks.filter((lock) => lock.canonical_repo_path === repoPath && lock.status !== "released").length;
-  } catch {
-    return 0;
-  }
-}
-
-/**
- * Check if the worktree at the given path is dirty.
- * Returns the dirty paths as an array or empty array if clean.
- */
-function checkWorktreeDirty(repoPath) {
-  try {
-    const stdout = execFileSync("git", ["status", "--porcelain"], {
-      cwd: repoPath,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
-      timeout: 10000,
-    });
-    const dirty_paths = stdout.trim().split("\n").filter(Boolean);
-    return { status: dirty_paths.length > 0 ? "dirty" : "clean", dirty_paths, error: null };
-  } catch (err) {
-    return {
-      status: "error",
-      dirty_paths: [],
-      error: String(err?.stderr || err?.message || "git status failed").trim(),
-    };
-  }
-}
+// NOTE: Repo lock and worktree dirty checks have been moved to
+// processGeneralTask (during execution phase). The queue only
+// performs dependency and capacity checks; all git mutation and
+// lock acquisition happens during execution on per-task worktree paths.
 
 // ---------------------------------------------------------------------------
 // Goal status check helpers
@@ -297,7 +260,7 @@ async function resolveQueueItemRepository(item, config) {
       worktree_lifecycle: resolved.worktree_lifecycle || null,
     };
   }
-  return resolveTaskRepository({
+  return resolveTaskRepositoryPlan({
     task: { id: item.task_id || item.goal_id, repo_id: item.repo_id || "" },
     goal: { id: item.goal_id, repo_id: item.repo_id || "" },
     config,
@@ -323,23 +286,9 @@ async function recheckTransientBlockedItems(state, config, workspaceRoot) {
     const depResult = isDependencySatisfied(state, item);
     if (!depResult.satisfied) continue;
 
-    const resolvedRepo = await resolveQueueItemRepository(item, config);
-    const repoPath = resolvedRepo.lock_repo_path || resolvedRepo.canonical_repo_path;
-
-    // Re-check repo lock
-    let activeLocks = 0;
-    try {
-      activeLocks = await getActiveRepoLocks(workspaceRoot, repoPath);
-    } catch {
-      // non-fatal
-    }
-    if (activeLocks > 0) continue;
-
-    // Re-check worktree
-    const worktreeStatus = checkWorktreeDirty(repoPath);
-    if (worktreeStatus.status !== "clean") continue;
-
-    // All transient conditions resolved — move back to waiting
+    // Transient conditions (repo lock, worktree dirty) are now handled during
+    // execution — the queue only performs dependency and capacity checks.
+    // Move back to waiting so startNextQueuedGoal can re-evaluate eligibility.
     item.status = QUEUE_STATUS_WAITING;
     item.blocked_reason = null;
     item.updated_at = now();
@@ -348,6 +297,7 @@ async function recheckTransientBlockedItems(state, config, workspaceRoot) {
 
   return changed;
 }
+
 
 export async function startNextQueuedGoal(store, config, opts = {}) {
   const dryRun = opts.dry_run === true;
@@ -403,49 +353,16 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
       return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
     }
 
-    // 2. Repo lock check
-    let activeLocks = 0;
-    try {
-      activeLocks = await getActiveRepoLocks(workspaceRoot, repoPath);
-    } catch {
-      // non-fatal
-    }
-    const repoLocked = activeLocks > 0;
-    checks.push({ check: "repo_lock", passed: !repoLocked, repo_path: repoPath, detail: repoLocked ? `Active locks: ${activeLocks}` : "no active lock" });
-    if (repoLocked) {
-      candidate.blocked_reason = `Repo locked (${activeLocks} active lock(s))`;
-      candidate.status = QUEUE_STATUS_BLOCKED;
-      candidate.updated_at = now();
-      if (!dryRun) await store.save();
-      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
-    }
-
-    // 3. Worktree dirty check
-    const worktreeStatus = checkWorktreeDirty(repoPath);
-    const isDirty = worktreeStatus.status === "dirty";
-    const isUnknown = worktreeStatus.status !== "clean" && !isDirty;
+        // 2. No repo lock or worktree dirty checks at queue time.
+    //    Locks are acquired during execution on per-task worktree paths.
+    //    The worktree does not exist yet, so dirty checks are irrelevant.
     checks.push({
-      check: "worktree_dirty",
-      passed: worktreeStatus.status === "clean",
-      status: worktreeStatus.status,
-      repo_path: repoPath,
-      detail: isDirty
-        ? `Dirty files: ${worktreeStatus.dirty_paths.join(", ")}`
-        : isUnknown
-          ? `git status failed: ${worktreeStatus.error || "unknown error"}`
-          : "clean",
+      check: "execution_guards_deferred",
+      passed: true,
+      detail: "repo lock and worktree dirty checks deferred to processGeneralTask",
     });
-    if (isDirty || isUnknown) {
-      candidate.blocked_reason = isDirty
-        ? `Worktree dirty (${worktreeStatus.dirty_paths.length} file(s))`
-        : `Worktree status unknown: ${worktreeStatus.error || "git status failed"}`;
-      candidate.status = QUEUE_STATUS_BLOCKED;
-      candidate.updated_at = now();
-      if (!dryRun) await store.save();
-      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
-    }
 
-    // All checks passed — this item is eligible
+// All checks passed — this item is eligible
     if (dryRun) {
       return {
         started: false,

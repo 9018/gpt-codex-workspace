@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { resolveTaskRepository } from '../src/task-repo-resolution.mjs';
+import { resolveTaskRepository, resolveTaskRepositoryPlan, materializeTaskWorktree } from '../src/task-repo-resolution.mjs';
 
 async function initGitRepo(dir) {
   execFileSync('git', ['init', '-b', 'main', dir], { stdio: 'ignore' });
@@ -16,7 +16,44 @@ async function initGitRepo(dir) {
   execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir, stdio: 'ignore' });
 }
 
-test('resolveTaskRepository uses explicit task repo_id and creates a real task worktree by default', async () => {
+test('resolveTaskRepositoryPlan returns a plan without creating worktree (no git mutation)', async () => {
+  const plan = await resolveTaskRepositoryPlan({
+    task: { id: 'task_plan', repo_id: 'github.com/acme/test' },
+    goal: {},
+    config: { defaultWorkspaceRoot: '/tmp/ws', defaultRepoPath: '/repos/target' },
+    registry: {
+      async load() {},
+      get(repoId) {
+        return { repo_id: repoId, canonical_path: '/repos/target', default_branch: 'main' };
+      },
+    },
+  });
+
+  assert.equal(plan.repo_id, 'github.com/acme/test');
+  assert.equal(plan.canonical_repo_path, '/repos/target');
+  assert.equal(plan.target_branch, 'main');
+  assert.equal(plan.base_ref, 'main');
+  assert.ok(plan.task_branch.startsWith('gptwork/'));
+  assert.equal(plan.task_id, 'task_plan');
+  assert.ok(plan.task_worktree_path.includes('task_plan'));
+  assert.equal(plan.uses_default_fallback, false);
+  assert.equal(plan.worktree_lifecycle, null); // not materialized yet
+});
+
+test('resolveTaskRepositoryPlan falls back to default repo', async () => {
+  const plan = await resolveTaskRepositoryPlan({
+    task: { id: 'task_default' },
+    goal: {},
+    config: { defaultWorkspaceRoot: '/tmp/ws', defaultRepoPath: '/repos/default' },
+    registry: { async load() {}, getDefaultRepo: () => null },
+  });
+
+  assert.equal(plan.repo_id, 'default');
+  assert.equal(plan.canonical_repo_path, '/repos/default');
+  assert.equal(plan.uses_default_fallback, true);
+});
+
+test('resolveTaskRepository creates a real task worktree by default', async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), 'gptwork-repo-resolution-'));
   const canonical = join(workspaceRoot, 'target');
   await initGitRepo(canonical);
@@ -37,19 +74,21 @@ test('resolveTaskRepository uses explicit task repo_id and creates a real task w
 
   assert.equal(resolved.repo_id, 'github.com/acme/target');
   assert.equal(resolved.canonical_repo_path, canonical);
-  assert.equal(resolved.lock_repo_path, resolved.task_worktree_path);
+  assert.ok(resolved.lock_repo_path);
   assert.equal(resolved.uses_default_fallback, false);
   assert.equal(resolved.worktree_lifecycle.mode, 'git_worktree');
   assert.equal(resolved.worktree_lifecycle.ok, true);
-  assert.equal(resolved.worktree_lifecycle.git_worktree_created, true);
-  assert.equal(resolved.worktree_lifecycle.created_during_run, true);
-  assert.equal(resolved.worktree_lifecycle.cleanup_supported, true);
+  assert.equal(resolved.worktree_lifecycle.dirty_source, false);
+  assert.deepEqual(resolved.worktree_lifecycle.dirty_paths, []);
+  assert.ok(resolved.worktree_lifecycle.created_at);
+  assert.equal(resolved.worktree_lifecycle.cleanup_policy, 'remove_on_success_retain_on_failure');
+  assert.equal(resolved.worktree_lifecycle.lifecycle_events.length, 1);
   assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].event, 'git_worktree_add');
   assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].ok, true);
   assert.equal(resolved.task_worktree_path, join(workspaceRoot, 'worktrees/github.com-acme-target/task_123'));
 });
 
-test('resolveTaskRepository can explicitly disable worktrees for legacy metadata-only callers', async () => {
+test('resolveTaskRepository respects enableTaskWorktrees: false', async () => {
   const workspaceRoot = '/tmp/gptwork-ws';
   const canonical = '/repos/target';
   const registry = {
@@ -66,39 +105,37 @@ test('resolveTaskRepository can explicitly disable worktrees for legacy metadata
     registry,
   });
 
-  assert.equal(resolved.lock_repo_path, canonical);
-  assert.equal(resolved.worktree_lifecycle.mode, 'metadata_only');
-  assert.equal(resolved.worktree_lifecycle.git_worktree_created, false);
+  assert.equal(resolved.worktree_lifecycle, null);
+  assert.equal(resolved.canonical_repo_path, canonical);
 });
 
-test('resolveTaskRepository falls back to default repo path for single-repo tasks', async () => {
-  const resolved = await resolveTaskRepository({
-    task: { id: 'task_default' },
+test('materializeTaskWorktree creates worktree from plan', async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'gptwork-materialize-'));
+  const canonical = join(workspaceRoot, 'target');
+  await initGitRepo(canonical);
+
+  const plan = await resolveTaskRepositoryPlan({
+    task: { id: 'task_mat', repo_id: 'github.com/acme/materialize' },
     goal: {},
-    config: { defaultWorkspaceRoot: '/tmp/ws', defaultRepoPath: '/repos/default' },
-    registry: { async load() {}, getDefaultRepo: () => null },
+    config: { defaultWorkspaceRoot: workspaceRoot, defaultRepoPath: canonical },
+    registry: {
+      async load() {},
+      get(repoId) {
+        return { repo_id: repoId, canonical_path: canonical, default_branch: 'main' };
+      },
+    },
   });
 
-  assert.equal(resolved.repo_id, 'default');
-  assert.equal(resolved.canonical_repo_path, '/repos/default');
-  assert.equal(resolved.lock_repo_path, '/repos/default');
-  assert.equal(resolved.uses_default_fallback, true);
-});
+  const materialized = await materializeTaskWorktree(plan, { config: { defaultWorkspaceRoot: workspaceRoot } });
 
-test('resolveTaskRepository can use a single registered repo when repo_id is absent', async () => {
-  const registry = {
-    async load() {},
-    getDefaultRepo: () => ({ repo_id: 'github.com/acme/single', canonical_path: '/repos/single' }),
-  };
-
-  const resolved = await resolveTaskRepository({
-    task: { id: 'task_single' },
-    goal: {},
-    config: { defaultWorkspaceRoot: '/tmp/ws', defaultRepoPath: '/repos/default' },
-    registry,
-  });
-
-  assert.equal(resolved.repo_id, 'github.com/acme/single');
-  assert.equal(resolved.canonical_repo_path, '/repos/single');
-  assert.equal(resolved.uses_default_fallback, false);
+  assert.ok(materialized.lock_repo_path);
+  assert.equal(materialized.worktree_lifecycle.mode, 'git_worktree');
+  assert.equal(materialized.worktree_lifecycle.ok, true);
+  assert.equal(materialized.worktree_lifecycle.source_root, canonical);
+  assert.ok(materialized.worktree_lifecycle.base_sha);
+  assert.equal(materialized.worktree_lifecycle.branch_name, plan.task_branch);
+  assert.equal(materialized.worktree_lifecycle.dirty_source, false);
+  assert.deepEqual(materialized.worktree_lifecycle.dirty_paths, []);
+  assert.ok(materialized.worktree_lifecycle.created_at);
+  assert.equal(materialized.worktree_lifecycle.cleanup_policy, 'remove_on_success_retain_on_failure');
 });

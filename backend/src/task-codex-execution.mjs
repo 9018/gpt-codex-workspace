@@ -10,6 +10,7 @@ export async function executeCodexTaskRun({
   workspaceRoot,
   task,
   goal,
+  resultJsonPath,
   executionCwd = null,
   promptFile,
   runFilePath = null,
@@ -113,8 +114,8 @@ export async function executeCodexTaskRun({
   }
 
   const out = (cr.stdout || "").trim();
-  const resultJsonPath = workspaceRoot + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
-  parsedResult = await parseCodexResultFn({ resultJsonPath, stdout: out });
+  const resolvedResultJsonPath = resultJsonPath || (workspaceRoot + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
+  parsedResult = await parseCodexResultFn({ resultJsonPath: resolvedResultJsonPath, stdout: out });
   if (parsedResult.summary) {
     summary = parsedResult.summary;
   } else {

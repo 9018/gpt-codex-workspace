@@ -1,5 +1,9 @@
 # GPTWork Operator Runbook
 
+> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → complete) is **integrated** into the main flow. All health checks, diagnostics, restart verification, lock management, and retention cleanup procedures below apply to the fully integrated system. The repair loop and serial integration queue remain **experimental** — see [Delivery Architecture](delivery/multi-task-delivery-architecture.md) for details on which components are still being hardened.
+
+---
+
 Concise operational guide for the npm-managed GPTWork service. Covers health checks, restart verification, locks, retention cleanup, and recovery.
 
 ---

@@ -1,5 +1,9 @@
 # GPTWork Setup and Connection Guide
 
+> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → complete) is **integrated** into the main flow. All setup, configuration, and connection procedures below apply to the fully integrated system. The repair loop and serial integration queue remain **experimental** — delivery tasks exceeding the repair budget will enter `waiting_for_review` rather than auto-repairing. See [Delivery Architecture](delivery/multi-task-delivery-architecture.md) for details on which components are still being hardened.
+
+---
+
 This guide walks you through the recommended path from clone to ChatGPT connection.
 
 ## Table of Contents

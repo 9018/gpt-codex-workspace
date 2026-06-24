@@ -9,15 +9,21 @@ import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
 import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle, validateResultContract, DIAGNOSIS_CODES } from "./task-result-status.mjs";
 import { updateTask } from "./task-lifecycle.mjs";
 import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
-import { resolveTaskRepository } from "./task-repo-resolution.mjs";
+import { resolveTaskRepositoryPlan as _resolveTaskRepositoryPlan, materializeTaskWorktree as _materializeTaskWorktree } from "./task-repo-resolution.mjs";
 import { buildReviewerDecision } from "./acceptance-policy.mjs";
+import { runAcceptanceAgent, ACCEPTANCE_PROFILES, hasCodeOrConfigOrRuntimeChanges } from './acceptance-agent.mjs';
+import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
+import { runIntegrationQueue } from './integration-queue.mjs';
+import { createGoal } from './goal-task-goals.mjs';
+
 
 export async function processGeneralTask(store, config, task, context, github) {
   return processGeneralTaskWithDeps(store, config, task, context, github, {});
 }
 
 export async function processGeneralTaskWithDeps(store, config, task, context, github, deps = {}) {
-  const resolveTaskRepositoryFn = deps.resolveTaskRepositoryFn || resolveTaskRepository;
+  const resolveTaskRepositoryPlanFn = deps.resolveTaskRepositoryPlanFn || _resolveTaskRepositoryPlan;
+  const materializeTaskWorktreeFn = deps.materializeTaskWorktreeFn || _materializeTaskWorktree;
   const acquireRepoLockFn = deps.acquireRepoLockFn || acquireRepoLock;
   const releaseLockForTaskFn = deps.releaseLockForTaskFn || releaseLockForTask;
   const prepareCodexTaskRunFn = deps.prepareCodexTaskRunFn || prepareCodexTaskRun;
@@ -27,6 +33,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const appendGoalMessageFn = deps.appendGoalMessageFn || appendGoalMessage;
   const ensureTaskGoalFn = deps.ensureTaskGoalFn || ensureTaskGoal;
   const selectWorkspaceFn = deps.selectWorkspaceFn || selectWorkspace;
+  // Acceptance/repair/integration deps
+  const runAcceptanceAgentFn = deps.runAcceptanceAgentFn || runAcceptanceAgent;
+  const createRepairGoalFromFindingsFn = deps.createRepairGoalFromFindingsFn || createRepairGoalFromFindings;
+  const shouldAttemptRepairFn = deps.shouldAttemptRepairFn || shouldAttemptRepair;
+  const runIntegrationQueueFn = deps.runIntegrationQueueFn || runIntegrationQueue;
+  const createGoalFn = deps.createGoalFn || createGoal;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
     delete item.lock_blocked_at;
@@ -38,6 +50,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const linked = await ensureTaskGoalFn(store, config, task.id, context, { assign_to_codex: true });
   const goal = linked.goal;
   const workspaceFiles = linked.workspace_files || (goal ? goalWorkspaceFiles(goal) : { dir: '.gptwork/goals/unknown' });
+
+  // Resolve repo plan first (no git mutation) — safe for queue/dry-run
+  const resolvedRepoPlan = await resolveTaskRepositoryPlanFn({ task, goal, config, registry: config.registry || null });
+  if (!resolvedRepoPlan || !resolvedRepoPlan.repo_id) {
+    throw new Error(`resolveTaskRepositoryPlan returned no plan for task ${task.id}`);
+  }
 
   const workspace = await selectWorkspaceFn(store, task.workspace_id, context);
   if (workspace.type !== "hosted") {
@@ -63,44 +81,79 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
     }, context);
   }
-  const resolvedRepo = await resolveTaskRepositoryFn({ task, goal, config, registry: config.registry || null });
-  const repoLockPath = resolvedRepo.lock_repo_path || config.defaultRepoPath;
-  const executionCwd = resolvedRepo.worktree_lifecycle?.ok === true
-    ? resolvedRepo.task_worktree_path
-    : workspace.root;
-  if (resolvedRepo.worktree_lifecycle?.ok === false) {
-    const failMsg = `[worker] failed to prepare task worktree: ${resolvedRepo.worktree_lifecycle.error || "unknown worktree error"}`;
+  // No pre-materialization lock — worktree tasks use independent worktree paths
+  // for true concurrent execution on the same canonical repo.
+  let repoLockPath = null;
+  // Enter materializing_worktree state (only now do we create the worktree)
+  const enableWorktrees = config.enableTaskWorktrees !== false;
+  let resolvedRepo = resolvedRepoPlan;
+  let executionCwd = workspace.root;
+
+  if (enableWorktrees) {
     await updateTaskFn(store, task.id, (item) => {
-      item.status = "failed";
-      item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
-      item.logs.push({ time: new Date().toISOString(), message: failMsg });
+      item.status = "materializing_worktree";
+      item.logs.push({ time: new Date().toISOString(), message: "[worker] materializing worktree" });
     });
-    return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
-  }
-  if (repoLockPath) {
-    const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, {
-      taskId: task.id,
-      runId: null,
-      mode: task.mode || "builder"
-    });
-    if (!lockResult.acquired) {
-      const lockMsg = "[worker] repo locked by task " + lockResult.heldByTask + ", retry after completion. Skipping.";
+
+    const materialized = await materializeTaskWorktreeFn(resolvedRepoPlan, { config });
+    resolvedRepo = { ...resolvedRepoPlan, ...materialized };
+    executionCwd = resolvedRepo.worktree_lifecycle?.ok === true
+      ? resolvedRepo.task_worktree_path
+      : workspace.root;
+
+    if (resolvedRepo.worktree_lifecycle?.ok === false) {
+      const failMsg = `[worker] failed to materialize task worktree: ${resolvedRepo.worktree_lifecycle.error || "unknown worktree error"}`;
       await updateTaskFn(store, task.id, (item) => {
-        item.status = "waiting_for_lock";
-        item.lock_blocked_at = new Date().toISOString();
-        item.lock_blocked_by = lockResult.heldByTask;
-        item.logs.push({ time: new Date().toISOString(), message: lockMsg });
+        item.status = "failed";
+        item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
+        item.logs.push({ time: new Date().toISOString(), message: failMsg });
       });
-      if (goal) {
-        await appendGoalMessageFn(store, config, {
-          goal_id: goal.id,
-          role: "codex",
-          content: lockMsg
-        }, context);
-      }
-      return { task_id: task.id, status: "waiting_for_lock", skipped: true, reason: lockMsg };
+      return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
     }
   }
+
+  // Compute contract paths once for the full prepare -> execute -> finalize chain
+  const _goalId = goal ? goal.id : task.id;
+  const _goalStateDir = config.defaultWorkspaceRoot + "/.gptwork/goals/" + _goalId;
+  const _resultJsonPath = _goalStateDir + "/result.json";
+  const _resultMdPath = _goalStateDir + "/result.md";
+  const _executionRepoPath = executionCwd || resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || config.defaultRepoPath;
+
+  // Acquire execution lock on task worktree path (not canonical repo).
+  // In worktree mode, each task uses its own worktree path as lock resource,
+  // so concurrent tasks on different worktrees are NOT serialized by this lock.
+  // In legacy mode (no worktrees), lock on canonical repo path.
+  {
+    const lockPath = enableWorktrees
+      ? (resolvedRepo.lock_repo_path || resolvedRepo.task_worktree_path)
+      : (resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath);
+    if (lockPath) {
+      const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, lockPath, {
+        taskId: task.id,
+        runId: null,
+        mode: task.mode || "builder"
+      });
+      if (!lockResult.acquired) {
+        const lockMsg = "[worker] execution path locked by task " + lockResult.heldByTask + ", retry after completion. Skipping.";
+        await updateTaskFn(store, task.id, (item) => {
+          item.status = "waiting_for_lock";
+          item.lock_blocked_at = new Date().toISOString();
+          item.lock_blocked_by = lockResult.heldByTask;
+          item.logs.push({ time: new Date().toISOString(), message: lockMsg });
+        });
+        if (goal) {
+          await appendGoalMessageFn(store, config, {
+            goal_id: goal.id,
+            role: "codex",
+            content: lockMsg
+          }, context);
+        }
+        return { task_id: task.id, status: "waiting_for_lock", skipped: true, reason: lockMsg };
+      }
+      repoLockPath = lockPath;
+    }
+  }
+
   await updateTaskFn(store, task.id, (item) => {
     item.status = "running";
     item.logs.push({ time: new Date().toISOString(), message: "[worker] codex exec started" });
@@ -120,6 +173,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       workspaceRoot: workspace.root,
       config,
       repoLockPath,
+      executionRepoPath: _executionRepoPath,
+      goalStateDir: _goalStateDir,
+      resultJsonPath: _resultJsonPath,
+      resultMdPath: _resultMdPath,
     });
     promptFile = prepResult.promptFile;
     runFilePath = prepResult.runFilePath;
@@ -164,6 +221,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       workspaceRoot: workspace.root,
       task,
       goal,
+      resultJsonPath: _resultJsonPath,
       promptFile,
       runFilePath,
       runId,
@@ -229,7 +287,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // P0: result contract validation — escalate to review on contract violation
   const acceptanceFindings = Array.isArray(parsedResult?.acceptance_findings) ? [...parsedResult.acceptance_findings] : [];
   if (taskStatus === "completed" && parsedResult) {
-    const contractValidation = validateResultContract(parsedResult, { repoPath: resolvedRepo.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot });
+    const validateRepoPath = resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot;
+    const contractValidation = validateResultContract(parsedResult, { repoPath: validateRepoPath });
     if (!contractValidation.valid) {
       taskStatus = "waiting_for_review";
       const diagnosisMsg = "Contract violation: " + contractValidation.diagnosis_codes.join(", ");
@@ -273,6 +332,189 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   if (reviewer.decision.repair_proposals.length > 0) {
     taskResult.repair_proposals = reviewer.decision.repair_proposals;
   }
+  // P0: Collect verification evidence before cleanup
+  if (taskStatus === "completed" && executionCwd) {
+    try {
+      const { collectVerificationEvidence } = await import("./verification-evidence.mjs");
+      const evidenceResult = await collectVerificationEvidence({
+        repoPath: resolvedRepo.canonical_repo_path,
+        worktreePath: resolvedRepo.task_worktree_path,
+        outputDir: _goalStateDir,
+        resultJsonPath: _resultJsonPath,
+        acceptanceFindings,
+      });
+      if (evidenceResult && evidenceResult.evidence_paths) {
+        taskResult.evidence_paths = evidenceResult.evidence_paths;
+      }
+    } catch (evidenceErr) {
+      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+      taskResult.warnings.push("Evidence collection failed (non-blocking): " + evidenceErr.message);
+    }
+  }
+
+
+  
+  // ================================================================
+  // PR0: Acceptance agent — evidence-based verification
+  // ================================================================
+  if (taskStatus === 'completed' && (parsedResult || taskResult)) {
+    const acceptanceResult = await runAcceptanceAgentFn({
+      task,
+      goal,
+      result: parsedResult || taskResult,
+      repoPath: _executionRepoPath,
+    });
+
+    // Merge acceptance agent findings with existing findings
+    const aaFindings = Array.isArray(acceptanceResult.findings) ? acceptanceResult.findings : [];
+    const mergedFindings = [...acceptanceFindings];
+
+    // Add acceptance agent findings that are not duplicates
+    for (const f of aaFindings) {
+      const isDup = mergedFindings.some(ex => ex.code === f.code && ex.message === f.message);
+      if (!isDup) mergedFindings.push(f);
+    }
+
+    taskResult.acceptance_findings = mergedFindings;
+    taskResult.acceptance_profile = acceptanceResult.profile;
+    // Prefer acceptance agent's reviewer decision over the lightweight one
+    if (acceptanceResult.reviewer_decision) {
+      taskResult.reviewer_decision = acceptanceResult.reviewer_decision;
+    }
+    if (Array.isArray(acceptanceResult.repair_proposals) && acceptanceResult.repair_proposals.length > 0) {
+      taskResult.repair_proposals = acceptanceResult.repair_proposals;
+    }
+    if (Array.isArray(acceptanceResult.next_tasks) && acceptanceResult.next_tasks.length > 0) {
+      taskResult.next_tasks = acceptanceResult.next_tasks;
+    }
+
+    if (!acceptanceResult.passed) {
+      // === Acceptance FAILED → attempt repair or escalate ===
+      const canRepair = await shouldAttemptRepairFn({ task, maxAttempts: config.maxRepairAttempts });
+      taskResult.acceptance_decision = acceptanceResult.reviewer_decision?.decision || null;
+
+      if (canRepair.should_repair) {
+        const repairGoal = await createRepairGoalFromFindingsFn({
+          task,
+          goal,
+          findings: mergedFindings,
+          repairProposals: acceptanceResult.repair_proposals,
+        });
+
+        taskStatus = 'waiting_for_repair';
+        taskResult.repair_goal = repairGoal;
+        taskResult.repair_attempt = repairGoal.repair_attempt;
+        taskResult.reason = 'acceptance_failed: ' + canRepair.reason;
+
+        // Create repair goal/task in the store so it can be picked up by the worker
+        try {
+          const repairCreated = await createGoalFn(store, config, {
+            user_request: repairGoal.user_request,
+            goal_prompt: repairGoal.goal_prompt,
+            title: 'Repair: ' + task.title + ' (attempt ' + repairGoal.repair_attempt + ')',
+            project_id: task.project_id || (goal ? goal.project_id : 'default'),
+            workspace_id: repairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : 'hosted-default'),
+            mode: repairGoal.mode || 'builder',
+            assign_to_codex: true,
+            skip_created_notification: false,
+          });
+          taskResult.repair_goal_id = repairCreated.goal ? repairCreated.goal.id : null;
+          taskResult.repair_task_id = repairCreated.task ? repairCreated.task.id : null;
+        } catch (repairErr) {
+          taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+          taskResult.warnings.push('Repair goal creation failed (non-blocking): ' + repairErr.message);
+        }
+      } else {
+        taskStatus = 'waiting_for_review';
+        taskResult.repair_denied_reason = canRepair.reason;
+        taskResult.reason = 'acceptance_failed: ' + canRepair.reason;
+      }
+    } else {
+      // === Acceptance PASSED → check if integration is needed ===
+      const hasChanges = hasCodeOrConfigOrRuntimeChanges({
+        acceptanceResult,
+        task,
+        result: parsedResult || taskResult,
+      });
+
+      if (hasChanges) {
+        // Integration is needed — run serial integration queue
+        const gitPath = resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || _executionRepoPath;
+        const integrationResult = await runIntegrationQueueFn({
+          repoId: resolvedRepo.repo_id,
+          targetBranch: config.defaultBranch || 'main',
+          worktreePath: gitPath,
+          canonicalRepoPath: resolvedRepo.canonical_repo_path,
+          taskBranch: (resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || 'gptwork/' + task.id,
+          integrationMode: config.integrationMode || 'push_branch',
+          checkCommands: config.integrationCheckCommands,
+        });
+
+        taskResult.integration = { ...integrationResult };
+
+        if (integrationResult.ok) {
+          // Integration succeeded — task completes
+          taskStatus = 'completed';
+        } else if (integrationResult.status === 'conflict' || integrationResult.status === 'check_failed') {
+          // Integration conflict — create repair or escalate
+          // Integration conflict — create repair or escalate
+          const intCanRepair = await shouldAttemptRepairFn({ task, maxAttempts: 1 });
+          const conflictFindings = [{
+            severity: 'blocker',
+            code: 'integration_' + integrationResult.status,
+            message: integrationResult.error || 'Integration ' + integrationResult.status,
+            source: 'integration_queue',
+            conflict_files: integrationResult.conflict_files || [],
+          }];
+
+          if (intCanRepair.should_repair) {
+            const intRepairGoal = await createRepairGoalFromFindingsFn({
+              task,
+              goal,
+              findings: conflictFindings,
+              repairProposals: [{
+                title: 'Resolve integration conflict',
+                proposed_action: 'Merge conflict with ' + (config.defaultBranch || 'target branch'),
+              }],
+            });
+
+            taskStatus = 'waiting_for_repair';
+            taskResult.repair_goal = intRepairGoal;
+            taskResult.repair_attempt = intRepairGoal.repair_attempt;
+            taskResult.reason = 'integration_' + integrationResult.status + ': ' + (integrationResult.error || 'unknown');
+
+            try {
+              const intRepairCreated = await createGoalFn(store, config, {
+                user_request: intRepairGoal.user_request,
+                goal_prompt: intRepairGoal.goal_prompt,
+                title: 'Repair: ' + task.title + ' (attempt ' + intRepairGoal.repair_attempt + ', integration conflict)',
+                project_id: task.project_id || (goal ? goal.project_id : 'default'),
+                workspace_id: intRepairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : 'hosted-default'),
+                mode: intRepairGoal.mode || 'builder',
+                assign_to_codex: true,
+                skip_created_notification: false,
+              });
+              taskResult.repair_goal_id = intRepairCreated.goal ? intRepairCreated.goal.id : null;
+              taskResult.repair_task_id = intRepairCreated.task ? intRepairCreated.task.id : null;
+            } catch (intRepairErr) {
+              taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+              taskResult.warnings.push('Integration repair goal creation failed (non-blocking): ' + intRepairErr.message);
+            }
+          } else {
+            taskStatus = 'waiting_for_review';
+            taskResult.repair_denied_reason = intCanRepair.reason;
+            taskResult.reason = 'integration_' + integrationResult.status + ': ' + (integrationResult.error || 'unknown');
+          }
+      } else {
+        // Integration locked or other non-terminal state
+        taskStatus = 'waiting_for_integration';
+      }
+      // NOTE: For multi-process integration, replace INTEGRATION_LOCKS Map with
+      // persistent repo-lock-lifecycle locks.
+      // else: no changes (noop/docs-only) — keep completed status
+    }
+  }
+
 
   return finalizeCodexTaskRunFn({
     store,
@@ -292,5 +534,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     resolvedRepo,
     github,
     appendGoalMessageFn,
+    resultJsonPath: _resultJsonPath,
   });
+}
 }

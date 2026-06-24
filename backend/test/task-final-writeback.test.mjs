@@ -251,4 +251,73 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
   assert.equal(fallbackJson.execution_cwd_proof.used_task_worktree_path, true);
 });
 
+// ===========================================================================
+// Test: resultJsonPath param overrides local derivation
+// ===========================================================================
+
+test("task-final-writeback: passed resultJsonPath used for fallback write", async () => {
+  let fallbackPath = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      return updater(state);
+    },
+  };
+  args.writeFileFn = async (path, content) => {
+    fallbackPath = path;
+  };
+  // Pass a custom resultJsonPath
+  args.resultJsonPath = "/custom/path/result.json";
+
+  await finalizeCodexTaskRun(args);
+  assert.equal(fallbackPath, "/custom/path/result.json", "should write to passed resultJsonPath");
+});
+
+test("task-final-writeback: passed resultJsonPath used in heartbeat", async () => {
+  let heartbeatResultJsonPath = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      return updater(state);
+    },
+  };
+  args.writeFileFn = async () => {};
+  args.fireHeartbeatFn = async (runPath, status, meta) => {
+    heartbeatResultJsonPath = meta.result_json_path;
+  };
+  args.runFilePath = "/some/run/file.json";
+  args.resultJsonPath = "/custom/heartbeat/result.json";
+
+  await finalizeCodexTaskRun(args);
+  assert.equal(heartbeatResultJsonPath, "/custom/heartbeat/result.json", "heartbeat should use passed resultJsonPath");
+});
+
+test("task-final-writeback: evidence_paths included in fallback result.json", async () => {
+  let savedData = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      return updater(state);
+    },
+  };
+  args.writeFileFn = async (path, content) => {
+    savedData = JSON.parse(content);
+  };
+  args.resultJsonPath = "/custom/result.json";
+  args.taskResult.evidence_paths = {
+    implementation_diff_patch: "/path/to/implementation-diff.patch",
+    verification_log: "/path/to/verification.log",
+    acceptance_evidence_json: "/path/to/acceptance.evidence.json",
+  };
+
+  await finalizeCodexTaskRun(args);
+  assert.ok(savedData, "should have written result.json");
+  assert.equal(savedData.evidence_paths.implementation_diff_patch, "/path/to/implementation-diff.patch");
+  assert.equal(savedData.evidence_paths.verification_log, "/path/to/verification.log");
+  assert.equal(savedData.evidence_paths.acceptance_evidence_json, "/path/to/acceptance.evidence.json");
+});
+
 console.log("task-final-writeback tests loaded");

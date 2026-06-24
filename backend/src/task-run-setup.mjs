@@ -9,6 +9,10 @@ export async function prepareCodexTaskRun({
   workspaceFiles,
   workspaceRoot,
   config,
+  executionRepoPath,
+  goalStateDir,
+  resultJsonPath,
+  resultMdPath,
   repoLockPath = null,
   updateRepoLockFn = updateRepoLock,
 }) {
@@ -18,6 +22,10 @@ export async function prepareCodexTaskRun({
     workspaceFiles,
     workspaceRoot,
     defaultRepoPath: config.defaultRepoPath,
+    executionRepoPath,
+    goalStateDir,
+    resultJsonPath,
+    resultMdPath,
   });
 
   // Write prompt to managed tmp directory with ENOSPC recovery

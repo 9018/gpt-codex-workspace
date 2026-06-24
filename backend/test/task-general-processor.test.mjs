@@ -232,20 +232,30 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
       workspace_ids: ["*"],
       scopes: ["task:create", "task:update", "workspace:read", "project:read", "workspace:write"],
     }, { syncTask: async () => {} }, {
-      resolveTaskRepositoryFn: async () => {
+      resolveTaskRepositoryPlanFn: async () => {
         resolvedCalled = true;
         return {
           repo_id: "github.com/acme/repo",
           canonical_repo_path: join(tmpDir, "canonical"),
-          lock_repo_path: taskWorktreePath,
+          task_id: "task_worktree_chain",
           task_worktree_path: taskWorktreePath,
           uses_default_fallback: false,
+          worktree_lifecycle: null,
+        };
+      },
+      materializeTaskWorktreeFn: async (plan) => {
+        return {
+          lock_repo_path: taskWorktreePath,
           worktree_lifecycle: {
             mode: "git_worktree",
             ok: true,
-            cleanup_supported: true,
-            git_worktree_created: true,
-            created_during_run: true,
+            source_root: plan.canonical_repo_path,
+            worktree_path: taskWorktreePath,
+            branch_name: "gptwork/task_worktree_chain",
+            dirty_source: false,
+            created_at: new Date().toISOString(),
+            cleanup_policy: "remove_on_success_retain_on_failure",
+            lifecycle_events: [{ event: "git_worktree_add", ok: true, worktree_path: taskWorktreePath }],
           },
         };
       },
@@ -277,11 +287,28 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      // PR0: Mock acceptance/repair/integration to avoid interference with existing test
+      runAcceptanceAgentFn: async () => ({
+        passed: true,
+        status: "accepted_with_followups",
+        profile: "default",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: [] },
+        reviewer_decision: { role: "acceptance_agent", summary: "Mock accepted", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: false, reason: "mock - no repair" }),
+      createRepairGoalFromFindingsFn: async () => ({ id: "mock_repair" }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async () => ({ goal: {}, task: {} }),
     });
 
     assert.equal(result.status, "completed");
     assert.equal(resolvedCalled, true);
-    assert.equal(acquiredLockPath, taskWorktreePath);
+    // Lock is now acquired on task worktree path (not canonical repo)
+  assert.equal(acquiredLockPath, taskWorktreePath);
     assert.equal(observedExecutionCwd, taskWorktreePath);
     assert.equal(finalizedResolvedRepo.task_worktree_path, taskWorktreePath);
     assert.equal(finalizedTaskResult.repo_resolution.worktree_lifecycle.mode, "git_worktree");
@@ -293,3 +320,466 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+// ===========================================================================
+// PR0 Integration Tests: acceptance agent + repair loop + integration queue
+// ===========================================================================
+
+test("processGeneralTaskWithDeps: acceptance passed + no changes -> completed", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-pass-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_acc_pass_noop", "goal_acc_pass_noop");
+    let acceptanceCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_pass_noop", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_acc_pass_noop", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "noop completed",
+        parsedResult: { structured: true, status: "completed", summary: "noop completed", changed_files: [], tests: "none", noop: true, acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        acceptanceCalled = true;
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      // Use real acceptance agent functions
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "noop",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: [] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(acceptanceCalled, true);
+    assert.equal(result.status, "completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: acceptance passed + code changes + integration success -> completed", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-int-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_acc_int_ok", "goal_acc_int_ok");
+    let integrationCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_int_ok", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_acc_int_ok", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change completed",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "completed", "task should complete after successful integration");
+        integrationCalled = true;
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        integrationCalled = true;
+        assert.equal(opts.repoId, "github.com/acme/repo");
+        return { ok: true, status: "completed", merged: false, pushed: true, pr_opened: false };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(integrationCalled, true, "integration should have been called");
+    assert.equal(result.status, "completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: acceptance passed + code changes + integration locked -> waiting_for_integration", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-int-lock-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_int_lock", "goal_int_lock");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_lock", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_int_lock", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_integration", "task should wait when integration locked");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        return { ok: false, status: "locked", merged: false, pushed: false, pr_opened: false, error: "Integration lock held for integration:github.com/acme/repo:main by another task" };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(result.status, "waiting_for_integration");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: acceptance failed + repair possible -> waiting_for_repair", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-fail-repair-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_fail_repair", "goal_fail_repair");
+    let repairGoalCreated = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_repair", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_fail_repair", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "failed code",
+        parsedResult: { structured: true, status: "completed", summary: "failed code", changed_files: ["src/bug.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_repair");
+        assert.ok(taskResult.repair_goal, "repair_goal should be set");
+        assert.equal(taskResult.repair_goal.parent_task_id, task.id);
+        assert.ok(taskResult.reason.startsWith("acceptance_failed"), "reason should indicate acceptance failure");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: false,
+        status: "needs_fix",
+        profile: "code_change",
+        findings: [{ severity: "blocker", code: "verification_failed", message: "Tests did not pass", source: "acceptance_agent" }],
+        repair_proposals: [{ title: "Fix tests", proposed_action: "Re-run tests after fixing" }],
+        next_tasks: [],
+        evidence: { changed_files: ["src/bug.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "Acceptance failed", decision: { status: "needs_fix", passed: false } },
+      }),
+      shouldAttemptRepairFn: async () => {
+        repairGoalCreated = true;
+        return { should_repair: true, reason: "Repair attempt 1/2" };
+      },
+      createRepairGoalFromFindingsFn: async (opts) => ({
+        id: "repair_task_fail_repair_1",
+        parent_task_id: task.id,
+        root_task_id: task.id,
+        repair_attempt: 1,
+        acceptance_findings: opts.findings,
+        repair_proposals: opts.repairProposals,
+        user_request: "Repair: " + task.title + " (attempt 1)",
+        goal_prompt: "Repair prompt for task " + task.id,
+        mode: "builder",
+        workspace_id: "hosted-default",
+      }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async (store, config, args) => {
+        assert.ok(args.user_request.includes("Repair"), "should be a repair goal");
+        return { goal: { id: "repair_goal_created" }, task: { id: "repair_task_created" } };
+      },
+    });
+
+    assert.equal(result.status, "waiting_for_repair");
+    assert.equal(repairGoalCreated, true);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: acceptance failed + no repair -> waiting_for_review", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-fail-review-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_fail_review", "goal_fail_review");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_review", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_fail_review", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "failing code",
+        parsedResult: { structured: true, status: "completed", summary: "failing code", changed_files: ["src/bug.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_review");
+        assert.ok(taskResult.repair_denied_reason, "repair_denied_reason should be set");
+        assert.ok(taskResult.reason.startsWith("acceptance_failed"), "reason should indicate acceptance failure");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: false,
+        status: "needs_fix",
+        profile: "code_change",
+        findings: [{ severity: "blocker", code: "verification_failed", message: "Tests did not pass", source: "acceptance_agent" }],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/bug.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "Acceptance failed", decision: { status: "needs_fix", passed: false } },
+      }),
+      shouldAttemptRepairFn: async () => {
+        return { should_repair: false, reason: "Repair attempt 3/2 exceeds max. Waiting for review." };
+      },
+      createRepairGoalFromFindingsFn: async (opts) => ({}),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async () => ({ goal: {}, task: {} }),
+    });
+
+    assert.equal(result.status, "waiting_for_review");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-int-conflict-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_int_conflict", "goal_int_conflict");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_conflict", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_int_conflict", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "conflicting change",
+        parsedResult: { structured: true, status: "completed", summary: "conflicting change", changed_files: ["src/app.mjs"], tests: "pass", commit: "def456", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_repair", "conflict should trigger repair");
+        assert.ok(taskResult.reason.startsWith("integration_conflict"), "reason should indicate integration conflict");
+        assert.ok(taskResult.repair_goal, "repair_goal should be set for integration conflict");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "Repair attempt 1/2" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({
+        id: "repair_int_conflict_1",
+        parent_task_id: task.id,
+        root_task_id: task.id,
+        repair_attempt: 1,
+        acceptance_findings: opts.findings,
+        repair_proposals: opts.repairProposals,
+        user_request: "Repair integration conflict",
+        goal_prompt: "Resolve integration conflict",
+        mode: "builder",
+        workspace_id: "hosted-default",
+      }),
+      runIntegrationQueueFn: async (opts) => ({
+        ok: false, status: "conflict", merged: false, pushed: false, pr_opened: false,
+        error: "Rebase conflict on main",
+        conflict_files: ["src/app.mjs"],
+      }),
+      createGoalFn: async () => ({ goal: { id: "repair_goal_created" }, task: { id: "repair_task_created" } }),
+    });
+
+    assert.equal(result.status, "waiting_for_repair");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ===========================================================================
+// Helpers for PR0 integration tests
+// ===========================================================================
+
+/**
+ * Create a StateStore with a pre-populated hosted workspace.
+ */
+/**
+ * Create a StateStore with a pre-populated hosted workspace and a single task.
+ * The state is written to a file before loading so that RocksDB-based indexes
+ * are properly populated.
+ *
+ * @param {string} tmpDir - Temp directory for state file
+ * @param {string} taskId - Task ID to create (optional)
+ * @param {string} goalId - Goal ID to create (optional)
+ * @param {object} [overrides] - Extra fields to set on the task
+ * @returns {{ store: object, task: object|null, goal: object|null, now: string }}
+ */
+function createTaskStore(tmpDir, taskId, goalId, overrides = {}) {
+  const now = new Date().toISOString();
+  const convId = "conv_" + (goalId || "default");
+
+  const goal = goalId ? {
+    id: goalId,
+    project_id: "default",
+    workspace_id: "hosted-default",
+    conversation_id: convId,
+    user_request: "Test " + taskId,
+    goal_prompt: "Goal prompt for " + taskId,
+    title: "Test " + taskId,
+    created_by: "user_default",
+    assignee: "codex",
+    status: "assigned",
+    mode: "builder",
+    created_at: now,
+    updated_at: now,
+  } : null;
+
+  const conversation = {
+    id: convId,
+    goal_id: goal ? goal.id : "none",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    messages: [{ role: "user", content: "Test", id: "msg_1", author_id: "user_default", created_at: now }],
+    created_at: now,
+    updated_at: now,
+  };
+
+  const task = taskId ? {
+    id: taskId,
+    project_id: "default",
+    workspace_id: "hosted-default",
+    goal_id: goal ? goal.id : null,
+    conversation_id: convId,
+    title: "Test " + taskId,
+    description: "Test description for " + taskId,
+    created_by: "user_default",
+    assignee: "codex",
+    status: "assigned",
+    mode: "builder",
+    logs: [],
+    artifacts: [],
+    result: null,
+    created_at: now,
+    updated_at: now,
+    ...overrides,
+  } : null;
+
+  const state = {
+    users: [{ id: "user_default", name: "Default User" }],
+    teams: [{ id: "team_default", name: "Default Team" }],
+    projects: [{ id: "default", team_id: "team_default", name: "Default Project", default_workspace_id: "hosted-default", created_at: now, updated_at: now }],
+    workspaces: [{ id: "hosted-default", project_id: "default", name: "Hosted Workspace", type: "hosted", root: tmpDir, default: true, created_at: now, updated_at: now }],
+    goals: goal ? [goal] : [],
+    conversations: [conversation],
+    memories: [],
+    tasks: task ? [task] : [],
+    activities: [],
+  };
+
+  const statePath = join(tmpDir, "state.json");
+  writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8");
+  const store = new StateStore({ statePath, defaultWorkspaceRoot: tmpDir });
+  return { store, task, goal, now };
+}
+
+const ctx = {
+  user_id: "test_user",
+  project_ids: ["*"],
+  workspace_ids: ["*"],
+  scopes: ["task:create", "task:update", "workspace:read", "project:read", "workspace:write"],
+};
+
+console.log("task-general-processor PR0 integration tests loaded");
+
+/**
+ * Create a mock repo plan for testing.
+ */
+function makeRepoPlan(taskId, tmpDir, repoId) {
+  const worktreePath = join(tmpDir, "worktrees", repoId.replace(/\//g, "-"), taskId);
+  return {
+    repo_id: repoId,
+    canonical_repo_path: join(tmpDir, "canonical", repoId.replace(/\//g, "-")),
+    task_id: taskId,
+    task_worktree_path: worktreePath,
+    uses_default_fallback: false,
+    worktree_lifecycle: null,
+  };
+}

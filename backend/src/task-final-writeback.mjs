@@ -5,6 +5,10 @@ import { releaseRepoLock } from "./repo-lock.mjs";
 import { removeTaskWorktree } from "./task-worktree-manager.mjs";
 import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
+import { runIntegrationQueue } from './integration-queue.mjs';
+import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
+import { createGoal } from './goal-task-goals.mjs';
+
 
 const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
 
@@ -20,6 +24,7 @@ export async function finalizeCodexTaskRun({
   goal,
   workspaceFiles,
   summary,
+  resultJsonPath,
   context,
   runFilePath,
   repoLockPath,
@@ -36,9 +41,9 @@ export async function finalizeCodexTaskRun({
   writeFileFn = nodeWriteFile,
 }) {
   if (runFilePath) {
-    const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
+    const _resolvedRjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
     fireHeartbeatFn(runFilePath, taskStatus === "completed" ? "completed" : "failed", {
-      result_json_path: resultJsonPath,
+      result_json_path: _resolvedRjPath,
       exit_code: cr?.returncode ?? -1,
       timed_out: cr?.timed_out || false,
       no_first_output_timeout: cr?.no_first_output_timeout || false,
@@ -51,12 +56,85 @@ export async function finalizeCodexTaskRun({
     });
   }
 
-  const cleanup = await cleanupTaskWorktree({
-    task,
-    config,
-    resolvedRepo,
-    removeTaskWorktreeFn,
-  });
+  // Integration queue: if task is waiting_for_integration, attempt serial integration
+  if (taskStatus === "waiting_for_integration") {
+    try {
+      const gitPath = (resolvedRepo && resolvedRepo.task_worktree_path) || (resolvedRepo && resolvedRepo.canonical_repo_path) || null;
+      if (gitPath && resolvedRepo && resolvedRepo.repo_id) {
+        const integrationResult = await runIntegrationQueue({
+          repoId: resolvedRepo.repo_id,
+          targetBranch: config.defaultBranch || "main",
+          worktreePath: gitPath,
+          canonicalRepoPath: (resolvedRepo && resolvedRepo.canonical_repo_path) || null,
+          taskBranch: (resolvedRepo && resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || "gptwork/" + task.id,
+          integrationMode: config.integrationMode || "push_branch",
+          checkCommands: config.integrationCheckCommands,
+        });
+
+        if (integrationResult.ok) {
+          taskStatus = "completed";
+          taskResult.integration = { status: "completed", ...integrationResult };
+        } else if (integrationResult.status === "conflict" || integrationResult.status === "check_failed") {
+          // Integration failed — create repair or escalate
+          const intCanRepair = shouldAttemptRepair({ task, maxAttempts: 1 });
+          if (intCanRepair.should_repair) {
+            const intRepairGoal = createRepairGoalFromFindings({
+              task,
+              goal,
+              findings: [{ severity: "blocker", code: "integration_" + integrationResult.status, message: integrationResult.error || "Integration " + integrationResult.status, source: "integration_queue" }],
+              repairProposals: [{ title: "Resolve integration conflict", proposed_action: "Merge conflict with " + (config.defaultBranch || "target branch") }],
+            });
+            taskStatus = "waiting_for_repair";
+            taskResult.repair_goal = intRepairGoal;
+            taskResult.repair_attempt = intRepairGoal.repair_attempt;
+            taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
+            // Attempt to create repair goal
+            try {
+              await createGoal(store, config, {
+                user_request: intRepairGoal.user_request,
+                goal_prompt: intRepairGoal.goal_prompt,
+                title: "Repair: " + task.title + " (integration conflict)",
+                project_id: task.project_id || (goal ? goal.project_id : "default"),
+                workspace_id: intRepairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : "hosted-default"),
+                mode: intRepairGoal.mode || "builder",
+                assign_to_codex: true,
+                skip_created_notification: false,
+              });
+            } catch {}
+          } else {
+            taskStatus = "waiting_for_review";
+            taskResult.repair_denied_reason = intCanRepair.reason;
+            taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
+          }
+        } else {
+          taskResult.integration = { status: integrationResult.status, error: integrationResult.error };
+        }
+      }
+    } catch (integrationErr) {
+      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+      taskResult.warnings.push("Integration queue execution failed: " + integrationErr.message);
+    }
+  }
+
+  // Cleanup policy: remove_on_success_retain_on_failure.
+  // Only remove worktree when task completed successfully.
+  // For failed/timed_out/waiting_for_review/waiting_for_repair/waiting_for_integration,
+  // retain the worktree to allow debugging, review, or repair.
+  let cleanup = null;
+  if (taskStatus === "completed") {
+    cleanup = await cleanupTaskWorktree({
+      task,
+      config,
+      resolvedRepo,
+      removeTaskWorktreeFn,
+    });
+  } else {
+    // Retain worktree for non-completed / non-terminal states
+    if (resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {
+      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+      taskResult.warnings.push("Worktree retained: " + resolvedRepo.task_worktree_path + " (status=" + taskStatus + ")");
+    }
+  }
   if (cleanup) {
     const updatedLifecycle = {
       ...(taskResult.worktree_lifecycle || resolvedRepo?.worktree_lifecycle || {}),
@@ -75,7 +153,7 @@ export async function finalizeCodexTaskRun({
       taskResult.kind = taskResult.kind || "worktree_cleanup_failed";
       taskResult.summary = taskResult.summary || "Task worktree cleanup failed.";
       taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-      taskResult.warnings.push(`Task worktree cleanup failed: ${cleanup.error || "unknown error"}`);
+      taskResult.warnings.push("Task worktree cleanup failed: " + (cleanup.error || "unknown error"));
       taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
       taskResult.acceptance_findings.push({
         severity: "blocker",
@@ -118,6 +196,8 @@ export async function finalizeCodexTaskRun({
       "failed": "Failed",
       "timed_out": "Timed out",
       "waiting_for_review": "Waiting for review",
+      "waiting_for_integration": "Waiting for integration",
+      "waiting_for_repair": "Waiting for repair",
     };
     const statusLabel = statusLabels[taskStatus] || taskStatus;
     await writeWorkspaceTextInternalFn(store, config, goal.workspace_id, workspaceFiles.result_md,
@@ -131,7 +211,7 @@ export async function finalizeCodexTaskRun({
     }, context);
 
     // Write fallback result.json so it always exists for subsequent parses.
-    const _rjPath = workspace.root + "/.gptwork/goals/" + goal.id + "/result.json";
+    const _rjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + goal.id + "/result.json");
     try {
       const _rjData = {
         status: taskStatus,
@@ -148,6 +228,7 @@ export async function finalizeCodexTaskRun({
         execution_cwd: taskResult.execution_cwd || null,
         execution_cwd_proof: taskResult.execution_cwd_proof || buildExecutionCwdProof(taskResult),
         queue_autostart_fix: taskResult.queue_autostart_fix || null,
+        evidence_paths: taskResult.evidence_paths || null,
         reviewer_decision: taskResult.reviewer_decision || null,
         acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
         next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],

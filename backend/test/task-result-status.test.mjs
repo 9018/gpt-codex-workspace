@@ -8,6 +8,7 @@ import {
   isP0TaskTitle,
   getRestartVerification,
   verifyToolExposure,
+  validateResultContract,
 } from '../src/task-result-status.mjs';
 
 // ===========================================================================
@@ -418,6 +419,104 @@ test('verifyToolExposure handles no required tools', () => {
   assert.equal(result.allPresent, true);
   assert.deepEqual(result.missingTools, []);
   assert.deepEqual(result.presentTools, []);
+});
+
+
+// ---------------------------------------------------------------------------
+// validateResultContract tests (P0)
+// ---------------------------------------------------------------------------
+
+test("validateResultContract returns valid for complete result with all fields", () => {
+  const result = {
+    status: "completed",
+    changed_files: ["src/foo.js"],
+    commit: "abc123",
+    tests: "npm test: passed",
+    summary: "Done",
+  };
+  // Skip worktree check since test environment may have uncommitted changes
+  const validation = validateResultContract(result, { repoPath: process.cwd(), skipWorktreeCheck: true });
+  assert.equal(validation.valid, true);
+  assert.equal(validation.diagnosis_codes.length, 0);
+});
+
+test("validateResultContract returns TESTS_MISSING for completed non-noop result without tests", () => {
+  const result = {
+    status: "completed",
+    changed_files: ["src/foo.js"],
+    commit: "abc123",
+    tests: null,
+    summary: "Done",
+  };
+  const validation = validateResultContract(result, { repoPath: process.cwd() });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.diagnosis_codes.includes("tests_missing"));
+});
+
+test("validateResultContract returns COMMIT_MISSING when changed_files but no commit", () => {
+  const result = {
+    status: "completed",
+    changed_files: ["src/foo.js"],
+    commit: "none",
+    tests: "npm test: passed",
+    summary: "Done",
+  };
+  const validation = validateResultContract(result, { repoPath: process.cwd() });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.diagnosis_codes.includes("commit_missing"));
+});
+
+test("validateResultContract skips worktree check when skipWorktreeCheck is true", () => {
+  const result = {
+    status: "completed",
+    changed_files: [],
+    commit: null,
+    tests: "npm test: passed",
+    summary: "Done",
+  };
+  const validation = validateResultContract(result, { skipWorktreeCheck: true });
+  assert.equal(validation.valid, true);
+});
+
+test("validateResultContract uses provided repoPath for worktree check", () => {
+  const result = {
+    status: "completed",
+    changed_files: [],
+    commit: "abc123",
+    tests: "npm test: passed",
+    summary: "Done",
+  };
+  // Using a valid repo path (current cwd) should not throw
+  const validation = validateResultContract(result, { repoPath: process.cwd() });
+  assert.ok(typeof validation.valid === "boolean");
+  assert.ok(Array.isArray(validation.diagnosis_codes));
+});
+
+test("validateResultContract returns SUMMARY_FIELD_CONFLICT for summary without evidence", () => {
+  const result = {
+    status: "completed",
+    summary: "Task completed successfully",
+    changed_files: [],
+    commit: "none",
+    tests: null,
+    noop: false,
+  };
+  const validation = validateResultContract(result, { repoPath: process.cwd(), skipWorktreeCheck: true });
+  assert.equal(validation.valid, false);
+  assert.ok(validation.diagnosis_codes.includes("summary_field_conflict"));
+});
+
+test("validateResultContract returns valid for noop completed result", () => {
+  const result = {
+    status: "completed",
+    noop: true,
+    summary: "No changes needed",
+    changed_files: [],
+    commit: null,
+    tests: null,
+  };
+  const validation = validateResultContract(result, { repoPath: process.cwd(), skipWorktreeCheck: true });
+  assert.equal(validation.valid, true);
 });
 
 console.log('task-result-status tests loaded');
