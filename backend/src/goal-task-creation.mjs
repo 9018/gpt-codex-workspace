@@ -3,7 +3,7 @@ import { defaultTokenContext, requireProjectAccess, requireScope, requireWorkspa
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 import { ensureGoalState } from "./task-lifecycle.mjs";
 import { ensureTaskGoal } from "./goal-task-ensure.mjs";
-import { normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
+import { defaultTaskExecutionFields, normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 
 function copyNotificationPolicyFields(task, args) {
@@ -22,6 +22,7 @@ export async function createTask(store, config, args, context = defaultTokenCont
   requireProjectAccess(context, args.project_id || "default");
   if (args.workspace_id) requireWorkspaceAccess(context, args.workspace_id);
   const now = new Date().toISOString();
+  const mode = normalizeCreatedTaskMode(args);
   const task = {
     id: `task_${randomUUID()}`,
     project_id: args.project_id || "default",
@@ -31,7 +32,8 @@ export async function createTask(store, config, args, context = defaultTokenCont
     created_by: context.user_id,
     assignee: args.assignee || "",
     status: args.assignee ? "queued" : "draft",
-    mode: normalizeCreatedTaskMode(args),
+    mode,
+    ...defaultTaskExecutionFields(mode),
     logs: [],
     artifacts: [],
     result: null,

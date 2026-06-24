@@ -958,6 +958,67 @@ test("goal-queue: dependency-satisfied waiting auto_start item starts even if co
   assert.ok(result.task?.id, "should create a Codex task for the queue item");
 });
 
+test("goal-queue: three ordinary builder tasks can start without canonical repo serialization", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-three-worktree-tasks-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  const now = new Date().toISOString();
+  for (const suffix of ["a", "b", "c"]) {
+    const goalId = `goal_parallel_${suffix}`;
+    const convId = `conv_parallel_${suffix}`;
+    store.state.goals.push({
+      id: goalId,
+      title: `Parallel ${suffix}`,
+      description: "",
+      user_request: `Do ${suffix}`,
+      goal_prompt: `Do ${suffix}`,
+      context_summary: "",
+      workspace_id: "hosted-default",
+      project_id: "default",
+      conversation_id: convId,
+      status: "open",
+      mode: "builder",
+      task_id: null,
+      created_at: now,
+      updated_at: now,
+    });
+    store.state.conversations.push({
+      id: convId,
+      goal_id: goalId,
+      project_id: "default",
+      workspace_id: "hosted-default",
+      messages: [{ role: "user", content: `Do ${suffix}` }],
+      created_at: now,
+      updated_at: now,
+    });
+    addGoalToQueue(store, `queue_parallel_${suffix}`, goalId, suffix.charCodeAt(0), "waiting");
+  }
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const config = { defaultWorkspaceRoot: dir, defaultRepoPath: repo };
+  const starts = [];
+  for (let i = 0; i < 3; i++) {
+    starts.push(await startNextQueuedGoal(store, config, { dry_run: false }));
+  }
+
+  assert.deepEqual(starts.map((result) => result.started), [true, true, true]);
+  assert.ok(starts.every((result) => result.checks.some((check) => check.check === "execution_guards_deferred" && check.passed)));
+
+  await store.load();
+  assert.equal(store.state.goal_queue.filter((item) => item.status === "running").length, 3);
+  assert.equal(store.state.tasks.length, 3);
+  assert.equal(new Set(store.state.tasks.map((task) => task.id)).size, 3);
+  for (const task of store.state.tasks) {
+    assert.equal(task.mode, "builder");
+    assert.equal(task.execution_mode, "worktree");
+    assert.equal(task.worktree.enabled, true);
+    assert.equal(task.worktree.status, "pending");
+  }
+});
+
 // ===========================================================================
 // P0: dry_run must NOT write state
 // ===========================================================================
@@ -991,5 +1052,4 @@ test("goal-queue: dry_run does not write any state changes", async () => {
   assert.equal(store.state.goal_queue[0].task_id, null, "task_id should not be set in dry_run");
   assert.equal(store.state.tasks.length, 0, "no tasks should be created in dry_run");
 });
-
 

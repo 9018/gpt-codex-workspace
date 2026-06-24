@@ -66,3 +66,26 @@ test('prepareCodexTaskRun writes run id back to repo lock immediately', async (t
     fields: { run_id: result.runId },
   }]);
 });
+
+test('prepareCodexTaskRun records executionRepoPath in run metadata', async (t) => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), 'gptwork-task-run-worktree-'));
+  t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
+
+  const task = { id: 'task_worktree_setup', title: 'Setup task', description: 'Prepare run', workspace_id: 'ws_1' };
+  const executionRepoPath = join(workspaceRoot, 'worktrees', 'repo', 'task_worktree_setup');
+  const result = await prepareCodexTaskRun({
+    task,
+    goal: null,
+    workspaceFiles: null,
+    workspaceRoot,
+    executionRepoPath,
+    config: {
+      defaultWorkspaceRoot: workspaceRoot,
+      defaultRepoPath: join(workspaceRoot, 'canonical'),
+      codexFirstOutputTimeout: 77,
+    },
+  });
+
+  const runData = JSON.parse(await readFile(result.runFilePath, 'utf8'));
+  assert.equal(runData.repo_path, executionRepoPath);
+});

@@ -42,7 +42,7 @@ export async function prepareCodexTaskRun({
       workspaceRoot: config.defaultWorkspaceRoot,
       taskId: task.id,
       workspaceId: task.workspace_id,
-      repoPath: config.defaultRepoPath,
+      repoPath: executionRepoPath || config.defaultRepoPath,
       promptPath: promptFile,
     });
     runFilePath = initResult.runFilePath;

@@ -52,6 +52,17 @@ function makeMinimalArgs(taskStatus) {
     releaseRepoLockFn: async () => {},
     writeWorkspaceTextInternalFn: async () => {},
     fireHeartbeatFn: async () => {},
+    verifyTaskCompletionFn: async () => ({
+      passed: true,
+      status: "completed",
+      commands: [],
+      changed_files: [],
+      reason_no_tests: null,
+      failure_class: null,
+      requires_review: false,
+      findings: [],
+    }),
+    autoStartNextOnTaskCompletedFn: async () => ({ auto_started: false, details: [] }),
   };
 }
 
@@ -251,6 +262,52 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
   assert.equal(fallbackJson.execution_cwd_proof.used_task_worktree_path, true);
 });
 
+test("task-final-writeback: persists spec-shaped task.worktree record", async () => {
+  let savedTask = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.taskResult.repo_resolution = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical-repo",
+    lock_repo_path: "/tmp/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    worktree_lifecycle: {
+      mode: "git_worktree",
+      ok: true,
+      worktree_path: "/tmp/worktrees/repo/task_label_test",
+      branch_name: "gptwork/task/task_label_test",
+      base_ref: "main",
+      base_sha: "a".repeat(40),
+      head_sha: "b".repeat(40),
+    },
+  };
+  args.taskResult.worktree_lifecycle = args.taskResult.repo_resolution.worktree_lifecycle;
+  args.resolvedRepo = args.taskResult.repo_resolution;
+  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/worktrees/repo/task_label_test" });
+
+  await finalizeCodexTaskRun(args);
+
+  assert.deepEqual(savedTask.worktree, {
+    enabled: true,
+    path: "/tmp/worktrees/repo/task_label_test",
+    branch: "gptwork/task/task_label_test",
+    base_ref: "main",
+    base_sha: "a".repeat(40),
+    head_sha: "b".repeat(40),
+    status: "removed",
+  });
+  assert.equal(savedTask.execution_mode, "worktree");
+  assert.equal(savedTask.attempt, 0);
+  assert.equal(savedTask.max_attempts, 2);
+});
+
 // ===========================================================================
 // Test: resultJsonPath param overrides local derivation
 // ===========================================================================
@@ -321,3 +378,76 @@ test("task-final-writeback: evidence_paths included in fallback result.json", as
 });
 
 console.log("task-final-writeback tests loaded");
+
+test("task-final-writeback: independent verifier can demote completed task before persistence", async () => {
+  let savedTask = null;
+  let verificationJson = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.taskResult.verification = { passed: false, commands: [] };
+  args.resultJsonPath = "/tmp/test-workspace/.gptwork/goals/goal_label_test/result.json";
+  args.verifyTaskCompletionFn = async ({ resultJson, repoPath }) => {
+    assert.equal(resultJson.status, "completed");
+    assert.equal(repoPath, "/tmp/test-workspace");
+    return {
+      passed: false,
+      status: "waiting_for_review",
+      commands: [],
+      changed_files: [],
+      reason_no_tests: null,
+      failure_class: "verification_failed",
+      requires_review: true,
+      findings: [{ severity: "blocker", code: "verification_failed", message: "failed", source: "test" }],
+    };
+  };
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/verification.json")) verificationJson = JSON.parse(content);
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_review");
+  assert.equal(savedTask.status, "waiting_for_review");
+  assert.equal(savedTask.result.verification.passed, false);
+  assert.ok(savedTask.result.acceptance_findings.some((finding) => finding.code === "verification_failed"));
+  assert.equal(verificationJson.passed, false);
+});
+
+test("task-final-writeback: completed task triggers queue autostart hook", async () => {
+  const args = makeMinimalArgs("completed");
+  let autoStartedTask = null;
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      return updater(state);
+    },
+  };
+  args.taskResult.verification = { passed: true, commands: [] };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [],
+    changed_files: [],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+  });
+  args.autoStartNextOnTaskCompletedFn = async (store, config, completedTask) => {
+    autoStartedTask = completedTask;
+    return { auto_started: true, details: [{ type: "auto_start_next", started: true }] };
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(autoStartedTask.id, "task_label_test");
+  assert.equal(result.auto_start.auto_started, true);
+});

@@ -1,8 +1,35 @@
 import { randomUUID } from "node:crypto";
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 
+export function defaultTaskExecutionFields(mode = "builder") {
+  const isOrdinaryCodeTask = mode !== "readonly";
+  return {
+    execution_mode: isOrdinaryCodeTask ? "worktree" : "canonical",
+    worktree: isOrdinaryCodeTask ? {
+      enabled: true,
+      path: null,
+      branch: null,
+      base_ref: null,
+      base_sha: null,
+      head_sha: null,
+      status: "pending",
+    } : {
+      enabled: false,
+      path: null,
+      branch: null,
+      base_ref: null,
+      base_sha: null,
+      head_sha: null,
+      status: "disabled",
+    },
+    attempt: 0,
+    max_attempts: 2,
+  };
+}
+
 export function buildGoalTask(goal, conversation, createdBy) {
   const now = goal.created_at;
+  const mode = goal.mode || "builder";
   return {
     id: `task_${randomUUID()}`,
     project_id: goal.project_id,
@@ -29,7 +56,8 @@ export function buildGoalTask(goal, conversation, createdBy) {
     created_by: createdBy,
     assignee: "codex",
     status: "assigned",
-    mode: goal.mode,
+    mode,
+    ...defaultTaskExecutionFields(mode),
     logs: [],
     artifacts: [],
     result: null,
@@ -112,6 +140,7 @@ export async function createGoalTask(store, config, goalId, opts = {}) {
     task.assignee = assignee;
     task.status = opts.status || 'assigned';
     task.mode = opts.mode || task.mode || 'builder';
+    Object.assign(task, defaultTaskExecutionFields(task.mode));
     task.updated_at = new Date().toISOString();
 
     state.tasks = state.tasks || [];

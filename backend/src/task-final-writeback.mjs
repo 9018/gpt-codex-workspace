@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { writeFile as nodeWriteFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
@@ -5,6 +6,8 @@ import { releaseRepoLock } from "./repo-lock.mjs";
 import { removeTaskWorktree } from "./task-worktree-manager.mjs";
 import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
+import { verifyTaskCompletion } from "./task-acceptance.mjs";
+import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
@@ -39,6 +42,8 @@ export async function finalizeCodexTaskRun({
   writeWorkspaceTextInternalFn = writeWorkspaceTextInternal,
   removeTaskWorktreeFn = removeTaskWorktree,
   writeFileFn = nodeWriteFile,
+  verifyTaskCompletionFn = verifyTaskCompletion,
+  autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted,
 }) {
   if (runFilePath) {
     const _resolvedRjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
@@ -115,6 +120,57 @@ export async function finalizeCodexTaskRun({
     } catch (integrationErr) {
       taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
       taskResult.warnings.push("Integration queue execution failed: " + integrationErr.message);
+    }
+  }
+
+  const verifierRepoPath = taskResult?.execution_cwd
+    || resolvedRepo?.task_worktree_path
+    || resolvedRepo?.canonical_repo_path
+    || workspace?.root
+    || config.defaultRepoPath
+    || config.defaultWorkspaceRoot;
+
+  if (taskStatus === "completed") {
+    const resultJsonForVerification = buildFallbackResultJson({ taskStatus, taskResult, summary });
+    let verification = null;
+    try {
+      verification = await verifyTaskCompletionFn({
+        task,
+        goal,
+        repoPath: verifierRepoPath,
+        resultJson: resultJsonForVerification,
+        resultJsonPath,
+        config,
+      });
+    } catch (err) {
+      verification = {
+        passed: false,
+        status: "waiting_for_review",
+        commands: [],
+        changed_files: [],
+        reason_no_tests: null,
+        failure_class: "verifier_error",
+        requires_review: true,
+        findings: [{ severity: "blocker", code: "verifier_error", message: err?.message || String(err), source: "task_final_writeback" }],
+      };
+    }
+
+    taskResult.verification = verification;
+    taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+    for (const finding of verification.findings || []) {
+      const duplicate = taskResult.acceptance_findings.some((existing) => existing.code === finding.code && existing.message === finding.message);
+      if (!duplicate) taskResult.acceptance_findings.push(finding);
+    }
+    taskResult.failure_class = verification.failure_class || taskResult.failure_class || null;
+
+    if (resultJsonPath) {
+      await writeFileFn(join(dirname(resultJsonPath), "verification.json"), JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
+    }
+    if (verification.passed !== true) {
+      taskStatus = "waiting_for_review";
+      taskResult.kind = taskResult.kind || "verification_failed";
+      taskResult.requires_review = true;
+      taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
     }
   }
 
@@ -215,32 +271,47 @@ export async function finalizeCodexTaskRun({
     // Write fallback result.json so it always exists for subsequent parses.
     const _rjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + goal.id + "/result.json");
     try {
-      const _rjData = {
-        status: taskStatus,
-        summary: taskResult.summary || summary || "",
-        changed_files: Array.isArray(taskResult.changed_files) ? taskResult.changed_files : [],
-        tests: taskResult.tests || null,
-        commit: taskResult.commit || null,
-        remote_head: taskResult.remote_head || null,
-        warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
-        followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
-        repo_resolution: taskResult.repo_resolution || null,
-        worktree_lifecycle: taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null,
-        worktree_lifecycle_proof: taskResult.worktree_lifecycle_proof || buildWorktreeLifecycleProof(taskResult),
-        execution_cwd: taskResult.execution_cwd || null,
-        execution_cwd_proof: taskResult.execution_cwd_proof || buildExecutionCwdProof(taskResult),
-        queue_autostart_fix: taskResult.queue_autostart_fix || null,
-        evidence_paths: taskResult.evidence_paths || null,
-        reviewer_decision: taskResult.reviewer_decision || null,
-        acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
-        next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
-      };
+      const _rjData = buildFallbackResultJson({ taskStatus, taskResult, summary });
       await writeFileFn(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
     } catch {}
   }
 
+  let autoStartResult = null;
+  if (taskStatus === "completed") {
+    try {
+      autoStartResult = await autoStartNextOnTaskCompletedFn(store, config, result.task);
+    } catch (err) {
+      autoStartResult = { auto_started: false, error: err?.message || String(err), details: [] };
+    }
+  }
+
   try { await github.syncTask(result.task); } catch {}
-  return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
+  return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind, auto_start: autoStartResult };
+}
+
+function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) {
+  return {
+    status: taskStatus,
+    summary: taskResult.summary || summary || "",
+    changed_files: Array.isArray(taskResult.changed_files) ? taskResult.changed_files : [],
+    tests: taskResult.tests || null,
+    commit: taskResult.commit || null,
+    remote_head: taskResult.remote_head || null,
+    warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
+    followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+    verification: taskResult.verification || null,
+    failure_class: taskResult.failure_class || null,
+    repo_resolution: taskResult.repo_resolution || null,
+    worktree_lifecycle: taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null,
+    worktree_lifecycle_proof: taskResult.worktree_lifecycle_proof || buildWorktreeLifecycleProof(taskResult),
+    execution_cwd: taskResult.execution_cwd || null,
+    execution_cwd_proof: taskResult.execution_cwd_proof || buildExecutionCwdProof(taskResult),
+    queue_autostart_fix: taskResult.queue_autostart_fix || null,
+    evidence_paths: taskResult.evidence_paths || null,
+    reviewer_decision: taskResult.reviewer_decision || null,
+    acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
+    next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
+  };
 }
 
 function buildWorktreeLifecycleProof(taskResult = {}) {
@@ -292,12 +363,44 @@ async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorkt
 
 function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config }) {
   item.status = taskStatus;
+  item.execution_mode = deriveExecutionMode(taskResult, item);
+  item.worktree = deriveSpecWorktreeRecord(taskResult, item.worktree);
+  item.attempt = Number.isInteger(item.attempt) ? item.attempt : 0;
+  item.max_attempts = Number.isInteger(item.max_attempts) ? item.max_attempts : 2;
   item.result = { ...taskResult, completed_at: doneAt };
   item.logs.push({ time: doneAt, message: taskResult.kind === "no_first_output_timeout"
     ? "[worker] timed out waiting for first Codex output after " + (cr?.first_output_timeout_seconds || config.codexFirstOutputTimeout || 180) + "s"
     : taskResult.kind === "codex_timeout"
       ? "[worker] timed out after " + config.codexExecTimeout + "s"
       : "[worker] completed: task processed by Codex CLI" });
+}
+
+function deriveExecutionMode(taskResult = {}, existingTask = {}) {
+  if (taskResult.repo_resolution?.worktree_lifecycle?.mode === "git_worktree" || taskResult.worktree_lifecycle?.mode === "git_worktree") {
+    return "worktree";
+  }
+  return existingTask.execution_mode || "canonical";
+}
+
+function deriveSpecWorktreeRecord(taskResult = {}, existingWorktree = null) {
+  const lifecycle = taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null;
+  const path = taskResult.repo_resolution?.task_worktree_path || lifecycle?.worktree_path || existingWorktree?.path || null;
+  if (!lifecycle && !path && !existingWorktree) return undefined;
+  const cleanupStatus = lifecycle?.cleanup
+    ? lifecycle.cleanup.ok === true ? "removed" : "cleanup_failed"
+    : null;
+  const status = cleanupStatus
+    || lifecycle?.status
+    || (lifecycle?.ok === true ? (taskResult.status === "running" ? "running" : "completed") : "cleanup_failed");
+  return {
+    enabled: lifecycle?.mode === "git_worktree" || existingWorktree?.enabled === true,
+    path,
+    branch: lifecycle?.branch_name || existingWorktree?.branch || null,
+    base_ref: lifecycle?.base_ref || existingWorktree?.base_ref || null,
+    base_sha: lifecycle?.base_sha || existingWorktree?.base_sha || null,
+    head_sha: lifecycle?.head_sha || existingWorktree?.head_sha || null,
+    status,
+  };
 }
 
 async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn }) {

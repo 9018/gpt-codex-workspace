@@ -21,6 +21,11 @@ export const ACCEPTANCE_PROFILES = {
   NOOP: 'noop',
 };
 
+function isManagedGitStatusLine(line) {
+  const path = String(line || "").slice(3).trim();
+  return path === ".gptwork" || path.startsWith(".gptwork/") || path === "worktrees" || path.startsWith("worktrees/");
+}
+
 /**
  * Build evidence from git status, diff, and verification log.
  *
@@ -48,7 +53,7 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       const stdout = execFileSync('git', ['status', '--porcelain'], {
         cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
       });
-      const dirtyFiles = stdout.trim().split('\n').filter(Boolean);
+      const dirtyFiles = stdout.trim().split('\n').filter(Boolean).filter((line) => !isManagedGitStatusLine(line));
       evidence.git_status = dirtyFiles.length === 0 ? 'clean' : 'dirty';
       evidence.git_status_dirty_files = dirtyFiles.length > 0 ? dirtyFiles : [];
     } catch {

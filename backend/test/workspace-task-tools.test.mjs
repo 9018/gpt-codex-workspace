@@ -385,6 +385,26 @@ test("general Codex worker completes linked goals and writes concise results", a
     assign_to_codex: true
   });
 
+  const resultJsonPath = join(workspaceRoot, ".gptwork", "goals", created.goal.id, "result.json");
+  await mkdir(dirname(resultJsonPath), { recursive: true });
+  await writeFile(resultJsonPath, JSON.stringify({
+    status: "completed",
+    summary: "worker-ok",
+    changed_files: [],
+    tests: "passed 1/1",
+    verification: { passed: true, commands: [{ cmd: "mock", exit_code: 0 }] },
+    subagents_used: true,
+    subagents: [
+      { role: "analyst", status: "completed", summary: "mock analysis" },
+      { role: "architect", status: "completed", summary: "mock arch" },
+      { role: "implementer", status: "completed", summary: "mock implementation" },
+      { role: "tester", status: "completed", summary: "mock testing" },
+      { role: "reviewer", status: "completed", summary: "mock review" },
+      { role: "escalation_judge", status: "completed", summary: "mock escalation" },
+    ],
+    gpt_questions_used: 0,
+  }), "utf8");
+
   const run = await callToolAs(server, "test-token", "run_assigned_codex_tasks", { limit: 1 });
   assert.equal(run.completed, 1);
 

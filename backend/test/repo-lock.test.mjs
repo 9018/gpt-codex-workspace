@@ -20,6 +20,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { existsSync, mkdtempSync, writeFileSync, chmodSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
@@ -40,6 +41,16 @@ import {
 // Test helpers
 // ---------------------------------------------------------------------------
 
+async function initGitRepo(dir) {
+  await mkdir(dir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), "initial\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+}
+
 /**
  * Create a mock `codex` executable in a temp directory and prepend it to PATH.
  * This allows tests to run without the real Codex binary (which hangs waiting
@@ -49,8 +60,23 @@ import {
 function setupMockCodex() {
   const mockDir = mkdtempSync(join(tmpdir(), "mock-codex-"));
   const mockCodex = join(mockDir, "codex");
-  const mockScript = `#!/bin/sh\necho "STATUS=completed"\necho "SUMMARY=test"
-echo "TESTS=passed 1/1"\necho "SUBAGENTS_USED=true"\necho 'SUBAGENTS=[{"role":"analyst","status":"completed","summary":"mock analysis"},{"role":"architect","status":"completed","summary":"mock arch"},{"role":"implementer","status":"completed","summary":"mock implementation"},{"role":"tester","status":"completed","summary":"mock testing"},{"role":"reviewer","status":"completed","summary":"mock review"},{"role":"escalation_judge","status":"completed","summary":"mock escalation"}]'\necho "GPT_QUESTIONS_USED=0"\nexit 0\n`;
+  const mockScript = [
+    "#!/bin/sh",
+    "prompt=$(cat)",
+    "result_path=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*Write result.json exactly to\\*\\*: //p' | head -n 1)",
+    "if [ -n \"$result_path\" ]; then",
+    "  mkdir -p \"$(dirname \"$result_path\")\"",
+    "  printf '%s\\n' '{\"status\":\"completed\",\"summary\":\"test\",\"changed_files\":[],\"tests\":\"passed 1/1\",\"verification\":{\"passed\":true,\"commands\":[{\"cmd\":\"mock\",\"exit_code\":0}]},\"subagents_used\":true,\"subagents\":[{\"role\":\"analyst\",\"status\":\"completed\",\"summary\":\"mock analysis\"},{\"role\":\"architect\",\"status\":\"completed\",\"summary\":\"mock arch\"},{\"role\":\"implementer\",\"status\":\"completed\",\"summary\":\"mock implementation\"},{\"role\":\"tester\",\"status\":\"completed\",\"summary\":\"mock testing\"},{\"role\":\"reviewer\",\"status\":\"completed\",\"summary\":\"mock review\"},{\"role\":\"escalation_judge\",\"status\":\"completed\",\"summary\":\"mock escalation\"}],\"gpt_questions_used\":0}' > \"$result_path\"",
+    "fi",
+    "echo \"STATUS=completed\"",
+    "echo \"SUMMARY=test\"",
+    "echo \"TESTS=passed 1/1\"",
+    "echo \"SUBAGENTS_USED=true\"",
+    "echo 'SUBAGENTS=[{\"role\":\"analyst\",\"status\":\"completed\",\"summary\":\"mock analysis\"},{\"role\":\"architect\",\"status\":\"completed\",\"summary\":\"mock arch\"},{\"role\":\"implementer\",\"status\":\"completed\",\"summary\":\"mock implementation\"},{\"role\":\"tester\",\"status\":\"completed\",\"summary\":\"mock testing\"},{\"role\":\"reviewer\",\"status\":\"completed\",\"summary\":\"mock review\"},{\"role\":\"escalation_judge\",\"status\":\"completed\",\"summary\":\"mock escalation\"}]'",
+    "echo \"GPT_QUESTIONS_USED=0\"",
+    "exit 0",
+    "",
+  ].join("\n");
   writeFileSync(mockCodex, mockScript, "utf8");
   chmodSync(mockCodex, 0o755);
   const origPath = process.env.PATH || "";
@@ -552,7 +578,7 @@ test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_
   try {
   const root = await mkdtemp(join(tmpdir(), "gptwork-lock-twotasks-"));
   const workspaceRoot = join(root, "workspace");
-  await mkdir(workspaceRoot, { recursive: true });
+  await initGitRepo(workspaceRoot);
 
   const server = await createGptWorkServer({
     statePath: join(root, "state.json"),
@@ -629,7 +655,7 @@ test("blocked task with waiting_for_lock is retried after lock release", async (
   try {
   const root = await mkdtemp(join(tmpdir(), "gptwork-lock-retry-"));
   const workspaceRoot = join(root, "workspace");
-  await mkdir(workspaceRoot, { recursive: true });
+  await initGitRepo(workspaceRoot);
 
   const server = await createGptWorkServer({
     statePath: join(root, "state.json"),

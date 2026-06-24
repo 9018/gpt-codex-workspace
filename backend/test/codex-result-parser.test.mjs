@@ -488,6 +488,24 @@ test("buildTaskResult propagates acceptance agent fields", () => {
   assert.deepEqual(result.repair_proposal, parsed.repair_proposal);
 });
 
+test("buildTaskResult propagates result.json verification object", () => {
+  const parsed = {
+    structured: true,
+    from_json: true,
+    status: "completed",
+    summary: "done",
+    changed_files: ["src/app.mjs"],
+    tests: "npm test",
+    verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+    acceptance_findings: [],
+    next_tasks: [],
+  };
+
+  const result = buildTaskResult(parsed, { returnCode: 0 });
+
+  assert.deepEqual(result.verification, parsed.verification);
+});
+
 test("buildTaskResult with failure includes warnings and followups", () => {
   const parsed = {
     status: "failed",
