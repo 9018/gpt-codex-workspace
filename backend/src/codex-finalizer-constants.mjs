@@ -31,6 +31,7 @@ export const RESULT_FIELDS = [
   'reviewer_decision',
   'acceptance_findings',
   'next_tasks',
+  'repair_proposal',
   'completed_at',
 ];
 

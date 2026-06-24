@@ -103,7 +103,11 @@ export function createWorkflowToolsGroup({
               const updatedTask = await resolveTask(store, task_id || "latest");
               if (updatedTask && diagnostics.latest_task) {
                 diagnostics.latest_task.status = updatedTask.status;
+                diagnostics.latest_task.reviewer_decision = updatedTask.result?.reviewer_decision || null;
+                diagnostics.latest_task.acceptance_findings = Array.isArray(updatedTask.result?.acceptance_findings) ? updatedTask.result.acceptance_findings : [];
+                diagnostics.latest_task.next_tasks = Array.isArray(updatedTask.result?.next_tasks) ? updatedTask.result.next_tasks : [];
               }
+              diagnostics.queue = await collectWorkerQueueCounts(store);
             } catch {}
           }
         }
@@ -525,6 +529,8 @@ export function createWorkflowToolsGroup({
           recommendation: proposal.recommendation,
           needs_gptchat_decision: proposal.needs_gptchat_decision,
           auto_accepted: proposal.auto_accepted || false,
+          acceptance: proposal.acceptance || null,
+          repair_proposal: proposal.repair_proposal || null,
           created_task_id: null,
           manual_verdict: manual_verdict || null,
           manual_note: manual_note || null,
@@ -551,12 +557,13 @@ export function createWorkflowToolsGroup({
           saveWorkflowState(config.defaultWorkspaceRoot, wfId, workflowState);
         }
 
+        let autoAcceptResult = null;
+        // In apply mode, create the task if safe and unambiguous
+        let createdTaskId = null;
         // Auto-accept in apply mode
         if (resolvedMode === "apply" && proposal.next_action === "auto_accepted" && task?.status === "waiting_for_review") {
           autoAcceptResult = await autoAcceptTask({ store, config, task, diagnostics });
         }
-        // In apply mode, create the task if safe and unambiguous
-        let createdTaskId = null;
         if (
           resolvedMode === "apply" &&
           !proposal.needs_gptchat_decision &&
@@ -595,12 +602,12 @@ export function createWorkflowToolsGroup({
         }
 
         // If auto-accepted, show different response
-        let autoAcceptResult = null;
         if (autoAcceptResult?.auto_accepted) {
           return {
             title: "Workflow Advance — Auto-accepted",
             summary: `Task "${task?.title}" auto-accepted. Result validated.`,
             workflow_id: wfId,
+            needs_gptchat_decision: false,
             auto_accepted: true,
             proposal: {
               ...proposalRecord,
@@ -645,6 +652,7 @@ export function createWorkflowToolsGroup({
           summary: proposal.recommendation,
           workflow_id: wfId,
           proposal: proposalRecord,
+          needs_gptchat_decision: proposal.needs_gptchat_decision,
           task: diagnostics.latest_task,
           runtime: diagnostics.runtime,
           worktree: diagnostics.worktree,

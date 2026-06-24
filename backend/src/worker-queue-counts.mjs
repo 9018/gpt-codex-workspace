@@ -19,6 +19,12 @@ function taskTimestamp(task) {
   return Number.isFinite(ts) ? ts : null;
 }
 
+function isResolvedReviewTask(task) {
+  if (task.status !== "waiting_for_review") return false;
+  const result = task.result || {};
+  return Boolean(result.resolved_by_task_id || result.superseded_by_task_id || result.auto_accepted || result.accepted_at);
+}
+
 function computeOldestAges(tasks = [], now = Date.now()) {
   const oldestTs = Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((status) => [status, null]));
   for (const task of tasks || []) {
@@ -47,29 +53,20 @@ export async function collectWorkerQueueCounts(store) {
           counts[st] = q.counts[st];
         }
       }
-      return { ...counts, oldest_age_ms };
+      let resolvedCount = 0;
+      for (const task of state.tasks || []) {
+        if (task.assignee === "codex" && isResolvedReviewTask(task)) resolvedCount++;
+      }
+      counts.waiting_for_review = Math.max(0, counts.waiting_for_review - resolvedCount);
+      return { ...counts, actionable_review: counts.waiting_for_review, oldest_age_ms };
     }
     for (const task of state.tasks || []) {
       if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
-      // P1: Skip resolved or superseded reviews so they don't pollute actionable queue
-      if (task.status === "waiting_for_review" && (task.result?.resolved_by_task_id || task.result?.superseded_by_task_id)) continue;
+      if (isResolvedReviewTask(task)) continue;
       counts[task.status] += 1;
     }
-    // P1: Subtract resolved/superseded reviews from actionable count
-    if (typeof store.load === 'function') {
-      try {
-        const st = await store.load();
-        let resolvedCount = 0;
-        for (const t of st.tasks || []) {
-          if (t.status === 'waiting_for_review' && (t.result?.resolved_by_task_id || t.result?.superseded_by_task_id)) {
-            resolvedCount++;
-          }
-        }
-        if (resolvedCount > 0) counts.waiting_for_review = Math.max(0, counts.waiting_for_review - resolvedCount);
-      } catch {}
-    }
-    return { ...counts, oldest_age_ms };
+    return { ...counts, actionable_review: counts.waiting_for_review, oldest_age_ms };
   } catch {
-    return { ...EMPTY_QUEUE_COUNTS, oldest_age_ms: emptyQueueAges() };
+    return { ...EMPTY_QUEUE_COUNTS, actionable_review: 0, oldest_age_ms: emptyQueueAges() };
   }
 }

@@ -22,6 +22,7 @@ export async function parseResultJson(resultJsonPath) {
     const reviewerDecision = data.reviewer_decision && typeof data.reviewer_decision === "object" ? data.reviewer_decision : null;
     const acceptanceFindings = Array.isArray(data.acceptance_findings) ? data.acceptance_findings.filter(f => f && typeof f === "object") : [];
     const nextTasks = Array.isArray(data.next_tasks) ? data.next_tasks.filter(t => t && typeof t === "object") : [];
+    const repairProposal = data.repair_proposal && typeof data.repair_proposal === "object" ? data.repair_proposal : null;
 
     if (!status) return null;
 
@@ -46,6 +47,7 @@ export async function parseResultJson(resultJsonPath) {
       reviewer_decision: reviewerDecision,
       acceptance_findings: acceptanceFindings,
       next_tasks: nextTasks,
+      repair_proposal: repairProposal,
       subagents_used: subagentsUsed,
       subagents,
       gpt_questions_used: gptQuestionsUsed,

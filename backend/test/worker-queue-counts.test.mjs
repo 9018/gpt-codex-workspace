@@ -53,6 +53,7 @@ test('collectWorkerQueueCounts returns zero counts when load fails', async () =>
     waiting_for_review: 0,
     completed: 0,
     failed: 0,
+    actionable_review: 0,
     oldest_age_ms: ZERO_AGES,
   });
 });

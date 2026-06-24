@@ -322,12 +322,14 @@ test("parseResultJson extracts reviewer decision acceptance findings and next ta
     reviewer_decision: { status: "accepted", passed: true },
     acceptance_findings: [{ severity: "minor", code: "docs", message: "docs later" }],
     next_tasks: [{ priority: "P1", title: "Docs followup" }],
+    repair_proposal: { repair_proposals: [] },
   }), "utf8");
 
   const result = await parseResultJson(jsonPath);
   assert.deepEqual(result.reviewer_decision, { status: "accepted", passed: true });
   assert.equal(result.acceptance_findings[0].severity, "minor");
   assert.equal(result.next_tasks[0].priority, "P1");
+  assert.deepEqual(result.repair_proposal, { repair_proposals: [] });
 });
 
 test("parseResultJson returns null for invalid status", async () => {
@@ -476,12 +478,14 @@ test("buildTaskResult propagates acceptance agent fields", () => {
     reviewer_decision: { status: "accepted", passed: true },
     acceptance_findings: [{ severity: "followup", code: "later", message: "later" }],
     next_tasks: [{ priority: "P2", title: "Later" }],
+    repair_proposal: { source_task_id: "task_source", failed_criteria: [] },
   };
 
   const result = buildTaskResult(parsed);
   assert.deepEqual(result.reviewer_decision, parsed.reviewer_decision);
   assert.deepEqual(result.acceptance_findings, parsed.acceptance_findings);
   assert.deepEqual(result.next_tasks, parsed.next_tasks);
+  assert.deepEqual(result.repair_proposal, parsed.repair_proposal);
 });
 
 test("buildTaskResult with failure includes warnings and followups", () => {

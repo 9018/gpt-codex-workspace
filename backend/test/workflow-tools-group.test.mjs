@@ -19,6 +19,7 @@ import {
   storeManualResult,
   storeProposal,
 } from "../src/workflow-state-service.mjs";
+import { collectWorkerQueueCounts } from "../src/worker-queue-counts.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -414,4 +415,131 @@ test("workflow_status: waiting_for_review + valid → triggers auto-accept", asy
   assert.ok(result.workflow_id);
   assert.ok(result.latest_task);
   assert.ok(saveCalled);
+});
+
+test("workflow_advance apply: waiting_for_review + accepted reviewer decision auto-accepts", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  let taskState = makeTask({
+    status: "waiting_for_review",
+    goal_id: "goal_accept",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      remote_head: null,
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+    },
+  });
+  const goal = { id: "goal_accept", task_id: taskState.id, status: "assigned" };
+  const store = {
+    load: async () => ({ tasks: [taskState], goals: [goal], activities: [] }),
+    save: async () => {},
+  };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+  const result = await tools.workflow_advance.handler({ task_id: taskState.id, mode: "apply" });
+
+  assert.equal(result.needs_gptchat_decision, false);
+  assert.equal(result.auto_accepted, true);
+  assert.equal(result.proposal.next_action, "auto_accepted");
+  assert.equal(taskState.status, "completed");
+  assert.equal(taskState.result.auto_accepted, true);
+});
+
+test("proposal: waiting_for_review + only minor and followup findings auto-accepts with next tasks", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "waiting_for_review",
+      result: {
+        status: "completed",
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        remote_head: null,
+        tests: "npm test: passed 15/15",
+        changed_files: ["src/file.js"],
+        reviewer_decision: { status: "needs_fix", passed: false },
+        acceptance_findings: [
+          { severity: "minor", code: "docs_gap", message: "Document later" },
+          { severity: "followup", code: "cleanup", message: "Cleanup later" },
+        ],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.acceptance.next_tasks.length, 2);
+});
+
+test("workflow_advance apply: blocker finding returns automatic repair proposal", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const taskState = makeTask({
+    status: "waiting_for_review",
+    goal_id: "goal_repair",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "needs_fix", passed: false },
+      acceptance_findings: [{ severity: "blocker", code: "dirty_worktree_after_codex", message: "Worktree dirty" }],
+    },
+  });
+  const store = {
+    load: async () => ({ tasks: [taskState], goals: [{ id: "goal_repair", task_id: taskState.id, status: "assigned", title: "Original goal" }], activities: [] }),
+    save: async () => {},
+  };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+  const result = await tools.workflow_advance.handler({ task_id: taskState.id, mode: "apply" });
+
+  assert.equal(result.proposal.next_action, "create_repair_task");
+  assert.equal(result.proposal.needs_gptchat_decision, false);
+  assert.ok(result.proposal.proposed_next_task.description.includes("dirty_worktree_after_codex"));
+  assert.ok(result.created_task_id || result.proposal.repair_proposal);
+});
+
+test("proposal: waiting_for_review + missing reviewer decision derives accepted decision from policy", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics({ runtime: { running_commit: "abc123", repo_head: "abc123", remote_head: null } }),
+    task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", remote_head: null, tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.acceptance.reviewer_decision.status, "accepted");
+  assert.equal(p.acceptance.reviewer_decision.passed, true);
+});
+
+test("workflow_status exposes reviewer decision and actionable review count", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const taskState = makeTask({
+    status: "waiting_for_review",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+    },
+  });
+  const resolvedReview = makeTask({ status: "waiting_for_review", result: { resolved_by_task_id: "task_fix" } });
+  const store = { load: async () => ({ tasks: [taskState, resolvedReview], goals: [], activities: [] }), save: async () => {} };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+
+  assert.equal(result.latest_task.reviewer_decision.status, "accepted");
+  assert.equal(result.queue.actionable_review, 0);
 });

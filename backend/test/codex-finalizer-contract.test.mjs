@@ -51,6 +51,7 @@ test('RESULT_FIELDS contains expected contract fields', () => {
     'reviewer_decision',
     'acceptance_findings',
     'next_tasks',
+    'repair_proposal',
     'completed_at',
   ]);
 });
@@ -128,6 +129,22 @@ test('createSuccessResult accepts explicit completed_at', () => {
   assert.equal(result.completed_at, fixed);
 });
 
+test('createSuccessResult derives default reviewer decision when missing', () => {
+  const result = createSuccessResult({
+    summary: 'Done',
+    changed_files: ['src/main.js'],
+    tests: 'npm test: passed 15/15',
+    commit: 'abc123',
+    remote_head: null,
+    acceptance_findings: [{ severity: 'followup', code: 'docs_later', message: 'Document later' }],
+  });
+
+  assert.equal(result.reviewer_decision.status, 'accepted_with_followups');
+  assert.equal(result.reviewer_decision.passed, true);
+  assert.equal(result.acceptance_findings[0].severity, 'followup');
+  assert.equal(result.next_tasks[0].finding_code, 'docs_later');
+});
+
 // ===========================================================================
 // createFailedResult
 // ===========================================================================
@@ -148,6 +165,17 @@ test('createFailedResult produces contract-compliant failed result', () => {
   assert.deepEqual(result.followups, ['Fix syntax error']);
   assert.equal(result.timed_out, false);
   assert.ok(result.completed_at);
+});
+
+test('createFailedResult derives repair proposal for blocker acceptance findings', () => {
+  const result = createFailedResult({
+    summary: 'Acceptance failed',
+    acceptance_findings: [{ severity: 'major', code: 'missing_test', message: 'Add regression test' }],
+  });
+
+  assert.equal(result.reviewer_decision.status, 'needs_fix');
+  assert.equal(result.reviewer_decision.passed, false);
+  assert.equal(result.repair_proposal.repair_proposals[0].finding_code, 'missing_test');
 });
 
 // ===========================================================================

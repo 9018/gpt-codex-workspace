@@ -52,6 +52,10 @@ export function validateFinalizerResult(result) {
     errors.push('next_tasks must be an array');
   }
 
+  if (result.repair_proposal !== undefined && result.repair_proposal !== null && typeof result.repair_proposal !== 'object') {
+    errors.push('repair_proposal must be an object or null');
+  }
+
   if (result.completed_at !== undefined && result.completed_at !== null && typeof result.completed_at !== 'string') {
     errors.push('completed_at must be a string or null');
   }

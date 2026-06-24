@@ -81,6 +81,7 @@ When complete, write a concise structured report in TWO formats:
      "reviewer_decision": { "status": "accepted|accepted_with_followups|needs_fix", "passed": true },
      "acceptance_findings": [],
      "next_tasks": [],
+     "repair_proposal": null,
      "subagents_used": true,
      "gpt_questions_used": 0,
      "decision_log": [],

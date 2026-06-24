@@ -8,6 +8,7 @@ function acceptanceFields(parsed = {}) {
     reviewer_decision: parsed.reviewer_decision || null,
     acceptance_findings: Array.isArray(parsed.acceptance_findings) ? parsed.acceptance_findings : [],
     next_tasks: Array.isArray(parsed.next_tasks) ? parsed.next_tasks : [],
+    repair_proposal: parsed.repair_proposal && typeof parsed.repair_proposal === "object" ? parsed.repair_proposal : null,
   };
 }
 

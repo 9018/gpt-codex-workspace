@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
 import { validateResultContract } from "./task-result-status.mjs";
+import { evaluateAcceptance } from "./acceptance-policy.mjs";
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
@@ -166,6 +167,10 @@ export async function collectWorkflowDiagnostics({
           created_at: task.created_at,
           updated_at: task.updated_at,
           result: task.result || null,
+          reviewer_decision: task.result?.reviewer_decision || null,
+          acceptance_findings: Array.isArray(task.result?.acceptance_findings) ? task.result.acceptance_findings : [],
+          next_tasks: Array.isArray(task.result?.next_tasks) ? task.result.next_tasks : [],
+          repair_proposal: task.result?.repair_proposal || null,
           changed_files: task.result?.changed_files || null,
           commit: task.result?.commit || null,
           tests: task.result?.tests || null,
@@ -194,6 +199,92 @@ export async function collectWorkflowDiagnostics({
 // ---------------------------------------------------------------------------
 // Proposal generation (decision rules)
 // ---------------------------------------------------------------------------
+
+const BLOCKING_ACCEPTANCE_STATUSES = new Set(["needs_fix", "rejected", "failed", "blocked"]);
+
+function normalizeDecisionStatus(decision) {
+  if (!decision || typeof decision !== "object") return null;
+  return decision.status || decision.verdict || decision.outcome || null;
+}
+
+function normalizeAcceptanceForResult(result = {}) {
+  const findings = Array.isArray(result.acceptance_findings) ? result.acceptance_findings : [];
+  const policy = evaluateAcceptance({ findings });
+  const suppliedDecision = result.reviewer_decision && typeof result.reviewer_decision === "object" ? result.reviewer_decision : null;
+  const suppliedStatus = normalizeDecisionStatus(suppliedDecision);
+  const hasBlockingFindings = policy.blocking_count > 0;
+  const decisionPassed = suppliedDecision?.passed === true || suppliedDecision?.accepted === true || suppliedStatus === "accepted" || suppliedStatus === "pass" || suppliedStatus === "passed" || suppliedStatus === "accepted_with_followups";
+  const decisionBlocks = suppliedDecision?.passed === false || BLOCKING_ACCEPTANCE_STATUSES.has(suppliedStatus);
+  const passed = hasBlockingFindings ? false : (decisionBlocks ? policy.passed : (decisionPassed || policy.passed));
+  const reviewer_decision = suppliedDecision || {
+    status: policy.status,
+    passed: policy.passed,
+    blocking_count: policy.blocking_count,
+    residual_count: policy.residual_count,
+  };
+  const status = passed ? (policy.residual_count > 0 ? "accepted_with_followups" : "accepted") : "needs_fix";
+
+  return {
+    passed,
+    status,
+    reviewer_decision: {
+      ...reviewer_decision,
+      status,
+      passed,
+      blocking_count: policy.blocking_count,
+      residual_count: policy.residual_count,
+    },
+    acceptance_findings: findings,
+    next_tasks: Array.isArray(result.next_tasks) && result.next_tasks.length > 0 ? result.next_tasks : policy.next_tasks,
+    repair_proposals: Array.isArray(result.repair_proposal?.repair_proposals) ? result.repair_proposal.repair_proposals : policy.repair_proposals,
+    blocking_count: policy.blocking_count,
+    residual_count: policy.residual_count,
+  };
+}
+
+function buildAcceptanceRepairTask({ task, acceptance, manualNote }) {
+  const failedCriteria = acceptance.acceptance_findings.filter((finding) => finding.severity === "blocker" || finding.severity === "major");
+  const repairProposal = {
+    source_task_id: task.id,
+    source_goal_id: task.goal_id || null,
+    reviewer_decision: acceptance.reviewer_decision,
+    acceptance_findings: acceptance.acceptance_findings,
+    failed_criteria: failedCriteria,
+    repair_proposals: acceptance.repair_proposals,
+  };
+  const lines = [
+    `Repair acceptance failures for task: ${task.id}`,
+    task.title,
+    "",
+    task.goal_id ? `Source goal: ${task.goal_id}` : "",
+    task.result?.summary ? `Original summary: ${task.result.summary}` : "",
+    task.result?.commit ? `Original commit: ${task.result.commit}` : "",
+    "",
+    "Acceptance decision:",
+    JSON.stringify(acceptance.reviewer_decision, null, 2),
+    "",
+    "Blocking findings:",
+    JSON.stringify(failedCriteria, null, 2),
+    "",
+    "Repair proposal:",
+    JSON.stringify(repairProposal, null, 2),
+    "",
+    manualNote ? `Additional note: ${manualNote}` : "",
+    "Implement the smallest fix that resolves the blocker/major findings, rerun verification, and report a new reviewer_decision.",
+  ].filter(Boolean);
+
+  return {
+    title: `Repair acceptance findings: ${task.title}`,
+    description: lines.join("\n"),
+    assignee: "codex",
+    project_id: task.project_id || "default",
+    workspace_id: task.workspace_id || "hosted-default",
+    mode: task.mode || "builder",
+    source_task_id: task.id,
+    source_goal_id: task.goal_id || null,
+    repair_proposal: repairProposal,
+  };
+}
 
 export function generateProposal({
   diagnostics,
@@ -324,13 +415,28 @@ export function generateProposal({
     // Validate result contract (skip git worktree check — diagnostics.isSafe already covers it)
     const validation = validateResultContract(result, { skipWorktreeCheck: true });
 
-    if (validation.valid) {
+    const acceptance = normalizeAcceptanceForResult(result);
+
+    if (validation.valid && !acceptance.passed) {
+      const proposed_next_task = buildAcceptanceRepairTask({ task, acceptance, manualNote });
+      return {
+        next_action: "create_repair_task",
+        proposed_next_task,
+        recommendation: `Task "${task.title}" has blocker/major acceptance findings. Proposed automatic repair task.`,
+        needs_gptchat_decision: false,
+        repair_proposal: proposed_next_task.repair_proposal,
+        acceptance,
+      };
+    }
+
+    if (validation.valid && acceptance.passed) {
       return {
         next_action: "auto_accepted",
         proposed_next_task: null,
-        recommendation: `Task "${task.title}" result is valid. Auto-accepted.`,
+        recommendation: `Task "${task.title}" result and acceptance verdict are valid. Auto-accepted.`,
         needs_gptchat_decision: false,
         auto_accepted: true,
+        acceptance,
       };
     }
 
@@ -448,8 +554,12 @@ export async function autoAcceptTask({ store, config, task, diagnostics }) {
   if (!result) return { auto_accepted: false, error: "Task has no result" };
 
   const validation = validateResultContract(result, { skipWorktreeCheck: true });
+  const acceptance = normalizeAcceptanceForResult(result);
   if (!validation.valid) {
     return { auto_accepted: false, error: `Result contract invalid: ${validation.warnings.join("; ")}` };
+  }
+  if (!acceptance.passed) {
+    return { auto_accepted: false, error: "Acceptance decision requires repair" };
   }
 
   // All conditions met — perform auto-accept
@@ -464,6 +574,9 @@ export async function autoAcceptTask({ store, config, task, diagnostics }) {
     if (t.result) {
       t.result.auto_accepted = true;
       t.result.accepted_at = new Date().toISOString();
+      t.result.reviewer_decision = acceptance.reviewer_decision;
+      t.result.acceptance_findings = acceptance.acceptance_findings;
+      t.result.next_tasks = acceptance.next_tasks;
     }
   });
 
