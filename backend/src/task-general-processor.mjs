@@ -15,6 +15,7 @@ import { runAcceptanceAgent, ACCEPTANCE_PROFILES, hasCodeOrConfigOrRuntimeChange
 import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createGoal } from './goal-task-goals.mjs';
+import { determineHealingAction } from './self-healing-policy.mjs';
 
 
 export async function processGeneralTask(store, config, task, context, github) {
@@ -39,6 +40,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const shouldAttemptRepairFn = deps.shouldAttemptRepairFn || shouldAttemptRepair;
   const runIntegrationQueueFn = deps.runIntegrationQueueFn || runIntegrationQueue;
   const createGoalFn = deps.createGoalFn || createGoal;
+  const determineHealingActionFn = deps.determineHealingActionFn || determineHealingAction;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
     delete item.lock_blocked_at;
@@ -182,14 +184,21 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     runFilePath = prepResult.runFilePath;
     runId = prepResult.runId;
   } catch (prepErr) {
-    // If prepareCodexTaskRun fails (e.g. ENOSPC), release the lock and mark
-    // the task as failed so it doesn't remain in "running" state with the lock held.
+    // If prepareCodexTaskRun fails (e.g. ENOSPC), classify via self-healing policy
+    // and set appropriate status (waiting_for_review for recoverable, failed otherwise).
     const failMsg = `[worker] failed during prompt preparation: ${prepErr.message}`;
     if (repoLockPath) {
       try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch {}
     }
+    // Classify the error via self-healing policy
+    const healingAction = determineHealingActionFn({
+      error: prepErr,
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
+    const taskStatus_ = healingAction.action === "waiting_for_review" ? "failed" : "waiting_for_review";
     await updateTaskFn(store, task.id, (item) => {
-      item.status = "failed";
+      item.status = taskStatus_;
       item.result = {
         kind: "operational_error",
         summary: failMsg,
@@ -203,17 +212,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         await appendGoalMessageFn(store, config, {
           goal_id: goal.id,
           role: "codex",
-          content: failMsg,
+          content: failMsg + " (healing: " + healingAction.action + ")",
         }, context);
       } catch {}
     }
-    return { task_id: task.id, status: "failed", kind: "operational_error", reason: failMsg };
+    return { task_id: task.id, status: taskStatus_, kind: "operational_error", reason: failMsg, healing_action: healingAction.action };
   }
 
   const mode = task.mode || "builder";
   let summary = "";
   let parsedResult = null;
   let cr = null;
+  let healingAction = null;
 
   try {
     ({ cr, parsedResult, summary } = await executeCodexTaskRunFn({
@@ -230,6 +240,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }));
   } catch (e) {
     summary = "[ERROR] " + e.message;
+    healingAction = determineHealingActionFn({
+      error: e,
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
   } finally {
     try { await rm(promptFile, { force: true }); } catch {}
   }
@@ -243,6 +258,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout, returnCode: cr?.returncode ?? 0, cr })
     : {
         kind: cr?.no_first_output_timeout ? "no_first_output_timeout" : timedOut ? "codex_timeout" : "codex_failed",
+        healing_action: healingAction?.action || null,
         summary: cr?.no_first_output_timeout ? "Codex produced no stdout/stderr before the first-output timeout." : summary,
         completed_at: new Date().toISOString(),
         stdout_bytes: cr?.stdout_bytes ?? 0,
@@ -448,6 +464,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           taskBranch: (resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || 'gptwork/' + task.id,
           integrationMode: config.integrationMode || 'push_branch',
           checkCommands: config.integrationCheckCommands,
+          locksBasePath: config.defaultWorkspaceRoot,
+          taskId: task.id,
         });
 
         taskResult.integration = { ...integrationResult };

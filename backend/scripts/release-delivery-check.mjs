@@ -35,6 +35,11 @@ async function main() {
       "--test", "--test-reporter=dot",
       "test/acceptance-policy.test.mjs",
       "test/context-index.test.mjs",
+      "test/acceptance-agent.test.mjs",
+    ]},
+    { name: "acceptance-agent runtime test", cmd: "node", args: [
+      "--input-type=module", "-e",
+      "import { runAcceptanceAgent } from \"./src/acceptance-agent.mjs\"; const r=await runAcceptanceAgent({task:{id:\"t\"},result:{status:\"completed\",summary:\"ok\",changed_files:[],verification:{commands:[\"true\"],passed:true}},repoPath:process.cwd(),evidence:{result_json_valid:true,result_summary:\"ok\",changed_files:[],git_status:\"clean\",verification_log_exists:true,commit_exists:true}}); if(!r.passed)throw new Error(\"acceptance-agent runtime failed: \"+r.status); console.log(\"runtime PASS: findings=\"+r.findings.length);",
     ]},
     { name: "E2E delivery test", cmd: "node", args: [
       "--test", "--test-reporter=dot",

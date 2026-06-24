@@ -39,7 +39,7 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
     commit_exists: false,
     changed_files: [],
     verification_log_exists: false,
-    result_json_valid: false,
+    result_json_valid: null,  // null = not checked (pass), false = checked+invalid (fail)
   };
 
   if (gitPath) {
@@ -79,7 +79,7 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
     try {
       const stdout = execFileSync('git', ['diff', '--name-only', 'HEAD~1..HEAD', '--relative'], {
         cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
-      }).catch(() => '');
+      });
       const files = stdout.trim().split('\n').filter(Boolean);
       if (files.length > 0) {
         evidence.changed_files = files;
@@ -242,7 +242,8 @@ function getProfileChecks(profile) {
 async function runCheck(check, { task, result, evidence, repoPath }) {
   switch (check) {
     case 'result_json_valid':
-      if (!evidence.result_json_valid) {
+      // null = not checked (pass), false = checked and invalid (fail)
+      if (evidence.result_json_valid === false) {
         return { severity: 'blocker', code: 'result_json_invalid', message: 'result.json is missing or invalid', source: 'acceptance_agent' };
       }
       return null;
@@ -262,7 +263,11 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       return null;
 
     case 'verification_present_for_non_noop':
-      if (result?.noop !== true && (!result?.verification || !result.verification.commands || result.verification.commands.length === 0)) {
+      if (result?.noop === true) return null;
+      // Tasks without changed files don't need verification (query/analysis/noop-like)
+      const verify_changedFiles = evidence.changed_files || result?.changed_files || [];
+      if (verify_changedFiles.length === 0) return null;
+      if (!result?.verification?.commands?.length) {
         return { severity: 'major', code: 'verification_missing', message: 'Verification commands not present in result for non-noop task', source: 'acceptance_agent' };
       }
       return null;

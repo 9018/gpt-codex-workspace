@@ -69,6 +69,8 @@ export async function finalizeCodexTaskRun({
           taskBranch: (resolvedRepo && resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || "gptwork/" + task.id,
           integrationMode: config.integrationMode || "push_branch",
           checkCommands: config.integrationCheckCommands,
+          locksBasePath: config.defaultWorkspaceRoot,
+          taskId: task.id,
         });
 
         if (integrationResult.ok) {

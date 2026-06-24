@@ -17,20 +17,20 @@ import { isIntegrationLocked, releaseIntegrationLock } from "../src/integration-
 // ===========================================================================
 
 test("isIntegrationLocked: returns false for unknown repo/branch", async () => {
-  const result = isIntegrationLocked("github.com/unknown/repo", "main");
+  const result = await isIntegrationLocked("github.com/unknown/repo", "main");
   assert.equal(result, false);
 });
 
 test("releaseIntegrationLock: does not throw for unknown repo/branch", async () => {
-  releaseIntegrationLock("github.com/unknown/repo", "main");
+  await releaseIntegrationLock("github.com/unknown/repo", "main");
   // Should not throw
   assert.ok(true);
 });
 
 test("releaseIntegrationLock: called on unknown key is a no-op", async () => {
   // Verify the function is callable and doesn't crash
-  releaseIntegrationLock("nonexistent/repo", "dev");
-  assert.equal(isIntegrationLocked("nonexistent/repo", "dev"), false);
+  await releaseIntegrationLock("nonexistent/repo", "dev");
+  assert.equal(await isIntegrationLocked("nonexistent/repo", "dev"), false);
 });
 
 // ===========================================================================
@@ -53,7 +53,7 @@ test("integration-queue: memory lock note and TODO", async () => {
   // For production multi-process use, it should be replaced with persistent
   // locks (e.g., repo-lock-lifecycle filesystem locks).
   //
-  // TODO(P0): Replace INTEGRATION_LOCKS Map with persistent filesystem-based
+  // FIXED(P0): INTEGRATION_LOCKS now uses file-based locks when locksBasePath is provided.
   // locks using repo-lock-lifecycle's acquireRepoLock/releaseRepoLock pattern.
   // This ensures cross-process serial integration and survives process restarts.
   //

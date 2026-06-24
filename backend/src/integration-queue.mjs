@@ -6,6 +6,9 @@
  */
 
 import { execFileSync } from 'node:child_process';
+import { acquireRepoLock, releaseRepoLock, forceReleaseRepoLock, safeRepoId, getLocksDir } from './repo-lock.mjs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 
 const INTEGRATION_LOCKS = new Map();
 
@@ -25,17 +28,30 @@ const INTEGRATION_LOCKS = new Map();
  */
 export async function runIntegrationQueue({
   repoId, targetBranch, worktreePath, canonicalRepoPath, taskBranch,
-  integrationMode, checkCommands,
+  integrationMode, checkCommands, locksBasePath, taskId,
 } = {}) {
   const lockKey = `integration:${repoId}:${targetBranch}`;
   const mode = integrationMode || process.env.GPTWORK_INTEGRATION_MODE || 'push_branch';
+  const integrationLockPath = `integration:${safeRepoId(repoId)}:${targetBranch}`;
 
-  // Acquire integration lock (non-blocking)
-  if (INTEGRATION_LOCKS.has(lockKey)) {
-    return { ok: false, status: 'locked', merged: false, pushed: false, pr_opened: false,
-      error: `Integration lock held for ${lockKey} by another task` };
+  // Acquire integration lock — file-based when locksBasePath provided, Map fallback
+  const useFileLock = Boolean(locksBasePath);
+  if (useFileLock) {
+    const lockResult = await acquireRepoLock(locksBasePath, integrationLockPath, {
+      taskId: taskId || 'integration',
+      mode: 'integration',
+    });
+    if (!lockResult.acquired) {
+      return { ok: false, status: 'locked', merged: false, pushed: false, pr_opened: false,
+        error: `Integration lock held for ${lockKey}: ${lockResult.reason || 'by another task'}` };
+    }
+  } else {
+    if (INTEGRATION_LOCKS.has(lockKey)) {
+      return { ok: false, status: 'locked', merged: false, pushed: false, pr_opened: false,
+        error: `Integration lock held for ${lockKey} by another task` };
+    }
+    INTEGRATION_LOCKS.set(lockKey, Date.now());
   }
-  INTEGRATION_LOCKS.set(lockKey, Date.now());
 
   try {
     const gitPath = worktreePath || canonicalRepoPath;
@@ -105,7 +121,11 @@ export async function runIntegrationQueue({
   } catch (err) {
     return { ok: false, status: 'failed', merged: false, pushed: false, pr_opened: false, error: err.message };
   } finally {
-    INTEGRATION_LOCKS.delete(lockKey);
+    if (useFileLock) {
+      try { await releaseRepoLock(locksBasePath, integrationLockPath, taskId || 'integration'); } catch {}
+    } else {
+      INTEGRATION_LOCKS.delete(lockKey);
+    }
   }
 }
 
@@ -126,7 +146,16 @@ function parseConflictFiles(stderr) {
  * @param {string} targetBranch
  * @returns {boolean}
  */
-export function isIntegrationLocked(repoId, targetBranch) {
+export async function isIntegrationLocked(repoId, targetBranch, { locksBasePath } = {}) {
+  if (locksBasePath) {
+    const lockFilePath = join(getLocksDir(locksBasePath), safeRepoId(`integration:${repoId}:${targetBranch}`) + '.json');
+    try {
+      const lock = JSON.parse(await readFile(lockFilePath, 'utf8'));
+      return lock.status === 'held';
+    } catch {
+      return false;
+    }
+  }
   return INTEGRATION_LOCKS.has(`integration:${repoId}:${targetBranch}`);
 }
 
@@ -136,6 +165,14 @@ export function isIntegrationLocked(repoId, targetBranch) {
  * @param {string} repoId
  * @param {string} targetBranch
  */
-export function releaseIntegrationLock(repoId, targetBranch) {
+export async function releaseIntegrationLock(repoId, targetBranch, { locksBasePath } = {}) {
+  if (locksBasePath) {
+    const integrationLockPath = `integration:${safeRepoId(repoId)}:${targetBranch}`;
+    try {
+      await forceReleaseRepoLock(locksBasePath, integrationLockPath);
+    } catch {
+      // Non-fatal
+    }
+  }
   INTEGRATION_LOCKS.delete(`integration:${repoId}:${targetBranch}`);
 }
