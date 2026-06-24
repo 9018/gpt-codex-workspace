@@ -52,7 +52,7 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
       try {
         const resultPath = `.gptwork/goals/${prior.id}/result.md`;
         const absPath = join(
-          workspaceRoot || process.cwd(),
+          workspaceRoot || process.cwd(),  // fallback to cwd when caller has not provided workspaceRoot
           resultPath
         );
         if (existsSync(absPath)) {
@@ -135,7 +135,7 @@ export async function maybeBuildContextBundle(
   }
 
   try {
-    const workspaceRoot = config?.defaultWorkspaceRoot || process.cwd();
+    const workspaceRoot = config?.defaultWorkspaceRoot || process.cwd();  // fallback to cwd when no config provided
     const transcriptPath = workspaceFiles?.transcript_md || `.gptwork/goals/${goal.id}/transcript.md`;
 
     // Load transcript for additional context if available

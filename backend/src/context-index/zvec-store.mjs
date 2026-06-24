@@ -18,6 +18,28 @@ const DEFAULT_INDEX_DIR = ".gptwork/context-index";
 const CHUNKS_FILE = "chunks.json";
 const VECTORS_FILE = "vectors.json";
 
+
+// ---------------------------------------------------------------------------
+// Per-goal concurrency lock
+// ---------------------------------------------------------------------------
+// Prevents lost-update races when addChunks/search run concurrently
+// for the same goalId.  Node.js is single-threaded, but async I/O
+// creates yield points where a second operation could read stale state.
+
+/** @type {Map<string, Promise<void>>} */
+const goalLocks = new Map();
+
+async function withGoalLock(goalId, fn) {
+  const existing = goalLocks.get(goalId);
+  if (existing) await existing;
+  const promise = (async () => {
+    try { return await fn(); }
+    finally { if (goalLocks.get(goalId) === promise) goalLocks.delete(goalId); }
+  })();
+  goalLocks.set(goalId, promise);
+  return promise;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -136,6 +158,7 @@ export function createLocalStore(options = {}) {
         byGoal.get(goalId).vectors.push(vectors[i]);
       }
       for (const [goalId, data] of byGoal) {
+        await withGoalLock(goalId, async () => {
         const entry = await loadGoalIndex(goalId);
         if (options.replace) {
           // Replace mode: clear existing chunks for this goal and use new data
@@ -166,6 +189,7 @@ export function createLocalStore(options = {}) {
           }
         }
         await persistGoalIndex(goalId, entry);
+        });
       }
     },
 
@@ -173,6 +197,7 @@ export function createLocalStore(options = {}) {
       const goalId = filters.goal_id;
       if (!goalId) return [];
 
+      return withGoalLock(goalId, async () => {
       const entry = await loadGoalIndex(goalId);
       if (entry.chunks.length === 0) return [];
 
@@ -192,6 +217,7 @@ export function createLocalStore(options = {}) {
 
       scored.sort((a, b) => b.score - a.score);
       return scored.slice(0, topK);
+      });
     },
 
     async removeGoalChunks(goalId) {

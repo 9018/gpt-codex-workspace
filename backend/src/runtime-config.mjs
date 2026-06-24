@@ -73,6 +73,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
         if (eqIdx === -1) continue;
         const k = line.slice(0, eqIdx).trim();
         if (!k) continue;
+        if (process.env[k] !== undefined) continue;
         fileKeys.push(k);
       }
       envLoadResult.keys = [...new Set([...envLoadResult.keys, ...fileKeys])];
