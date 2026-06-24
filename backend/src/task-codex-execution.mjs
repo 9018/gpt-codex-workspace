@@ -1,4 +1,4 @@
-import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, createThrottledHeartbeat, removeThrottledHeartbeat, getStdoutLogPath, getStderrLogPath } from "./codex-run-metadata.mjs";
+import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, ensureRunLogFiles, createThrottledHeartbeat, removeThrottledHeartbeat, getStdoutLogPath, getStderrLogPath } from "./codex-run-metadata.mjs";
 import { parseCodexResultWithFallback } from "./codex-result-parser.mjs";
 import { updateRepoLock } from "./repo-lock.mjs";
 import { runLocalShell } from "./workspace-service.mjs";
@@ -18,6 +18,7 @@ export async function executeCodexTaskRun({
   runLocalShellFn = runLocalShell,
   parseCodexResultFn = parseCodexResultWithFallback,
   writeRunLogsFn = writeRunLogs,
+  ensureRunLogFilesFn = ensureRunLogFiles,
   fireHeartbeatFn = fireHeartbeat,
   updateRunHeartbeatFn = updateRunHeartbeat,
   updateRepoLockFn = updateRepoLock,
@@ -79,8 +80,16 @@ export async function executeCodexTaskRun({
   // P1.1: Clean up throttled heartbeat
   if (throttledHb) removeThrottledHeartbeat(runFilePath);
 
+  if (cr && runId && hasStreamingLogs) {
+    await ensureRunLogFilesFn({
+      workspaceRoot: config.defaultWorkspaceRoot,
+      taskId: task.id,
+      runId,
+    }).catch(() => {});
+  }
+
   if (cr && runId && !hasStreamingLogs) {
-    writeRunLogsFn({
+    await writeRunLogsFn({
       workspaceRoot: config.defaultWorkspaceRoot,
       taskId: task.id,
       runId,

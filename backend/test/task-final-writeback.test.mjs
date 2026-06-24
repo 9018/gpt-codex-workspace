@@ -159,4 +159,38 @@ test("task-final-writeback: unknown status passes through as-is", async () => {
   }
 });
 
+test("task-final-writeback: git worktree cleanup failure is fail-closed and recorded", async () => {
+  let savedTask = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical-repo",
+    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    worktree_lifecycle: { mode: "git_worktree", ok: true },
+  };
+  args.removeTaskWorktreeFn = async () => ({
+    ok: false,
+    removed: false,
+    error: "worktree remove failed: dirty files",
+    command: "git -C /tmp/canonical-repo worktree remove /tmp/worktrees/repo/task_label_test",
+    worktree_path: "/tmp/worktrees/repo/task_label_test",
+  });
+
+  await finalizeCodexTaskRun(args);
+
+  assert.equal(savedTask.status, "failed");
+  assert.equal(savedTask.result.worktree_lifecycle.cleanup_supported, true);
+  assert.equal(savedTask.result.worktree_lifecycle.cleanup.ok, false);
+  assert.match(savedTask.result.worktree_lifecycle.cleanup.error, /dirty files/);
+  assert.ok(savedTask.result.acceptance_findings.some((finding) => finding.code === "git_worktree_cleanup_failed"));
+});
+
 console.log("task-final-writeback tests loaded");

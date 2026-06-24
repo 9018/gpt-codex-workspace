@@ -2,10 +2,21 @@ import "./helpers/env-isolation.mjs";
 import fs from "node:fs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
+
+async function initGitRepo(dir) {
+  await mkdir(dir, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), "initial\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+}
 
 async function makeServer() {
   const root = await mkdtemp(join(tmpdir(), "gptwork-tools-"));
@@ -353,11 +364,14 @@ test("safe Codex worker completes assigned session inventory tasks", async () =>
 
 test("general Codex worker completes linked goals and writes concise results", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-general-worker-"));
+  const workspaceRoot = join(root, "workspace");
+  await initGitRepo(workspaceRoot);
   const server = await createGptWorkServer({
     statePath: join(root, "state.json"),
-    defaultWorkspaceRoot: join(root, "workspace"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
     codexHome: root,
-    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nTESTS=passed 1/1\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')" --`,
+    codexExecArgs: `--help >/dev/null 2>&1; ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nTESTS=passed 1/1\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')"; true #`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,

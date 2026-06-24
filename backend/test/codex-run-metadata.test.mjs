@@ -1,6 +1,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -25,6 +26,15 @@ import {
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+async function initGitRepo(dir) {
+  execFileSync("git", ["init", "-b", "main", dir], { stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: dir });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: dir });
+  await writeFile(join(dir, "README.md"), "initial\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: dir });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: dir, stdio: "ignore" });
+}
 
 async function makeServer() {
   const root = await mkdtemp(join(tmpdir(), "gptwork-rundiag-"));
@@ -305,11 +315,12 @@ test("isRepoDirty returns false for non-existent path", () => {
 test("Codex execution creates run metadata with heartbeats", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-runint-"));
   const workspaceRoot = join(root, "workspace");
-  await mkdir(workspaceRoot, { recursive: true });
+  await initGitRepo(workspaceRoot);
 
   const server = await createGptWorkServer({
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
     codexHome: root,
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=heartbeat-test')" --`,
     codexExecTimeout: 5,
@@ -353,11 +364,12 @@ test("Codex execution creates run metadata with heartbeats", async () => {
 test("run metadata is cleaned up properly after execution", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-runmeta-"));
   const workspaceRoot = join(root, "workspace");
-  await mkdir(workspaceRoot, { recursive: true });
+  await initGitRepo(workspaceRoot);
 
   const server = await createGptWorkServer({
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
     codexHome: root,
     codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=cleanup-test')" --`,
     codexExecTimeout: 5,

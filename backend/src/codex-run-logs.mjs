@@ -1,4 +1,4 @@
-import { appendFile, mkdir } from "node:fs/promises";
+import { appendFile, mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 import { getStdoutLogPath, getStderrLogPath, MAX_STDOUT_TAIL_BYTES } from "./codex-run-paths.mjs";
 
@@ -18,7 +18,7 @@ export function trimUtf8Tail(text = "", maxBytes = MAX_STDOUT_TAIL_BYTES) {
 }
 
 export async function appendLogFile(filePath, chunk) {
-  if (!filePath || !chunk) return;
+  if (!filePath || chunk === undefined || chunk === null) return;
   const previous = logAppendQueues.get(filePath) || Promise.resolve();
   const next = previous.catch(() => {}).then(async () => {
     await mkdir(dirname(filePath), { recursive: true });
@@ -33,7 +33,7 @@ export async function appendLogFile(filePath, chunk) {
 
 export function streamToLog(opts = {}) {
   const { filePath, chunk, boundedTail = "", maxTailBytes = MAX_STDOUT_TAIL_BYTES } = opts;
-  if (!filePath || !chunk) return { tail: boundedTail, truncated: false };
+  if (!filePath || chunk === undefined || chunk === null || chunk === "") return { tail: boundedTail, truncated: false };
 
   // Append to file in per-file order. Fire-and-forget keeps streaming fast,
   // while appendLogFile serializes concurrent chunks for stable logs.
@@ -62,8 +62,18 @@ export async function writeRunLogs(opts = {}) {
 
   // Append-mode for streaming: writes are serialized per log file to avoid
   // out-of-order chunks when stdout/stderr handlers fire quickly.
-  if (stdout) await appendLogFile(stdLog, stdout);
-  if (stderr) await appendLogFile(errLog, stderr);
+  await appendLogFile(stdLog, stdout || "");
+  await appendLogFile(errLog, stderr || "");
+}
+
+export async function ensureRunLogFiles(opts = {}) {
+  const { workspaceRoot, taskId, runId } = opts;
+  if (!workspaceRoot || !taskId || !runId) return;
+  for (const filePath of [getStdoutLogPath(workspaceRoot, taskId, runId), getStderrLogPath(workspaceRoot, taskId, runId)]) {
+    await mkdir(dirname(filePath), { recursive: true });
+    const handle = await open(filePath, "a");
+    await handle.close();
+  }
 }
 
 // ---------------------------------------------------------------------------

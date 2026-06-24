@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, readdir, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -86,6 +86,37 @@ test("ensureTaskWorktree reports git failures instead of pretending success", as
   });
 
   assert.equal(result.ok, false);
-  assert.match(result.error, /worktree add failed|not a git repository|No such file/i);
+  assert.match(result.error, /worktree add failed|not a git repository|No such file|ENOENT/i);
 });
 
+test("ensureTaskWorktree fails closed when canonical repo is dirty", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-dirty-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+  await writeFile(join(repo, "dirty.txt"), "dirty\n", "utf8");
+
+  const result = await ensureTaskWorktree("repo", "task_dirty", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+  });
+
+  assert.equal(result.ok, false);
+  assert.match(result.error, /dirty/i);
+  assert.equal(existsSync(getTaskWorktreePath(root, "repo", "task_dirty")), false);
+});
+
+test("pruneStaleWorktrees removes orphan task worktree directories after git prune", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-orphan-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+  const orphan = join(root, "worktrees", "github.com-acme-repo", "task_orphan");
+  await mkdir(orphan, { recursive: true });
+  await writeFile(join(orphan, "leftover.txt"), "orphan\n", "utf8");
+
+  const pruned = await pruneStaleWorktrees({ workspaceRoot: root, canonicalRepoPath: repo });
+
+  assert.equal(pruned.ok, true);
+  assert.ok(pruned.orphans.includes(orphan));
+  assert.ok(pruned.removed_orphans.includes(orphan));
+  assert.equal(existsSync(orphan), false);
+});

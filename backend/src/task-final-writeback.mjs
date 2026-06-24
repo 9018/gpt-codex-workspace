@@ -32,6 +32,7 @@ export async function finalizeCodexTaskRun({
   releaseRepoLockFn = releaseRepoLock,
   updateGoalStatusFn = updateGoalStatus,
   writeWorkspaceTextInternalFn = writeWorkspaceTextInternal,
+  removeTaskWorktreeFn = removeTaskWorktree,
 }) {
   if (runFilePath) {
     const resultJsonPath = workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json";
@@ -47,6 +48,34 @@ export async function finalizeCodexTaskRun({
       first_stderr_at: cr?.first_stderr_at,
       first_output_delay_ms: cr?.first_output_delay_ms,
     });
+  }
+
+  const cleanup = await cleanupTaskWorktree({
+    task,
+    config,
+    resolvedRepo,
+    removeTaskWorktreeFn,
+  });
+  if (cleanup) {
+    taskResult.worktree_lifecycle = {
+      ...(taskResult.worktree_lifecycle || resolvedRepo?.worktree_lifecycle || {}),
+      cleanup_supported: true,
+      cleanup,
+    };
+    if (cleanup.ok === false) {
+      taskStatus = "failed";
+      taskResult.kind = taskResult.kind || "worktree_cleanup_failed";
+      taskResult.summary = taskResult.summary || "Task worktree cleanup failed.";
+      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+      taskResult.warnings.push(`Task worktree cleanup failed: ${cleanup.error || "unknown error"}`);
+      taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+      taskResult.acceptance_findings.push({
+        severity: "blocker",
+        code: "git_worktree_cleanup_failed",
+        message: cleanup.error || "git worktree remove failed",
+        source: "worktree_lifecycle",
+      });
+    }
   }
 
   const result = typeof store.mutate === "function"
@@ -69,15 +98,6 @@ export async function finalizeCodexTaskRun({
     if (!keptForRestart) {
       await releaseRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id);
     }
-  }
-
-  if (resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {
-    await removeTaskWorktree(task.id, {
-      workspaceRoot: config.defaultWorkspaceRoot,
-      repoId: resolvedRepo.repo_id,
-      canonicalRepoPath: resolvedRepo.canonical_repo_path,
-      worktreePath: resolvedRepo.task_worktree_path,
-    }).catch(() => {});
   }
 
   if (goal) {
@@ -114,6 +134,8 @@ export async function finalizeCodexTaskRun({
         remote_head: taskResult.remote_head || null,
         warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
         followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+        worktree_lifecycle: taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null,
+        queue_autostart_fix: taskResult.queue_autostart_fix || null,
         reviewer_decision: taskResult.reviewer_decision || null,
         acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
         next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
@@ -124,6 +146,25 @@ export async function finalizeCodexTaskRun({
 
   try { await github.syncTask(result.task); } catch {}
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind };
+}
+
+async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorktreeFn }) {
+  if (resolvedRepo?.worktree_lifecycle?.mode !== "git_worktree" || !resolvedRepo?.task_worktree_path) return null;
+  try {
+    return await removeTaskWorktreeFn(task.id, {
+      workspaceRoot: config.defaultWorkspaceRoot,
+      repoId: resolvedRepo.repo_id,
+      canonicalRepoPath: resolvedRepo.canonical_repo_path,
+      worktreePath: resolvedRepo.task_worktree_path,
+    });
+  } catch (error) {
+    return {
+      ok: false,
+      removed: false,
+      error: error?.message || String(error || "git worktree remove failed"),
+      worktree_path: resolvedRepo.task_worktree_path,
+    };
+  }
 }
 
 function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config }) {

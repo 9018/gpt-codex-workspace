@@ -190,6 +190,7 @@ export async function processGeneralTask(store, config, task, context, github) {
     uses_default_fallback: resolvedRepo.uses_default_fallback,
     worktree_lifecycle: resolvedRepo.worktree_lifecycle,
   };
+  taskResult.worktree_lifecycle = resolvedRepo.worktree_lifecycle;
 
   const doneAt = new Date().toISOString();
   let taskStatus = deriveTaskStatusFromTaskResult(taskResult);

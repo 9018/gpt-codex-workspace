@@ -84,6 +84,7 @@ export async function createGptWorkServer(options = {}) {
     defaultBranch: rcc.defaultBranch,
     defaultRepoPath: options.defaultRepoPath || rcc.defaultRepoPath,
     defaultRemote: rcc.defaultRemote,
+    enableTaskWorktrees: options.enableTaskWorktrees ?? rcc.enableTaskWorktrees,
     // GitHub config from unified config
     githubEnabled: rcc.githubEnabled,
     githubRepo: rcc.githubRepo,

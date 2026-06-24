@@ -33,7 +33,7 @@ export async function resolveTaskRepository({ task = {}, goal = {}, config = {},
   };
   let lockRepoPath = canonicalRepoPath;
 
-  if (config.enableTaskWorktrees === true) {
+  if (config.enableTaskWorktrees !== false) {
     const ensured = await ensureTaskWorktree(repoId, taskId, {
       workspaceRoot,
       canonicalRepoPath,

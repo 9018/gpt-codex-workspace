@@ -68,7 +68,8 @@ async function makeServer() {
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
 }
 
@@ -456,7 +457,8 @@ test("gptwork_doctor suggests repo_lock_status when locks exist", async () => {
     codexHome: root,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
   const doctor = await callTool(server, "gptwork_doctor", {});
   assert.ok(doctor.suggested_next_actions.length > 0,
@@ -561,7 +563,8 @@ test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
 
   // Create first task
@@ -637,7 +640,8 @@ test("blocked task with waiting_for_lock is retried after lock release", async (
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
 
   // Acquire a repo lock manually to simulate another task running
@@ -718,7 +722,8 @@ test("waiting_for_lock task does not trigger Bark waiting_for_review notificatio
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
 
   // Acquire lock manually to force blocking
@@ -782,7 +787,8 @@ test("task processor locks resolved repo_id canonical path instead of default re
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,
-    toolMode: "full"
+    toolMode: "full",
+    enableTaskWorktrees: false
   });
 
   await callTool(server, "register_repository", {

@@ -56,15 +56,34 @@ async function makeStore(dir) {
 
 function addGoal(store, id, title, status, opts = {}) {
   const now = new Date().toISOString();
+  const conversationId = opts.conversation_id || `conv_${id}`;
   store.state.goals.push({
     id,
+    project_id: opts.project_id || "default",
+    conversation_id: conversationId,
     title: title || id,
     description: "",
+    user_request: opts.user_request || title || id,
+    goal_prompt: opts.goal_prompt || title || id,
+    context_summary: opts.context_summary || "",
     workspace_id: opts.workspace_id || "hosted-default",
+    mode: opts.mode || "builder",
     status: status || "open",
     created_at: now,
     updated_at: now,
   });
+  store.state.conversations ||= [];
+  if (!store.state.conversations.some((conversation) => conversation.id === conversationId)) {
+    store.state.conversations.push({
+      id: conversationId,
+      goal_id: id,
+      project_id: opts.project_id || "default",
+      workspace_id: opts.workspace_id || "hosted-default",
+      messages: [],
+      created_at: now,
+      updated_at: now,
+    });
+  }
 }
 
 function addGoalToQueue(store, queueId, goalId, position, status, opts = {}) {
@@ -79,6 +98,7 @@ function addGoalToQueue(store, queueId, goalId, position, status, opts = {}) {
     status: status || "waiting",
     depends_on_goal_id: opts.depends_on_goal_id || null,
     depends_on_task_id: opts.depends_on_task_id || null,
+    dependency_policy: opts.dependency_policy || "completed_only",
     blocked_reason: opts.blocked_reason || null,
     auto_start: opts.auto_start !== false,
     created_at: now,
@@ -836,6 +856,7 @@ test("goal-queue: repo resolver falls back to default repo path when repo_id is 
 
   const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
   const config = { defaultWorkspaceRoot: dir, defaultRepoPath: defaultRepo };
+  config.enableTaskWorktrees = false;
   const result = await startNextQueuedGoal(store, config, { dry_run: false });
 
   assert.equal(result.started, false);
@@ -858,6 +879,7 @@ test("goal-queue: git status failure blocks fail-closed", async () => {
   const result = await startNextQueuedGoal(store, {
     defaultWorkspaceRoot: dir,
     defaultRepoPath: nonRepo,
+    enableTaskWorktrees: false,
   }, { dry_run: false });
 
   assert.equal(result.started, false);
@@ -900,4 +922,32 @@ test("goal-queue: blocked dirty/unknown item only auto-recovers after fail-close
   await store.load();
   assert.notEqual(store.state.goal_queue[0].status, "blocked", "clean repo and no lock should recover transient block");
   assert.match(result.reason, /Dry run/);
+});
+
+test("goal-queue: dependency-satisfied waiting auto_start item starts even if completion hook was missed", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-queue70298-regression-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+
+  const store = await makeStore(dir);
+  addTask(store, "task_2f357f8e-44c7-43ed-bdfa-e1db06572746", "completed", { goal_id: "goal_prereq" });
+  addGoal(store, "goal_queued_after_dep", "Queued after dependency", "open");
+  addGoalToQueue(store, "queue_70298c5b530", "goal_queued_after_dep", 1, "waiting", {
+    depends_on_task_id: "task_2f357f8e-44c7-43ed-bdfa-e1db06572746",
+    dependency_policy: "completed_only",
+    auto_start: true,
+  });
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const result = await startNextQueuedGoal(store, {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: repo,
+    enableTaskWorktrees: false,
+  }, { dry_run: false });
+
+  assert.equal(result.started, true);
+  assert.equal(result.item.queue_id, "queue_70298c5b530");
+  assert.equal(result.item.status, "running");
+  assert.ok(result.task?.id, "should create a Codex task for the queue item");
 });

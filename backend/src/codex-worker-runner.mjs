@@ -8,6 +8,7 @@ import { normalizeLegacyModes, updateTask } from "./task-lifecycle.mjs";
 import { isCodexSessionInventoryTask } from "./task-status.mjs";
 import { completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
+import { startNextQueuedGoal } from "./goal-queue.mjs";
 
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
@@ -118,12 +119,30 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   // Use indexed query from StateStore instead of full scan on state.tasks.
   // The query is fair across status buckets so large assigned backlogs do not
   // starve queued or waiting_for_lock tasks.
-  const candidates = store.getCodexActiveQueueCandidates(
+  let candidates = store.getCodexActiveQueueCandidates(
     ["assigned", "queued", "waiting_for_lock"],
     maxTasks
   ).filter((task) =>
     canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
   );
+
+  let queueAutostart = null;
+  if (candidates.length === 0) {
+    queueAutostart = await startNextQueuedGoal(store, config).catch((error) => ({
+      started: false,
+      item: null,
+      task: null,
+      reason: `queue autostart failed: ${errorMessage(error)}`,
+    }));
+    if (queueAutostart?.started) {
+      candidates = store.getCodexActiveQueueCandidates(
+        ["assigned", "queued", "waiting_for_lock"],
+        maxTasks
+      ).filter((task) =>
+        canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
+      );
+    }
+  }
 
   const results = await mapConcurrent(candidates, maxConcurrency, (task) =>
     runSingleCodexTask(store, config, github, task, context, processGeneralTask)
@@ -139,6 +158,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     ok: true,
     inspected: candidates.length,
     concurrency: maxConcurrency,
+    queue_autostart: queueAutostart,
     completed,
     failed,
     skipped,
