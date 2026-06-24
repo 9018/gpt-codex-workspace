@@ -199,6 +199,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     const taskStatus_ = healingAction.action === "waiting_for_review" ? "failed" : "waiting_for_review";
     await updateTaskFn(store, task.id, (item) => {
       item.status = taskStatus_;
+      // Track self-healing retry count for budget enforcement
+      if (healingAction.action !== "waiting_for_review") {
+        item.healing_retry_count = (task.healing_retry_count || 0) + 1;
+      }
       item.result = {
         kind: "operational_error",
         summary: failMsg,
@@ -245,6 +249,15 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       task,
       retryCount: task.healing_retry_count || 0,
     });
+    // Track self-healing retry count for budget enforcement
+    if (healingAction && healingAction.action !== "waiting_for_review") {
+      try {
+        const newCount = (task.healing_retry_count || 0) + 1;
+        await updateTaskFn(store, task.id, (item) => {
+          item.healing_retry_count = newCount;
+        });
+      } catch {}
+    }
   } finally {
     try { await rm(promptFile, { force: true }); } catch {}
   }

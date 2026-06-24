@@ -40,6 +40,13 @@ export function formatDuration(ms) {
  */
 export function buildConfig(options = {}) {
   const rawEnabled = options.barkEnabled ?? process.env.GPTWORK_BARK_ENABLED;
+  // Force-disable in test/non-notification modes.
+  // npm test, node --test, CI, NODE_ENV=test, GPTWORK_TEST_MODE=true, or
+  // GPTWORK_DISABLE_NOTIFICATIONS=true always disable the notifier so that
+  // test environments never send real Bark HTTP requests.
+  const isTestMode = process.env.NODE_ENV === 'test' ||
+    process.env.GPTWORK_TEST_MODE === 'true' ||
+    process.env.GPTWORK_DISABLE_NOTIFICATIONS === 'true';
   const rawUrl = options.barkUrl ?? process.env.GPTWORK_BARK_URL;
   const rawKey = options.barkKey ?? process.env.GPTWORK_BARK_KEY;
   const rawGroup = options.barkGroup ?? process.env.GPTWORK_BARK_GROUP;
@@ -80,6 +87,9 @@ export function buildConfig(options = {}) {
     enabled = false;
   } else {
     enabled = rawEnabled === "true" || rawEnabled === true || hasUrl || hasKey;
+  // Force disabled in test mode regardless of configuration (overrides everything).
+  // This ensures no real Bark HTTP request is made during tests.
+  if (isTestMode) enabled = false;
   }
 
   return {

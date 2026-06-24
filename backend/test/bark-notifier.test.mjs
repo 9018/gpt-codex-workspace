@@ -69,6 +69,46 @@ test("send returns not configured for default createBarkNotifier({})", async () 
   assert.equal(result.ok, false);
 });
 
+
+// ================================================================
+// Tests: test mode notification isolation (no real Bark in test mode)
+// ================================================================
+
+test("createBarkNotifier is disabled when NODE_ENV=test even with valid key", () => {
+  const saved = process.env.NODE_ENV;
+  try {
+    process.env.NODE_ENV = "test";
+    const bark = createBarkNotifier({ barkKey: "test-key" });
+    assert.equal(bark.isEnabled(), false);
+  } finally {
+    process.env.NODE_ENV = saved;
+  }
+});
+
+test("createBarkNotifier is disabled when GPTWORK_TEST_MODE=true even with valid key", () => {
+  const saved = process.env.GPTWORK_TEST_MODE;
+  try {
+    process.env.GPTWORK_TEST_MODE = "true";
+    const bark = createBarkNotifier({ barkKey: "test-key" });
+    assert.equal(bark.isEnabled(), false);
+  } finally {
+    delete process.env.GPTWORK_TEST_MODE;
+    if (saved !== undefined) process.env.GPTWORK_TEST_MODE = saved;
+  }
+});
+
+test("createBarkNotifier is disabled when GPTWORK_DISABLE_NOTIFICATIONS=true even with valid key", () => {
+  const saved = process.env.GPTWORK_DISABLE_NOTIFICATIONS;
+  try {
+    process.env.GPTWORK_DISABLE_NOTIFICATIONS = "true";
+    const bark = createBarkNotifier({ barkKey: "test-key" });
+    assert.equal(bark.isEnabled(), false);
+  } finally {
+    delete process.env.GPTWORK_DISABLE_NOTIFICATIONS;
+    if (saved !== undefined) process.env.GPTWORK_DISABLE_NOTIFICATIONS = saved;
+  }
+});
+
 test("send constructs correct Bark API URL with key", async (t) => {
   t.mock.method(globalThis, "fetch", async (url) => {
     assert.match(url, /test-key/, "URL should contain API key");
