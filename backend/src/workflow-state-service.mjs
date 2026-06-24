@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 
+import { validateResultContract } from "./task-result-status.mjs";
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
@@ -306,6 +307,46 @@ export function generateProposal({
     };
   }
 
+  // Task status is "waiting_for_review" — check if auto-acceptable
+  if (task.status === "waiting_for_review") {
+    const result = task.result;
+
+    // No result → needs GPTChat review
+    if (!result) {
+      return {
+        next_action: "needs_gptchat_decision",
+        proposed_next_task: null,
+        recommendation: `Task "${task.id}" is waiting_for_review but has no result. GPTChat should review.`,
+        needs_gptchat_decision: true,
+      };
+    }
+
+    // Validate result contract (skip git worktree check — diagnostics.isSafe already covers it)
+    const validation = validateResultContract(result, { skipWorktreeCheck: true });
+
+    if (validation.valid) {
+      return {
+        next_action: "auto_accepted",
+        proposed_next_task: null,
+        recommendation: `Task "${task.title}" result is valid. Auto-accepted.`,
+        needs_gptchat_decision: false,
+        auto_accepted: true,
+      };
+    }
+
+    // Contract issues → needs GPTChat review
+    const issues = validation.warnings.length > 0
+      ? validation.warnings.join("; ")
+      : validation.diagnosis_codes.join(", ");
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" has result issues: ${issues}. GPTChat should review.`,
+      needs_gptchat_decision: true,
+      diagnosis_codes: validation.diagnosis_codes,
+    };
+  }
+
   // Catch-all: task is in progress or other status
   return {
     next_action: "needs_gptchat_decision",
@@ -377,4 +418,65 @@ export function storeCreatedTaskId(workflowState, taskId) {
     workflowState.created_task_ids.push(taskId);
   }
   return workflowState;
+}
+
+
+// ---------------------------------------------------------------------------
+// Auto-accept: upgrade a waiting_for_review task to completed
+// Called by both workflow_advance (apply mode) and workflow_status.
+// ---------------------------------------------------------------------------
+
+/**
+ * @param {object} opts
+ * @param {object} opts.store       — persistent store
+ * @param {object} opts.config      — server config
+ * @param {object} opts.task        — current task
+ * @param {object} opts.diagnostics — workflow diagnostics snapshot
+ * @returns {Promise<{auto_accepted: boolean, error?: string}>}
+ */
+export async function autoAcceptTask({ store, config, task, diagnostics }) {
+  if (!task) return { auto_accepted: false, error: "No task provided" };
+  if (task.status !== "waiting_for_review") {
+    return { auto_accepted: false, error: `Task status is "${task.status}", not "waiting_for_review"` };
+  }
+  if (!diagnostics) return { auto_accepted: false, error: "No diagnostics provided" };
+  if (diagnostics.worker?.running) return { auto_accepted: false, error: "Worker is running" };
+  if ((diagnostics.repo_locks?.active || 0) > 0) return { auto_accepted: false, error: "Active repo locks" };
+  if (diagnostics.worktree?.dirty) return { auto_accepted: false, error: "Worktree is dirty" };
+
+  const result = task.result;
+  if (!result) return { auto_accepted: false, error: "Task has no result" };
+
+  const validation = validateResultContract(result, { skipWorktreeCheck: true });
+  if (!validation.valid) {
+    return { auto_accepted: false, error: `Result contract invalid: ${validation.warnings.join("; ")}` };
+  }
+
+  // All conditions met — perform auto-accept
+  const { updateTask, updateGoalStatus } = await import("./task-lifecycle.mjs");
+
+  await updateTask(store, task.id, (t) => {
+    t.status = "completed";
+    t.logs = [...(t.logs || []), {
+      time: new Date().toISOString(),
+      message: "[workflow] auto-accepted: result contract valid, tests passed, commit present, worktree clean",
+    }];
+    if (t.result) {
+      t.result.auto_accepted = true;
+      t.result.accepted_at = new Date().toISOString();
+    }
+  });
+
+  // Also update goal status if a goal is associated with this task
+  try {
+    const state = await store.load();
+    const goal = (state.goals || []).find((g) => g.task_id === task.id);
+    if (goal) {
+      await updateGoalStatus(store, goal.id, "completed");
+    }
+  } catch {
+    // Goal update is best-effort
+  }
+
+  return { auto_accepted: true };
 }

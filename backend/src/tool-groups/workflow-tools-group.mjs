@@ -21,6 +21,7 @@ import {
   saveWorkflowState,
   storeCreatedTaskId,
   storeManualResult,
+  autoAcceptTask,
   storeProposal,
 } from "../workflow-state-service.mjs";
 
@@ -91,6 +92,20 @@ export function createWorkflowToolsGroup({
           );
         } catch {
           // Non-fatal: workflow state may not exist yet
+        }
+
+        // Auto-accept check: if a waiting_for_review task qualifies, trigger auto-accept
+        if (task && task.status === "waiting_for_review") {
+          const autoAccepted = await autoAcceptTask({ store, config, task, diagnostics });
+          if (autoAccepted.auto_accepted) {
+            // Re-resolve task to get updated status
+            try {
+              const updatedTask = await resolveTask(store, task_id || "latest");
+              if (updatedTask && diagnostics.latest_task) {
+                diagnostics.latest_task.status = updatedTask.status;
+              }
+            } catch {}
+          }
         }
 
         return {
@@ -509,6 +524,7 @@ export function createWorkflowToolsGroup({
           proposed_next_task: proposal.proposed_next_task,
           recommendation: proposal.recommendation,
           needs_gptchat_decision: proposal.needs_gptchat_decision,
+          auto_accepted: proposal.auto_accepted || false,
           created_task_id: null,
           manual_verdict: manual_verdict || null,
           manual_note: manual_note || null,
@@ -535,6 +551,10 @@ export function createWorkflowToolsGroup({
           saveWorkflowState(config.defaultWorkspaceRoot, wfId, workflowState);
         }
 
+        // Auto-accept in apply mode
+        if (resolvedMode === "apply" && proposal.next_action === "auto_accepted" && task?.status === "waiting_for_review") {
+          autoAcceptResult = await autoAcceptTask({ store, config, task, diagnostics });
+        }
         // In apply mode, create the task if safe and unambiguous
         let createdTaskId = null;
         if (
@@ -574,6 +594,52 @@ export function createWorkflowToolsGroup({
           }
         }
 
+        // If auto-accepted, show different response
+        let autoAcceptResult = null;
+        if (autoAcceptResult?.auto_accepted) {
+          return {
+            title: "Workflow Advance — Auto-accepted",
+            summary: `Task "${task?.title}" auto-accepted. Result validated.`,
+            workflow_id: wfId,
+            auto_accepted: true,
+            proposal: {
+              ...proposalRecord,
+              created_task_id: createdTaskId,
+            },
+            task: {
+              ...diagnostics.latest_task,
+              status: "completed",
+              result: { ...(diagnostics.latest_task?.result || {}), auto_accepted: true },
+            },
+            runtime: diagnostics.runtime,
+            worktree: diagnostics.worktree,
+            repo_locks: diagnostics.repo_locks,
+            worker: {
+              enabled: diagnostics.worker.enabled,
+              running: diagnostics.worker.running,
+            },
+            fingerprint,
+            created_task_id: createdTaskId,
+            mode: resolvedMode,
+            status_checks: {
+              worker_idle: !diagnostics.worker.running,
+              no_active_locks: diagnostics.repo_locks.active === 0,
+              worktree_clean: !diagnostics.worktree.dirty,
+              safe_to_advance: isSafe,
+            },
+            next_steps: [],
+            keyValues: [
+              { key: "Workflow", value: wfId },
+              { key: "Task", value: `${task?.id} (completed)` },
+              { key: "Next Action", value: "auto_accepted" },
+              { key: "Auto-accepted", value: "true" },
+              { key: "Fingerprint", value: fingerprint },
+              { key: "Mode", value: resolvedMode },
+            ],
+          };
+        }
+
+        // Original return for non-auto-accept
         return {
           title: "Workflow Advance Proposal",
           summary: proposal.recommendation,

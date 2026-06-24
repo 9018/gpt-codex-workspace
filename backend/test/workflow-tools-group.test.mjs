@@ -344,3 +344,74 @@ test("workflow_apply_proposal: throws on missing proposal", async () => {
   const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
   await assert.rejects(() => tools.workflow_apply_proposal.handler({ workflow_id: "nonexist", proposal_id: "wf_nonexist" }), /Proposal not found/);
 });
+
+// ---------------------------------------------------------------------------
+// waiting_for_review auto-accept tests
+// ---------------------------------------------------------------------------
+
+test("proposal: waiting_for_review + valid result → auto_accepted", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_accepted, true);
+});
+
+test("proposal: waiting_for_review + valid result + remote_head null → auto_accepted", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics({ runtime: { running_commit: "abc123", repo_head: "abc123", remote_head: null } }), task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.auto_accepted, true);
+});
+
+test("proposal: waiting_for_review + no result → needs_gptchat_decision", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: "waiting_for_review", result: null }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "needs_gptchat_decision");
+  assert.equal(p.needs_gptchat_decision, true);
+});
+
+test("proposal: waiting_for_review + tests_missing → needs_gptchat_decision", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: null, changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "needs_gptchat_decision");
+  assert.equal(p.needs_gptchat_decision, true);
+});
+
+test("proposal: waiting_for_review + commit_missing (has changed_files) → needs_gptchat_decision", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: null, tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "needs_gptchat_decision");
+  assert.equal(p.needs_gptchat_decision, true);
+});
+
+test("proposal: waiting_for_review + blocked by worker → blocked", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics({ worker: { enabled: true, running: true, health: { phase: "running" } } }), task: makeTask({ status: "waiting_for_review", result: { status: "completed", summary: "Done", commit: "abc123", tests: "pass" } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "blocked");
+  assert.equal(p.needs_gptchat_decision, true);
+});
+
+test("workflow_advance propose: waiting_for_review + valid → auto_accepted proposal", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const taskState = makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } });
+  const store = { load: async () => ({ tasks: [taskState], goals: [], activities: [] }), save: async () => {} };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+  const result = await tools.workflow_advance.handler({ task_id: taskState.id, mode: "propose" });
+  assert.equal(result.proposal.next_action, "auto_accepted");
+  assert.equal(result.proposal.needs_gptchat_decision, false);
+  assert.equal(result.proposal.auto_accepted, true);
+  assert.equal(result.created_task_id, null);
+});
+
+test("workflow_status: waiting_for_review + valid → triggers auto-accept", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const taskState = makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } });
+  let saveCalled = false;
+  const store = { load: async () => {
+    const tasks = [{ ...taskState, ...(saveCalled ? { status: "completed" } : {}) }];
+    const goals = [];
+    return { tasks, goals, activities: [] };
+  }, save: async () => { saveCalled = true; } };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+  assert.ok(result.workflow_id);
+  assert.ok(result.latest_task);
+  assert.ok(saveCalled);
+});
