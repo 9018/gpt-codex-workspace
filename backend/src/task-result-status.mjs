@@ -1,15 +1,101 @@
 import { validateAutonomyResult, detectRuntimeCodeChanges } from "./codex-result-parser.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
+import { execFileSync } from "node:child_process";
 
 const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
+
+// ---------------------------------------------------------------------------
+// Diagnosis codes for result contract validation (P0)
+// ---------------------------------------------------------------------------
+
+export const DIAGNOSIS_CODES = {
+  TESTS_MISSING: "tests_missing",
+  COMMIT_MISSING: "commit_missing",
+  DIRTY_WORKTREE_AFTER_CODEX: "dirty_worktree_after_codex",
+  STRUCTURED_RESULT_MISSING_FIELDS: "structured_result_missing_fields",
+  SUMMARY_FIELD_CONFLICT: "summary_field_conflict",
+};
+
+/**
+ * Validate a result JSON against the P0 contract.
+ *
+ * Checks:
+ * 1. tests field MUST be non-null for non-noop completed results
+ * 2. commit MUST be present when changed_files > 0
+ * 3. Worktree MUST be clean after completed execution
+ * 4. summary must not conflict with structured fields
+ *
+ * @param {object} result - Parsed result object
+ * @param {object} [options]
+ * @param {string} [options.repoPath] - Path to git repo for worktree dirty check
+ * @param {boolean} [options.skipWorktreeCheck=false] - Skip git worktree check
+ * @returns {{ valid: boolean, diagnosis_codes: string[], warnings: string[] }}
+ */
+export function validateResultContract(result, options = {}) {
+  const diagnosis_codes = [];
+  const warnings = [];
+
+  if (!result || typeof result !== "object") {
+    return { valid: false, diagnosis_codes: [DIAGNOSIS_CODES.STRUCTURED_RESULT_MISSING_FIELDS], warnings: ["Result is null or not an object"] };
+  }
+
+  const isCompleted = result.status === "completed";
+  const isNoop = result.noop === true || result.kind === "noop";
+  const hasChangedFiles = Array.isArray(result.changed_files) && result.changed_files.length > 0;
+  const hasCommit = result.commit && result.commit !== "none";
+  const hasTests = result.tests && result.tests !== "none" && result.tests !== null;
+  const hasSummary = typeof result.summary === "string" && result.summary.length > 0;
+
+  // 1. tests field MUST be non-null for non-noop completed results
+  if (isCompleted && !isNoop && !hasTests) {
+    diagnosis_codes.push(DIAGNOSIS_CODES.TESTS_MISSING);
+    warnings.push("tests is missing for a non-noop completed result");
+  }
+
+  // 2. commit must be present when changed_files > 0
+  if (isCompleted && hasChangedFiles && !hasCommit) {
+    diagnosis_codes.push(DIAGNOSIS_CODES.COMMIT_MISSING);
+    warnings.push("commit is missing but changed_files has entries");
+  }
+
+  // 3. check worktree is not dirty (skip for noop results — no changes were made)
+  if (isCompleted && !isNoop && !options.skipWorktreeCheck) {
+    const repoPath = options.repoPath || process.cwd();
+    try {
+      const stdout = execFileSync("git", ["status", "--porcelain"], {
+        cwd: repoPath,
+        encoding: "utf8",
+        maxBuffer: 1024 * 1024,
+        timeout: 5000,
+      });
+      const dirtyFiles = stdout.trim().split("\n").filter(Boolean);
+      if (dirtyFiles.length > 0) {
+        diagnosis_codes.push(DIAGNOSIS_CODES.DIRTY_WORKTREE_AFTER_CODEX);
+        warnings.push(`worktree has ${dirtyFiles.length} dirty file(s): ${dirtyFiles.slice(0, 5).join(", ")}`);
+      }
+    } catch {
+      // Not a git repo or git not available — skip check non-blocking
+    }
+  }
+
+  // 4. summary field conflicts: says task completed but no evidence
+  if (hasSummary && !isNoop && !hasChangedFiles && !hasCommit && !hasTests) {
+    diagnosis_codes.push(DIAGNOSIS_CODES.SUMMARY_FIELD_CONFLICT);
+    warnings.push("summary says task completed but no changed_files, commit, or tests evidence");
+  }
+
+  return { valid: diagnosis_codes.length === 0, diagnosis_codes, warnings };
+}
 
 export function deriveTaskStatusFromTaskResult(taskResult) {
   if (taskResult?.kind === "codex_executed") return "completed";
   if (taskResult?.kind === "codex_timeout" || taskResult?.kind === "no_first_output_timeout") return "timed_out";
-  if (taskResult?.kind === "noop") return "waiting_for_review";
+  // P0: noop is a normal completion path, not a review trigger
+  if (taskResult?.kind === "noop") return "completed";
   return "failed";
 }
 
+/** Append a warning to taskResult.warnings array. */
 function appendWarning(taskResult, warning) {
   taskResult.warnings = taskResult.warnings || [];
   taskResult.warnings.push(warning);

@@ -51,7 +51,22 @@ export async function collectWorkerQueueCounts(store) {
     }
     for (const task of state.tasks || []) {
       if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
+      // P1: Skip resolved or superseded reviews so they don't pollute actionable queue
+      if (task.status === "waiting_for_review" && (task.result?.resolved_by_task_id || task.result?.superseded_by_task_id)) continue;
       counts[task.status] += 1;
+    }
+    // P1: Subtract resolved/superseded reviews from actionable count
+    if (typeof store.load === 'function') {
+      try {
+        const st = await store.load();
+        let resolvedCount = 0;
+        for (const t of st.tasks || []) {
+          if (t.status === 'waiting_for_review' && (t.result?.resolved_by_task_id || t.result?.superseded_by_task_id)) {
+            resolvedCount++;
+          }
+        }
+        if (resolvedCount > 0) counts.waiting_for_review = Math.max(0, counts.waiting_for_review - resolvedCount);
+      } catch {}
     }
     return { ...counts, oldest_age_ms };
   } catch {

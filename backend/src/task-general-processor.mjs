@@ -6,7 +6,7 @@ import { buildTaskResult } from "./codex-result-parser.mjs";
 import { prepareCodexTaskRun } from "./task-run-setup.mjs";
 import { executeCodexTaskRun } from "./task-codex-execution.mjs";
 import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
-import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle } from "./task-result-status.mjs";
+import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle, validateResultContract, DIAGNOSIS_CODES } from "./task-result-status.mjs";
 import { updateTask } from "./task-lifecycle.mjs";
 import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
 
@@ -176,6 +176,17 @@ export async function processGeneralTask(store, config, task, context, github) {
     taskId: task.id,
     isP0Task: isP0TaskTitle(task.title),
   });
+
+  // P0: result contract validation — escalate to review on contract violation
+  if (taskStatus === "completed" && parsedResult) {
+    const contractValidation = validateResultContract(parsedResult, { repoPath: config.defaultRepoPath || config.defaultWorkspaceRoot });
+    if (!contractValidation.valid) {
+      taskStatus = "waiting_for_review";
+      const diagnosisMsg = "Contract violation: " + contractValidation.diagnosis_codes.join(", ");
+      taskResult.warnings = taskResult.warnings || [];
+      taskResult.warnings.push(diagnosisMsg);
+    }
+  }
 
   return finalizeCodexTaskRun({
     store,

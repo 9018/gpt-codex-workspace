@@ -109,7 +109,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
         "(b) prompt was too large for context window, (c) codex exec timed out before model responded, " +
         "(d) stdout/stderr was truncated or not captured. " +
         "See the 'diagnostics' field for detailed execution metadata. " +
-        "This task has been moved to waiting_for_review for operator inspection."
+        "This task completed with no changes (no-op). See diagnostics for details."
       );
     }
     return {
@@ -176,7 +176,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     warnings.push(
       "NO-OP: Codex execution completed with no changed files, no tests, no commit, and no structured summary. " +
       "See the 'diagnostics' field for detailed execution metadata. " +
-      "This task has been moved to waiting_for_review for operator inspection."
+      "This task completed with no changes (no-op). See diagnostics for details."
     );
   }
   return {

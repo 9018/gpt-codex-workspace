@@ -357,7 +357,7 @@ test("general Codex worker completes linked goals and writes concise results", a
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
     codexHome: root,
-    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')" --`,
+    codexExecArgs: `__gptwork_test_invalid_arg__ || ${JSON.stringify(process.execPath)} -e "process.stdout.write('STATUS=completed\\nSUMMARY=worker-ok\\nTESTS=passed 1/1\\nSUBAGENTS_USED=true\\nSUBAGENTS=' + JSON.stringify([{role:'analyst',status:'completed',summary:'mock analysis'},{role:'architect',status:'completed',summary:'mock arch'},{role:'implementer',status:'completed',summary:'mock implementation'},{role:'tester',status:'completed',summary:'mock testing'},{role:'reviewer',status:'completed',summary:'mock review'},{role:'escalation_judge',status:'completed',summary:'mock escalation'}]) + '\\nGPT_QUESTIONS_USED=0')" --`,
     codexExecTimeout: 5,
     tokens: ["test-token"],
     requireAuth: true,

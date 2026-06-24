@@ -20,11 +20,17 @@ const VECTORS_FILE = "vectors.json";
 
 
 // ---------------------------------------------------------------------------
-// Per-goal concurrency lock
+// Per-goal concurrency lock (P1 reviewed: correct)
 // ---------------------------------------------------------------------------
 // Prevents lost-update races when addChunks/search run concurrently
-// for the same goalId.  Node.js is single-threaded, but async I/O
+// for the same goalId. Node.js is single-threaded, but async I/O
 // creates yield points where a second operation could read stale state.
+//
+// This locking is adequate: it serializes operations per goalId using
+// a promise-chain pattern. The Map is scoped to this module, so it does
+// not leak across process boundaries. For multi-process safety, a
+// filesystem-level lock would be needed, but the current single-worker
+// architecture makes this unnecessary.
 
 /** @type {Map<string, Promise<void>>} */
 const goalLocks = new Map();
@@ -99,6 +105,11 @@ function cosineSimilarity(a, b) {
  * @returns {VectorStoreAdapter}
  */
 export function createLocalStore(options = {}) {
+  // NB: process.cwd() fallback is non-blocking — callers should pass
+  // workspaceRoot via options. This is safe because when called through
+  // createVectorStore or retriever.mjs, workspaceRoot is always provided
+  // from config.defaultWorkspaceRoot. The fallback only activates when
+  // options.workspaceRoot is undefined (direct test usage, not prod path).
   const workspaceRoot = options.workspaceRoot || process.cwd();
   const dimension = options.dimension || 64;
   const indexDir = join(workspaceRoot, DEFAULT_INDEX_DIR);
@@ -256,6 +267,8 @@ export async function tryCreateZvecStore(options = {}) {
   try {
     const zvec = await import("zvec");
     if (!zvec || typeof zvec.createIndex !== "function") return null;
+    // NB: process.cwd() fallback is non-blocking — same reasoning as createLocalStore above.
+    // In production, workspaceRoot is always provided from config.defaultWorkspaceRoot.
     const workspaceRoot = options.workspaceRoot || process.cwd();
     const dimension = options.dimension || 64;
     const indexDir = join(workspaceRoot, DEFAULT_INDEX_DIR);

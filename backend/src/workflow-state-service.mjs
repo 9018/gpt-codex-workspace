@@ -288,24 +288,21 @@ export function generateProposal({
     };
   }
 
-  // Task completed, passed → advance to next planned goal
+  // P1: Task completed, passed → advance to next planned goal
+  // GitHub sync is NOT a delivery blocker; remote_head null or commit mismatch
+  // does not block local delivery. Return observation for GPTChat context.
   if (task.status === "completed" && manualVerdict === "passed") {
-    // Check if runtime commit matches task result commit
     const commitMatch = diagnostics.runtime.running_commit === task.result?.commit;
-    if (!commitMatch) {
-      return {
-        next_action: "needs_gptchat_decision",
-        proposed_next_task: null,
-        recommendation: `Task completed and passed, but runtime running_commit (${diagnostics.runtime.running_commit}) does not match task result commit (${task.result?.commit}). Verify deployment status before advancing.`,
-        needs_gptchat_decision: true,
-      };
-    }
-    // No configured next goal → needs GPTChat decision
     return {
       next_action: "needs_gptchat_decision",
       proposed_next_task: null,
-      recommendation: `Task "${task.title}" completed and passed. No next planned goal configured; GPTChat should determine the next task.`,
+      recommendation: commitMatch
+        ? `Task "${task.title}" completed and passed. No next planned goal configured; GPTChat should determine the next task.`
+        : `Task "${task.title}" completed and passed. Note: running_commit (${diagnostics.runtime.running_commit}) differs from task result commit (${task.result?.commit}). This is not a blocker — GPTChat should determine the next task.`,
       needs_gptchat_decision: true,
+      observations: commitMatch
+        ? []
+        : [{ type: "commit_mismatch", detail: "running_commit differs from task result commit; GitHub sync not required for delivery" }],
     };
   }
 

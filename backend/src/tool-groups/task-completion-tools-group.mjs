@@ -1,5 +1,6 @@
 import { updateTask } from '../task-lifecycle.mjs';
 import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
+import { validateResultContract, DIAGNOSIS_CODES } from '../task-result-status.mjs';
 
 /**
  * Factory for task completion and review MCP tool registration.
@@ -19,6 +20,8 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         let targetStatus = "completed";
         let resultFields = { summary, completed_at: new Date().toISOString() };
 
+        // P0: Auto-accept when result exists and is contract-valid
+        // Only escalate to review for actual contract violations or when no result exists
         if (!admin_override) {
           try {
             await store.load();
@@ -30,14 +33,36 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
                 ? await store.findGoalById(existingTask.goal_id)
                 : (store.state?.goals || []).find(g => g.id === existingTask.goal_id);
               const subagent = linkedGoal?.subagent_policy || {};
+
               if (subagent.mode === 'required') {
-                targetStatus = "waiting_for_review";
-                resultFields = {
-                  summary: summary || "Task requires policy validation before completion",
-                  completed_at: new Date().toISOString(),
-                  policy_override_required: true,
-                  review_message: "This task has a goal with required subagent policy. Use admin_override=true to bypass, or wait for Codex execution to validate autonomously."
-                };
+                // Check if the task already has a result with valid contract
+                const existingResult = existingTask?.result;
+                if (existingResult && existingResult.status === "completed") {
+                  const contractValidation = validateResultContract(existingResult, { skipWorktreeCheck: true });
+                  if (contractValidation.valid) {
+                    // Auto-accept: result is contract-valid, no review needed
+                    targetStatus = "completed";
+                  } else {
+                    // Contract violation: escalate to review with diagnosis codes
+                    targetStatus = "waiting_for_review";
+                    resultFields = {
+                      summary: summary || "Task requires review: " + contractValidation.diagnosis_codes.join(", "),
+                      completed_at: new Date().toISOString(),
+                      policy_override_required: false,
+                      diagnosis_codes: contractValidation.diagnosis_codes,
+                      review_message: "Contract validation failed: " + contractValidation.warnings.join("; ") + ". Use admin_override=true to bypass."
+                    };
+                  }
+                } else {
+                  // No existing result — require policy validation
+                  targetStatus = "waiting_for_review";
+                  resultFields = {
+                    summary: summary || "Task requires policy validation before completion",
+                    completed_at: new Date().toISOString(),
+                    policy_override_required: true,
+                    review_message: "This task has a goal with required subagent policy. Use admin_override=true to bypass, or wait for Codex execution to validate autonomously."
+                  };
+                }
               }
             }
           } catch (e) { /* non-fatal: proceed with normal completion */ }
