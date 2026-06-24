@@ -7,7 +7,8 @@
  */
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
@@ -467,6 +468,44 @@ test("workflow_status: waiting_for_review + valid → triggers auto-accept", asy
   assert.ok(result.workflow_id);
   assert.ok(result.latest_task);
   assert.ok(saveCalled);
+});
+
+test("workflow_status: waiting_for_review + dirty worktree does not auto-accept", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const repoRoot = mkdtempSync(join(tmpdir(), `gptwork-dirty-status-${process.pid}-`));
+  execFileSync("git", ["init"], { cwd: repoRoot, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repoRoot });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repoRoot });
+  writeFileSync(join(repoRoot, "tracked.txt"), "clean\n");
+  execFileSync("git", ["add", "tracked.txt"], { cwd: repoRoot });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repoRoot, stdio: "ignore" });
+  writeFileSync(join(repoRoot, "tracked.txt"), "dirty\n");
+
+  const taskState = makeTask({
+    status: "waiting_for_review",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+    },
+  });
+  let saveCalled = false;
+  const store = {
+    load: async () => ({ tasks: [taskState], goals: [], activities: [] }),
+    save: async () => { saveCalled = true; },
+  };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: repoRoot, defaultRepoPath: repoRoot }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+
+  assert.equal(saveCalled, false);
+  assert.equal(taskState.status, "waiting_for_review");
+  assert.equal(taskState.result.auto_accepted, undefined);
+  assert.equal(result.status_checks.worktree_clean, false);
 });
 
 test("workflow_advance apply: waiting_for_review + accepted reviewer decision auto-accepts", async () => {

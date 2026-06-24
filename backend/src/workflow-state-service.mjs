@@ -242,6 +242,23 @@ function normalizeAcceptanceForResult(result = {}) {
   };
 }
 
+function withRuntimeDirtyFinding(result = {}, diagnostics = {}) {
+  const findings = Array.isArray(result.acceptance_findings) ? [...result.acceptance_findings] : [];
+  if (diagnostics?.worktree?.dirty) {
+    const dirtyPaths = Array.isArray(diagnostics.worktree.dirty_paths) ? diagnostics.worktree.dirty_paths : [];
+    findings.push({
+      severity: "blocker",
+      code: "dirty_worktree_after_codex",
+      message: dirtyPaths.length > 0
+        ? `Worktree is dirty after task completion: ${dirtyPaths.slice(0, 5).join(", ")}`
+        : "Worktree is dirty after task completion.",
+      source: "workflow_runtime",
+      evidence: { dirty_paths: dirtyPaths },
+    });
+  }
+  return { ...result, acceptance_findings: findings };
+}
+
 function buildAcceptanceRepairTask({ task, acceptance, manualNote }) {
   const failedCriteria = acceptance.acceptance_findings.filter((finding) => finding.severity === "blocker" || finding.severity === "major");
   const repairProposal = {
@@ -312,8 +329,9 @@ export function generateProposal({
       };
     }
 
-    const validation = validateResultContract(result, { skipWorktreeCheck: true });
-    const acceptance = normalizeAcceptanceForResult(result);
+    const resultWithRuntimeFindings = withRuntimeDirtyFinding(result, diagnostics);
+    const validation = validateResultContract(resultWithRuntimeFindings, { skipWorktreeCheck: true });
+    const acceptance = normalizeAcceptanceForResult(resultWithRuntimeFindings);
 
     if (validation.valid && !acceptance.passed) {
       const proposed_next_task = buildAcceptanceRepairTask({ task, acceptance, manualNote });
@@ -548,8 +566,9 @@ export async function autoAcceptTask({ store, config, task, diagnostics }) {
   const result = task.result;
   if (!result) return { auto_accepted: false, error: "Task has no result" };
 
-  const validation = validateResultContract(result, { skipWorktreeCheck: true });
-  const acceptance = normalizeAcceptanceForResult(result);
+  const resultWithRuntimeFindings = withRuntimeDirtyFinding(result, diagnostics);
+  const validation = validateResultContract(resultWithRuntimeFindings, { skipWorktreeCheck: true });
+  const acceptance = normalizeAcceptanceForResult(resultWithRuntimeFindings);
   if (!validation.valid) {
     return { auto_accepted: false, error: `Result contract invalid: ${validation.warnings.join("; ")}` };
   }
