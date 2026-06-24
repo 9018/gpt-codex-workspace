@@ -25,6 +25,15 @@ import {
   storeProposal,
 } from "../workflow-state-service.mjs";
 
+export const WORKFLOW_ADVANCE_HANDLER_VERSION = "workflow_advance.v2.acceptance_first";
+
+function handlerDiagnostics(diagnostics) {
+  return {
+    workflow_advance_handler_version: WORKFLOW_ADVANCE_HANDLER_VERSION,
+    runtime_handler_commit: diagnostics?.runtime?.running_commit || diagnostics?.runtime?.repo_head || null,
+  };
+}
+
 /**
  * Factory for workflow MCP tool registration.
  * Dependencies are passed in to match the pattern in server-tools.mjs.
@@ -415,7 +424,7 @@ export function createWorkflowToolsGroup({
           diagnostics.repo_locks.active === 0 &&
           !diagnostics.worktree.dirty;
 
-        if (!isSafe && resolvedMode === "apply") {
+        if (!isSafe && resolvedMode === "apply" && task?.status !== "waiting_for_review") {
           const reasons = [];
           if (diagnostics.worker.running)
             reasons.push("worker is running");
@@ -425,6 +434,7 @@ export function createWorkflowToolsGroup({
             reasons.push("worktree is dirty");
           return {
             title: "Workflow Blocked",
+            ...handlerDiagnostics(diagnostics),
             summary: "Cannot advance: unsafe state",
             workflow_id: wfId,
             next_action: "blocked",
@@ -476,7 +486,11 @@ export function createWorkflowToolsGroup({
           workflowState,
           fingerprint
         );
-        if (existingProposal) {
+        const existingIsStaleWaitingReviewShortCircuit =
+          task?.status === "waiting_for_review" &&
+          existingProposal?.next_action === "needs_gptchat_decision" &&
+          !existingProposal?.acceptance;
+        if (existingProposal && !existingIsStaleWaitingReviewShortCircuit) {
           // If in apply mode and task was already created, return existing
           if (
             resolvedMode === "apply" &&
@@ -484,6 +498,7 @@ export function createWorkflowToolsGroup({
           ) {
             return {
               title: "Workflow Advance (already applied)",
+              ...handlerDiagnostics(diagnostics),
               summary: `Task already created: ${existingProposal.created_task_id}`,
               workflow_id: wfId,
               proposal: existingProposal,
@@ -498,6 +513,7 @@ export function createWorkflowToolsGroup({
           }
           return {
             title: "Workflow Proposal (existing)",
+            ...handlerDiagnostics(diagnostics),
             summary: `Proposal already generated for task ${task?.id}`,
             workflow_id: wfId,
             proposal: existingProposal,
@@ -566,6 +582,48 @@ export function createWorkflowToolsGroup({
         }
         if (
           resolvedMode === "apply" &&
+          !isSafe &&
+          !proposal.needs_gptchat_decision &&
+          proposal.proposed_next_task
+        ) {
+          return {
+            title: "Workflow Advance Proposal",
+            ...handlerDiagnostics(diagnostics),
+            summary: `${proposal.recommendation} Task creation is deferred until worker, repo lock, and worktree safety checks are clear.`,
+            workflow_id: wfId,
+            proposal: proposalRecord,
+            needs_gptchat_decision: false,
+            task: diagnostics.latest_task,
+            runtime: diagnostics.runtime,
+            worktree: diagnostics.worktree,
+            repo_locks: diagnostics.repo_locks,
+            worker: {
+              enabled: diagnostics.worker.enabled,
+              running: diagnostics.worker.running,
+            },
+            fingerprint,
+            created_task_id: null,
+            mode: resolvedMode,
+            status_checks: {
+              worker_idle: !diagnostics.worker.running,
+              no_active_locks: diagnostics.repo_locks.active === 0,
+              worktree_clean: !diagnostics.worktree.dirty,
+              safe_to_advance: isSafe,
+            },
+            next_steps: ['Call workflow_advance(mode="apply") again after runtime safety checks are clear to create the proposed task.'],
+            keyValues: [
+              { key: "Workflow", value: wfId },
+              { key: "Task", value: task ? `${task.id} (${task.status})` : "none" },
+              { key: "Next Action", value: proposal.next_action },
+              { key: "Needs GPTChat", value: "false" },
+              { key: "Created Task", value: "deferred" },
+              { key: "Fingerprint", value: fingerprint },
+              { key: "Mode", value: resolvedMode },
+            ],
+          };
+        }
+        if (
+          resolvedMode === "apply" &&
           !proposal.needs_gptchat_decision &&
           proposal.proposed_next_task
         ) {
@@ -588,6 +646,7 @@ export function createWorkflowToolsGroup({
           } catch (err) {
             return {
               title: "Workflow Advance Error",
+              ...handlerDiagnostics(diagnostics),
               summary: `Failed to create task: ${err.message}`,
               workflow_id: wfId,
               proposal: proposalRecord,
@@ -605,6 +664,7 @@ export function createWorkflowToolsGroup({
         if (autoAcceptResult?.auto_accepted) {
           return {
             title: "Workflow Advance — Auto-accepted",
+            ...handlerDiagnostics(diagnostics),
             summary: `Task "${task?.title}" auto-accepted. Result validated.`,
             workflow_id: wfId,
             needs_gptchat_decision: false,
@@ -649,6 +709,7 @@ export function createWorkflowToolsGroup({
         // Original return for non-auto-accept
         return {
           title: "Workflow Advance Proposal",
+          ...handlerDiagnostics(diagnostics),
           summary: proposal.recommendation,
           workflow_id: wfId,
           proposal: proposalRecord,

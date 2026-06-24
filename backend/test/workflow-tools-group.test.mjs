@@ -10,6 +10,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import {
   computeFingerprint,
   findExistingProposal,
@@ -383,10 +384,61 @@ test("proposal: waiting_for_review + commit_missing (has changed_files) → need
   assert.equal(p.needs_gptchat_decision, true);
 });
 
-test("proposal: waiting_for_review + blocked by worker → blocked", () => {
+test("proposal: waiting_for_review + blocked by worker still consumes acceptance", () => {
   const p = generateProposal({ diagnostics: makeDiagnostics({ worker: { enabled: true, running: true, health: { phase: "running" } } }), task: makeTask({ status: "waiting_for_review", result: { status: "completed", summary: "Done", commit: "abc123", tests: "pass" } }), manualVerdict: "passed", manualNote: "" });
-  assert.equal(p.next_action, "blocked");
-  assert.equal(p.needs_gptchat_decision, true);
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.needs_gptchat_decision, false);
+});
+
+test("workflow_advance MCP path: accepted waiting_for_review bypasses worker safety early return", async () => {
+  const root = uniqueRoot();
+  const statePath = join(root, "state.json");
+  const task = makeTask({
+    id: "task_mcp_auto_accept",
+    status: "waiting_for_review",
+    goal_id: "goal_mcp_auto_accept",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      remote_head: null,
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+    },
+  });
+  const server = await createGptWorkServer({
+    statePath,
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: root,
+    tokens: ["test-token"],
+    requireAuth: true,
+    toolMode: "standard",
+  });
+  const store = server.getStoreForTests();
+  const state = await store.load();
+  state.tasks = [task];
+  state.goals = [{ id: "goal_mcp_auto_accept", task_id: task.id, status: "assigned" }];
+  await store.save(state);
+
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/call",
+    params: {
+      name: "workflow_advance",
+      arguments: { task_id: task.id, mode: "apply" },
+    },
+  }, { authorization: "Bearer test-token" });
+
+  const result = response.result.structuredContent;
+  assert.equal(result.needs_gptchat_decision, false);
+  assert.equal(result.auto_accepted, true);
+  assert.equal(result.proposal.next_action, "auto_accepted");
+  assert.equal(result.runtime_handler_commit, result.runtime.repo_head);
+  assert.equal(result.workflow_advance_handler_version, "workflow_advance.v2.acceptance_first");
 });
 
 test("workflow_advance propose: waiting_for_review + valid → auto_accepted proposal", async () => {

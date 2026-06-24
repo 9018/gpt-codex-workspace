@@ -297,6 +297,59 @@ export function generateProposal({
     diagnostics.repo_locks.active === 0 &&
     !diagnostics.worktree.dirty;
 
+  // Review-state tasks must consume acceptance metadata before global runtime
+  // safety gates. Auto-accepting a valid review task only updates task/goal
+  // state; creating new repair work is gated later by workflow_advance.
+  if (task?.status === "waiting_for_review") {
+    const result = task.result;
+
+    if (!result) {
+      return {
+        next_action: "needs_gptchat_decision",
+        proposed_next_task: null,
+        recommendation: `Task "${task.id}" is waiting_for_review but has no result. GPTChat should review.`,
+        needs_gptchat_decision: true,
+      };
+    }
+
+    const validation = validateResultContract(result, { skipWorktreeCheck: true });
+    const acceptance = normalizeAcceptanceForResult(result);
+
+    if (validation.valid && !acceptance.passed) {
+      const proposed_next_task = buildAcceptanceRepairTask({ task, acceptance, manualNote });
+      return {
+        next_action: "create_repair_task",
+        proposed_next_task,
+        recommendation: `Task "${task.title}" has blocker/major acceptance findings. Proposed automatic repair task.`,
+        needs_gptchat_decision: false,
+        repair_proposal: proposed_next_task.repair_proposal,
+        acceptance,
+      };
+    }
+
+    if (validation.valid && acceptance.passed) {
+      return {
+        next_action: "auto_accepted",
+        proposed_next_task: null,
+        recommendation: `Task "${task.title}" result and acceptance verdict are valid. Auto-accepted.`,
+        needs_gptchat_decision: false,
+        auto_accepted: true,
+        acceptance,
+      };
+    }
+
+    const issues = validation.warnings.length > 0
+      ? validation.warnings.join("; ")
+      : validation.diagnosis_codes.join(", ");
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" has result issues: ${issues}. GPTChat should review.`,
+      needs_gptchat_decision: true,
+      diagnosis_codes: validation.diagnosis_codes,
+    };
+  }
+
   // Unsafe state: blocked
   if (!isSafe) {
     const reasons = [];
@@ -398,61 +451,6 @@ export function generateProposal({
     };
   }
 
-  // Task status is "waiting_for_review" — check if auto-acceptable
-  if (task.status === "waiting_for_review") {
-    const result = task.result;
-
-    // No result → needs GPTChat review
-    if (!result) {
-      return {
-        next_action: "needs_gptchat_decision",
-        proposed_next_task: null,
-        recommendation: `Task "${task.id}" is waiting_for_review but has no result. GPTChat should review.`,
-        needs_gptchat_decision: true,
-      };
-    }
-
-    // Validate result contract (skip git worktree check — diagnostics.isSafe already covers it)
-    const validation = validateResultContract(result, { skipWorktreeCheck: true });
-
-    const acceptance = normalizeAcceptanceForResult(result);
-
-    if (validation.valid && !acceptance.passed) {
-      const proposed_next_task = buildAcceptanceRepairTask({ task, acceptance, manualNote });
-      return {
-        next_action: "create_repair_task",
-        proposed_next_task,
-        recommendation: `Task "${task.title}" has blocker/major acceptance findings. Proposed automatic repair task.`,
-        needs_gptchat_decision: false,
-        repair_proposal: proposed_next_task.repair_proposal,
-        acceptance,
-      };
-    }
-
-    if (validation.valid && acceptance.passed) {
-      return {
-        next_action: "auto_accepted",
-        proposed_next_task: null,
-        recommendation: `Task "${task.title}" result and acceptance verdict are valid. Auto-accepted.`,
-        needs_gptchat_decision: false,
-        auto_accepted: true,
-        acceptance,
-      };
-    }
-
-    // Contract issues → needs GPTChat review
-    const issues = validation.warnings.length > 0
-      ? validation.warnings.join("; ")
-      : validation.diagnosis_codes.join(", ");
-    return {
-      next_action: "needs_gptchat_decision",
-      proposed_next_task: null,
-      recommendation: `Task "${task.title}" has result issues: ${issues}. GPTChat should review.`,
-      needs_gptchat_decision: true,
-      diagnosis_codes: validation.diagnosis_codes,
-    };
-  }
-
   // Catch-all: task is in progress or other status
   return {
     next_action: "needs_gptchat_decision",
@@ -546,9 +544,6 @@ export async function autoAcceptTask({ store, config, task, diagnostics }) {
     return { auto_accepted: false, error: `Task status is "${task.status}", not "waiting_for_review"` };
   }
   if (!diagnostics) return { auto_accepted: false, error: "No diagnostics provided" };
-  if (diagnostics.worker?.running) return { auto_accepted: false, error: "Worker is running" };
-  if ((diagnostics.repo_locks?.active || 0) > 0) return { auto_accepted: false, error: "Active repo locks" };
-  if (diagnostics.worktree?.dirty) return { auto_accepted: false, error: "Worktree is dirty" };
 
   const result = task.result;
   if (!result) return { auto_accepted: false, error: "Task has no result" };
