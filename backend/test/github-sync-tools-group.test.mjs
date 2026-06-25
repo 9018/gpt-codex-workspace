@@ -12,6 +12,7 @@ function fakeSchema(shape = {}, required = []) {
 }
 
 const expectedToolNames = [
+  "import_task_handoffs",
   "sync_from_github",
   "sync_to_github",
 ];
