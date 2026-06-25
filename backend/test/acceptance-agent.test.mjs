@@ -7,6 +7,11 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { hasCodeOrConfigOrRuntimeChanges } from "../src/acceptance-agent.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 // ===========================================================================
 // Tests for hasCodeOrConfigOrRuntimeChanges
@@ -69,7 +74,7 @@ test("hasCodeOrConfigOrRuntimeChanges: config-only files returns false for defau
       evidence: { changed_files: ["config.json", "deploy.yaml"] },
     },
   });
-  assert.equal(result, false);
+  assert.equal(result, true, "config-only changes now require integration");
 });
 
 test("hasCodeOrConfigOrRuntimeChanges: mixed code+docs returns true", async () => {
@@ -274,3 +279,114 @@ test("runAcceptanceAgent: noop profile passes without verification", async () =>
 });
 
 console.log("acceptance-agent tests loaded");
+
+// ===========================================================================
+// P0: Issue 2 — Config-only changes should enter integration (regression)
+// ===========================================================================
+
+test("hasCodeOrConfigOrRuntimeChanges: config-only changes return true for integration (Issue 2)", async () => {
+  // Before the fix, this returned false. Config-only changes should require integration.
+  const result = hasCodeOrConfigOrRuntimeChanges({
+    acceptanceResult: {
+      profile: "default",
+      evidence: { changed_files: ["config.json", "deploy.yaml"] },
+    },
+  });
+  assert.equal(result, true, "config-only changes must NOT skip integration");
+});
+
+test("hasCodeOrConfigOrRuntimeChanges: docs-only changes still skip integration (Issue 2)", async () => {
+  const result = hasCodeOrConfigOrRuntimeChanges({
+    acceptanceResult: {
+      profile: "default",
+      evidence: { changed_files: ["docs/readme.md", "CHANGELOG.md"] },
+    },
+  });
+  assert.equal(result, false, "docs-only changes should still skip integration");
+});
+
+// ===========================================================================
+// P0: Issue 3 — commit_exists=false without baseSha causes commit_or_patch finding
+// ===========================================================================
+
+test("runAcceptanceAgent: commit_or_patch fails when commit_exists=false and no result.commit (Issue 3)", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_issue3", mode: "code_change" },
+    result: {
+      status: "completed",
+      summary: "Task with no commit evidence",
+      changed_files: ["src/app.mjs"],
+      verification: { commands: ["true"], passed: true },
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with no commit evidence",
+      changed_files: ["src/app.mjs"],
+      git_changed_files: ["src/app.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: false,
+    },
+  });
+  const commitFindings = result.findings.filter(f => f.code === "commit_or_patch_missing");
+  assert.ok(commitFindings.length > 0, "Expected commit_or_patch_missing when commit_exists=false and no result.commit");
+});
+
+test("buildEvidence: commit_exists is false when baseSha is not provided (Issue 3 regression)", async () => {
+  // This test verifies that buildEvidence no longer uses `git log -1` which
+  // would return true for any repo with historical commits.
+  const dir = await mkdtemp(join(tmpdir(), "be-issue3-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+
+  const mod = await import("../src/acceptance-agent.mjs");
+
+  // Without baseSha, commit_exists must be false (repo has commits but not task-specific)
+  const evidence = await mod.buildEvidence({ repoPath: repo });
+  assert.equal(evidence.commit_exists, false, "without baseSha, commit_exists should be false");
+
+  // With baseSha=HEAD (no new commits since HEAD), commit_exists should be false
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  const evidence2 = await mod.buildEvidence({ repoPath: repo, baseSha: headSha });
+  assert.equal(evidence2.commit_exists, false, "baseSha===HEAD means no new commits");
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+// ===========================================================================
+// P0: Issue 4 — changed_files_match_git uses git_changed_files (not result_changed_files)
+// ===========================================================================
+
+test("runAcceptanceAgent: changed_files_match_git detects mismatch via git_changed_files (Issue 4)", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_issue4" },
+    result: {
+      status: "completed",
+      summary: "Task with file mismatch",
+      changed_files: ["src/claimed.mjs", "src/missing.mjs"],
+      verification: { commands: ["true"], passed: true },
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with file mismatch",
+      git_changed_files: ["src/claimed.mjs"],
+      changed_files: ["src/claimed.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch");
+  assert.ok(mismatchFindings.length > 0, "Expected changed_files_mismatch when result files not in git diff");
+  assert.ok(mismatchFindings.some(f => f.severity === "major"), "Expected major severity");
+});

@@ -34,16 +34,19 @@ function isManagedGitStatusLine(line) {
  * @param {string} [options.worktreePath] - Optional worktree path for git operations
  * @param {string} [options.verificationLogPath] - Path to verification.log file
  * @param {string} [options.resultJsonPath] - Path to result.json file
+ * @param {string} [options.baseSha] - Base SHA for task-specific diff; uses `<baseSha>..HEAD` for commit evidence
  * @returns {Promise<object>} Evidence object
  */
-export async function buildEvidence({ repoPath, worktreePath, verificationLogPath, resultJsonPath } = {}) {
+export async function buildEvidence({ repoPath, worktreePath, verificationLogPath, resultJsonPath, baseSha } = {}) {
   const gitPath = worktreePath || repoPath;
   const evidence = {
     git_status: null,
     git_diff_summary: null,
-    commit_exists: false,
-    changed_files: [],
-    verification_log_exists: false,
+   commit_exists: false,
+   changed_files: [],
+    git_changed_files: [],
+    result_changed_files: [],
+   verification_log_exists: false,
     result_json_valid: null,  // null = not checked (pass), false = checked+invalid (fail)
   };
 
@@ -70,13 +73,19 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       evidence.git_diff_summary = '(git diff failed)';
     }
 
-    // Check for recent commits
-    try {
-      const stdout = execFileSync('git', ['log', '--oneline', '-1'], {
-        cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
-      });
-      evidence.commit_exists = Boolean(stdout.trim());
-    } catch {
+    // Check for task-specific commits using baseSha diff range
+    // This prevents unrelated repo history from falsely satisfying commit_or_patch_evidence
+    if (baseSha) {
+      try {
+        const stdout = execFileSync('git', ['rev-list', '--count', `${baseSha}..HEAD`], {
+          cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
+        });
+        const count = parseInt(stdout.trim(), 10);
+        evidence.commit_exists = count > 0;
+      } catch {
+        evidence.commit_exists = false;
+      }
+    } else {
       evidence.commit_exists = false;
     }
 
@@ -88,6 +97,7 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       const files = stdout.trim().split('\n').filter(Boolean);
       if (files.length > 0) {
         evidence.changed_files = files;
+        evidence.git_changed_files = files;
       }
     } catch {
       // HEAD~1 might not exist; try diff against empty tree
@@ -112,7 +122,7 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       evidence.result_json_valid = Boolean(parsed.status) && Boolean(parsed.summary);
       if (parsed.status) evidence.result_status = parsed.status;
       if (parsed.summary) evidence.result_summary = parsed.summary;
-      if (Array.isArray(parsed.changed_files)) evidence.changed_files = parsed.changed_files;
+      if (Array.isArray(parsed.changed_files)) evidence.result_changed_files = parsed.changed_files;
       if (parsed.verification) evidence.verification = parsed.verification;
     } catch {
       evidence.result_json_valid = false;
@@ -136,12 +146,13 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
  */
 export async function runAcceptanceAgent({ task, goal, result, repoPath, profile, evidence: preBuiltEvidence } = {}) {
   // Build evidence if not provided
-  const evidence = preBuiltEvidence || await buildEvidence({
-    repoPath,
-    worktreePath: task?.worktree_path,
-    verificationLogPath: result?.verification_log_path,
-    resultJsonPath: result?.result_json_path,
-  });
+ const evidence = preBuiltEvidence || await buildEvidence({
+   repoPath,
+   worktreePath: task?.worktree_path,
+   verificationLogPath: result?.verification_log_path,
+   resultJsonPath: result?.result_json_path,
+    baseSha: task?.worktree_lifecycle?.base_sha || result?.base_sha,
+ });
 
   // Determine profile
   const activeProfile = profile || inferProfileFromTask(task, result);
@@ -314,12 +325,12 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       }
       return null;
 
-    case 'changed_files_match_git':
-      const resultFiles = new Set((result?.changed_files || []).map(f => f.replace(/^\/+/, '')));
-      const gitFiles = new Set((evidence.changed_files || []).map(f => f.replace(/^\/+/, '')));
-      if (resultFiles.size > 0 && gitFiles.size > 0) {
-        const missing = [...resultFiles].filter(f => !gitFiles.has(f));
-        if (missing.length > 0) {
+   case 'changed_files_match_git':
+     const resultFiles = new Set((result?.changed_files || []).map(f => f.replace(/^\/+/, '')));
+      const gitFiles = new Set((evidence.git_changed_files || evidence.changed_files || []).map(f => f.replace(/^\/+/, '')));
+     if (resultFiles.size > 0 && gitFiles.size > 0) {
+       const missing = [...resultFiles].filter(f => !gitFiles.has(f));
+       if (missing.length > 0) {
           return { severity: 'major', code: 'changed_files_mismatch', message: `Files in result not found in git diff: ${missing.join(', ')}`, source: 'acceptance_agent' };
         }
       }
@@ -387,8 +398,9 @@ export function hasCodeOrConfigOrRuntimeChanges({ acceptanceResult, task, result
   const allDocs = changedFiles.every(f => f.startsWith('docs/') || f.endsWith('.md'));
   const allConfig = changedFiles.every(f => f.endsWith('.json') || f.endsWith('.yaml') || f.endsWith('.yml'));
 
-  if (allDocs || allConfig) {
-    return false;
-  }
+ if (allDocs || allConfig) {
+    // Only docs-only changes skip integration; config-only changes require it
+    if (allDocs) return false;
+ }
   return true;
 }
