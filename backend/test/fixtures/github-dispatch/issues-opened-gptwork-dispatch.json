@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 43,
+    "title": "[Dispatch] Test with dispatch label",
+    "body": "ZIP base64: `.gptwork/goal-inbox/foo.zip.b64`\n\nRestore instructions: `.gptwork/goal-inbox/restore.md`",
+    "labels": [
+      { "name": "gptwork-dispatch" }
+    ]
+  }
+}

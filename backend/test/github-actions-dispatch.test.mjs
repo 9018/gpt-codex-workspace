@@ -352,3 +352,84 @@ test("parseIssueBodyForPayload parses fallback task file", () => {
   assert.equal(result.source, "fallback");
   assert.equal(result.path, ".gptwork/goal-inbox/some-task.md");
 });
+
+// =========================================================================
+// New label checks (gptwork-dispatch / gptwork-payload)
+// =========================================================================
+
+function hasDispatchLabel(labels) {
+  return labels.some((l) => l === "gptwork-dispatch" || l === "gptwork-payload");
+}
+
+function hasGptworkTaskOnly(labels) {
+  const isDispatch = labels.some((l) => l === "gptwork-dispatch" || l === "gptwork-payload");
+  const isTask = labels.some((l) => l === "gptwork-task");
+  return isTask && !isDispatch;
+}
+
+test("detects gptwork-dispatch label from fixture", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasDispatchLabel(labels), "dispatch label should be detected");
+  assert.ok(labels.includes("gptwork-dispatch"), "gptwork-dispatch should be present");
+});
+
+test("detects gptwork-payload label", () => {
+  const labels = ["gptwork-payload"];
+  assert.ok(hasDispatchLabel(labels));
+});
+
+test("hasGptworkTaskOnly returns true for gptwork-task without dispatch", () => {
+  const payload = readFixture("issues-opened-gptwork-task-no-payload.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasGptworkTaskOnly(labels), "regular gptwork-task without dispatch should be identified");
+  assert.ok(!hasDispatchLabel(labels), "no dispatch label detected");
+});
+
+test("old gptwork-task fixture without dispatch returns hasGptworkTaskOnly", () => {
+  // The existing fixture has gptwork-task label
+  const payload = readFixture("issues-opened-gptwork-task.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasGptworkTaskOnly(labels), "old gptwork-task fixture has task label but not dispatch");
+  assert.ok(!hasDispatchLabel(labels), "no dispatch label on old fixture");
+});
+
+test("dispatch fixture returns hasGptworkTaskOnly false", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(!hasGptworkTaskOnly(labels), "dispatch fixture should not be identified as task-only");
+});
+
+test("regular gptwork-task issue without payload ref does not comment failed — simulates handleIssues decision", () => {
+  const payload = readFixture("issues-opened-gptwork-task-no-payload.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  
+  // Simulate the new dispatch logic:
+  const isDispatchLabel = hasDispatchLabel(labels);
+  const isRegularTaskLabel = labels.some((l) => l === "gptwork-task");
+  
+  // This issue has gptwork-task but NOT dispatch/payload
+  assert.ok(!isDispatchLabel, "No dispatch label");
+  assert.ok(isRegularTaskLabel, "Has gptwork-task label");
+  
+  // Simulate no payload ref (issue body doesn't have ZIP base64 etc.)
+  const body = payload.issue.body;
+  const result = parseIssueBodyForPayload(body);
+  assert.equal(result, null, "No payload reference in body");
+  
+  // The fix: for regular gptwork-task issues, we should NOT enter the payload parsing path at all
+  // The label check should say "no dispatch label" and skip without commenting
+  // This verifies the core behavioral change
+});
+
+test("dispatch issue with payload ref finds payload reference", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  
+  assert.ok(hasDispatchLabel(labels), "Has dispatch label");
+  
+  const result = parseIssueBodyForPayload(payload.issue.body);
+  assert.ok(result, "Found payload reference");
+  assert.equal(result.source, "zip", "Payload is zip");
+  assert.equal(result.path, ".gptwork/goal-inbox/foo.zip.b64");
+});

@@ -312,12 +312,15 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     .filter((item) => ELIGIBLE_STATUSES.has(item.status))
     .sort((a, b) => (a.position || 0) - (b.position || 0));
 
-  if (sorted.length === 0) {
-    return { started: false, item: null, task: null, reason: "No eligible queue items (status=waiting|ready)", checks: [] };
-  }
+ if (sorted.length === 0) {
+   return { started: false, item: null, task: null, reason: "No eligible queue items (status=waiting|ready)", checks: [] };
+ }
 
-  for (const candidate of sorted) {
-    const checks = [];
+  /** Collect items blocked during scanning so startQueuedGoals can report them. */
+  const blockedItems = [];
+
+ for (const candidate of sorted) {
+   const checks = [];
 
     // 1. Dependency check
     const depResult = isDependencySatisfied(state, candidate);
@@ -345,13 +348,15 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
         ? `worktree error: ${resolvedRepo.worktree_lifecycle.error || "unknown"}`
         : resolvedRepo.uses_default_fallback ? "default repo fallback" : "resolved repo",
     });
-    if (resolvedRepo.worktree_lifecycle?.ok === false) {
-      candidate.blocked_reason = `Worktree status unknown: ${resolvedRepo.worktree_lifecycle.error || "worktree preparation failed"}`;
-      candidate.status = QUEUE_STATUS_BLOCKED;
-      candidate.updated_at = now();
+   if (resolvedRepo.worktree_lifecycle?.ok === false) {
+     candidate.blocked_reason = `Worktree status unknown: ${resolvedRepo.worktree_lifecycle.error || "worktree preparation failed"}`;
+      checks[checks.length - 1].passed = false;
+     candidate.status = QUEUE_STATUS_BLOCKED;
+     candidate.updated_at = now();
+      blockedItems.push({ queue_id: candidate.queue_id, goal_id: candidate.goal_id, reason: candidate.blocked_reason });
       if (!dryRun) await store.save();
-      return { started: false, item: candidate, task: null, reason: candidate.blocked_reason, checks };
-    }
+      continue;
+   }
 
         // 2. No repo lock or worktree dirty checks at queue time.
     //    Locks are acquired during execution on per-task worktree paths.
@@ -374,13 +379,18 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     }
 
     // Create task for this goal
-    try {
-      const { createGoalTask } = await import("./goal-task-task-factory.mjs");
-      const task = await createGoalTask(store, config, candidate.goal_id, {
-        assignee: "codex",
-        status: "assigned",
-        mode: "builder",
-      });
+   try {
+     const { createGoalTask } = await import("./goal-task-task-factory.mjs");
+
+      // Preserve the goal's own mode; fallback to "builder" if missing
+      const goalObj = Array.isArray(state.goals)
+        ? state.goals.find((g) => g.id === candidate.goal_id)
+        : null;
+     const task = await createGoalTask(store, config, candidate.goal_id, {
+       assignee: "codex",
+       status: "assigned",
+        mode: goalObj?.mode || "builder",
+     });
       if (candidate.repo_id) {
         task.repo_id = candidate.repo_id;
         const goal = Array.isArray(state.goals) ? state.goals.find((item) => item.id === candidate.goal_id) : null;
@@ -412,13 +422,16 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     }
   }
 
-  return {
-    started: false,
-    item: null,
-    task: null,
-    reason: "No eligible queue items after checking all candidates",
-    checks: [],
-  };
+ return {
+   started: false,
+   item: null,
+   task: null,
+    blocked_items: blockedItems,
+    reason: blockedItems.length > 0
+      ? `${blockedItems.length} item(s) blocked, no eligible candidates`
+      : "No eligible queue items after checking all candidates",
+   checks: [],
+ };
 }
 
 export async function startQueuedGoals(store, config, opts = {}) {
@@ -433,11 +446,22 @@ export async function startQueuedGoals(store, config, opts = {}) {
       results.push(result);
       break;
     }
-    if (result.started) {
-      results.push(result);
-      continue;
+   if (result.started) {
+     results.push(result);
+     continue;
+   }
+    // Collect blocked items from the scan even when none started
+    if (Array.isArray(result.blocked_items)) {
+      for (const bi of result.blocked_items) {
+        blocked.push(bi);
+      }
     }
-    if (result.item && result.reason) blocked.push({ queue_id: result.item.queue_id, reason: result.reason });
+    // If no item was found, all candidates exhausted — stop
+    if (!result.item) break;
+    // A specific item was tried and failed (task creation error) — stop
+    if (result.reason) {
+      blocked.push({ queue_id: result.item.queue_id, reason: result.reason });
+    }
     break;
   }
 

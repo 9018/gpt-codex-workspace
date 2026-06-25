@@ -144,9 +144,10 @@ export function createLocalStore(options = {}) {
   // createVectorStore or retriever.mjs, workspaceRoot is always provided
   // from config.defaultWorkspaceRoot. The fallback only activates when
   // options.workspaceRoot is undefined (direct test usage, not prod path).
-  const workspaceRoot = options.workspaceRoot || process.cwd();
-  const dimension = options.dimension || 64;
-  const indexDir = join(workspaceRoot, DEFAULT_INDEX_DIR);
+ const workspaceRoot = options.workspaceRoot || process.cwd();
+ const dimension = options.dimension || 64;
+  const maxGoalsScanned = options.maxGoalsScanned || 50;
+ const indexDir = join(workspaceRoot, DEFAULT_INDEX_DIR);
 
   /** Lazy-loaded in-memory cache: { goalId: { chunks, vectors } } */
   const cache = new Map();
@@ -247,10 +248,28 @@ export function createLocalStore(options = {}) {
       }
     },
 
-    async search(queryVector, topK = 5, filters = {}) {
-      const goalId = filters.goal_id;
-      const goalIds = goalId ? [goalId] : await listStoredGoalIds(indexDir);
-      if (goalIds.length === 0) return [];
+   async search(queryVector, topK = 5, filters = {}) {
+     const goalId = filters.goal_id;
+      let goalIds;
+      if (goalId) {
+        goalIds = [goalId];
+      } else {
+        // Unbounded all-goal scan is expensive; sort by mtime (newest first) and apply limit
+        const allGoalIds = await listStoredGoalIds(indexDir);
+        if (allGoalIds.length > 0) {
+          const withMtime = await Promise.all(allGoalIds.slice(0, Math.max(maxGoalsScanned * 2, 200)).map(async (gid) => {
+            try {
+              const stat = await import("node:fs/promises").then(m => m.stat(join(indexDir, gid)));
+              return { gid, mtime: stat.mtimeMs || 0 };
+            } catch { return { gid, mtime: 0 }; }
+          }));
+          withMtime.sort((a, b) => b.mtime - a.mtime);
+          goalIds = withMtime.slice(0, maxGoalsScanned).map(e => e.gid);
+        } else {
+          goalIds = [];
+        }
+      }
+     if (goalIds.length === 0) return [];
 
       const scored = [];
       for (const currentGoalId of goalIds) {
