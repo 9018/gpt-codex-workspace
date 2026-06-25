@@ -81,10 +81,12 @@ export function createGithubSyncToolsGroup({ tool, schema, store, github, config
           for (const item of inboxResult.skipped) results.skipped.push({ ...item, source: "inbox" });
           for (const item of inboxResult.failed) results.skipped.push({ ...item, source: "inbox", reason: "failed: " + item.reason });
         }
+        const totalCount = results.github.length + results.request.length + results.inbox.length;
         return {
           dry_run: !shouldApply,
           source,
-          total_imported: results.github.length + results.request.length + results.inbox.length,
+          total_imported: shouldApply ? totalCount : 0,
+          would_import_count: shouldApply ? 0 : totalCount,
           total_skipped: results.skipped.length,
           github_tasks: results.github,
           request_conversions: results.request,

@@ -430,3 +430,226 @@ test("importFromIssues idempotent: same issue not imported twice", async () => {
   const reasons = diag.skipped_reasons.map(s => s.reason);
   assert.ok(reasons.includes("duplicate_issue_number"), "Duplicate issue skipped");
 });
+
+// =========================================================================
+// Test: import_task_handoffs handler dry_run with request source
+// =========================================================================
+test("import_task_handoffs handler dry_run skips ordinary request, shows task_intake as convertible", async () => {
+  const tools = createGithubSyncToolsGroup({
+    tool: fakeTool, schema: fakeSchema,
+    store: createStore({
+      chatgpt_requests: [
+        { id: "r_dry_1", title: "Help me", prompt: "How?", status: "open" },
+        { id: "r_dry_2", title: "Create task", prompt: "Do work", status: "open", escalation: { category: "task_intake" } }
+      ]
+    }),
+    github: {
+      enabled: false,
+      importFromIssues: async () => [],
+      importInboxHandoffs: async () => ({ imported: [], skipped: [], failed: [] }),
+    },
+    config: { defaultWorkspaceRoot: process.cwd() },
+  });
+
+  const result = await tools.import_task_handoffs.handler({ source: "request", dry_run: true, apply: false });
+
+  // Ordinary request without marker should be skipped
+  const skippedOrdinary = result.skipped.filter(s => s.request_id === "r_dry_1");
+  assert.ok(skippedOrdinary.length > 0, "Ordinary request without marker is skipped");
+  assert.ok(skippedOrdinary.some(s => s.reason === "no_task_intake_marker"), "Skip reason is no_task_intake_marker");
+
+  // task_intake request should show as convertible (dry_run)
+  const convertible = result.request_conversions.filter(r => r.request_id === "r_dry_2");
+  assert.ok(convertible.length > 0, "task_intake request is convertible");
+  assert.ok(convertible.some(r => r.dry_run === true), "Listed as dry_run");
+
+  // No tasks created
+  const state = await tools.import_task_handoffs._store || await (createStore()).load();
+  // We can't access the store directly, but we can check the result shape
+  assert.equal(result.total_imported, 0, "Dry run imported 0 tasks");
+  assert.equal(result.request_conversions.filter(r => r.dry_run).length, 1, "1 convertible reported");
+});
+
+// =========================================================================
+// Test: import_task_handoffs handler cannot apply when dry_run=true
+// =========================================================================
+test("import_task_handoffs rejects apply=true with dry_run=true", async () => {
+  const tools = createGithubSyncToolsGroup({
+    tool: fakeTool, schema: fakeSchema,
+    store: createStore(),
+    github: {},
+    config: { defaultWorkspaceRoot: process.cwd() },
+  });
+
+  const result = await tools.import_task_handoffs.handler({ source: "request", dry_run: true, apply: true });
+  assert.ok(result.error, "Error message returned");
+  assert.ok(result.error.includes("Cannot apply"), "Error mentions cannot apply");
+});
+
+// =========================================================================
+// Test: import_task_handoffs handler inbox dry_run does not move files
+// =========================================================================
+test("import_task_handoffs handler inbox dry_run does not create tasks", async () => {
+  const workDir = "/tmp/gptwork-handler-test-" + Date.now();
+  const inboxDir = workDir + "/.gptwork/inbox";
+  const procDir = inboxDir + "/processed";
+  await mkdir(procDir, { recursive: true });
+
+  const payload = {
+    kind: "gptwork_task_handoff",
+    title: "Handler Dry Run Test",
+    description: "desc",
+    assignee: "codex",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    idempotency_key: "handler-dry-run-key",
+  };
+  await writeFile(inboxDir + "/handler-dry.json", JSON.stringify(payload, null, 2));
+
+  const fakeGh = {
+    enabled: false,
+    importFromIssues: async () => [],
+    importInboxHandoffs: async (store, opts) => {
+      // We re-create a real github sync to test the actual inbox import
+      const { createGithubSync } = await import("../src/github-sync-factory.mjs");
+      const realSync = createGithubSync({ githubRepo: "", githubToken: "", githubEnabled: false, defaultWorkspaceRoot: workDir });
+      return realSync.importInboxHandoffs(store, opts);
+    },
+    convertChatGptRequestToTask: async () => ({ converted: false, reason: "not_implemented" }),
+  };
+
+  const tools = createGithubSyncToolsGroup({
+    tool: fakeTool, schema: fakeSchema,
+    store: createStore(),
+    github: fakeGh,
+    config: { defaultWorkspaceRoot: workDir },
+  });
+
+  const result = await tools.import_task_handoffs.handler({ source: "inbox", dry_run: true, apply: false });
+  assert.ok(result.dry_run === true, "Dry run mode");
+  assert.equal(result.total_imported, 0, "No tasks imported (github disabled)");
+
+  await rm(workDir, { recursive: true, force: true });
+});
+
+// =========================================================================
+// Test: import_task_handoffs handler dry_run field contracts (would_import_count, total_imported=0)
+// =========================================================================
+test("import_task_handoffs dry_run: total_imported=0, would_import_count > 0", async () => {
+  const workDir = "/tmp/gptwork-test-" + Date.now();
+  const inboxDir = workDir + "/.gptwork/inbox";
+  const procDir = inboxDir + "/processed";
+  await mkdir(procDir, { recursive: true });
+
+  const payload = {
+    kind: "gptwork_task_handoff",
+    title: "Field Contract Test",
+    description: "desc",
+    assignee: "codex",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    idempotency_key: "field-contract-key",
+  };
+  await writeFile(inboxDir + "/field.json", JSON.stringify(payload, null, 2));
+
+  const store = createStore();
+  const github = createGithubSync({ githubRepo: "", githubToken: "", githubEnabled: false, defaultWorkspaceRoot: workDir });
+
+  const group = createGithubSyncToolsGroup({
+    tool: (d, s, h) => ({ description: d, inputSchema: s, handler: h }),
+    schema: (p, r) => ({ type: "object", properties: p, required: r }),
+    store, github,
+    config: { defaultWorkspaceRoot: workDir },
+  });
+
+  // dry_run
+  const dryResult = await group.import_task_handoffs.handler({ source: "inbox", dry_run: true, apply: false });
+
+  // Verify field contracts
+  assert.equal(dryResult.dry_run, true, "dry_run flag is true");
+  assert.equal(dryResult.total_imported, 0, "total_imported is 0 during dry_run");
+  assert.ok(dryResult.would_import_count > 0, "would_import_count > 0 during dry_run");
+  assert.ok("total_skipped" in dryResult, "total_skipped present");
+  assert.ok(Array.isArray(dryResult.inbox_handoffs), "inbox_handoffs is array");
+
+  // Verify no tasks created
+  const state1 = await store.load();
+  assert.equal(state1.tasks.length, 0, "No tasks after dry_run");
+
+  // apply
+  const applyResult = await group.import_task_handoffs.handler({ source: "inbox", dry_run: false, apply: true });
+  assert.equal(applyResult.dry_run, false, "dry_run flag is false");
+  assert.ok(applyResult.total_imported > 0, "total_imported > 0 after apply");
+
+  // After apply, list_tasks shows the task
+  const state2 = await store.load();
+  assert.equal(state2.tasks.length, 1, "1 task after apply");
+  assert.equal(state2.tasks[0].title, "Field Contract Test");
+  assert.equal(state2.tasks[0].assignee, "codex");
+  assert.equal(state2.tasks[0].status, "queued");
+
+  // Also verify list_tasks-like behavior: store.findTaskById works
+  const found = await store.findTaskById(state2.tasks[0].id);
+  assert.ok(found, "findTaskById finds the created task");
+  assert.equal(found.title, "Field Contract Test");
+
+  await rm(workDir, { recursive: true, force: true });
+});
+
+// =========================================================================
+// Test: import_task_handoffs e2e: dry_run → apply → list_tasks flow
+// =========================================================================
+test("import_task_handoffs e2e: dry_run no tasks, apply creates tasks, list_tasks sees them", async () => {
+  const workDir = "/tmp/gptwork-test-" + Date.now();
+  const inboxDir = workDir + "/.gptwork/inbox";
+  const procDir = inboxDir + "/processed";
+  await mkdir(procDir, { recursive: true });
+
+  // Two handoff files
+  const t1 = { kind: "gptwork_task_handoff", title: "E2E Task 1", description: "d1", assignee: "codex", workspace_id: "hosted-default", mode: "builder", idempotency_key: "e2e-1" };
+  const t2 = { kind: "gptwork_task_handoff", title: "E2E Task 2", description: "d2", assignee: "codex", workspace_id: "hosted-default", mode: "builder", idempotency_key: "e2e-2" };
+  await writeFile(inboxDir + "/e2e-1.json", JSON.stringify(t1, null, 2));
+  await writeFile(inboxDir + "/e2e-2.json", JSON.stringify(t2, null, 2));
+
+  const store = createStore();
+  const github = createGithubSync({ githubRepo: "", githubToken: "", githubEnabled: false, defaultWorkspaceRoot: workDir });
+
+  const group = createGithubSyncToolsGroup({
+    tool: (d, s, h) => ({ description: d, inputSchema: s, handler: h }),
+    schema: (p, r) => ({ type: "object", properties: p, required: r }),
+    store, github,
+    config: { defaultWorkspaceRoot: workDir },
+  });
+
+  // 1. dry_run → task count unchanged
+  const dryResult = await group.import_task_handoffs.handler({ source: "inbox", dry_run: true, apply: false });
+  assert.equal(dryResult.total_imported, 0, "dry_run total_imported=0");
+  assert.equal(dryResult.would_import_count, 2, "dry_run would_import=2");
+  let s = await store.load();
+  assert.equal(s.tasks.length, 0, "No tasks after dry_run");
+
+  // 2. apply → task count increased
+  const applyResult = await group.import_task_handoffs.handler({ source: "inbox", dry_run: false, apply: true });
+  assert.equal(applyResult.total_imported, 2, "apply imported 2 tasks");
+  s = await store.load();
+  assert.equal(s.tasks.length, 2, "2 tasks after apply");
+
+  // 3. list_tasks sees the new tasks
+  const taskNames = s.tasks.map(t => t.title).sort();
+  assert.deepEqual(taskNames, ["E2E Task 1", "E2E Task 2"]);
+
+  // 4. Verify each task has expected fields for the worker
+  for (const task of s.tasks) {
+    assert.ok(task.id, "Has task id");
+    assert.ok(task.id.startsWith("task_"), "Task id format task_xxx");
+    assert.equal(task.assignee, "codex", "Assigned to codex");
+    assert.equal(task.status, "queued", "Status queued");
+    assert.equal(task.mode, "builder", "Mode builder");
+    assert.equal(task.workspace_id, "hosted-default", "Workspace correct");
+    assert.ok(task.idempotency_key, "Has idempotency_key");
+    assert.ok(task.created_at, "Has created_at");
+    assert.ok(task.created_by, "Has created_by");
+  }
+
+  await rm(workDir, { recursive: true, force: true });
+});
