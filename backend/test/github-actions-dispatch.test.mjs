@@ -44,6 +44,40 @@ function hasGptworkTaskLabel(labels) {
 }
 
 /**
+ * Check if labels include gptwork-dispatch.
+ */
+function hasGptworkDispatchLabel(labels) {
+  return labels.some((l) => l === "gptwork-dispatch");
+}
+
+/**
+ * Simulate the handleIssues dispatch decision based on labels and body content.
+ * Matches the new logic in github-actions-dispatch.mjs.
+ */
+function determineDispatchAction(labels, body) {
+  const isDispatch = labels.some((l) => l === "gptwork-dispatch");
+  const isTask = labels.some((l) => l === "gptwork-task");
+
+  if (!isDispatch && !isTask) {
+    return { action: "skip", reason: "no_dispatch_label" };
+  }
+
+  const payload = parseIssueBodyForPayload(body);
+
+  if (!payload) {
+    if (isTask && !isDispatch) {
+      return { action: "skip_silently", reason: "no_payload_ref_regular_task" };
+    }
+    if (isDispatch) {
+      return { action: "comment_failure", reason: "no_payload_ref_dispatch" };
+    }
+    return { action: "skip_silently", reason: "no_payload_ref" };
+  }
+
+  return { action: "dispatch", reason: "has_payload" };
+}
+
+/**
  * Simulate issue body parsing for payload paths.
  */
 function parseIssueBodyForPayload(body) {
@@ -351,4 +385,109 @@ test("parseIssueBodyForPayload parses fallback task file", () => {
   assert.ok(result);
   assert.equal(result.source, "fallback");
   assert.equal(result.path, ".gptwork/goal-inbox/some-task.md");
+});
+
+
+// =========================================================================
+// Tests: gptwork-dispatch label and issue decision logic
+// =========================================================================
+
+test("fixtures have expected issues with gptwork-dispatch structure", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  assert.equal(payload.action, "opened");
+  assert.equal(payload.issue.number, 101);
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasGptworkDispatchLabel(labels), "Should have gptwork-dispatch label");
+  assert.equal(hasGptworkTaskLabel(labels), false, "Should not have gptwork-task label");
+});
+
+test("fixtures have expected issues with gptwork-task no-payload structure", () => {
+  const payload = readFixture("issues-opened-gptwork-task-no-payload.json");
+  assert.equal(payload.action, "opened");
+  assert.equal(payload.issue.number, 102);
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasGptworkTaskLabel(labels), "Should have gptwork-task label");
+  assert.equal(hasGptworkDispatchLabel(labels), false, "Should not have gptwork-dispatch label");
+});
+
+test("detects gptwork-dispatch label from fixture", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(hasGptworkDispatchLabel(labels));
+  assert.equal(hasGptworkTaskLabel(labels), false);
+});
+
+test("rejects regular gptwork-task issue without payload as no_payload_ref_regular_task", () => {
+  const payload = readFixture("issues-opened-gptwork-task-no-payload.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "skip_silently");
+  assert.equal(result.reason, "no_payload_ref_regular_task",
+    "Regular gptwork-task without payload should skip silently");
+});
+
+test("gptwork-dispatch issue with payload is dispatchable", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "dispatch");
+  assert.equal(result.reason, "has_payload",
+    "gptwork-dispatch with payload should be dispatchable");
+});
+
+test("gptwork-task issue with payload is dispatchable for backward compatibility", () => {
+  const payload = readFixture("issues-opened-gptwork-task.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "dispatch",
+    "gptwork-task with payload should still be dispatchable");
+});
+
+test("no-label issue returns no_dispatch_label", () => {
+  const payload = readFixture("issues-opened-no-label.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "skip");
+  assert.equal(result.reason, "no_dispatch_label");
+});
+// =========================================================================
+// gptwork-dispatch without payload tests
+// =========================================================================
+
+test("fixtures have expected issues with gptwork-dispatch no-payload structure", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch-no-payload.json");
+  assert.equal(payload.action, "opened");
+  assert.equal(payload.issue.number, 103);
+  const labels = getLabelsFromIssue(payload.issue);
+  assert.ok(labels.includes("gptwork-dispatch"), "Has gptwork-dispatch label");
+});
+
+test("gptwork-dispatch without payload returns comment_failure", () => {
+  const labels = ["gptwork-dispatch"];
+  const body = "Just a question, no payload references at all.";
+  const result = determineDispatchAction(labels, body);
+  assert.equal(result.action, "comment_failure",
+    "gptwork-dispatch without payload should return comment_failure");
+  assert.equal(result.reason, "no_payload_ref_dispatch",
+    "Reason should be no_payload_ref_dispatch");
+});
+
+test("gptwork-dispatch without payload fixture returns comment_failure", () => {
+  const payload = readFixture("issues-opened-gptwork-dispatch-no-payload.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "comment_failure",
+    "gptwork-dispatch fixture without payload should return comment_failure");
+  assert.equal(result.reason, "no_payload_ref_dispatch",
+    "Correct reason for gptwork-dispatch without payload");
+});
+
+test("gptwork-task without payload still returns skip_silently", () => {
+  const payload = readFixture("issues-opened-gptwork-task-no-payload.json");
+  const labels = getLabelsFromIssue(payload.issue);
+  const result = determineDispatchAction(labels, payload.issue.body);
+  assert.equal(result.action, "skip_silently",
+    "gptwork-task without payload should skip silently");
+  assert.equal(result.reason, "no_payload_ref_regular_task",
+    "Correct reason for gptwork-task without payload");
 });

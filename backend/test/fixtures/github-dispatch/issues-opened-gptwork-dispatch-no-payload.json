@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 103,
+    "title": "[GPTWork Dispatch] Dispatch label without payload",
+    "body": "This issue has the gptwork-dispatch label but no ZIP base64, restore instructions, or fallback task file reference.\n\nThe dispatch bot should comment 'GPTWork dispatch failed' on this issue.",
+    "labels": [
+      { "name": "gptwork-dispatch" }
+    ]
+  }
+}

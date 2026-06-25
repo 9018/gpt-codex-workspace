@@ -98,6 +98,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "gptwork_self_test",
   "handoff_to_agent",
   "health_check",
+  "import_task_handoffs",
   "list_agent_runs",
   "list_chatgpt_requests",
   "list_codex_sessions_metadata",
@@ -265,7 +266,7 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
     // Also verify total count is 118 (114 public + 4 placeholder)
-    assert.equal(names.length, 129,
+    assert.equal(names.length, 130,
       `Expected 129 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
