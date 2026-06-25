@@ -8,6 +8,7 @@ export function getTaskCard(data) {
     formatKeyValue('id', task.id),
     formatKeyValue('title', (task.title || '').slice(0, 80)),
     formatKeyValue('status', task.status),
+    formatKeyValue('lifecycle_stage', task.status === 'waiting_for_review' ? 'review' : task.status === 'waiting_for_repair' ? 'repair' : task.status === 'waiting_for_integration' ? 'integration' : task.status === 'waiting_for_lock' ? 'queued' : task.status),
     formatKeyValue('mode', task.mode || '-'),
     formatKeyValue('assignee', task.assignee || '-'),
   ];
@@ -57,9 +58,39 @@ export function getTaskCard(data) {
   }
   if (result.tests) {
     lines.push(formatKeyValue('tests', result.tests));
+  } else if (result.tests === null || result.tests === undefined) {
+    lines.push(formatKeyValue('tests', 'tests_missing'));
+  }
+  // Verification status
+  if (result.verification !== undefined) {
+    lines.push(formatKeyValue('verification', result.verification === null ? 'missing' : result.verification.passed === true ? 'passed' : result.verification.passed === false ? 'failed' : 'present'));
   }
   if (result.commit) {
     lines.push(formatKeyValue('commit', result.commit.slice(0, 12)));
+  }
+  // Repair info
+  const repairInfo = result.repair || {};
+  if (repairInfo.repair_of_task_id || task.repair_of_task_id) {
+    lines.push(formatKeyValue('repair_of', repairInfo.repair_of_task_id || task.repair_of_task_id));
+  }
+  if (repairInfo.repair_attempt != null || task.repair_attempt != null) {
+    const ra = repairInfo.repair_attempt ?? task.repair_attempt;
+    const ma = repairInfo.max_attempts ?? task.max_attempts;
+    lines.push(formatKeyValue('repair_attempt', `${ra}/${ma ?? '?'}`));
+  }
+  // Integration info
+  const integrationInfo = result.integration || {};
+  if (integrationInfo.branch) lines.push(formatKeyValue('branch', integrationInfo.branch));
+  if (integrationInfo.push_status) lines.push(formatKeyValue('push', integrationInfo.push_status));
+  if (integrationInfo.pr_status) lines.push(formatKeyValue('pr', integrationInfo.pr_status));
+  if (integrationInfo.merge_status) lines.push(formatKeyValue('merge', integrationInfo.merge_status));
+  // Retained worktree/branch
+  const repairMeta = result.repair || {};
+  if (repairMeta.retained_worktree || result.retained_worktree || task.worktree_path) {
+    lines.push(formatKeyValue('worktree', repairMeta.retained_worktree || result.retained_worktree || task.worktree_path));
+  }
+  if (repairMeta.retained_branch || result.retained_branch) {
+    lines.push(formatKeyValue('branch_retained', repairMeta.retained_branch || result.retained_branch));
   }
 
   // Warnings

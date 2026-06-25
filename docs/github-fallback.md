@@ -324,6 +324,32 @@ dispatch workflow.
 
 ---
 
+## 6.5. 429 / No-Result Handling
+
+When a Codex task returns `no-result` or a 429 (rate limit / quota exceeded),
+do NOT create a runner downgrade or code fix task. This is an operational condition.
+
+**What to do:**
+1. Wait for quota / rate limit to be restored (typically 1–60 minutes depending on tier).
+2. Retry the task via `retry_task` or `create_encoded_goal` (same goal_id).
+3. Confirm retry succeeded by checking:
+   - `result.tests` is non-null (not `tests_missing`)
+   - `result.verification` is present and `verification.passed === true`
+   - `reviewer_decision.passed === true`
+
+**What NOT to do:**
+- Do not create a "fix quota" or "rate limit mitigation" Codex task — that is a runner/hosting concern.
+- Do not mark the task as failed and move on without retrying.
+- Do not apply manual repairs to the diagnostics runtime.
+
+**How to identify 429/no-result in diagnostics:**
+- `runtime_status` → `last_error` contains `429` or `rate_limit`
+- `result.verification === null`
+- `result.summary` contains `no-result` or `quota`
+- Card displays `retry after quota restored` instead of generic `codex_failed`
+
+---
+
 ## 7. Troubleshooting
 
 | Symptom | Likely Cause | Action | Auto-Fix? |

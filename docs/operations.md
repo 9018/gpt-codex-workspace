@@ -257,6 +257,23 @@ Key commits:
 
 ---
 
+---
+
+## Troubleshooting
+
+| Symptom | Likely Cause | Action |
+|---------|-------------|--------|
+| `runtime_status` → `no-result` / `429` | Quota/rate limit exceeded | Wait for quota restored, then retry via `retry_task`. Do not create code fix tasks for quota issues. |
+| `imported_tasks=0` | No matching labels/titles in GitHub Issues | Ensure issue has `gptwork-task` label or task-intake marker. Run `sync_from_github` first. |
+| `question_label_without_task_intake` | Issue has `gptwork-question` label but no intake marker | Add `gptwork-task-intake` label or body marker. |
+| `waiting_for_review` due to `tests_missing` | Task completed but result.tests is null | Operator can retry the task. If tests infrastructure is missing, escalate to P0. |
+| `waiting_for_review` due to `runtime_restart_required` | Runtime commit does not match repo HEAD | Restart service via `schedule_service_restart`. Then the task should auto-complete. |
+| Tool exists in code but not in ChatGPT tool list | Tool mode restriction or cache | Check `GPTWORK_TOOL_MODE` (should be `standard`). Restart the server if recently added. |
+| `running_commit != repo_head` | Service not restarted after deployment | Restart the service. If restart required, `runtime_status` will show a diagnostic. |
+| Dirty worktree | Uncommitted changes in workspace | This blocks new tasks. Commit or stash changes, or set `GPTWORK_ALLOW_DIRTY_WORKTREE=true`. |
+| Active repo lock | Another task running on the same repo | Wait for lock release or stale timeout (15 min heartbeat). Check `list_repo_locks`. |
+| `failed` task with no diagnostics | Unexpected crash or timeout | Check runtime logs, retry the task. If consistently failing, escalate. |
+
 ## Links
 
 - [GitHub Fallback](github-fallback.md)

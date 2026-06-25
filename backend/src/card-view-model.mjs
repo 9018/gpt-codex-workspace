@@ -338,12 +338,16 @@ function buildTaskCard(tool, data, meta) {
   card.identity.task_id = task.id;
   card.identity.goal_id = task.goal_id;
   card.progress = taskProgress(task.status);
+  const repair_norm = normalizeRepair(task, result);
+  const integration_norm = normalizeIntegration(task, result);
   addKeyValues(card.key_values, [
     { key: "task_id", value: task.id },
     { key: "goal_id", value: task.goal_id },
     { key: "status", value: task.status },
+    { key: "lifecycle_stage", value: task.status },
     { key: "mode", value: task.mode },
     { key: "assignee", value: task.assignee },
+    { key: "tests_missing", value: result.tests === null || result.tests === undefined ? true : undefined },
     { key: "changed_files", value: Array.isArray(result.changed_files) ? result.changed_files.length : undefined },
     { key: "tests", value: result.tests },
     { key: "commit", value: result.commit ? short(result.commit) : undefined },
@@ -358,7 +362,29 @@ function buildTaskCard(tool, data, meta) {
   if (Array.isArray(result.changed_files) && result.changed_files.length > 0) {
     card.sections.push({ title: "Changed files", type: "list", items: result.changed_files.slice(0, 20) });
   }
-  if (result.tests) card.sections.push({ title: "Verification", type: "text", text: result.tests });
+  // Show tests_missing explicitly when tests is null/undefined
+  if (result.tests) {
+    card.sections.push({ title: "Verification", type: "text", text: result.tests });
+  } else if (result.tests === null || result.tests === undefined) {
+    card.sections.push({ title: "Verification", type: "text", text: "tests_missing" });
+  }
+  // Show verification status (present/missing/passed/failed)
+  if (result.verification !== undefined) {
+    card.key_values.push({
+      key: "verification",
+      value: result.verification === null ? "missing" : result.verification.passed === true ? "passed" : result.verification.passed === false ? "failed" : "present",
+    });
+  }
+  // Retained worktree/branch from repair
+  if (repair_norm.retained_worktree) card.key_values.push({ key: "retained_worktree", value: repair_norm.retained_worktree });
+  if (repair_norm.retained_branch) card.key_values.push({ key: "retained_branch", value: repair_norm.retained_branch });
+  // Integration summary in key_values
+  if (integration_norm.mode && integration_norm.mode !== "-") card.key_values.push({ key: "integration.mode", value: integration_norm.mode });
+  if (integration_norm.branch) card.key_values.push({ key: "integration.branch", value: integration_norm.branch });
+  if (integration_norm.commit) card.key_values.push({ key: "integration.commit", value: short(integration_norm.commit) });
+  if (integration_norm.push_status) card.key_values.push({ key: "integration.push", value: integration_norm.push_status });
+  if (integration_norm.pr_status) card.key_values.push({ key: "integration.pr", value: integration_norm.pr_status });
+  if (integration_norm.merge_status) card.key_values.push({ key: "integration.merge", value: integration_norm.merge_status });
   addAcceptanceSection(card, result);
   addRepairSection(card, task, result);
   addIntegrationSection(card, task, result);
