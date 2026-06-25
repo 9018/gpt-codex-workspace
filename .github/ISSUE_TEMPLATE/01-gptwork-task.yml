@@ -1,0 +1,51 @@
+name: GPTWork Task
+description: Create a plain-text task for Codex execution. Use when ChatGPT create_task is blocked.
+title: "[GPTWork Task]: "
+labels: ["gptwork-task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## GPTWork Task Issue
+
+        This template creates a task that will be imported by `sync_from_github`
+        or `import_task_handoffs`. The `gptwork-task` label is auto-applied.
+
+        > **For payloads or bundles**, use the "GPTWork Dispatch" template instead.
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Description
+      description: Clear, actionable description of what Codex should do.
+      placeholder: |
+        Implement a CSV export endpoint for /api/export.
+
+        Acceptance criteria:
+        - Endpoint returns CSV for a given date range
+        - Handles empty datasets gracefully
+        - Includes error handling for invalid input
+      value: |
+        ## Description
+
+        (Write the task description here.)
+
+        ## Acceptance Criteria
+
+        - (List criteria)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional Context
+      description: Links, files, or notes to help Codex understand the task.
+      placeholder: Reference any relevant documentation or issues.
+      render: markdown
+  - type: checkboxes
+    id: intake
+    attributes:
+      label: Task Intake (optional)
+      description: If this issue was originally a question, optionally mark it for task intake.
+      options:
+        - label: Upgrade this question to a task (applies gptwork-task-intake marker)
+          required: false
