@@ -4,6 +4,7 @@ const EMPTY_QUEUE_COUNTS = {
   running: 0,
   waiting_for_lock: 0,
   waiting_for_review: 0,
+  waiting_for_integration: 0,
   completed: 0,
   failed: 0,
 };

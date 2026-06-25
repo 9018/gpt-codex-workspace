@@ -9,6 +9,10 @@ import { isCodexSessionInventoryTask } from "./task-status.mjs";
 import { completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
 import { startQueuedGoals } from "./goal-queue.mjs";
+import { runIntegrationQueue } from "./integration-queue.mjs";
+import { createRepairGoalFromFindings, shouldAttemptRepair } from "./repair-loop.mjs";
+import { createGoal } from "./goal-task-goals.mjs";
+import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
@@ -69,6 +73,112 @@ function normalizeWorkerResult(task, result, extra = {}) {
   };
 }
 
+// ---------------------------------------------------------------------------
+// Integration retry handler — P0 fix for waiting_for_integration stuck tasks
+// ---------------------------------------------------------------------------
+// Called by runSingleCodexTask when a task is in "waiting_for_integration"
+// status.  Retries the integration queue and either completes, creates a
+// repair task, or escalates to review.  Non-terminal lock states preserve
+// the waiting_for_integration status for a future retry.
+async function retryIntegrationForTask(store, config, task) {
+  const repoResolution = task.result?.repo_resolution || task.result?.worktree_lifecycle || null;
+  if (!repoResolution) {
+    return markTaskWaitingForReview(store, task, "integration retry: no repo resolution in task result");
+  }
+
+  const gitPath = repoResolution.task_worktree_path || repoResolution.canonical_repo_path;
+  if (!gitPath) {
+    return markTaskWaitingForReview(store, task, "integration retry: no git path available");
+  }
+
+  const branchName = (repoResolution.worktree_lifecycle?.branch_name)
+    || (task.result?.worktree_lifecycle?.branch_name)
+    || null;
+
+  try {
+    const integrationResult = await runIntegrationQueue({
+      repoId: repoResolution.repo_id || task.repo_id || "default",
+      targetBranch: config.defaultBranch || "main",
+      worktreePath: gitPath,
+      canonicalRepoPath: repoResolution.canonical_repo_path || gitPath,
+      taskBranch: branchName || sanitizeTaskBranchName(task.id),
+      integrationMode: config.integrationMode || "push_branch",
+      checkCommands: config.integrationCheckCommands,
+      locksBasePath: config.defaultWorkspaceRoot,
+      taskId: task.id,
+    });
+
+    if (integrationResult.ok) {
+      // Integration succeeded!
+      await transitionTaskForWorker(
+        store, task, "completed",
+        "[worker] integration retry succeeded",
+        { result: { integration: { ...integrationResult }, integration_retried: true } }
+      );
+      return { task_id: task.id, status: "completed", progressed: true, transitioned: true };
+    }
+
+    if (integrationResult.status === "locked") {
+      // Still locked — preserve waiting_for_integration for another retry
+      await transitionTaskForWorker(
+        store, task, "waiting_for_integration",
+        `[worker] integration retry still locked: ${integrationResult.error || "lock held"}`
+      );
+      return { task_id: task.id, status: "waiting_for_integration", progressed: false, reason: "lock held" };
+    }
+
+    // Repairable integration failure (conflict, check_failed, push_failed, pr_failed)
+    const intCanRepair = shouldAttemptRepair({ task, tasks: [], maxAttempts: config.maxRepairAttempts || 2 });
+
+    if (intCanRepair.should_repair) {
+      const intRepairGoal = createRepairGoalFromFindings({
+        task: { ...task, worktree_path: gitPath, repo_id: repoResolution.repo_id || task.repo_id },
+        goal: { id: task.goal_id, mode: task.mode },
+        findings: [{
+          severity: "blocker",
+          code: "integration_" + integrationResult.status,
+          message: integrationResult.error || "Integration " + integrationResult.status,
+          source: "integration_retry",
+        }],
+        repairProposals: [{
+          title: "Resolve integration failure",
+          proposed_action: "Fix integration " + integrationResult.status + " and rerun integration.",
+        }],
+      });
+
+      const newGoalResult = await createGoal(store, config, {
+        user_request: intRepairGoal.user_request,
+        goal_prompt: intRepairGoal.goal_prompt,
+        title: "Repair: " + (task.title || task.id) + " (integration attempt " + (intRepairGoal.repair_attempt || 1) + ")",
+        project_id: task.project_id || "default",
+        workspace_id: task.workspace_id || "hosted-default",
+        mode: intRepairGoal.mode || "builder",
+        assign_to_codex: true,
+        skip_created_notification: false,
+        ...intRepairGoal,
+      });
+
+      await transitionTaskForWorker(
+        store, task, "waiting_for_repair",
+        "[worker] integration retry failed, created repair task: " + integrationResult.status,
+        { result: { integration: { ...integrationResult }, integration_retried: true, repair_goal_id: newGoalResult.goal?.id || null, repair_task_id: newGoalResult.task?.id || null } }
+      );
+      return { task_id: task.id, status: "waiting_for_repair", progressed: true, transitioned: true };
+    }
+
+    // Out of repair budget — escalate to review
+    await transitionTaskForWorker(
+      store, task, "waiting_for_review",
+      "[worker] integration retry failed, no repair budget: " + (integrationResult.error || integrationResult.status),
+      { result: { integration: { ...integrationResult }, integration_retried: true, repair_denied_reason: intCanRepair.reason } }
+    );
+    return { task_id: task.id, status: "waiting_for_review", progressed: true, transitioned: true };
+
+  } catch (error) {
+    return markTaskFailed(store, task, error, "integration retry failed");
+  }
+}
+
 async function runSingleCodexTask(store, config, github, task, context, processGeneralTask) {
   let transitioned = false;
   try {
@@ -82,6 +192,12 @@ async function runSingleCodexTask(store, config, github, task, context, processG
       });
       task.status = "assigned";
       transitioned = true;
+    }
+
+    // P0: Retry waiting_for_integration tasks that got stuck (lock held, etc.)
+    if (task.status === "waiting_for_integration") {
+      const result = await retryIntegrationForTask(store, config, task);
+      return normalizeWorkerResult(task, result, { transitioned: result.transitioned || false });
     }
 
     if (isCodexSessionInventoryTask(task)) {
@@ -119,8 +235,9 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   // Use indexed query from StateStore instead of full scan on state.tasks.
   // The query is fair across status buckets so large assigned backlogs do not
   // starve queued or waiting_for_lock tasks.
+  // Added waiting_for_integration — P0 fix: prevent stuck integration tasks.
   let candidates = store.getCodexActiveQueueCandidates(
-    ["assigned", "queued", "waiting_for_lock"],
+    ["assigned", "queued", "waiting_for_lock", "waiting_for_integration"],
     maxTasks
   ).filter((task) =>
     canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
@@ -142,7 +259,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     };
     if (queueAutostart.started) {
       candidates = store.getCodexActiveQueueCandidates(
-        ["assigned", "queued", "waiting_for_lock"],
+        ["assigned", "queued", "waiting_for_lock", "waiting_for_integration"],
         maxTasks
       ).filter((task) =>
         canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)

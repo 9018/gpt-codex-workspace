@@ -11,7 +11,7 @@ import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
 import { failureClassRequiresRepair } from "./task-retry.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
-import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
+import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
@@ -362,6 +362,26 @@ export async function finalizeCodexTaskRun({
       autoStartResult = await autoStartNextOnTaskCompletedFn(store, config, result.task);
     } catch (err) {
       autoStartResult = { auto_started: false, error: err?.message || String(err), details: [] };
+    }
+  }
+
+  // P0: Repair parent-child loop — when a repair task completes, trigger
+  // parent task re-verification / integration.
+  if (taskStatus === "completed" && (task.parent_task_id || task.repair_of_task_id)) {
+    try {
+      const repairResult = await handleRepairCompletion({
+        store,
+        config,
+        completedTask: result.task,
+        passed: true,
+      });
+      if (repairResult.parent_updated) {
+        const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) require("node:fs").appendFileSync(_lp, `[gptwork-worker] repair completion: parent ${repairResult.parent_task_id} updated to ${repairResult.parent_status}
+`);
+      }
+    } catch (repairErr) {
+      const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) require("node:fs").appendFileSync(_lp, `[gptwork-worker] repair completion handler error: ${repairErr.message}
+`);
     }
   }
 

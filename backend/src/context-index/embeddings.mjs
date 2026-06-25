@@ -56,6 +56,8 @@ function hashEmbed(text, dimension = FALLBACK_DIMENSION) {
  * @type {{ name: string, dimension: number, embed: (texts: string[]) => Promise<number[][]> }}
  */
 export const fallbackEmbeddingProvider = {
+  semantic: false,
+  support_info: "hash-based deterministic fallback — NOT semantically meaningful; use only for testing or offline dev.",
   name: "fallback-hash-sha256",
   dimension: FALLBACK_DIMENSION,
   async embed(texts) {
