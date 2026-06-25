@@ -174,6 +174,21 @@ function buildRuntimeStatusCard(tool, data, meta) {
     card.diagnostics.push({ severity: "warning", message: `Worker health: ${worker.health.phase}${worker.health.reason ? ` - ${worker.health.reason}` : ""}`, code: "worker_health" });
   }
   if (data.last_error || worker.last_error) card.diagnostics.push({ severity: "error", message: truncate(data.last_error || worker.last_error), code: "last_error" });
+
+  // Safe-to-advance analysis — list blockages
+  const blockages = [];
+  if (worker.running) blockages.push("worker_running");
+  if (dirty) blockages.push("dirty_worktree");
+  if (queue.waiting_for_review > 0) blockages.push("waiting_for_review");
+  if (data.running_commit && data.repo_head && data.running_commit !== data.repo_head) blockages.push("runtime_restart_required");
+  if (blockages.length > 0) {
+    card.sections.push({
+      title: "Blockages",
+      type: "list",
+      items: blockages,
+    });
+  }
+
   return finalize(card);
 }
 
@@ -204,6 +219,27 @@ function buildListTasksCard(tool, data, meta) {
       mode: task.mode || "-",
     })),
   });
+
+  // Waiting for review breakdown
+  const wfrTasks = tasks.filter((t) => t.status === "waiting_for_review");
+  if (wfrTasks.length > 0) {
+    card.sections.push({
+      title: "Waiting for review",
+      type: "table",
+      rows: wfrTasks.slice(0, 10).map((task) => ({
+        id: task.id,
+        title: truncate(task.title || "", 50),
+        status: task.status,
+        reason: task.waiting_for_review_reason || task.result?.waiting_for_review_reason || "manual_review",
+      })),
+    });
+    card.key_values.push({ key: "waiting_for_review", value: wfrTasks.length });
+    const actionableReasons = wfrTasks.filter((t) => t.waiting_for_review_reason === "manual_review" || !t.waiting_for_review_reason);
+    if (actionableReasons.length > 0) {
+      card.diagnostics.push({ severity: "info", message: `${actionableReasons.length} review task(s) actionable — check reason column`, code: "wfr_actionable" });
+    }
+  }
+
   return finalize(card);
 }
 
@@ -341,13 +377,39 @@ function buildTaskCard(tool, data, meta) {
   addKeyValues(card.key_values, [
     { key: "task_id", value: task.id },
     { key: "goal_id", value: task.goal_id },
-    { key: "status", value: task.status },
+    { key: "lifecycle_stage", value: task.status },
     { key: "mode", value: task.mode },
     { key: "assignee", value: task.assignee },
     { key: "changed_files", value: Array.isArray(result.changed_files) ? result.changed_files.length : undefined },
-    { key: "tests", value: result.tests },
+    { key: "tests", value: result.tests || (result.tests === null || result.tests === undefined ? "tests_missing" : undefined) },
     { key: "commit", value: result.commit ? short(result.commit) : undefined },
   ]);
+
+  // Verification status explicit display
+  const verification = result.verification;
+  if (verification) {
+    const verStatus = verification.passed === true ? "passed" : (verification.passed === false ? "failed" : "present");
+    card.key_values.push({ key: "verification", value: verStatus });
+    if (verification.passed === false) {
+      card.diagnostics.push({ severity: "error", message: "Verification failed — review details in result", code: "verification_failed" });
+    }
+  } else if (result.tests === null || result.tests === undefined) {
+    card.key_values.push({ key: "verification", value: "missing" });
+    card.diagnostics.push({ severity: "warning", message: "Tests missing — task result has no verification evidence", code: "tests_missing" });
+  }
+
+  // Acceptance summary
+  const acceptance = result.acceptance || result.acceptance_result || {};
+  if (acceptance.overall_status) {
+    card.key_values.push({ key: "acceptance", value: acceptance.overall_status });
+  }
+  if (typeof acceptance.blocking_count === "number") {
+    card.key_values.push({ key: "blocking_count", value: acceptance.blocking_count });
+  }
+  if (typeof acceptance.residual_count === "number") {
+    card.key_values.push({ key: "residual_count", value: acceptance.residual_count });
+  }
+
   if (Array.isArray(task.logs) && task.logs.length > 0) {
     card.sections.push({
       title: "Timeline",
@@ -358,7 +420,11 @@ function buildTaskCard(tool, data, meta) {
   if (Array.isArray(result.changed_files) && result.changed_files.length > 0) {
     card.sections.push({ title: "Changed files", type: "list", items: result.changed_files.slice(0, 20) });
   }
-  if (result.tests) card.sections.push({ title: "Verification", type: "text", text: result.tests });
+  if (result.tests) {
+    card.sections.push({ title: "Verification", type: "text", text: result.tests });
+  } else if (result.tests === null || result.tests === undefined) {
+    card.sections.push({ title: "Verification", type: "text", text: "tests_missing — no verification evidence in result" });
+  }
   addAcceptanceSection(card, result);
   addRepairSection(card, task, result);
   addIntegrationSection(card, task, result);

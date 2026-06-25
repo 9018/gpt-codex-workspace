@@ -7,7 +7,7 @@ export function getTaskCard(data) {
   const lines = [
     formatKeyValue('id', task.id),
     formatKeyValue('title', (task.title || '').slice(0, 80)),
-    formatKeyValue('status', task.status),
+    formatKeyValue('lifecycle stage', task.status),
     formatKeyValue('mode', task.mode || '-'),
     formatKeyValue('assignee', task.assignee || '-'),
   ];
@@ -57,9 +57,57 @@ export function getTaskCard(data) {
   }
   if (result.tests) {
     lines.push(formatKeyValue('tests', result.tests));
+  } else if (result.tests === null || result.tests === undefined) {
+    lines.push(formatKeyValue('tests', 'tests_missing'));
   }
   if (result.commit) {
     lines.push(formatKeyValue('commit', result.commit.slice(0, 12)));
+  }
+
+  // Verification status
+  const verification = result.verification;
+  if (verification) {
+    const verStatus = verification.passed === true ? 'passed' : (verification.passed === false ? 'failed' : 'present');
+    lines.push(formatKeyValue('verification', verStatus));
+  } else if (result.tests === null || result.tests === undefined) {
+    lines.push(formatKeyValue('verification', 'missing'));
+  }
+
+  // Acceptance summary
+  const acceptance = result.acceptance || result.acceptance_result || {};
+  if (acceptance.overall_status) {
+    lines.push(formatKeyValue('acceptance', acceptance.overall_status));
+  }
+  if (typeof acceptance.blocking_count === 'number') {
+    lines.push(formatKeyValue('blocking count', acceptance.blocking_count));
+  }
+  if (typeof acceptance.residual_count === 'number') {
+    lines.push(formatKeyValue('residual count', acceptance.residual_count));
+  }
+
+  // Repair info
+  const repair = result.repair || {};
+  if (repair.root_task_id || repair.parent_task_id || repair.repair_attempt != null) {
+    lines.push('');
+    lines.push('  Repair:');
+    if (repair.root_task_id) lines.push(formatKeyValue('root task', repair.root_task_id));
+    if (repair.parent_task_id) lines.push(formatKeyValue('parent task', repair.parent_task_id));
+    if (repair.repair_attempt != null) lines.push(formatKeyValue('attempt', repair.repair_attempt + (repair.max_attempts != null ? '/' + repair.max_attempts : '')));
+    if (repair.retained_worktree) lines.push(formatKeyValue('retained worktree', repair.retained_worktree));
+    if (repair.retained_branch) lines.push(formatKeyValue('retained branch', repair.retained_branch));
+  }
+
+  // Integration info
+  const integration = result.integration || {};
+  if (integration.mode || integration.branch || integration.push_status || integration.pr_status || integration.merge_status) {
+    lines.push('');
+    lines.push('  Integration:');
+    if (integration.mode) lines.push(formatKeyValue('mode', integration.mode));
+    if (integration.branch) lines.push(formatKeyValue('branch', integration.branch));
+    if (integration.commit) lines.push(formatKeyValue('commit', integration.commit.slice(0, 12)));
+    if (integration.push_status) lines.push(formatKeyValue('push', integration.push_status));
+    if (integration.pr_status) lines.push(formatKeyValue('PR', integration.pr_status));
+    if (integration.merge_status) lines.push(formatKeyValue('merge', integration.merge_status));
   }
 
   // Warnings
@@ -71,6 +119,15 @@ export function getTaskCard(data) {
   }
   if (task.status === 'waiting_for_review') {
     warnings.push('Task needs review before completing');
+    if (task.waiting_for_review_reason) {
+      warnings.push('Reason: ' + task.waiting_for_review_reason);
+    } else if (result.waiting_for_review_reason) {
+      warnings.push('Reason: ' + result.waiting_for_review_reason);
+    }
+  }
+  // Retained worktree/branch from task level
+  if (task.retained_worktree || result.retained_worktree || repair.retained_worktree) {
+    warnings.push('Retained worktree present - cleanup may be needed');
   }
 
   return formatToolCard('Task', { lines, warnings });

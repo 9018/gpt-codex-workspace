@@ -246,6 +246,66 @@ For an existing `gptwork-question` issue that should become a task:
 
 ---
 
+
+### Flow E: No-result / 429 (quota/rate limit recovery)
+
+When a task completes with `result.tests=null` or `result.summary` indicating
+a quota/rate-limit error (e.g., ChatGPT 429, "no-result" diagnostics):
+
+1. **Do not** create a runner downgrade or code-fix task. The issue is temporary
+   quota exhaustion, not a system defect.
+2. Check current quota status:
+   - `runtime_status` → `worker.health` for worker stall warnings.
+   - `gptwork_doctor` → diagnostics for any quota-related flags.
+3. Wait for quota to restore (typically 1-60 minutes depending on rate limit).
+4. After quota is restored, retry the task:
+   - If the task is in `waiting_for_repair`: call `request_repair(task_id: "...", origin: "after_quota_restore")`.
+   - If the task is `failed`: re-create with `create_task` using the same description.
+   - If using GitHub fallback: re-sync with `import_task_handoffs(source: "github", apply: true)`.
+5. **Confirm retry succeeded** — check:
+   - `get_task(id: "...") → result.tests` is non-null and shows a test count.
+   - `result.verification.passed === true`.
+   - `result.acceptance_decision === "passed"` or `result.reviewer_decision.passed === true`.
+
+> **Red flag**: If retry also produces `tests=null` / no-result, the issue may
+> not be quota-related. File a bug report with the full diagnostics output.
+
+### Flow F: Repair / retry loop
+
+For tasks that failed verification or acceptance:
+
+1. Check `get_task(id: "...")` for repair info:
+   - `repair.root_task_id` — original root task (if this is a repair).
+   - `repair.repair_attempt` — current attempt number.
+   - `repair.max_attempts` — maximum allowed attempts.
+   - `repair.retained_worktree` / `repair.retained_branch` — worktree to reuse.
+2. If `repair.can_continue === true`: call `request_repair(task_id: "...", max_attempts: 3)`.
+3. After repair completes, verify:
+   - `result.tests` shows passing tests.
+   - `result.verification.passed === true`.
+   - `result.acceptance.overall_status === "passed"` or equivalent.
+   - `reviewer_decision.passed === true` and `reviewer_decision.blocking_count === 0`.
+4. If repair exhausted (`repair.can_continue === false`): task enters
+   `waiting_for_review` for manual operator assessment.
+
+### Completion criteria — when is a task really done?
+
+A task is **fully complete** when ALL of the following are true:
+
+| Criterion | Check |
+|-----------|-------|
+| Status | `task.status === "completed"` |
+| Tests present | `result.tests` is non-null and shows pass/fail counts |
+| Verification passed | `result.verification.passed === true` |
+| No blockers | `result.acceptance_decision === "passed"` or `acceptance_findings` has 0 blockers |
+| Reviewer decision | `reviewer_decision.passed === true` and `blocking_count === 0` |
+| Commit exists | `result.commit` is a valid commit SHA |
+| Clean worktree | Git worktree is clean (no uncommitted changes in result) |
+
+If any criterion is missing, the task is **not ready** for closure and should
+remain in `waiting_for_review` for operator evaluation.
+
+
 ## 5. Diagnostics and Sync Output
 
 The `sync_from_github` and `import_task_handoffs` tools return diagnostic
@@ -342,6 +402,16 @@ dispatch workflow.
 | Tool exists in code but not visible in ChatGPT tool list | Tool mode restriction or server needs restart | Check `GPTWORK_TOOL_MODE` (should be `standard` or higher). Call `tools/list` to verify. Restart if tool was recently added | Yes after restart |
 | `sync_from_github` returns error | GitHub API call failed (token expired, rate limit, network) | Check `last_sync_error` field. Verify GitHub token is valid and has repo scope | No — manual check |
 | `worker_status` shows no progress | Worker needs a tick or queue is empty | Check `worker.enabled` and `worker.running`. If idle, create and assign a task | No — assign task |
+
+| Symptom | Likely Cause | Action | Auto-Fix? |
+|---------|-------------|--------|-----------|
+| `runtime_commit_mismatch` | Running commit differs from repo HEAD | Restart GPTWork service: `cd backend && ./bin/restart-mcp.mjs` | Yes after restart |
+| `dirty_worktree` | Uncommitted changes in the worktree | Commit or stash changes, then restart or continue | Manual git work |
+| `active_lock` | A task holds a repo execution lock | Check `repo_locks.statuses` in `runtime_status`. Wait for lock to release, or force-clear if stale | No — wait or force |
+| `waiting_for_review: tests_missing` | Task completed but has no test evidence | Retry task (see Flow E) or request repair | No — retry |
+| `waiting_for_review: runtime_restart_required` | Running commit != repo HEAD, changes not active | Restart GPTWork service to pick up latest commit | Yes after restart |
+| `waiting_for_review: manual_review` | Repair exhausted or operator decision needed | Check `get_task` for full result, manually assess | No — requires human |
+| Tool exists in code but not visible | Tool mode restriction or server needs restart | Check `GPTWORK_TOOL_MODE`. Call `tools/list`. Restart if needed | Yes after restart |
 
 ---
 

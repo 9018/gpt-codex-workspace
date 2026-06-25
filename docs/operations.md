@@ -257,6 +257,43 @@ Key commits:
 
 ---
 
+
+## Workflow Status Assessment
+
+Use the runtime card and queue views to quickly assess pipeline health.
+
+### Safe-to-advance check
+
+Before assuming the pipeline can continue, check for blockages:
+
+| Blockage | How to detect | Action |
+|----------|-------------|--------|
+| worker_running | `runtime_status` → worker.running=true | Worker is busy; wait for it to free |
+| dirty_worktree | `runtime_status` → worktree=dirty | Commit or stash changes |
+| waiting_for_review | `list_tasks` → waiting_for_review>0 | Review or retry (see `get_task` for reason) |
+| runtime_restart_required | running_commit != repo_head in `runtime_status` | Restart service: `backend/bin/restart-mcp.mjs` |
+| active_lock | `runtime_status` → repo_locks.active>0 | Wait or force-clear stale lock |
+| worker disabled | `worker_status` → enabled=false | Enable worker or start service |
+
+### Using the card view model
+
+The unified card view model (`buildCardViewModel`) produces structured content
+for all major tools. When viewing task details with `get_task`:
+
+- **lifecycle_stage**: shows the current stage in the lifecycle flow.
+- **verification**: passed/failed/missing — whether test evidence exists.
+- **acceptance**: passed/failed — overall acceptance status.
+- **blocking_count / residual_count**: acceptance findings breakdown.
+- **retained_worktree / retained_branch**: worktree and branch to reuse for repair.
+- **Repair section**: shows root_task_id, repair_attempt/max_attempts.
+- **Integration section**: shows mode, branch, push/PR/merge status.
+- **Blockages section** (runtime card): lists all blocking conditions.
+
+See [github-fallback.md](github-fallback.md) for detailed troubleshooting.
+
+---
+
+
 ## Links
 
 - [GitHub Fallback](github-fallback.md)
