@@ -148,6 +148,20 @@ export async function enqueueGoal(store, goalId, opts = {}) {
   if (already) {
     return { ok: false, item: already, warnings: [`Goal ${goalId} is already queued (id=${already.queue_id}, status=${already.status})`] };
   }
+  // P0 fix: Check if goal already has an active task — if so, refuse to enqueue
+  // to prevent duplicate task creation when create_goal(assign_to_codex=true)
+  // already created a task for this goal.
+  const ACTIVE_TASK_STATUSES_FOR_QUEUE = new Set([
+    "assigned", "queued", "running", "waiting_for_lock",
+    "waiting_for_review", "waiting_for_repair", "waiting_for_integration",
+  ]);
+  const existingActiveTask = Array.isArray(state.tasks)
+    ? state.tasks.find((t) => t.goal_id === goalId && ACTIVE_TASK_STATUSES_FOR_QUEUE.has(t.status))
+    : null;
+  if (existingActiveTask) {
+    return { ok: false, item: null, warnings: [`Goal ${goalId} already has active task ${existingActiveTask.id} (status=${existingActiveTask.status}); refusing duplicate enqueue. Use cancelGoalQueueItem or wait for the active task to complete.`] };
+  }
+
 
   const timestamp = now();
   const position = nextPosition(state);

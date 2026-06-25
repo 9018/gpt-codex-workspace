@@ -47,6 +47,8 @@ export async function buildIndexChunks(ctx) {
 
   const baseMeta = {
     workspace_id: goal.workspace_id || "hosted-default",
+    project_id: goal.project_id || "default",
+    repo_id: goal.repo_id || "",
     goal_id: goal.id,
     conversation_id: goal.conversation_id || "",
     task_id: task?.id || goal.task_id || "",
@@ -177,10 +179,41 @@ export async function retrieveContext(params) {
 
   const [queryVector] = await embedder.embed([queryText]);
 
+  // P1: Support multi-dimension filters — workspace_id, project_id, repo_id,
+  // source_type, time_decay.  Pass all filters to the store which applies
+  // them during search.
   const searchFilters = { ...filters };
   if (goalId) searchFilters.goal_id = goalId;
+  // Explicit filter keys supported by the store's search implementation
+  for (const key of ["workspace_id", "project_id", "repo_id", "source_type"]) {
+    if (filters[key] !== undefined && filters[key] !== null && filters[key] !== "") {
+      searchFilters[key] = filters[key];
+    }
+  }
+
+  // Time-decay weighting: results older than the decay threshold get a
+  // score penalty.  This is handled as a post-search re-ranking step
+  // since the vector store does not natively support time decay.
+  const timeDecayDays = filters.time_decay ? Number(filters.time_decay) : 0;
 
   const results = await store.search(queryVector, topK, searchFilters);
+
+  if (timeDecayDays > 0 && results.length > 0) {
+    const now = Date.now();
+    const decayMs = timeDecayDays * 24 * 60 * 60 * 1000;
+    for (const r of results) {
+      const createdAt = r.metadata?.created_at ? new Date(r.metadata.created_at).getTime() : 0;
+      if (createdAt > 0 && (now - createdAt) > decayMs) {
+        // Apply a decay penalty: score *= 0.5 for each decay period elapsed
+        const periodsElapsed = Math.floor((now - createdAt) / decayMs);
+        r.score = r.score * Math.pow(0.5, periodsElapsed);
+        r.time_decayed = true;
+        r.time_decay_periods = periodsElapsed;
+      }
+    }
+    // Re-sort after time decay reweighting
+    results.sort((a, b) => b.score - a.score);
+  }
 
   return results;
 }

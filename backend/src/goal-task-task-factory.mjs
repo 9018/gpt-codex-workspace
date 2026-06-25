@@ -1,6 +1,15 @@
 import { randomUUID } from "node:crypto";
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 
+// ---------------------------------------------------------------------------
+// Active task statuses — any task in one of these statuses is considered
+// "in progress" and prevents duplicate task creation for the same goal.
+// ---------------------------------------------------------------------------
+const ACTIVE_TASK_STATUSES = new Set([
+  "assigned", "queued", "running", "waiting_for_lock",
+  "waiting_for_review", "waiting_for_repair", "waiting_for_integration",
+]);
+
 export function defaultTaskExecutionFields(mode = "builder") {
   const isOrdinaryCodeTask = mode === "builder";
   return {
@@ -116,9 +125,11 @@ export function normalizeAssignedTaskMode(task, requestedMode = "") {
  *
  * This function:
  * 1. Loads the goal and its associated conversation from state.
- * 2. Calls buildGoalTask() to construct the task object.
- * 3. Pushes the task into state.tasks and links goal.task_id to task.id.
- * 4. Persists the mutation atomically via store.mutate().
+ * 2. Checks if the goal already has an active task — if so, returns it
+ *    instead of creating a duplicate (P0 fix: prevent duplicate task creation).
+ * 3. Calls buildGoalTask() to construct the task object.
+ * 4. Pushes the task into state.tasks and links goal.task_id to task.id.
+ * 5. Persists the mutation atomically via store.mutate().
  *
  * @param {object} store   - StateStore instance.
  * @param {object} config  - Server config (needed for workspaceFiles).
@@ -127,7 +138,7 @@ export function normalizeAssignedTaskMode(task, requestedMode = "") {
  * @param {string} [opts.assignee='codex']  - Task assignee.
  * @param {string} [opts.status='assigned'] - Initial task status.
  * @param {string} [opts.mode='builder']    - Task mode.
- * @returns {Promise<object>} The created task object.
+ * @returns {Promise<object>} The created (or existing) task object.
  */
 export async function createGoalTask(store, config, goalId, opts = {}) {
   // Use store.mutate for atomic read-write
@@ -136,6 +147,24 @@ export async function createGoalTask(store, config, goalId, opts = {}) {
     const goal = (state.goals || []).find((g) => g.id === goalId);
     if (!goal) {
       throw new Error(`Goal not found: ${goalId}`);
+    }
+
+    // P0 fix: Prevent duplicate task creation — if the goal already has
+    // an active task, return the existing task instead of creating a new one.
+    // This handles the case where create_goal(assign_to_codex=true) already
+    // created a task, and then enqueueGoal -> startNextQueuedGoal tries to
+    // create another one.
+    state.tasks = state.tasks || [];
+    if (goal.task_id) {
+      const existingTask = state.tasks.find((t) => t.id === goal.task_id);
+      if (existingTask && ACTIVE_TASK_STATUSES.has(existingTask.status)) {
+        // Goal already has an active task — return it instead of creating duplicate
+        return { task: existingTask, reused: true, warnings: [`Goal ${goalId} already has active task ${existingTask.id} (status=${existingTask.status}); reusing instead of creating duplicate`] };
+      }
+      if (existingTask && existingTask.status === "completed") {
+        // Task completed — allow creating a new one
+        // (this is a new execution cycle for an existing goal)
+      }
     }
 
     // Find the conversation
@@ -156,11 +185,10 @@ export async function createGoalTask(store, config, goalId, opts = {}) {
     Object.assign(task, defaultTaskExecutionFields(task.mode));
     task.updated_at = new Date().toISOString();
 
-    state.tasks = state.tasks || [];
     state.tasks.push(task);
     goal.task_id = task.id;
 
-    return { task };
+    return { task, reused: false, warnings: [] };
   });
   return result.task;
 }
