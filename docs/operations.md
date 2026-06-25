@@ -254,8 +254,12 @@ Key commits:
 
 ---
 
+
+---
+
 ## Links
 
+- [GitHub Fallback](github-fallback.md)
 - [Architecture](architecture.md)
 - [Current Status](current-status.md)
 - [Setup & Connection](setup-connect.md)

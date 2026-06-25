@@ -1,0 +1,45 @@
+name: GPTWork Question
+description: Ask a question or make a ChatGPT request. Not imported as a task by default.
+title: "[GPTWork Question]: "
+labels: ["gptwork-question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## GPTWork Question / Request
+
+        This issue is a question or request for ChatGPT. It will **not** be
+        imported as a Codex task unless a `gptwork-task-intake` marker is
+        added later.
+
+        > **To create a task**, use the "GPTWork Task" template instead.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question or Request
+      description: What would you like ChatGPT to answer or help with?
+      placeholder: |
+        How does the delivery pipeline handle worktree isolation?
+      value: |
+        ## Question
+
+        (Write your question here.)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context / Background
+      description: Any information that helps understand the question.
+      placeholder: Provide relevant background or links.
+      render: markdown
+  - type: dropdown
+    id: upgrade
+    attributes:
+      label: Convert to Task?
+      description: If you decide later that this should be a task, add the task-intake marker.
+      options:
+        - "No, keep as question"
+        - "Yes, upgrade to task (adds task-intake marker)"
+    validations:
+      required: false

@@ -1,0 +1,49 @@
+name: GPTWork Dispatch
+description: Dispatch a bundled payload (ZIP, restore files) via GitHub Actions. Not imported by sync_from_github.
+title: "[Dispatch]: "
+labels: ["gptwork-dispatch"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## GPTWork Payload Dispatch
+
+        This template dispatches a payload bundle via the GitHub Actions
+        `gptwork-dispatch.yml` workflow. **The issue body must contain at
+        least one payload reference** (ZIP base64, restore instructions, or
+        fallback queued task file).
+
+        > **For plain text tasks**, use the "GPTWork Task" template instead.
+        > **Regular gptwork-task issues are not processed by the dispatch
+        > workflow** — they use `sync_from_github` instead.
+  - type: textarea
+    id: payload_refs
+    attributes:
+      label: Payload References
+      description: Paths to payload files under `.gptwork/goal-inbox/` (relative to workspace root). At least one is required.
+      placeholder: |
+        ZIP base64: `.gptwork/goal-inbox/my-bundle.zip.b64`
+        Restore instructions: `.gptwork/goal-inbox/my-bundle-restore.md`
+        Fallback queued task file: `.gptwork/goal-inbox/my-bundle-task.md`
+      value: |
+        ZIP base64: `.gptwork/goal-inbox/___.zip.b64`
+        Restore instructions: `.gptwork/goal-inbox/___-restore.md`
+        Fallback queued task file: `.gptwork/goal-inbox/___-task.md`
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Bundle Description
+      description: What does this payload contain?
+      placeholder: Describe the task this payload represents.
+      render: markdown
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: Pre-flight Checklist
+      options:
+        - label: The payload file(s) exist on the main branch under `.gptwork/goal-inbox/`
+          required: true
+        - label: This is a bundled payload, not a plain-text task
+          required: true

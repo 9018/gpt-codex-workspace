@@ -736,3 +736,38 @@ Backend modules are split behind compatibility facades. Verification passed with
 ### Latest Commit
 
 Will be: `Add E2E product acceptance documentation`
+
+---
+
+## 2026-06-26 GitHub Fallback Documentation (P1)
+
+**Implemented**: Comprehensive GitHub fallback documentation and issue templates.
+
+### What Changed
+
+- **New `docs/github-fallback.md`**: Complete guide covering label taxonomy, issue templates, user workflows, task-intake markers, migration strategy, troubleshooting tables, diagnostics reference, and FAQ.
+- **New `.github/ISSUE_TEMPLATE/`**: Three issue templates:
+  - `01-gptwork-task.yml` — Plain-text Codex task
+  - `02-gptwork-question.yml` — ChatGPT request/question
+  - `03-gptwork-dispatch.yml` — Payload bundle dispatch
+- **Key principles documented**:
+  - `gptwork-task` for plain text tasks (sync_from_github/import_task_handoffs)
+  - `gptwork-question` for questions (no task by default)
+  - `gptwork-task-intake` / body marker to upgrade question → task
+  - `gptwork-dispatch` for payload dispatch (GitHub Actions, not sync)
+- **Migration guidance** for historical issues like #125 and #130.
+- **Troubleshooting table** covering 12+ scenarios with auto-fix indicators.
+
+### Background / Rationale
+
+The P0 task (task_952ce95c) fixed the core dispatch bot behavior — issues with only `gptwork-task` label no longer receive "GPTWork dispatch failed" comments. The P1 documentation layer now provides the user-facing guidance to make the system usable without confusion.
+
+### Status
+
+Documents are additive (no existing files modified). No core code changes required.
+
+### Verification
+
+- `git diff --check` — PASS (no whitespace errors)
+- Markdown structure — 3 issue templates with valid YAML
+- No conflicts with P0 task files
