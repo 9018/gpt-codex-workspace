@@ -99,6 +99,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "sync_from_github",
     "sync_to_github",
     "sync_github_comments",
+    "import_task_handoffs",
     "clear_repo_lock",
     "tmp_status",
     "cleanup_tmp",
@@ -148,6 +149,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "sync_from_github",
     "sync_to_github",
     "sync_github_comments",
+    "import_task_handoffs",
   
     "list_goal_queue",
     "get_goal_queue",
@@ -258,7 +260,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createWorkspaceMutationToolsGroup({ tool, schema, store, config }),
     ...createWorkspaceOperationsToolsGroup({ tool, schema, store, config }),
 
-    ...createGithubSyncToolsGroup({ tool, schema, store, github }),
+    ...createGithubSyncToolsGroup({ tool, schema, store, github, config }),
     ...createRepositoryToolsGroup({ tool, schema, registry }),
     ...createContextHealthToolsGroup({ tool, schema, config, registry, store }),
 
