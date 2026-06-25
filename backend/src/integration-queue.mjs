@@ -1,6 +1,28 @@
 /**
  * integration-queue.mjs — Serial integration queue for same repo/branch.
  *
+ * ## Integration Status Semantics (P0)
+ *
+ * The integration result `status` field uses descriptive statuses rather
+ * than a generic "completed" to avoid false completion claims:
+ *
+ * | status             | mode=local_merge | mode=push_branch | mode=open_pr | mode=none |
+ * |--------------------|:----------------:|:----------------:|:------------:|:---------:|
+ * | merged             | ✓                | —                | —            | —         |
+ * | branch_pushed      | —                | ✓                | ✓            | —         |
+ * | pr_opened          | —                | —                | ✓ (also pushed) | —     |
+ * | skipped            | —                | —                | —            | ✓         |
+ * | conflict           | (rebase failed)  | (rebase failed)  | (rebase failed) | —     |
+ * | check_failed       | (pre-check fail) | (pre-check fail) | (pre-check fail) | —    |
+ * | push_failed        | —                | ✓                | ✓            | —         |
+ * | pr_failed          | —                | —                | ✓ (pushed ok) | —        |
+ * | locked             | (lock held)      | (lock held)      | (lock held)  | —         |
+ * | failed             | (unexpected err) | (unexpected err) | (unexpected err) | —    |
+ *
+ * Callers MUST use the detailed `status` field (not just `ok` boolean) to
+ * determine the real integration outcome.  A task whose integration status
+ * is `branch_pushed` is NOT merged or deployed.
+ *
  * Ensures that tasks targeting the same repository and target branch
  * are integrated (merged/rebase/pushed) serially to avoid conflicts.
  */
@@ -26,11 +48,12 @@ const INTEGRATION_LOCKS = new Map();
  * @param {Array} [options.checkCommands] - Integration check commands
  * @returns {Promise<{ ok: boolean, status: string, merged: boolean, pushed: boolean, pr_opened: boolean, error?: string, conflict_files?: string[] }>}
  */
-export async function runIntegrationQueue({
-  repoId, targetBranch, worktreePath, canonicalRepoPath, taskBranch,
-  integrationMode, checkCommands, locksBasePath, taskId,
-} = {}) {
+export async function runIntegrationQueue(options = {}) {
+  const { repoId, targetBranch, worktreePath, canonicalRepoPath, taskBranch,
+    integrationMode, checkCommands, locksBasePath, taskId } = options;
   const lockKey = `integration:${repoId}:${targetBranch}`;
+  // Default integration mode — push_branch is the default but is NOT equivalent to merged/deployed.
+  // See status table above for the actual status returned.
   const mode = integrationMode || process.env.GPTWORK_INTEGRATION_MODE || 'push_branch';
   const integrationLockPath = `integration:${safeRepoId(repoId)}:${targetBranch}`;
 
@@ -71,7 +94,7 @@ export async function runIntegrationQueue({
     }
 
     if (mode === 'none') {
-      return { ok: true, status: 'completed', merged: false, pushed: false, pr_opened: false };
+      return { ok: true, status: 'skipped', merged: false, pushed: false, pr_opened: false };
     }
 
     const needsPush = mode === 'push_branch' || mode === 'open_pr';
@@ -100,7 +123,7 @@ export async function runIntegrationQueue({
     }
 
     if (mode === 'local_merge') {
-      return { ok: true, status: 'completed', merged: true, pushed: false, pr_opened: false };
+      return { ok: true, status: 'merged', merged: true, pushed: false, pr_opened: false };
     }
 
     // Push branch
@@ -134,7 +157,13 @@ export async function runIntegrationQueue({
       }
     }
 
-    return { ok: true, status: 'completed', merged: false, pushed, pr_opened: prOpened };
+    // Determine final status based on mode
+    // push_branch mode: status=branch_pushed (NOT merged/deployed — just a branch pushed)
+    if (mode === 'push_branch') {
+      return { ok: true, status: 'branch_pushed', merged: false, pushed, pr_opened: false };
+    }
+    // open_pr mode: status=pr_opened (branch pushed + PR created)
+    return { ok: true, status: 'pr_opened', merged: false, pushed, pr_opened };
   } catch (err) {
     return { ok: false, status: 'failed', merged: false, pushed: false, pr_opened: false, error: err.message };
   } finally {

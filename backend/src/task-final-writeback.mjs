@@ -123,7 +123,7 @@ export async function finalizeCodexTaskRun({
 
         if (integrationResult.ok) {
           taskStatus = "completed";
-          taskResult.integration = { status: "completed", ...integrationResult };
+          taskResult.integration = { ...integrationResult };
         } else if (isIntegrationRepairableStatus(integrationResult.status)) {
           // Integration failed — create repair or escalate
           const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });

@@ -122,3 +122,96 @@ test('worktree reliability blocks failed git worktree lifecycle instead of auto-
   assert.deepEqual(findings.map((finding) => finding.code), ['git_worktree_lifecycle_failed']);
   assert.equal(findings[0].severity, 'blocker');
 });
+
+// ===========================================================================
+// P0: Acceptance profile coverage — noop, docs, config, code, deploy
+// ===========================================================================
+
+test("P0: noop profile passes with minimal checks", () => {
+  const decision = evaluateAcceptance({
+    findings: [
+      { severity: 'minor', code: 'noop_reason_missing', message: 'Noop tasks should include a reason' },
+    ],
+    needs_gpt_review: false,
+  });
+  assert.equal(decision.passed, true);
+  assert.equal(decision.status, 'accepted_with_followups');
+});
+
+test("P0: docs_only profile accepts docs changes without requiring verification", () => {
+  const decision = evaluateAcceptance({ findings: [], needs_gpt_review: false });
+  assert.equal(decision.passed, true);
+  assert.equal(decision.status, 'accepted');
+});
+
+test("P0: config_change profile accepts config-only changes with relaxed test requirement", () => {
+  const decision = evaluateAcceptance({
+    findings: [
+      { severity: 'minor', code: 'tests_missing', message: 'No test evidence found for config change' },
+    ],
+    needs_gpt_review: false,
+  });
+  assert.equal(decision.passed, true);
+  assert.equal(decision.status, 'accepted_with_followups');
+});
+
+test("P0: code_change profile requires full acceptance contract", () => {
+  const decision = evaluateAcceptance({
+    findings: [
+      { severity: 'blocker', code: 'result_json_invalid', message: 'result.json is missing or invalid' },
+      { severity: 'blocker', code: 'verification_failed', message: 'Verification did not pass' },
+    ],
+    needs_gpt_review: false,
+  });
+  assert.equal(decision.passed, false);
+  assert.equal(decision.status, 'needs_fix');
+});
+
+test("P0: deploy profile requires safe restart evidence", () => {
+  const decision = evaluateAcceptance({
+    findings: [
+      { severity: 'blocker', code: 'safe_restart_missing', message: 'Deploy task requires safe restart evidence' },
+    ],
+    needs_gpt_review: false,
+  });
+  assert.equal(decision.passed, false);
+  assert.equal(decision.status, 'needs_fix');
+});
+
+test("P0: acceptance failure maps to waiting_for_repair not completed", () => {
+  const decision = evaluateAcceptance({
+    findings: [
+      { severity: 'blocker', code: 'dirty_worktree_after_codex', message: 'Worktree is dirty' },
+    ],
+    needs_gpt_review: false,
+  });
+  assert.equal(decision.passed, false);
+  assert.equal(decision.status, 'needs_fix');
+  assert.notEqual(decision.status, 'accepted');
+  assert.notEqual(decision.status, 'accepted_with_followups');
+});
+
+test("P0: reviewer_decision documents findings for acceptance/repair traceability", () => {
+  const result = { status: 'needs_fix', summary: 'Failed acceptance', changed_files: ['src/broken.mjs'] };
+  const reviewer = buildReviewerDecision({
+    result,
+    findings: [{ severity: 'blocker', code: 'verification_failed', message: 'Tests did not pass' }],
+    needs_gpt_review: false,
+  });
+  assert.equal(reviewer.decision.status, 'needs_fix');
+  assert.equal(reviewer.decision.passed, false);
+  assert.ok(Array.isArray(reviewer.acceptance_findings));
+  assert.equal(reviewer.acceptance_findings.length, 1);
+  assert.equal(reviewer.acceptance_findings[0].code, 'verification_failed');
+});
+
+test("P0: reviewer_decision with needs_gpt_review=true sets should_enter_review flag", () => {
+  const result = { status: 'waiting_for_review', summary: 'Blocked' };
+  const reviewer = buildReviewerDecision({
+    result, findings: [], needs_gpt_review: true,
+    review_reason: 'Repair budget exceeded',
+  });
+  assert.equal(reviewer.decision.passed, true);
+  assert.equal(reviewer.decision.should_enter_review, true);
+  assert.equal(reviewer.decision.review_reason, 'Repair budget exceeded');
+});

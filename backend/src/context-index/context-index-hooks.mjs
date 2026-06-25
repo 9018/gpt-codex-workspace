@@ -4,6 +4,16 @@
  * Provides `maybeBuildContextBundle` which attempts to index the goal context
  * and generate a context.bundle.md file.  Failures are caught and logged
  * without breaking the existing workflow.
+ *
+ * ## Cross-Goal Retrieval (P0)
+ *
+ * The bundle builder performs two-phase retrieval:
+ * 1. Cross-goal retrieval — searches all indexed goals in the workspace
+ *    for related context (results, messages, goals) without goal_id filter.
+ * 2. Per-goal retrieval — searches the current goal's index for precision.
+ *
+ * Results are merged with current-goal chunks prioritized. The retrieval JSON
+ * records both phases, proving cross-goal awareness.
  */
 
 import { existsSync } from "node:fs";
@@ -34,10 +44,12 @@ async function loadTranscriptIfExists(workspaceRoot, transcriptPath) {
 
 /**
  * Load prior goal result summaries from the workspace.
+ * Now also reads result.json for structured data in addition to result.md.
+ *
  * @param {object} store
  * @param {string} workspaceRoot
  * @param {object} goal
- * @returns {Promise<Array<{ summary: string }>>}
+ * @returns {Promise<Array<{ summary: string, goal_id: string, title: string, status: string }>>}
  */
 export async function loadPriorResults(store, workspaceRoot, goal) {
   try {
@@ -49,17 +61,36 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
 
     const results = [];
     for (const prior of priorGoals) {
+      const goalDir = join(workspaceRoot || process.cwd(), ".gptwork", "goals", prior.id);
+      // Try result.json first (structured)
+      const resultJsonPath = join(goalDir, "result.json");
+      if (existsSync(resultJsonPath)) {
+        try {
+          const content = JSON.parse(await readFile(resultJsonPath, "utf8"));
+          results.push({
+            summary: content.summary || `Goal ${prior.id}: ${prior.title || "untitled"}`,
+            goal_id: prior.id,
+            title: prior.title || "untitled",
+            status: content.status || prior.status || "unknown",
+          });
+          continue;
+        } catch {
+          // Invalid JSON, fall through to result.md
+        }
+      }
+      // Fallback: result.md
       try {
-        const resultPath = `.gptwork/goals/${prior.id}/result.md`;
-        const absPath = join(
-          workspaceRoot || process.cwd(),  // fallback to cwd when caller has not provided workspaceRoot
-          resultPath
-        );
-        if (existsSync(absPath)) {
-          const content = await readFile(absPath, "utf8");
-          results.push({ summary: content.substring(0, 2000) });
+        const resultPath = join(goalDir, "result.md");
+        if (existsSync(resultPath)) {
+          const content = await readFile(resultPath, "utf8");
+          results.push({
+            summary: content.substring(0, 2000),
+            goal_id: prior.id,
+            title: prior.title || "untitled",
+            status: prior.status || "unknown",
+          });
         } else {
-          results.push({ summary: `Goal ${prior.id}: ${prior.title || "untitled"}` });
+          results.push({ summary: `Goal ${prior.id}: ${prior.title || "untitled"}`, goal_id: prior.id, title: prior.title || "untitled", status: prior.status || "unknown" });
         }
       } catch {
         // Skip unreadable results
@@ -72,26 +103,42 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
 }
 
 // ---------------------------------------------------------------------------
-// Safe retrieval JSON builder
+// Safe retrieval JSON builder (cross-goal aware)
 // ---------------------------------------------------------------------------
 
 /**
  * Build a retrieval metadata JSON object from retrieval results.
  */
-function buildRetrievalJson(goalId, retrieved, storeName, stored) {
+function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeName, stored, workload) {
   return {
     goal_id: goalId,
     store_name: storeName,
     total_indexed: stored,
-    retrieved_count: retrieved.length,
+    cross_goal_retrieval: {
+      enabled: true,
+      retrieved_count: crossGoalRetrieved.length,
+      cross_goal_chunks: crossGoalRetrieved.filter((r) => r.metadata?.goal_id !== goalId).length,
+      results: crossGoalRetrieved.map((r) => ({
+        id: r.id,
+        score: r.score ?? null,
+        goal_id: r.metadata?.goal_id || null,
+        source_type: r.metadata?.source_type || "unknown",
+        tokens: r.tokens,
+        text_preview: r.text?.substring(0, 200),
+      })),
+    },
+    per_goal_retrieval: {
+      retrieved_count: perGoalRetrieved.length,
+      results: perGoalRetrieved.map((r) => ({
+        id: r.id,
+        score: r.score ?? null,
+        source_type: r.metadata?.source_type || "unknown",
+        tokens: r.tokens,
+        text_preview: r.text?.substring(0, 200),
+      })),
+    },
+    merged_chunk_count: workload.length,
     retrieved_at: new Date().toISOString(),
-    results: retrieved.map((r) => ({
-      id: r.id,
-      score: r.score ?? null,
-      source_type: r.metadata?.source_type || "unknown",
-      tokens: r.tokens,
-      text_preview: r.text?.substring(0, 200),
-    })),
   };
 }
 
@@ -135,7 +182,7 @@ export async function maybeBuildContextBundle(
   }
 
   try {
-    const workspaceRoot = config?.defaultWorkspaceRoot || process.cwd();  // fallback to cwd when no config provided
+    const workspaceRoot = config?.defaultWorkspaceRoot || process.cwd();
     const transcriptPath = workspaceFiles?.transcript_md || `.gptwork/goals/${goal.id}/transcript.md`;
 
     // Load transcript for additional context if available
@@ -146,7 +193,7 @@ export async function maybeBuildContextBundle(
       // Transcript not available
     }
 
-    // Load prior results for context
+    // Load prior results for context (P0: cross-goal awareness via prior result loading)
     let priorResults = [];
     try {
       priorResults = await loadPriorResults(store, workspaceRoot, goal);
@@ -190,11 +237,34 @@ export async function maybeBuildContextBundle(
       };
     }
 
-    // Retrieve relevant chunks
-    const retrieved = await retrieveContext({
-      goalId: goal.id,
+    // ================================================================
+    // P0: Two-phase retrieval — cross-goal + per-goal
+    // ================================================================
+
+    // Phase 1: Cross-goal retrieval (no goal_id filter)
+    // This searches ALL indexed goals in the workspace for related context.
+    // The local store's search method iterates all goal directories when
+    // goal_id filter is absent, enabling cross-goal awareness.
+    const crossGoalRetrieved = await retrieveContext({
+      goalId: null,           // no goal filter — search all goals
       queryText,
       topK: 10,
+      options: {
+        workspaceRoot,
+        storePrefer: indexResult.store,
+        contextVectorStore: config?.contextVectorStore,
+        embeddingConfig: { provider: "fallback" },
+      },
+      filters: {},            // no goal_id filter — cross-goal search
+    });
+
+    // Phase 2: Per-goal retrieval (current goal only)
+    // This ensures the current goal's context is always represented,
+    // even if cross-goal results dominate.
+    const perGoalRetrieved = await retrieveContext({
+      goalId: goal.id,
+      queryText,
+      topK: 5,
       options: {
         workspaceRoot,
         storePrefer: indexResult.store,
@@ -204,19 +274,52 @@ export async function maybeBuildContextBundle(
       filters: { goal_id: goal.id },
     });
 
-    // Build bundle from retrieved chunks
+    // Merge results: current-goal chunks first (priority), then cross-goal chunks
+    // Deduplicate by chunk ID
+    const seenIds = new Set();
+    const mergedChunks = [];
+
+    // Priority 1: Current goal chunks (per-goal retrieval)
+    for (const chunk of perGoalRetrieved) {
+      if (!seenIds.has(chunk.id)) {
+        seenIds.add(chunk.id);
+        mergedChunks.push(chunk);
+      }
+    }
+
+    // Priority 2: Cross-goal chunks that are not current goal (related context)
+    for (const chunk of crossGoalRetrieved) {
+      if (!seenIds.has(chunk.id) && chunk.metadata?.goal_id !== goal.id) {
+        seenIds.add(chunk.id);
+        mergedChunks.push(chunk);
+      }
+    }
+
+    // If we still have room, add remaining index chunks for context
+    if (mergedChunks.length < 10) {
+      for (const chunk of indexResult.chunks) {
+        if (!seenIds.has(chunk.id) && mergedChunks.length < 10) {
+          seenIds.add(chunk.id);
+          mergedChunks.push(chunk);
+        }
+      }
+    }
+
+    // Build bundle from merged chunks
     const bundleResult = buildContextBundle({
-      chunks: retrieved.length > 0 ? retrieved : indexResult.chunks.slice(0, 10),
+      chunks: mergedChunks.length > 0 ? mergedChunks : indexResult.chunks.slice(0, 10),
       goal,
       workspaceFiles,
     });
 
-    // Build retrieval JSON
+    // Build retrieval JSON with cross-goal metadata
     const retrievalJson = buildRetrievalJson(
       goal.id,
-      retrieved,
+      crossGoalRetrieved,
+      perGoalRetrieved,
       indexResult.storeName,
-      indexResult.stored
+      indexResult.stored,
+      mergedChunks,
     );
 
     return {
