@@ -239,6 +239,7 @@ test("SDK-4: resources/read tool card returns HTML with Apps SDK _meta", async (
     "tool card HTML must start with doctype");
   assert.ok(content.text.includes("GPTWork"), "tool card HTML must contain GPTWork");
   assert.ok(content.text.includes("renderCard"), "tool card HTML must include renderCard function");
+  assert.ok(content.text.includes("renderViewModelCard"), "tool card HTML must include unified ViewModel renderer");
   assert.ok(content.text.includes("structuredContent"), "tool card HTML must reference structuredContent");
   assert.ok(content.text.includes("toolOutput"), "tool card HTML must reference toolOutput");
   assert.ok(content.text.includes("Show raw JSON"), "tool card HTML must have JSON fallback toggle");
@@ -381,6 +382,50 @@ test("SDK-4d: tool card HTML renders structuredContent and toolOutput payloads",
   assert.match(toolOutput.root.innerHTML, /Worker status/);
   assert.match(toolOutput.root.innerHTML, /assigned/);
   assert.match(toolOutput.root.innerHTML, /1/);
+});
+
+test("SDK-4d1: tool card HTML renders unified Card ViewModel before legacy fallback", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const rendered = renderWidgetHtml(res.result.contents[0].text, {
+    structuredContent: {
+      summary: "legacy summary should not dominate",
+      status: "ok",
+      keyValues: { legacy: "visible fallback only" },
+      card: {
+        card_version: "gptwork-card-v1",
+        card_type: "task_execution",
+        title: "Task: Unified card",
+        subtitle: "task_123",
+        status: "waiting_for_review",
+        severity: "warning",
+        summary: "Acceptance failed and repair is waiting",
+        progress: {
+          current_stage: "waiting_for_review",
+          stages: [
+            { key: "assigned", label: "Assigned", status: "done" },
+            { key: "waiting_for_review", label: "Review", status: "current" },
+          ],
+        },
+        key_values: [{ key: "task_id", value: "task_123" }],
+        sections: [
+          { title: "Acceptance", type: "checklist", items: [{ key: "verification_passed", label: "verification_passed", status: "failed" }] },
+          { title: "Logs", type: "logs", items: [{ time: "2026-06-25T00:00:00Z", text: "verification failed" }] },
+        ],
+        diagnostics: [{ severity: "error", message: "Tests failed", code: "verification_failed" }],
+        actions: [{ label: "View task", tool: "get_task", args: { task_id: "task_123" } }],
+        raw_available: true,
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Task: Unified card/);
+  assert.match(rendered.root.innerHTML, /Acceptance failed and repair is waiting/);
+  assert.match(rendered.root.innerHTML, /verification_passed/);
+  assert.match(rendered.root.innerHTML, /Tests failed/);
+  assert.match(rendered.root.innerHTML, /View task/);
+  assert.match(rendered.root.innerHTML, /Show raw JSON/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Maximum call stack size exceeded/);
 });
 
 test("SDK-4e: tool card HTML restores second-open snapshot from widgetState", async () => {

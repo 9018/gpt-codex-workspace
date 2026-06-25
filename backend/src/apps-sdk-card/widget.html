@@ -193,8 +193,70 @@ function renderError(err){
 function renderLoopPrevented(){
   return '<div class="section"><div class="title">GPTWork Card '+badge('blocked')+'</div><div class="errors">Render loop prevented.</div></div>'+diagnostics('blocked');
 }
+function renderCell(value){
+  if(value===null||value===undefined)return '-';
+  if(typeof value==='object'){try{return limitString(JSON.stringify(value),260)}catch(e){return String(value)}}
+  return String(value);
+}
+function renderRows(rows){
+  if(!Array.isArray(rows)||!rows.length)return '';
+  var out=['<table class="kv-table">'];
+  for(var i=0;i<rows.length;i++){
+    var row=rows[i]||{};
+    if(row.key!==undefined||row.value!==undefined){out.push('<tr><td>'+esc(row.key||'')+'</td><td>'+esc(renderCell(row.value))+'</td></tr>')}
+    else{var cells=[];for(var k in row){if(Object.prototype.hasOwnProperty.call(row,k))cells.push('<span class="muted">'+esc(k)+':</span> '+esc(renderCell(row[k])))}out.push('<tr><td colspan="2">'+cells.join(' &nbsp; ')+'</td></tr>')}
+  }
+  out.push('</table>');return out.join('');
+}
+function renderSectionItems(type,items){
+  if(!Array.isArray(items)||!items.length)return '';
+  var out=['<ul class="item-list">'];
+  for(var i=0;i<items.length;i++){
+    var item=items[i];
+    if(type==='checklist'&&isObject(item)){
+      var mark=(item.status==='passed'||item.status==='ok'||item.checked===true)?'✓':'□';
+      out.push('<li>'+esc(mark+' '+(item.label||item.key||''))+(item.status?' '+badge(item.status):'')+(item.detail?' <span class="muted">'+esc(item.detail)+'</span>':'')+'</li>');
+    }else if((type==='timeline'||type==='logs')&&isObject(item)){
+      out.push('<li>'+esc((item.time?item.time+'  ':'')+(item.text||item.message||item.label||renderCell(item)))+'</li>');
+    }else if(isObject(item)){
+      out.push('<li>'+esc(item.label||item.text||item.message||renderCell(item))+'</li>');
+    }else out.push('<li>'+esc(item)+'</li>');
+  }
+  out.push('</ul>');return out.join('');
+}
+function renderViewModelCard(card,source){
+  var parts=[];var title=card.title||'GPTWork Result';
+  parts.push('<div class="section"><div class="title">'+esc(title));
+  if(card.status!==undefined)parts.push(' '+badge(card.status));
+  parts.push('</div>');
+  if(card.subtitle)parts.push('<div class="muted">'+esc(card.subtitle)+'</div>');
+  if(card.summary)parts.push('<p>'+esc(card.summary)+'</p>');
+  parts.push('</div>');
+  if(card.progress&&Array.isArray(card.progress.stages)&&card.progress.stages.length){
+    parts.push('<div class="section"><div class="muted">Progress: '+esc(card.progress.current_stage||'')+'</div><ul class="item-list">');
+    for(var p=0;p<card.progress.stages.length;p++){var st=card.progress.stages[p]||{};parts.push('<li>'+esc(st.label||st.key||'')+' '+badge(st.status||'pending')+(st.detail?' <span class="muted">'+esc(st.detail)+'</span>':'')+'</li>')}
+    parts.push('</ul></div>');
+  }
+  if(Array.isArray(card.key_values)&&card.key_values.length){parts.push('<div class="section">'+renderRows(card.key_values)+'</div>')}
+  if(Array.isArray(card.sections)){
+    for(var s=0;s<card.sections.length;s++){
+      var section=card.sections[s]||{};var body='';
+      if(section.type==='table')body=renderRows(section.rows||[]);
+      else if(section.type==='text'||section.type==='diff')body='<pre class="raw">'+esc(limitString(section.text||'',1600))+'</pre>';
+      else body=renderSectionItems(section.type,section.items||[]);
+      if(body)parts.push('<div class="section"><div class="muted">'+esc(section.title||section.type||'Section')+'</div>'+body+'</div>')
+    }
+  }
+  if(Array.isArray(card.diagnostics)&&card.diagnostics.length){parts.push('<div class="section">');for(var d=0;d<card.diagnostics.length;d++){var diag=card.diagnostics[d]||{};var cls=(diag.severity==='error'||diag.severity==='blocker')?'errors':(diag.severity==='warning'||diag.severity==='major')?'warnings':'muted';parts.push('<div class="'+cls+'">'+esc((diag.severity||'info')+': '+(diag.message||diag.code||''))+(diag.code?' <span class="muted">'+esc(diag.code)+'</span>':'')+'</div>')}parts.push('</div>')}
+  if(Array.isArray(card.actions)&&card.actions.length){parts.push('<div class="section"><div class="muted">Actions</div><ul class="item-list">');for(var a=0;a<card.actions.length;a++){var action=card.actions[a]||{};parts.push('<li>'+esc(action.label||action.tool||'Action')+(action.tool?' <span class="muted">'+esc(action.tool)+'</span>':'')+'</li>')}parts.push('</ul></div>')}
+  var jsonStr=stableStringify(card);
+  if(card.raw_available!==false){parts.push('<div class="section"><button class="fold-toggle" onclick="(function(b){var p=b.nextElementSibling;if(p){p.classList.toggle(\'collapsed\');b.textContent=p.classList.contains(\'collapsed\')?\'Show raw JSON\':\'Hide raw JSON\'}})(this)">Show raw JSON</button><pre class="json collapsed">'+esc(jsonStr)+'</pre></div>')}
+  parts.push(diagnostics(source));
+  return parts.join('');
+}
 function renderCard(data,source){
   if(!isObject(data)) return renderFallback();
+  if(isObject(data.card)) return renderViewModelCard(data.card,source);
   var parts=[];var title=data.title||data.summary||data.name||data.gptwork_title||'GPTWork Result';
   parts.push('<div class="section"><div class="title">'+esc(title));
   if(data.status!==undefined) parts.push(' '+badge(data.status));

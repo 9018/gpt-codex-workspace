@@ -1,6 +1,8 @@
 import { GPTWORK_TOOL_CARD_URI } from "./constants.mjs";
 import { hasToolCardMetadata } from "./card-meta.mjs";
 import { createHash } from "node:crypto";
+import { buildCardViewModel, isCardViewModelEnabledTool, legacyFieldsFromCard } from "../card-view-model.mjs";
+import { renderCardText } from "../card-render-text.mjs";
 
 const VOLATILE_KEYS = new Set([
   "current_time",
@@ -105,15 +107,28 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     : { value: structuredContent };
   const auto = generateAutoSummary(name, base);
   const hash = payloadHash(base);
+  const title = toolDescriptor?.metadata?.name || name;
+  const card = isCardViewModelEnabledTool(name)
+    ? buildCardViewModel(name, base, { payload_hash: hash, card_instance_id: `${name}:${hash}`, title })
+    : undefined;
+  if (card) {
+    if (base.summary) card.summary = base.summary;
+    else if (auto.summary) card.summary = auto.summary;
+    if (base.status) card.status = base.status;
+  }
+  const legacy = card ? legacyFieldsFromCard(card) : {};
   return {
     ...base,
+    ...(card ? { card } : {}),
     gptwork_tool: name,
-    gptwork_title: toolDescriptor?.metadata?.name || name,
-    summary: base.summary || auto.summary,
-    status: base.status || auto.status,
+    gptwork_title: title,
+    summary: card?.summary || base.summary || auto.summary,
+    status: card?.status || base.status || auto.status,
     gptwork_type: "tool_result",
     gptwork_payload_hash: hash,
     gptwork_card_instance_id: `${name}:${hash}`,
+    ...(legacy.keyValues ? { keyValues: base.keyValues || legacy.keyValues } : {}),
+    ...(legacy.items ? { items: base.items || legacy.items } : {}),
   };
 }
 
@@ -131,7 +146,9 @@ export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, su
     : rawStructuredContent;
   const summary = typeof summarizeToolResult === "function"
     ? summarizeToolResult(name, structuredContent)
-    : JSON.stringify(structuredContent);
+    : structuredContent?.card
+      ? renderCardText(structuredContent.card)
+      : JSON.stringify(structuredContent);
   const result = {
     content: [{ type: "text", text: summary }],
     structuredContent,
