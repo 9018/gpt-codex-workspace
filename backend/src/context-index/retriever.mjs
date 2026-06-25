@@ -165,7 +165,7 @@ export async function indexGoalContext(ctx) {
  * @returns {Promise<Array<{ id: string, text: string, tokens: number, metadata: object, score: number }>>}
  */
 export async function retrieveContext(params) {
-  const { goalId, queryText, options = {}, topK = 5, filters = {} } = params;
+  const { goalId = null, queryText, options = {}, topK = 5, filters = {} } = params;
   const workspaceRoot = options.workspaceRoot || process.cwd();
 
   const embedder = createEmbeddingProvider(options.embeddingConfig || { provider: "fallback" });
@@ -177,10 +177,10 @@ export async function retrieveContext(params) {
 
   const [queryVector] = await embedder.embed([queryText]);
 
-  const results = await store.search(queryVector, topK, {
-    ...filters,
-    goal_id: goalId,
-  });
+  const searchFilters = { ...filters };
+  if (goalId) searchFilters.goal_id = goalId;
+
+  const results = await store.search(queryVector, topK, searchFilters);
 
   return results;
 }

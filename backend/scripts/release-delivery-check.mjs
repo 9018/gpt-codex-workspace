@@ -20,6 +20,7 @@ async function main() {
     { name: "delivery-contracts test", cmd: "node", args: [
       "--test", "--test-reporter=dot",
       "test/delivery-contracts.test.mjs",
+      "test/delivery-spec-compat.test.mjs",
     ]},
     { name: "worktree lifecycle tests", cmd: "node", args: [
       "--test", "--test-reporter=dot",

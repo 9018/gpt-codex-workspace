@@ -674,6 +674,166 @@ test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", a
   }
 });
 
+test("processGeneralTaskWithDeps: prompt preparation waiting_for_review action parks task for review", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-healing-review-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_healing_review", "goal_healing_review");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_review", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_review" },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      releaseLockForTaskFn: async () => {},
+      prepareCodexTaskRunFn: async () => { throw Object.assign(new Error("unknown prep failure"), { code: "EUNKNOWN" }); },
+      determineHealingActionFn: () => ({ action: "waiting_for_review", next_status: "waiting_for_review", reason: "not recoverable", retry_budget: 0 }),
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "waiting_for_review");
+    assert.equal(result.healing_action, "waiting_for_review");
+    const updated = await store.findTaskById(task.id);
+    assert.equal(updated.status, "waiting_for_review");
+    assert.equal(updated.result.healing_action, "waiting_for_review");
+    assert.equal(updated.result.healing_retry_count, 0);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: prompt preparation retry action requeues within retry budget", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-healing-retry-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_healing_retry", "goal_healing_retry");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_retry", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_retry" },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      releaseLockForTaskFn: async () => {},
+      prepareCodexTaskRunFn: async () => { throw Object.assign(new Error("no space left"), { code: "ENOSPC" }); },
+      determineHealingActionFn: () => ({ action: "cleanup_and_retry", next_status: "queued", reason: "cleanup temp files", retry_budget: 1 }),
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "queued");
+    assert.equal(result.healing_action, "cleanup_and_retry");
+    assert.equal(result.healing_retry_count, 1);
+    const updated = await store.findTaskById(task.id);
+    assert.equal(updated.status, "queued");
+    assert.equal(updated.healing_retry_count, 1);
+    assert.equal(updated.result.healing_action, "cleanup_and_retry");
+    assert.equal(updated.result.reason, "cleanup temp files");
+    assert.ok(updated.logs.some((log) => /self-healing cleanup_and_retry/.test(log.message)));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: execution retry action requeues within retry budget", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-healing-exec-retry-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_healing_exec_retry", "goal_healing_exec_retry");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_exec_retry", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_exec_retry" },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      releaseLockForTaskFn: async () => {},
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => { throw Object.assign(new Error("worker crash"), { code: "EWORKER" }); },
+      determineHealingActionFn: () => ({ action: "recover_and_retry", next_status: "queued", reason: "restart worker", retry_budget: 1 }),
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "queued");
+    assert.equal(result.healing_action, "recover_and_retry");
+    const updated = await store.findTaskById(task.id);
+    assert.equal(updated.status, "queued");
+    assert.equal(updated.healing_retry_count, 1);
+    assert.equal(updated.result.reason, "restart worker");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: integration push_failed creates repair when allowed", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-int-push-failed-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_int_push_failed", "goal_int_push_failed");
+    let createGoalArgs = null;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_push_failed", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_int_push_failed" },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_repair");
+        assert.equal(taskResult.failure_class, "integration_push_failed");
+        assert.match(taskResult.reason, /integration_push_failed/);
+        assert.equal(taskResult.repair_goal.repair_of_task_id, task.id);
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async () => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "accepted", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "Repair attempt 1/2" }),
+      runIntegrationQueueFn: async () => ({ ok: false, status: "push_failed", error: "git push failed", merged: false, pushed: false, pr_opened: false }),
+      createGoalFn: async (_store, _config, args) => {
+        createGoalArgs = args;
+        return { goal: { id: "repair_goal_push" }, task: { id: "repair_task_push" } };
+      },
+    });
+
+    assert.equal(result.status, "waiting_for_repair");
+    assert.equal(createGoalArgs.repair_of_task_id, task.id);
+    assert.equal(createGoalArgs.repair_of_worktree, join(tmpDir, ".gptwork", "worktrees", "github.com-acme-repo", "task_int_push_failed"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ===========================================================================
 // Helpers for PR0 integration tests
 // ===========================================================================

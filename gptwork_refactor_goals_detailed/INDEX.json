@@ -1,0 +1,25 @@
+{
+  "repo": "9018/gpt-codex-workspace",
+  "date": "2026-06-25",
+  "recommended_order": [
+    "P0_1_worktree_service",
+    "P0_2_task_schema_state",
+    "P0_3_goal_queue_worktree_concurrency",
+    "P0_4_codex_worker_uses_worktree",
+    "P0_5_task_acceptance_verifier",
+    "P0_6_failure_classifier_retry",
+    "P0_7_finalizer_queue_state_sync",
+    "P0_8_multi_task_demo_test",
+    "P1_1_multi_agent_pipeline",
+    "P1_2_context_zvec_project_retrieval",
+    "P2_1_user_delivery_cli_demo"
+  ],
+  "hard_fail_conditions": [
+    "missing worktree-service.mjs",
+    "missing task-acceptance.mjs",
+    "builder task holds canonical repo lock for entire execution",
+    "worker cwd remains config.defaultRepoPath",
+    "no independent verifier",
+    "no multi-task worktree demo/test"
+  ]
+}

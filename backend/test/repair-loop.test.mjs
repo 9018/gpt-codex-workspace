@@ -56,6 +56,54 @@ test("createRepairGoalFromFindings: increments repair attempt", async () => {
   assert.equal(repair.user_request, "Repair: Retry fix (attempt 3)");
 });
 
+test("createRepairGoalFromFindings: persists repair lineage and original worktree metadata", async () => {
+  const task = {
+    id: "task_child",
+    title: "Repair chain",
+    goal_id: "goal_child",
+    root_task_id: "task_root",
+    repair_attempt: 1,
+    max_attempts: 4,
+    repo_id: "github.com/acme/repo",
+    worktree_path: "/tmp/original-worktree",
+    worktree: { path: "/tmp/worktree-record", branch: "gptwork/task/task_root" },
+    result: {
+      repo_resolution: { task_worktree_path: "/tmp/result-worktree" },
+      worktree_lifecycle: { branch_name: "gptwork/task/result-branch" },
+    },
+  };
+  const goal = { id: "goal_child", goal_prompt: "Original prompt", workspace_id: "hosted-default" };
+  const findings = [{ severity: "blocker", code: "verification_failed", message: "Tests failed" }];
+
+  const repair = createRepairGoalFromFindings({ task, goal, findings });
+
+  assert.equal(repair.root_task_id, "task_root");
+  assert.equal(repair.parent_task_id, "task_child");
+  assert.equal(repair.repair_attempt, 2);
+  assert.equal(repair.max_attempts, 4);
+  assert.equal(repair.repair_of_goal_id, "goal_child");
+  assert.equal(repair.repair_of_task_id, "task_child");
+  assert.equal(repair.repair_of_worktree, "/tmp/original-worktree");
+  assert.equal(repair.repair_of_branch, "gptwork/task/task_root");
+  assert.match(repair.goal_prompt, /Original failure worktree: \/tmp\/original-worktree/);
+});
+
+test("shouldAttemptRepair: uses highest attempt in root task lineage", async () => {
+  const result = shouldAttemptRepair({
+    task: { id: "task_child", root_task_id: "task_root", repair_attempt: 0 },
+    tasks: [
+      { id: "task_root", root_task_id: "task_root", repair_attempt: 0 },
+      { id: "task_repair_1", root_task_id: "task_root", repair_attempt: 1 },
+      { id: "task_repair_2", root_task_id: "task_root", repair_attempt: 2 },
+    ],
+    maxAttempts: 2,
+  });
+
+  assert.equal(result.should_repair, false);
+  assert.match(result.reason, /exceeds max 2/);
+  assert.equal(result.current_attempt, 2);
+});
+
 // ===========================================================================
 // Tests for shouldAttemptRepair
 // ===========================================================================

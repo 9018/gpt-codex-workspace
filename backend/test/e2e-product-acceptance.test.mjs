@@ -383,7 +383,7 @@ test("Area 4a: run_agent_pipeline creates pipeline runs", async () => {
     goal_id: "goal_e2e_test",
     task_id: "task_e2e_test",
     agent: "codex",
-    roles: ["analyst", "architect"],
+    roles: ["planner", "architect"],
   });
   const sc = result.structuredContent;
   assert.ok(sc.pipeline, "has pipeline object");
@@ -391,6 +391,7 @@ test("Area 4a: run_agent_pipeline creates pipeline runs", async () => {
   assert.ok(sc.pipeline.id.startsWith("pipeline_"), "pipeline.id starts with pipeline_");
   assert.ok(Array.isArray(sc.agent_runs), "has agent_runs array");
   assert.ok(sc.agent_runs.length >= 1, "agent_runs not empty");
+  assert.deepEqual(sc.agent_runs.map((run) => run.role), ["planner", "architect"]);
   sc.agent_runs.forEach(run => {
     assert.ok(run.role, "agent_run has role");
     assert.ok(run.status, "agent_run has status");

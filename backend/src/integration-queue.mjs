@@ -74,6 +74,9 @@ export async function runIntegrationQueue({
       return { ok: true, status: 'completed', merged: false, pushed: false, pr_opened: false };
     }
 
+    const needsPush = mode === 'push_branch' || mode === 'open_pr';
+    const needsPr = mode === 'open_pr';
+
     // Rebase or merge onto target branch
     try {
       execFileSync('git', ['checkout', targetBranch], { cwd: gitPath, stdio: 'pipe', timeout: 30000 });
@@ -96,24 +99,38 @@ export async function runIntegrationQueue({
       };
     }
 
+    if (mode === 'local_merge') {
+      return { ok: true, status: 'completed', merged: true, pushed: false, pr_opened: false };
+    }
+
     // Push branch
     let pushed = false;
     try {
       execFileSync('git', ['push', 'origin', taskBranch, '--force-with-lease'], { cwd: gitPath, stdio: 'pipe', timeout: 60000 });
       pushed = true;
-    } catch {
-      // Push failed — might not have remote configured
+    } catch (err) {
+      const error = `git push failed for ${taskBranch}: ${err.stderr?.toString().trim() || err.message}`;
+      if (needsPush) {
+        return { ok: false, status: 'push_failed', merged: false, pushed: false, pr_opened: false, error };
+      }
     }
 
     // Open PR if mode allows
     let prOpened = false;
-    if (mode === 'open_pr' && pushed) {
+    if (needsPr && pushed) {
       try {
         // Try gh CLI for PR creation
         execFileSync('gh', ['pr', 'create', '--fill', '--base', targetBranch, '--head', taskBranch], { cwd: gitPath, stdio: 'pipe', timeout: 30000 });
         prOpened = true;
-      } catch {
-        // gh CLI not available or PR creation failed
+      } catch (err) {
+        return {
+          ok: false,
+          status: 'pr_failed',
+          merged: false,
+          pushed,
+          pr_opened: false,
+          error: `gh pr create failed for ${taskBranch}: ${err.stderr?.toString().trim() || err.message}`,
+        };
       }
     }
 

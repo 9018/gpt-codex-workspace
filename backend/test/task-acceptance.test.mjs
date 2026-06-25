@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -13,6 +14,11 @@ test('verifyTaskCompletion runs discovered npm scripts as npm run <script> comma
   await writeFile(join(repoPath, 'package.json'), JSON.stringify({
     scripts: { test: 'node --version' },
   }), 'utf8');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repoPath });
+  execFileSync('git', ['add', 'package.json'], { cwd: repoPath });
+  execFileSync('git', ['commit', '-m', 'initial'], { cwd: repoPath, stdio: 'ignore' });
 
   const commands = [];
   const verification = await verifyTaskCompletion({
@@ -152,4 +158,23 @@ test('verifyTaskCompletion writes verification.json next to result.json', async 
   const written = JSON.parse(await readFile(join(dir, 'verification.json'), 'utf8'));
   assert.equal(written.passed, verification.passed);
   assert.equal(written.status, verification.status);
+});
+
+test('verifyTaskCompletion does not fabricate clean git status or commit evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    resultJson: {
+      status: 'completed',
+      summary: 'code changed',
+      changed_files: ['src/app.mjs'],
+      verification: { passed: true, commands: ['npm test'] },
+      tests: 'npm test: passed',
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, false);
+  assert.equal(verification.evidence.git_status, 'unknown');
+  assert.equal(verification.evidence.commit_exists, 'unknown');
+  assert.ok(verification.findings.some((finding) => finding.code === 'commit_or_patch_missing'));
 });

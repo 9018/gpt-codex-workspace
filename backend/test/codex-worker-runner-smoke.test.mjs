@@ -179,3 +179,54 @@ test('runAssignedCodexTasks auto-starts dependency-satisfied waiting queue item 
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('runAssignedCodexTasks batch-starts queued goals to fill available concurrency slots', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-queue-batch-'));
+  try {
+    const repo = join(tmpDir, 'repo');
+    initGitRepo(repo);
+    const store = makeStore(tmpDir);
+    await store.load();
+    store.state.goal_queue = [];
+    store.state.conversations = [];
+    for (const suffix of ['a', 'b', 'c']) {
+      const goal = addGoal(store.state, { id: `goal_batch_${suffix}`, title: `Batch ${suffix}` });
+      store.state.goal_queue.push({
+        queue_id: `queue_batch_${suffix}`,
+        goal_id: goal.id,
+        task_id: null,
+        workspace_id: 'hosted-default',
+        repo_id: '',
+        position: suffix.charCodeAt(0),
+        status: 'waiting',
+        depends_on_goal_id: null,
+        depends_on_task_id: null,
+        dependency_policy: 'completed_only',
+        blocked_reason: null,
+        auto_start: true,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      });
+    }
+    await store.save();
+
+    const seen = [];
+    const result = await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: repo,
+      enableTaskWorktrees: false,
+    }, {}, { limit: 10, concurrency: 3 }, undefined, {
+      processGeneralTask: async (_store, _config, task) => {
+        seen.push(task.id);
+        return { task_id: task.id, status: 'completed', progressed: true };
+      },
+    });
+
+    assert.equal(result.queue_autostart?.started_count, 3);
+    assert.equal(result.inspected, 3);
+    assert.equal(result.progressed, 3);
+    assert.equal(seen.length, 3);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

@@ -1019,6 +1019,81 @@ test("goal-queue: three ordinary builder tasks can start without canonical repo 
   }
 });
 
+test("goal-queue: startQueuedGoals starts multiple eligible goals up to max_start", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-batch-start-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  const now = new Date().toISOString();
+  for (const suffix of ["a", "b", "c", "d"]) {
+    const goalId = `goal_batch_${suffix}`;
+    const convId = `conv_batch_${suffix}`;
+    store.state.goals.push({
+      id: goalId,
+      title: `Batch ${suffix}`,
+      description: "",
+      user_request: `Do ${suffix}`,
+      goal_prompt: `Do ${suffix}`,
+      context_summary: "",
+      workspace_id: "hosted-default",
+      project_id: "default",
+      conversation_id: convId,
+      status: "open",
+      mode: "builder",
+      task_id: null,
+      created_at: now,
+      updated_at: now,
+    });
+    store.state.conversations.push({
+      id: convId,
+      goal_id: goalId,
+      project_id: "default",
+      workspace_id: "hosted-default",
+      messages: [{ role: "user", content: `Do ${suffix}` }],
+      created_at: now,
+      updated_at: now,
+    });
+    addGoalToQueue(store, `queue_batch_${suffix}`, goalId, suffix.charCodeAt(0), "waiting");
+  }
+  await store.save();
+
+  const { startQueuedGoals } = await import("../src/goal-queue.mjs");
+  const result = await startQueuedGoals(store, { defaultWorkspaceRoot: dir, defaultRepoPath: repo }, { max_start: 3 });
+
+  assert.equal(result.started, 3);
+  assert.equal(result.results.length, 3);
+  assert.deepEqual(result.results.map((entry) => entry.item.queue_id), ["queue_batch_a", "queue_batch_b", "queue_batch_c"]);
+
+  await store.load();
+  assert.equal(store.state.goal_queue.filter((item) => item.status === "running").length, 3);
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_batch_d").status, "waiting");
+  assert.equal(store.state.tasks.length, 3);
+});
+
+test("goal-queue: startQueuedGoals preserves dependency ordering while batch starting", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-batch-deps-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_blocked_dep", "Blocked dep", "open");
+  addGoal(store, "goal_ready_batch", "Ready batch", "open");
+  addGoalToQueue(store, "queue_blocked_dep", "goal_blocked_dep", 1, "waiting", { depends_on_task_id: "task_missing" });
+  addGoalToQueue(store, "queue_ready_batch", "goal_ready_batch", 2, "waiting");
+  await store.save();
+
+  const { startQueuedGoals } = await import("../src/goal-queue.mjs");
+  const result = await startQueuedGoals(store, { defaultWorkspaceRoot: dir, defaultRepoPath: repo }, { max_start: 2 });
+
+  assert.equal(result.started, 1);
+  assert.equal(result.results[0].item.queue_id, "queue_ready_batch");
+
+  await store.load();
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_blocked_dep").status, "blocked");
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_ready_batch").status, "running");
+});
+
 // ===========================================================================
 // P0: dry_run must NOT write state
 // ===========================================================================

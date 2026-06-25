@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { dirname, join } from "node:path";
 import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
-import { runAcceptanceAgent } from "./acceptance-agent.mjs";
+import { buildEvidence, runAcceptanceAgent } from "./acceptance-agent.mjs";
 import { classifyFailure } from "./failure-classifier.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -118,22 +118,16 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings.push({ severity: "followup", code: "no_verification_commands", message: "No verification command could be run", source: "task_acceptance" });
   }
 
+  const evidence = parsed.ok ? await buildTaskAcceptanceEvidence({ result, repoPath, resultJsonPath }) : null;
   const acceptance = parsed.ok ? await runAcceptanceAgent({
     task,
     goal,
     result,
     repoPath,
-    evidence: {
-      result_json_valid: true,
-      result_summary: result.summary || "",
-      changed_files: Array.isArray(result.changed_files) ? result.changed_files : [],
-      git_status: "clean",
-      verification_log_exists: Array.isArray(result.verification?.commands) && result.verification.commands.length > 0,
-      commit_exists: true,
-    },
-  }).catch((err) => ({ passed: false, findings: [{ severity: "major", code: "acceptance_agent_error", message: err?.message || String(err), source: "task_acceptance" }] })) : { passed: false, findings: [] };
+    evidence,
+  }).catch((err) => ({ passed: false, findings: [{ severity: "major", code: "acceptance_agent_error", message: err?.message || String(err), source: "task_acceptance" }], evidence })) : { passed: false, findings: [], evidence: null };
 
-  findings.push(...(acceptance.findings || []).filter((finding) => finding.severity === "blocker"));
+  findings.push(...(acceptance.findings || []).filter((finding) => finding.severity === "blocker" || finding.severity === "major"));
 
   const hardFailed = findings.some((finding) => finding.severity === "blocker" || finding.severity === "major");
   const passed = parsed.ok && status === "completed" && result.verification?.passed === true && commands.every((command) => command.exit_code === 0) && !hardFailed;
@@ -147,6 +141,7 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     failure_class: failureClass === "unknown" && !passed ? (result.verification?.passed === false ? "verification_failed" : "unknown") : failureClass,
     requires_review: !passed,
     findings,
+    evidence: acceptance.evidence || evidence || null,
   };
 
   if (resultJsonPath) {
@@ -156,4 +151,28 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     await stateStore.save().catch(() => {});
   }
   return verification;
+}
+
+async function buildTaskAcceptanceEvidence({ result, repoPath, resultJsonPath } = {}) {
+  const evidence = repoPath
+    ? await buildEvidence({ repoPath, resultJsonPath: resultJsonPath || result?.result_json_path, verificationLogPath: result?.verification_log_path })
+    : {
+        git_status: "unknown",
+        git_diff_summary: null,
+        commit_exists: "unknown",
+        changed_files: [],
+        verification_log_exists: false,
+        result_json_valid: null,
+      };
+
+  evidence.result_json_valid = true;
+  evidence.result_summary = result?.summary || "";
+  evidence.changed_files = Array.isArray(result?.changed_files) ? result.changed_files : evidence.changed_files || [];
+  evidence.verification_log_exists = evidence.verification_log_exists === true
+    || (Array.isArray(result?.verification?.commands) && result.verification.commands.length > 0);
+  if (!repoPath) {
+    evidence.git_status = "unknown";
+    evidence.commit_exists = "unknown";
+  }
+  return evidence;
 }

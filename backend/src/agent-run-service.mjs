@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
+import { DEFAULT_AGENT_PIPELINE, normalizeAgentRole, validateAgentRoles } from "./subagent-policy.mjs";
 
-const ROLES = new Set(["planner", "architect", "implementer", "tester", "reviewer", "finalizer", "analyst", "escalation_judge"]);
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
 function now() {
@@ -10,10 +10,6 @@ function now() {
 function ensureAgentRuns(state) {
   if (!Array.isArray(state.agent_runs)) state.agent_runs = [];
   return state.agent_runs;
-}
-
-function normalizeRole(role) {
-  return ROLES.has(role) ? role : "implementer";
 }
 
 function normalizeStatus(status, fallback = "queued") {
@@ -27,7 +23,7 @@ export async function createAgentRun(store, args = {}, context = {}) {
       id: `agent_run_${randomUUID()}`,
       goal_id: args.goal_id || "",
       task_id: args.task_id || "",
-      role: normalizeRole(args.role),
+      role: normalizeAgentRole(args.role),
       agent: args.agent || "codex",
       status: normalizeStatus(args.status),
       input_artifacts: Array.isArray(args.input_artifacts) ? args.input_artifacts : [],
@@ -99,14 +95,16 @@ export async function completeAgentRun(store, args = {}, context = {}) {
 
 export async function runAgentPipeline(store, args = {}, context = {}) {
   const pipelineId = `pipeline_${randomUUID()}`;
-  const roles = Array.isArray(args.roles) && args.roles.length ? args.roles : ["planner", "implementer", "tester", "reviewer", "finalizer"];
+  const roles = validateAgentRoles(args.roles || DEFAULT_AGENT_PIPELINE);
+  const executionOrder = validateAgentRoles(args.execution_order || roles);
+  const reviewGateAfter = normalizeAgentRole(args.review_gate_after || "reviewer");
   const pipeline = {
     id: pipelineId,
     goal_id: args.goal_id || "",
     task_id: args.task_id || "",
     roles,
-    review_gate_after: args.review_gate_after || "reviewer",
-    execution_order: args.execution_order || roles,
+    review_gate_after: reviewGateAfter,
+    execution_order: executionOrder,
     status: "created",
     created_at: now(),
   };
@@ -135,4 +133,22 @@ export async function cancelAgentRun(store, args = {}, context = {}) {
   await context.eventLogger?.append("agent_run.cancelled", { agent_run_id: result.agent_run.id, reason: args.reason || "" });
   await context.hookBus?.emit("onAgentRunCancelled", { agent_run: result.agent_run });
   return result;
+}
+
+export function buildSubagentsFromAgentRuns(agentRuns = []) {
+  return [...agentRuns]
+    .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
+    .map((run) => ({
+      role: run.role,
+      status: run.status,
+      summary: run.summary || "",
+      agent_run_id: run.id,
+      started_at: run.created_at || null,
+      completed_at: run.updated_at || null,
+    }));
+}
+
+export function agentRunsBlockCompletion(agentRuns = []) {
+  const blockingRoles = new Set(["tester", "reviewer", "finalizer"]);
+  return agentRuns.some((run) => blockingRoles.has(run.role) && !["completed", "skipped"].includes(run.status));
 }

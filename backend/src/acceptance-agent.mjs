@@ -287,6 +287,9 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       if (evidence.git_status === 'dirty') {
         return { severity: 'major', code: 'worktree_dirty', message: `Worktree has ${evidence.git_status_dirty_files?.length || 0} dirty file(s)`, source: 'acceptance_agent' };
       }
+      if (evidence.git_status === 'unknown' || evidence.git_status == null) {
+        return { severity: 'major', code: 'worktree_clean_unknown', message: 'Unable to verify worktree cleanliness', source: 'acceptance_agent' };
+      }
       return null;
 
     case 'no_blocker_or_major_findings':
@@ -306,7 +309,7 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       return null;
 
     case 'commit_or_patch_evidence':
-      if (!evidence.commit_exists && !result?.commit && !result?.patch_evidence) {
+      if (evidence.commit_exists !== true && !result?.commit && !result?.patch_evidence) {
         return { severity: 'major', code: 'commit_or_patch_missing', message: 'No commit or patch evidence for changed files', source: 'acceptance_agent' };
       }
       return null;

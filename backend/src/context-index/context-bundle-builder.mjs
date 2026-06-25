@@ -134,6 +134,26 @@ function buildTranscriptNoteSection(workspaceFiles) {
   ].join("\n");
 }
 
+function buildRetrievalSourcesSection(chunks) {
+  const lines = ["## Retrieval Sources", ""];
+  if (!Array.isArray(chunks) || chunks.length === 0) {
+    lines.push("- none");
+    lines.push("");
+    return lines.join("\n");
+  }
+
+  for (const chunk of chunks.slice(0, 10)) {
+    const meta = chunk.metadata || {};
+    const sourceType = meta.source_type || "unknown";
+    const goalId = meta.goal_id || "unknown-goal";
+    const sourcePath = meta.source_path || meta.result_path || meta.transcript_path || "inline context";
+    const score = chunk.score !== undefined ? ` score=${Number(chunk.score).toFixed(3)}` : "";
+    lines.push(`- ${sourceType}: ${goalId} — ${sourcePath}${score}`);
+  }
+  lines.push("");
+  return lines.join("\n");
+}
+
 // ---------------------------------------------------------------------------
 // Bundle builder
 // ---------------------------------------------------------------------------
@@ -183,6 +203,9 @@ export function buildContextBundle(options = {}) {
   sections.push(buildTranscriptNoteSection(workspaceFiles));
 
   // Section 7: retrieval metadata
+  sections.push(buildRetrievalSourcesSection(chunks));
+
+  // Section 8: retrieval metadata
   const retrievedTypes = [...new Set(chunks.map((c) => c.metadata?.source_type).filter(Boolean))];
   sections.push("## Retrieval Metadata");
   sections.push("");

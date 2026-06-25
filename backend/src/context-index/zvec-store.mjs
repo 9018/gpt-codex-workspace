@@ -180,6 +180,15 @@ export function createLocalStore(options = {}) {
     return entry;
   }
 
+  async function listStoredGoalIds(rootDir) {
+    try {
+      const entries = await readdir(rootDir, { withFileTypes: true });
+      return entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name);
+    } catch {
+      return [];
+    }
+  }
+
   async function persistGoalIndex(goalId, entry) {
     const dir = await ensureGoalDir(goalId);
     await writeFile(join(dir, CHUNKS_FILE), JSON.stringify(entry.chunks), "utf8");
@@ -240,29 +249,32 @@ export function createLocalStore(options = {}) {
 
     async search(queryVector, topK = 5, filters = {}) {
       const goalId = filters.goal_id;
-      if (!goalId) return [];
-
-      return withGoalLock(goalId, async () => {
-      const entry = await loadGoalIndex(goalId);
-      if (entry.chunks.length === 0) return [];
+      const goalIds = goalId ? [goalId] : await listStoredGoalIds(indexDir);
+      if (goalIds.length === 0) return [];
 
       const scored = [];
-      for (let i = 0; i < entry.chunks.length; i++) {
-        const chunk = entry.chunks[i];
-        // Apply simple filters
-        if (filters.source_type && chunk.metadata?.source_type !== filters.source_type) continue;
-        if (filters.goal_id && chunk.metadata?.goal_id !== filters.goal_id) continue;
-        if (filters.workspace_id && chunk.metadata?.workspace_id !== filters.workspace_id) continue;
+      for (const currentGoalId of goalIds) {
+        await withGoalLock(currentGoalId, async () => {
+          const entry = await loadGoalIndex(currentGoalId);
+          if (entry.chunks.length === 0) return;
 
-        const vec = entry.vectors[i];
-        if (!vec || vec.length !== queryVector.length) continue;
-        const score = cosineSimilarity(queryVector, vec);
-        scored.push({ ...chunk, score });
+          for (let i = 0; i < entry.chunks.length; i++) {
+            const chunk = entry.chunks[i];
+            // Apply simple filters
+            if (filters.source_type && chunk.metadata?.source_type !== filters.source_type) continue;
+            if (filters.goal_id && chunk.metadata?.goal_id !== filters.goal_id) continue;
+            if (filters.workspace_id && chunk.metadata?.workspace_id !== filters.workspace_id) continue;
+
+            const vec = entry.vectors[i];
+            if (!vec || vec.length !== queryVector.length) continue;
+            const score = cosineSimilarity(queryVector, vec);
+            scored.push({ ...chunk, score });
+          }
+        });
       }
 
       scored.sort((a, b) => b.score - a.score);
       return scored.slice(0, topK);
-      });
     },
 
     async removeGoalChunks(goalId) {

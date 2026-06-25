@@ -10,6 +10,20 @@ Concise operational guide for the npm-managed GPTWork service. Covers health che
 
 ## Health Checks
 
+### 0. Delivery Verification and Demo
+
+Use the CLI before handing a build to a user:
+
+```bash
+cd backend
+node bin/gptwork.mjs verify-delivery
+node bin/gptwork.mjs demo-multi-task --dry-run
+```
+
+`verify-delivery` runs the syntax/import/test/release delivery gates. `demo-multi-task` prints the expected three-task delivery shape: task id, goal id, branch, worktree path, result path, and verification path.
+
+Automatic completion requires `verification.passed === true`. Tasks with failed verification, exhausted repair attempts, integration conflicts, or unsupported workspace modes remain in `waiting_for_review` / `waiting_for_repair` for operator review.
+
 ### 1. Basic Liveness
 
 ```bash

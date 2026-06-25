@@ -18,6 +18,91 @@ import { createGoal } from './goal-task-goals.mjs';
 import { determineHealingAction } from './self-healing-policy.mjs';
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 
+const RETRY_HEALING_ACTIONS = new Set([
+  "cleanup_and_retry",
+  "compact_and_retry",
+  "reconcile_lock_and_retry",
+  "recover_and_retry",
+  "fallback_parse_and_retry",
+]);
+
+function applyRepairMetadata(args = {}, repairGoal = {}) {
+  for (const key of [
+    "root_task_id",
+    "parent_task_id",
+    "repair_attempt",
+    "max_attempts",
+    "repair_of_goal_id",
+    "repair_of_task_id",
+    "repair_of_worktree",
+    "repair_of_branch",
+  ]) {
+    if (repairGoal[key] !== undefined) args[key] = repairGoal[key];
+  }
+  return args;
+}
+
+function statusForHealingAction(action) {
+  if (action === "waiting_for_review") return "waiting_for_review";
+  if (RETRY_HEALING_ACTIONS.has(action)) return "queued";
+  return "waiting_for_review";
+}
+
+async function parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error, healingAction, prefix }) {
+  const status = statusForHealingAction(healingAction.action);
+  const retryCount = RETRY_HEALING_ACTIONS.has(healingAction.action) ? (task.healing_retry_count || 0) + 1 : (task.healing_retry_count || 0);
+  const summary = `${prefix}: ${error?.message || String(error || "unknown error")}`;
+  if (repoLockPath) {
+    try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch {}
+  }
+  await updateTaskFn(store, task.id, (item) => {
+    item.status = status;
+    if (RETRY_HEALING_ACTIONS.has(healingAction.action)) item.healing_retry_count = retryCount;
+    item.result = {
+      kind: "operational_error",
+      summary,
+      completed_at: new Date().toISOString(),
+      error_code: error?.code || null,
+      healing_action: healingAction.action,
+      healing_retry_count: retryCount,
+      retry_budget: healingAction.retry_budget ?? null,
+      reason: healingAction.reason || summary,
+    };
+    item.logs.push({ time: new Date().toISOString(), message: summary });
+    item.logs.push({ time: new Date().toISOString(), message: `[worker] self-healing ${healingAction.action}: status=${status} retry=${retryCount} reason=${healingAction.reason || "none"}` });
+  });
+  if (goal) {
+    try {
+      await appendGoalMessageFn(store, config, {
+        goal_id: goal.id,
+        role: "codex",
+        content: summary + " (healing: " + healingAction.action + ")",
+      }, context);
+    } catch {}
+  }
+  return { task_id: task.id, status, kind: "operational_error", reason: summary, healing_action: healingAction.action, healing_retry_count: retryCount };
+}
+
+function isIntegrationRepairableStatus(status) {
+  return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
+}
+
+function taskWithRepairContext(task, resolvedRepo) {
+  return {
+    ...task,
+    worktree_path: task.worktree_path || resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
+    worktree: task.worktree || {
+      path: resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
+      branch: resolvedRepo?.worktree_lifecycle?.branch_name || resolvedRepo?.task_branch || null,
+    },
+    repo_id: task.repo_id || resolvedRepo?.repo_id || null,
+    result: {
+      ...(task.result || {}),
+      repo_resolution: resolvedRepo || task.result?.repo_resolution || null,
+      worktree_lifecycle: resolvedRepo?.worktree_lifecycle || task.result?.worktree_lifecycle || null,
+    },
+  };
+}
 
 export async function processGeneralTask(store, config, task, context, github) {
   return processGeneralTaskWithDeps(store, config, task, context, github, {});
@@ -187,42 +272,15 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     runId = prepResult.runId;
   } catch (prepErr) {
     // If prepareCodexTaskRun fails (e.g. ENOSPC), classify via self-healing policy
-    // and set appropriate status (waiting_for_review for recoverable, failed otherwise).
-    const failMsg = `[worker] failed during prompt preparation: ${prepErr.message}`;
-    if (repoLockPath) {
-      try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch {}
-    }
+    // and either requeue within budget or park for review.
+    const failMsg = `[worker] failed during prompt preparation`;
     // Classify the error via self-healing policy
     const healingAction = determineHealingActionFn({
       error: prepErr,
       task,
       retryCount: task.healing_retry_count || 0,
     });
-    const taskStatus_ = healingAction.action === "waiting_for_review" ? "failed" : "waiting_for_review";
-    await updateTaskFn(store, task.id, (item) => {
-      item.status = taskStatus_;
-      // Track self-healing retry count for budget enforcement
-      if (healingAction.action !== "waiting_for_review") {
-        item.healing_retry_count = (task.healing_retry_count || 0) + 1;
-      }
-      item.result = {
-        kind: "operational_error",
-        summary: failMsg,
-        completed_at: new Date().toISOString(),
-        error_code: prepErr.code || null,
-      };
-      item.logs.push({ time: new Date().toISOString(), message: failMsg });
-    });
-    if (goal) {
-      try {
-        await appendGoalMessageFn(store, config, {
-          goal_id: goal.id,
-          role: "codex",
-          content: failMsg + " (healing: " + healingAction.action + ")",
-        }, context);
-      } catch {}
-    }
-    return { task_id: task.id, status: taskStatus_, kind: "operational_error", reason: failMsg, healing_action: healingAction.action };
+    return parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error: prepErr, healingAction, prefix: failMsg });
   }
 
   const mode = task.mode || "builder";
@@ -251,14 +309,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       task,
       retryCount: task.healing_retry_count || 0,
     });
-    // Track self-healing retry count for budget enforcement
+    // Execution failures use the same bounded self-healing state machine.
     if (healingAction && healingAction.action !== "waiting_for_review") {
-      try {
-        const newCount = (task.healing_retry_count || 0) + 1;
-        await updateTaskFn(store, task.id, (item) => {
-          item.healing_retry_count = newCount;
-        });
-      } catch {}
+      return parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error: e, healingAction, prefix: "[worker] failed during Codex execution" });
+    }
+    if (healingAction?.action === "waiting_for_review") {
+      return parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error: e, healingAction, prefix: "[worker] failed during Codex execution" });
     }
   } finally {
     try { await rm(promptFile, { force: true }); } catch {}
@@ -421,12 +477,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
     if (!acceptanceResult.passed) {
       // === Acceptance FAILED → attempt repair or escalate ===
-      const canRepair = await shouldAttemptRepairFn({ task, maxAttempts: config.maxRepairAttempts });
+      const canRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts });
       taskResult.acceptance_decision = acceptanceResult.reviewer_decision?.decision || null;
 
       if (canRepair.should_repair) {
         const repairGoal = await createRepairGoalFromFindingsFn({
-          task,
+          task: taskWithRepairContext(task, resolvedRepo),
           goal,
           findings: mergedFindings,
           repairProposals: acceptanceResult.repair_proposals,
@@ -440,7 +496,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
         // Create repair goal/task in the store so it can be picked up by the worker
         try {
-          const repairCreated = await createGoalFn(store, config, {
+          const repairCreated = await createGoalFn(store, config, applyRepairMetadata({
             user_request: repairGoal.user_request,
             goal_prompt: repairGoal.goal_prompt,
             title: 'Repair: ' + task.title + ' (attempt ' + repairGoal.repair_attempt + ')',
@@ -449,7 +505,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             mode: repairGoal.mode || 'builder',
             assign_to_codex: true,
             skip_created_notification: false,
-          });
+          }, repairGoal));
           taskResult.repair_goal_id = repairCreated.goal ? repairCreated.goal.id : null;
           taskResult.repair_task_id = repairCreated.task ? repairCreated.task.id : null;
         } catch (repairErr) {
@@ -489,10 +545,9 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         if (integrationResult.ok) {
           // Integration succeeded — task completes
           taskStatus = 'completed';
-        } else if (integrationResult.status === 'conflict' || integrationResult.status === 'check_failed') {
-          // Integration conflict — create repair or escalate
-          // Integration conflict — create repair or escalate
-          const intCanRepair = await shouldAttemptRepairFn({ task, maxAttempts: 1 });
+        } else if (isIntegrationRepairableStatus(integrationResult.status)) {
+          // Integration failure — create repair or escalate
+          const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           const conflictFindings = [{
             severity: 'blocker',
             code: 'integration_' + integrationResult.status,
@@ -503,12 +558,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
           if (intCanRepair.should_repair) {
             const intRepairGoal = await createRepairGoalFromFindingsFn({
-              task,
+              task: taskWithRepairContext(task, resolvedRepo),
               goal,
               findings: conflictFindings,
               repairProposals: [{
-                title: 'Resolve integration conflict',
-                proposed_action: 'Merge conflict with ' + (config.defaultBranch || 'target branch'),
+                title: 'Resolve integration failure',
+                proposed_action: 'Fix integration ' + integrationResult.status + ' and rerun integration.',
               }],
             });
 
@@ -519,7 +574,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             taskResult.reason = 'integration_' + integrationResult.status + ': ' + (integrationResult.error || 'unknown');
 
             try {
-              const intRepairCreated = await createGoalFn(store, config, {
+              const intRepairCreated = await createGoalFn(store, config, applyRepairMetadata({
                 user_request: intRepairGoal.user_request,
                 goal_prompt: intRepairGoal.goal_prompt,
                 title: 'Repair: ' + task.title + ' (attempt ' + intRepairGoal.repair_attempt + ', integration conflict)',
@@ -528,7 +583,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
                 mode: intRepairGoal.mode || 'builder',
                 assign_to_codex: true,
                 skip_created_notification: false,
-              });
+              }, intRepairGoal));
               taskResult.repair_goal_id = intRepairCreated.goal ? intRepairCreated.goal.id : null;
               taskResult.repair_task_id = intRepairCreated.task ? intRepairCreated.task.id : null;
             } catch (intRepairErr) {

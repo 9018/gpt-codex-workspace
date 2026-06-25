@@ -8,6 +8,17 @@ import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 
+const REPAIR_METADATA_KEYS = [
+  "root_task_id",
+  "parent_task_id",
+  "repair_attempt",
+  "max_attempts",
+  "repair_of_goal_id",
+  "repair_of_task_id",
+  "repair_of_worktree",
+  "repair_of_branch",
+];
+
 export async function createGoal(store, config, args, context = defaultTokenContext("system")) {
   requireScope(context, "task:create");
   requireScope(context, "task:update");
@@ -43,6 +54,9 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     created_at: now,
     updated_at: now
   };
+  for (const key of REPAIR_METADATA_KEYS) {
+    if (args[key] !== undefined) goal[key] = args[key];
+  }
 
   // P0.1: Inject default autonomy/subagent policies if not provided in payload
   const payloadPolicies = args.payload || {};

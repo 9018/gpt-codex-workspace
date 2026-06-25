@@ -421,6 +421,39 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
   };
 }
 
+export async function startQueuedGoals(store, config, opts = {}) {
+  const maxStart = Math.max(1, Math.min(Number(opts.max_start || opts.maxStart || 1) || 1, 50));
+  const dryRun = opts.dry_run === true;
+  const results = [];
+  const blocked = [];
+
+  for (let i = 0; i < maxStart; i++) {
+    const result = await startNextQueuedGoal(store, config, { ...opts, dry_run: dryRun });
+    if (dryRun) {
+      results.push(result);
+      break;
+    }
+    if (result.started) {
+      results.push(result);
+      continue;
+    }
+    if (result.item && result.reason) blocked.push({ queue_id: result.item.queue_id, reason: result.reason });
+    break;
+  }
+
+  const startedResults = results.filter((result) => result.started);
+  return {
+    started: startedResults.length,
+    started_count: startedResults.length,
+    any_started: startedResults.length > 0,
+    results,
+    blocked,
+    reason: startedResults.length > 0
+      ? `Started ${startedResults.length} queued goal(s)`
+      : (results[0]?.reason || "No eligible queue items"),
+  };
+}
+
 /**
  * Update a queue item by queue_id.
  */

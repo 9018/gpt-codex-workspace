@@ -1,5 +1,19 @@
 # GPTWork Current Status
 
+## 2026-06-25 Delivery Refactor Goal Bundle
+
+**Implemented**: the `gptwork_refactor_goals_detailed` delivery goals now have code-backed verification for per-task worktrees, task execution metadata, queue concurrency, worktree cwd execution, independent acceptance verification, retry/repair state, finalizer queue sync, context retrieval sources, agent run summaries, and user-facing delivery CLI commands.
+
+User-facing commands:
+
+```bash
+cd backend
+node bin/gptwork.mjs verify-delivery
+node bin/gptwork.mjs demo-multi-task --dry-run
+```
+
+`demo-multi-task` reports worktree, branch, task, goal, result, and verification paths. Automatic completion is limited to tasks with `verification.passed === true`; failed verification or repair-budget exhaustion remains visible as `waiting_for_review` / `waiting_for_repair`.
+
 ## 2026-06-22 Queue Tool Exposure + Card v2 Display Fix
 
 **Fixed**: Queue MCP tools were imported but never registered in `createTools()` — tools/list didn't include them. v2 card `mimeType` was `text/html` instead of `text/html;profile=mcp-app`, preventing ChatGPT Apps SDK from recognizing it as a card.

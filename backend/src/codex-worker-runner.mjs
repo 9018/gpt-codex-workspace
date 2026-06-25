@@ -8,7 +8,7 @@ import { normalizeLegacyModes, updateTask } from "./task-lifecycle.mjs";
 import { isCodexSessionInventoryTask } from "./task-status.mjs";
 import { completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
-import { startNextQueuedGoal } from "./goal-queue.mjs";
+import { startQueuedGoals } from "./goal-queue.mjs";
 
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
@@ -127,14 +127,20 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   );
 
   let queueAutostart = null;
-  if (candidates.length === 0) {
-    queueAutostart = await startNextQueuedGoal(store, config).catch((error) => ({
-      started: false,
-      item: null,
-      task: null,
+  const desiredActiveCandidates = Math.min(maxConcurrency, maxTasks);
+  const availableQueueSlots = Math.max(0, desiredActiveCandidates - candidates.length);
+  if (availableQueueSlots > 0) {
+    const batchAutostart = await startQueuedGoals(store, config, { max_start: availableQueueSlots }).catch((error) => ({
+      started_count: 0,
+      any_started: false,
+      results: [],
       reason: `queue autostart failed: ${errorMessage(error)}`,
     }));
-    if (queueAutostart?.started) {
+    queueAutostart = {
+      ...batchAutostart,
+      started: Boolean(batchAutostart.any_started || batchAutostart.started_count > 0),
+    };
+    if (queueAutostart.started) {
       candidates = store.getCodexActiveQueueCandidates(
         ["assigned", "queued", "waiting_for_lock"],
         maxTasks

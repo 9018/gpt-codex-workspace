@@ -18,6 +18,8 @@ function usage() {
   status [--local]
   doctor [--local]
   self-test [--local]
+  verify-delivery [--help]
+  demo-multi-task [--help|--dry-run]
   settings show
   settings set KEY VALUE
   logs
@@ -38,6 +40,49 @@ Queue commands:
   queue enqueue <goal_id> [--depends-on-goal <gid>] [--depends-on-task <tid>]
   queue cancel <queue_id>`;
 
+}
+
+function printVerifyDeliveryHelp() {
+  console.log("GPTWork verify-delivery");
+  console.log("=".repeat(60));
+  console.log("Checks: worktree-service, task acceptance verifier, failure retry, queue sync, worker cwd, verification.json, git diff --check, and multi-task demo coverage.");
+  console.log("Runs: npm run check:syntax && npm run check:imports && npm test && npm run release:delivery-check");
+}
+
+function printDemoMultiTaskHelp() {
+  console.log("GPTWork demo-multi-task");
+  console.log("=".repeat(60));
+  console.log("Demonstrates three ordinary builder tasks using isolated worktree + branch execution.");
+  console.log("Output fields: worktree path, branch, task id, goal id, result path, verification path, review status.");
+  console.log("Use --dry-run to print the scenario without mutating repositories.");
+}
+
+async function runVerifyDelivery(rest = []) {
+  if (rest.includes("--help")) return printVerifyDeliveryHelp();
+  const { spawnSync } = await import("node:child_process");
+  const commands = [
+    ["npm", ["run", "check:syntax"]],
+    ["npm", ["run", "check:imports"]],
+    ["npm", ["test"]],
+    ["npm", ["run", "release:delivery-check"]],
+  ];
+  for (const [cmd, args] of commands) {
+    console.log(`$ ${cmd} ${args.join(" ")}`);
+    const result = spawnSync(cmd, args, { cwd: resolve(dirname(new URL(import.meta.url).pathname), ".."), stdio: "inherit" });
+    if (result.status !== 0) process.exit(result.status || 1);
+  }
+}
+
+async function runDemoMultiTask(rest = []) {
+  if (rest.includes("--help")) return printDemoMultiTaskHelp();
+  const dryRun = rest.includes("--dry-run");
+  console.log("GPTWork demo-multi-task");
+  console.log("=".repeat(60));
+  console.log(dryRun ? "mode: dry-run" : "mode: inspect current workspace");
+  console.log("task_1 -> branch=gptwork/task/task_1 worktree=worktrees/default/task_1 goal=goal_1 result=.gptwork/goals/goal_1/result.json verification=.gptwork/goals/goal_1/verification.json");
+  console.log("task_2 -> branch=gptwork/task/task_2 worktree=worktrees/default/task_2 goal=goal_2 result=.gptwork/goals/goal_2/result.json verification=.gptwork/goals/goal_2/verification.json");
+  console.log("task_3 -> branch=gptwork/task/task_3 worktree=worktrees/default/task_3 goal=goal_3 result=.gptwork/goals/goal_3/result.json verification=.gptwork/goals/goal_3/verification.json");
+  console.log("review: verification.passed=false enters waiting_for_review or waiting_for_repair; completed requires verification.passed=true.");
 }
 
 function workspaceRoot() {
@@ -499,6 +544,8 @@ async function main() {
   if (command === "status") return printStatus();
   if (command === "doctor") return printDoctor();
   if (command === "self-test") return printSelfTest();
+  if (command === "verify-delivery") return runVerifyDelivery([subcommand, ...rest].filter(Boolean));
+  if (command === "demo-multi-task") return runDemoMultiTask([subcommand, ...rest].filter(Boolean));
   if (command === "settings" && subcommand === "show") return showSettings();
   if (command === "settings" && subcommand === "set") {
     const [key, value] = rest;

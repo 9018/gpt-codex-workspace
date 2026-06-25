@@ -14,6 +14,43 @@ import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 
+function applyRepairMetadata(args = {}, repairGoal = {}) {
+  for (const key of [
+    "root_task_id",
+    "parent_task_id",
+    "repair_attempt",
+    "max_attempts",
+    "repair_of_goal_id",
+    "repair_of_task_id",
+    "repair_of_worktree",
+    "repair_of_branch",
+  ]) {
+    if (repairGoal[key] !== undefined) args[key] = repairGoal[key];
+  }
+  return args;
+}
+
+function isIntegrationRepairableStatus(status) {
+  return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
+}
+
+function taskWithRepairContext(task, resolvedRepo) {
+  return {
+    ...task,
+    worktree_path: task.worktree_path || resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
+    worktree: task.worktree || {
+      path: resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
+      branch: resolvedRepo?.worktree_lifecycle?.branch_name || resolvedRepo?.task_branch || null,
+    },
+    repo_id: task.repo_id || resolvedRepo?.repo_id || null,
+    result: {
+      ...(task.result || {}),
+      repo_resolution: resolvedRepo || task.result?.repo_resolution || null,
+      worktree_lifecycle: resolvedRepo?.worktree_lifecycle || task.result?.worktree_lifecycle || null,
+    },
+  };
+}
+
 
 const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
 
@@ -87,15 +124,15 @@ export async function finalizeCodexTaskRun({
         if (integrationResult.ok) {
           taskStatus = "completed";
           taskResult.integration = { status: "completed", ...integrationResult };
-        } else if (integrationResult.status === "conflict" || integrationResult.status === "check_failed") {
+        } else if (isIntegrationRepairableStatus(integrationResult.status)) {
           // Integration failed — create repair or escalate
-          const intCanRepair = shouldAttemptRepairFn({ task, maxAttempts: 1 });
+          const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           if (intCanRepair.should_repair) {
             const intRepairGoal = createRepairGoalFromFindingsFn({
-              task,
+              task: taskWithRepairContext(task, resolvedRepo),
               goal,
               findings: [{ severity: "blocker", code: "integration_" + integrationResult.status, message: integrationResult.error || "Integration " + integrationResult.status, source: "integration_queue" }],
-              repairProposals: [{ title: "Resolve integration conflict", proposed_action: "Merge conflict with " + (config.defaultBranch || "target branch") }],
+              repairProposals: [{ title: "Resolve integration failure", proposed_action: "Fix integration " + integrationResult.status + " and rerun integration." }],
             });
             taskStatus = "waiting_for_repair";
             taskResult.repair_goal = intRepairGoal;
@@ -103,7 +140,7 @@ export async function finalizeCodexTaskRun({
             taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
             // Attempt to create repair goal
             try {
-              const created = await createGoalFn(store, config, {
+              const created = await createGoalFn(store, config, applyRepairMetadata({
                 user_request: intRepairGoal.user_request,
                 goal_prompt: intRepairGoal.goal_prompt,
                 title: "Repair: " + task.title + " (integration conflict)",
@@ -112,7 +149,7 @@ export async function finalizeCodexTaskRun({
                 mode: intRepairGoal.mode || "builder",
                 assign_to_codex: true,
                 skip_created_notification: false,
-              });
+              }, intRepairGoal));
               taskResult.repair_goal_id = created.goal?.id || null;
               taskResult.repair_task_id = created.task?.id || null;
             } catch {}
@@ -177,10 +214,10 @@ export async function finalizeCodexTaskRun({
       await writeFileFn(verificationPath, JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
     }
     if (verification.passed !== true) {
-      const repairDecision = shouldAttemptRepairFn({ task, maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
+      const repairDecision = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
       if (repairDecision.should_repair && failureClassRequiresRepairCompat(verification.failure_class)) {
         const repairGoal = createRepairGoalFromFindingsFn({
-          task,
+          task: taskWithRepairContext(task, resolvedRepo),
           goal,
           findings: verification.findings || [],
           repairProposals: [{ title: `Repair ${verification.failure_class || "verification"}`, proposed_action: "Fix verification failure and rerun verifier." }],
@@ -190,7 +227,7 @@ export async function finalizeCodexTaskRun({
         taskResult.repair_attempt = repairGoal.repair_attempt;
         taskResult.reason = `verification_failed: ${repairDecision.reason}`;
         try {
-          const created = await createGoalFn(store, config, {
+          const created = await createGoalFn(store, config, applyRepairMetadata({
             user_request: repairGoal.user_request,
             goal_prompt: repairGoal.goal_prompt,
             title: `Repair: ${task.title || task.id} (attempt ${repairGoal.repair_attempt})`,
@@ -199,7 +236,7 @@ export async function finalizeCodexTaskRun({
             mode: repairGoal.mode || "builder",
             assign_to_codex: true,
             skip_created_notification: false,
-          });
+          }, repairGoal));
           taskResult.repair_goal_id = created.goal?.id || null;
           taskResult.repair_task_id = created.task?.id || null;
         } catch (err) {

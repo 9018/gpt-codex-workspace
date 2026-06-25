@@ -20,6 +20,18 @@ import { randomUUID } from 'node:crypto';
 export function createRepairGoalFromFindings({ task, goal, findings, repairProposals } = {}) {
   const rootTaskId = task.root_task_id || task.id;
   const attempt = (task.repair_attempt || 0) + 1;
+  const maxAttempts = task.max_attempts || task.maxAttempts || Number.parseInt(process.env.GPTWORK_MAX_REPAIR_ATTEMPTS || '2', 10);
+  const repairOfWorktree = task.repair_of_worktree
+    || task.worktree_path
+    || task.worktree?.path
+    || task.result?.repo_resolution?.task_worktree_path
+    || task.result?.worktree_lifecycle?.worktree_path
+    || null;
+  const repairOfBranch = task.repair_of_branch
+    || task.worktree?.branch
+    || task.result?.worktree_lifecycle?.branch_name
+    || task.result?.repo_resolution?.worktree_lifecycle?.branch_name
+    || null;
 
   const repairPrompt = [
     `# Repair Task: ${task.title}`,
@@ -31,6 +43,12 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     '',
     '## What Was Changed (Previous Attempt Summary)',
     task.result?.summary || '(no previous result summary available)',
+    '',
+    '## Original Failure Context',
+    `Original failure goal: ${goal?.id || task.goal_id || '(unknown)'}`,
+    `Original failure task: ${task.id || '(unknown)'}`,
+    `Original failure worktree: ${repairOfWorktree || '(not recorded)'}`,
+    `Original failure branch: ${repairOfBranch || '(not recorded)'}`,
     '',
     '## Acceptance Findings That Need Repair',
     ...(Array.isArray(findings) ? findings.map((f, i) => `${i + 1}. [${f.severity}] ${f.code}: ${f.message}`) : ['(no findings)']),
@@ -50,6 +68,11 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     parent_task_id: task.id,
     root_task_id: rootTaskId,
     repair_attempt: attempt,
+    max_attempts: maxAttempts,
+    repair_of_goal_id: goal?.id || task.goal_id || null,
+    repair_of_task_id: task.id || null,
+    repair_of_worktree: repairOfWorktree,
+    repair_of_branch: repairOfBranch,
     reason: findings?.[0]?.message || 'acceptance_failure',
     acceptance_findings: findings || [],
     repair_proposals: repairProposals || [],
@@ -69,20 +92,37 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
  * @param {number} [options.maxAttempts] - Max repair attempts (default from env or 2)
  * @returns {{ should_repair: boolean, reason: string }}
  */
-export function shouldAttemptRepair({ task = {}, maxAttempts } = {}) {
+export function shouldAttemptRepair({ task = {}, tasks = [], maxAttempts } = {}) {
+  return shouldAttemptRepairWithLineage({ task, tasks, maxAttempts });
+}
+
+export function shouldAttemptRepairWithLineage({ task = {}, tasks = [], maxAttempts } = {}) {
   const max = maxAttempts != null ? maxAttempts : (parseInt(process.env.GPTWORK_MAX_REPAIR_ATTEMPTS || '2', 10));
-  const attempt = task.repair_attempt || 0;
+  const rootTaskId = task.root_task_id || task.id;
+  const lineageAttempts = Array.isArray(tasks)
+    ? tasks
+        .filter((candidate) => {
+          const candidateRoot = candidate.root_task_id || candidate.id;
+          return rootTaskId && candidateRoot === rootTaskId;
+        })
+        .map((candidate) => Number(candidate.repair_attempt || 0))
+    : [];
+  const attempt = Math.max(Number(task.repair_attempt || 0), ...lineageAttempts, 0);
 
   if (attempt >= max) {
     return {
       should_repair: false,
       reason: `Repair attempt ${attempt + 1} exceeds max ${max}. Waiting for review.`,
+      current_attempt: attempt,
+      max_attempts: max,
     };
   }
 
   return {
     should_repair: true,
     reason: `Repair attempt ${attempt + 1}/${max}`,
+    current_attempt: attempt,
+    max_attempts: max,
   };
 }
 

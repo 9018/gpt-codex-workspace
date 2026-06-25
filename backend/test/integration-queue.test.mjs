@@ -10,7 +10,28 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { isIntegrationLocked, releaseIntegrationLock } from "../src/integration-queue.mjs";
+import { execFileSync } from "node:child_process";
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
+import { isIntegrationLocked, releaseIntegrationLock, runIntegrationQueue } from "../src/integration-queue.mjs";
+
+function initRepoWithoutRemote() {
+  const dir = mkdtempSync(join(tmpdir(), "gptwork-integration-no-remote-"));
+  const repo = join(dir, "repo");
+  mkdirSync(repo, { recursive: true });
+  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+  writeFileSync(join(repo, "README.md"), "initial\n", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["checkout", "-b", "task_branch"], { cwd: repo, stdio: "ignore" });
+  writeFileSync(join(repo, "feature.txt"), "feature\n", "utf8");
+  execFileSync("git", ["add", "feature.txt"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "feature"], { cwd: repo, stdio: "ignore" });
+  return { dir, repo };
+}
 
 // ===========================================================================
 // Tests for lock management
@@ -42,6 +63,48 @@ test("integration-queue exports expected symbols", async () => {
   assert.equal(typeof mod.runIntegrationQueue, "function");
   assert.equal(typeof mod.isIntegrationLocked, "function");
   assert.equal(typeof mod.releaseIntegrationLock, "function");
+});
+
+test("runIntegrationQueue push_branch returns push_failed when git push fails", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-no-remote",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "push_branch",
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "push_failed");
+    assert.equal(result.pushed, false);
+    assert.match(result.error, /push/i);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("runIntegrationQueue open_pr returns push_failed before attempting PR when push fails", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-open-pr-no-remote",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "open_pr",
+    });
+
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "push_failed");
+    assert.equal(result.pushed, false);
+    assert.equal(result.pr_opened, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 // ===========================================================================

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 
 export function defaultTaskExecutionFields(mode = "builder") {
-  const isOrdinaryCodeTask = mode !== "readonly";
+  const isOrdinaryCodeTask = mode === "builder";
   return {
     execution_mode: isOrdinaryCodeTask ? "worktree" : "canonical",
     worktree: isOrdinaryCodeTask ? {
@@ -30,7 +30,7 @@ export function defaultTaskExecutionFields(mode = "builder") {
 export function buildGoalTask(goal, conversation, createdBy) {
   const now = goal.created_at;
   const mode = goal.mode || "builder";
-  return {
+  const task = {
     id: `task_${randomUUID()}`,
     project_id: goal.project_id,
     workspace_id: goal.workspace_id,
@@ -64,6 +64,19 @@ export function buildGoalTask(goal, conversation, createdBy) {
     created_at: now,
     updated_at: now
   };
+  for (const key of [
+    "root_task_id",
+    "parent_task_id",
+    "repair_attempt",
+    "max_attempts",
+    "repair_of_goal_id",
+    "repair_of_task_id",
+    "repair_of_worktree",
+    "repair_of_branch",
+  ]) {
+    if (goal[key] !== undefined) task[key] = goal[key];
+  }
+  return task;
 }
 
 
