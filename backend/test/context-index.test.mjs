@@ -705,3 +705,64 @@ describe("P1: loadPriorResults export", () => {
     }
   });
 });
+
+// ===========================================================================
+// P0: Issue 6 — maxGoalsScanned limits cross-goal scanning (regression test)
+// ===========================================================================
+
+describe("zvec-store — maxGoalsScanned limits (Issue 6)", () => {
+
+  it("local store search with maxGoalsScanned limits scanned goals when no goal_id filter", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-issue6-"));
+    try {
+      const store = zvecStore.createLocalStore({
+        workspaceRoot: tmpDir,
+        dimension: 2,
+        maxGoalsScanned: 2,
+      });
+
+      // Create chunks for 3 different goals
+      for (const gid of ["g_a", "g_b", "g_c"]) {
+        await store.addChunks(
+          [{ id: `c_${gid}`, text: `content for ${gid}`, tokens: 3, metadata: { goal_id: gid, source_type: "goal" } }],
+          [[1, 0]]
+        );
+      }
+
+      // Search without goal_id filter — should only scan up to maxGoalsScanned (2)
+      const results = await store.search([1, 0], 10, {});
+      // With maxGoalsScanned=2, at most 2 goals' vectors are returned
+      assert.ok(results.length <= 2, "should limit to maxGoalsScanned goals when no goal_id filter");
+
+      // Search with specific goal_id should still work and return all from that goal
+      const specificResults = await store.search([1, 0], 10, { goal_id: "g_c" });
+      assert.equal(specificResults.length, 1);
+      assert.equal(specificResults[0].metadata?.goal_id, "g_c");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("local store search with maxGoalsScanned default does not affect specific goal_id retrieval", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-issue6-specific-"));
+    try {
+      // Use default maxGoalsScanned (should be 50)
+      const store = zvecStore.createLocalStore({
+        workspaceRoot: tmpDir,
+        dimension: 2,
+      });
+
+      await store.addChunks(
+        [{ id: "c1", text: "specific goal content", tokens: 3, metadata: { goal_id: "g_specific", source_type: "goal" } }],
+        [[1, 0]]
+      );
+
+      // Specific goal_id retrieval should find the chunk regardless of maxGoalsScanned
+      const results = await store.search([1, 0], 10, { goal_id: "g_specific" });
+      assert.equal(results.length, 1);
+      assert.equal(results[0].id, "c1");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

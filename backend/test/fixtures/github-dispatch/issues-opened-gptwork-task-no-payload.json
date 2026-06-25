@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 130,
+    "title": "[Task] Some regular task [queued]",
+    "body": "**Task ID**: `task_abc123`\n\nThis is a regular synced task issue, not a dispatch payload.",
+    "labels": [
+      { "name": "gptwork-task" }
+    ]
+  }
+}

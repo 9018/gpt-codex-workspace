@@ -1127,3 +1127,145 @@ test("goal-queue: dry_run does not write any state changes", async () => {
   assert.equal(store.state.goal_queue[0].task_id, null, "task_id should not be set in dry_run");
   assert.equal(store.state.tasks.length, 0, "no tasks should be created in dry_run");
 });
+
+// ===========================================================================
+// P0: Issue 1 — Queue task mode preserves goal mode (regression test)
+// ===========================================================================
+
+test("goal-queue: task mode preserves deploy goal mode (Issue 1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-issue1-deploy-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_deploy_mode", "Deploy Mode Goal", "open", { mode: "deploy" });
+  addGoalToQueue(store, "queue_deploy_mode", "goal_deploy_mode", 1, "waiting");
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+  const config = { defaultWorkspaceRoot: dir, defaultRepoPath: repo, enableTaskWorktrees: false };
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+
+  assert.equal(result.started, true, "deploy mode goal should start");
+  assert.ok(result.task, "task should be created");
+  assert.equal(result.task.mode, "deploy", "task mode should be 'deploy', matching goal mode");
+
+  // Fallback: goal without a mode should get "builder"
+  addGoal(store, "goal_no_mode", "No Mode Goal", "open", {});
+  addGoalToQueue(store, "queue_no_mode", "goal_no_mode", 2, "waiting");
+  await store.save();
+
+  const result2 = await startNextQueuedGoal(store, config, { dry_run: false });
+  assert.equal(result2.started, true, "no-mode goal should start");
+  assert.equal(result2.task.mode, "builder", "task mode should fall back to 'builder'");
+});
+
+// ===========================================================================
+// P0: Issue 5 — Single bad queue item (worktree error) does not block subsequent
+// ===========================================================================
+
+test("goal-queue: first item worktree error does not block second eligible item (Issue 5)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-issue5-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_bad_worktree", "Bad Worktree", "open");
+  addGoal(store, "goal_good", "Good Goal", "open");
+  addGoalToQueue(store, "queue_bad_worktree", "goal_bad_worktree", 1, "waiting");
+  addGoalToQueue(store, "queue_good", "goal_good", 2, "waiting");
+  await store.save();
+
+  const { startNextQueuedGoal } = await import("../src/goal-queue.mjs");
+
+  const config = {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: repo,
+    enableTaskWorktrees: false,
+    repoResolver: async (taskLike) => {
+      if (taskLike.goal_id === "goal_bad_worktree") {
+        return {
+          repo_id: "default",
+          canonical_repo_path: repo,
+          task_worktree_path: null,
+          uses_default_fallback: false,
+          worktree_lifecycle: { ok: false, error: "simulated worktree failure" },
+        };
+      }
+      return {
+        repo_id: "default",
+        canonical_repo_path: repo,
+        task_worktree_path: null,
+        uses_default_fallback: false,
+        worktree_lifecycle: null,
+      };
+    },
+  };
+
+  // This should start the second (good) item, skipping the first
+  const result = await startNextQueuedGoal(store, config, { dry_run: false });
+
+  assert.equal(result.started, true, "should start the good item despite blocked first item");
+  assert.equal(result.item.queue_id, "queue_good", "should have started the second item");
+  assert.equal(result.item.goal_id, "goal_good", "should start the good goal");
+
+  // First item should be marked as blocked
+  await store.load();
+  const badItem = store.state.goal_queue.find((i) => i.queue_id === "queue_bad_worktree");
+  assert.equal(badItem.status, "blocked", "bad worktree item should be blocked");
+  assert.ok(badItem.blocked_reason && badItem.blocked_reason.includes("worktree"), "blocked reason should mention worktree");
+
+  // Second item should be running
+  const goodItem = store.state.goal_queue.find((i) => i.queue_id === "queue_good");
+  assert.equal(goodItem.status, "running", "good item should be running");
+});
+
+// ===========================================================================
+// P0: Issue 5 — startQueuedGoals continues past blocked items
+// ===========================================================================
+
+test("goal-queue: startQueuedGoals returns blocked summary alongside started items (Issue 5)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-issue5-batch-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_blocked_a", "Blocked A", "open");
+  addGoal(store, "goal_ok_b", "OK B", "open");
+  addGoalToQueue(store, "queue_blocked_a", "goal_blocked_a", 1, "waiting");
+  addGoalToQueue(store, "queue_ok_b", "goal_ok_b", 2, "waiting");
+  await store.save();
+
+  const { startQueuedGoals } = await import("../src/goal-queue.mjs");
+
+  const config = {
+    defaultWorkspaceRoot: dir,
+    defaultRepoPath: repo,
+    enableTaskWorktrees: false,
+    repoResolver: async (taskLike) => {
+      if (taskLike.goal_id === "goal_blocked_a") {
+        return {
+          repo_id: "default",
+          canonical_repo_path: repo,
+          task_worktree_path: null,
+          uses_default_fallback: false,
+          worktree_lifecycle: { ok: false, error: "simulated failure A" },
+        };
+      }
+      return {
+        repo_id: "default",
+        canonical_repo_path: repo,
+        task_worktree_path: null,
+        uses_default_fallback: false,
+        worktree_lifecycle: null,
+      };
+    },
+  };
+
+  const result = await startQueuedGoals(store, config, { max_start: 2 });
+
+  assert.equal(result.started, 1, "should start 1 item (the non-blocked one)");
+  assert.ok(result.any_started, "should have started at least one");
+  assert.ok(result.blocked.length >= 1, "should report blocked item in summary");
+  assert.ok(result.blocked.some((b) => b.queue_id === "queue_blocked_a"), "blocked summary should include the bad item");
+});
