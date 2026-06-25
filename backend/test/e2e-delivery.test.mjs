@@ -1,195 +1,280 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+
+import { StateStore } from '../src/state-store.mjs';
+import { enqueueGoal, startNextQueuedGoal } from '../src/goal-queue.mjs';
+import { processGeneralTaskWithDeps } from '../src/task-general-processor.mjs';
+
+const ctx = {
+  user_id: 'test_user',
+  project_ids: ['*'],
+  workspace_ids: ['*'],
+  scopes: ['task:create', 'task:update', 'workspace:read', 'project:read', 'workspace:write'],
+};
 
 function initGitRepo(dir) {
   execFileSync('git', ['init', '-b', 'main', dir], { stdio: 'pipe' });
   execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
-  execFileSync('git', ['config', 'user.name', 'Test'], { cwd: dir });
-}
-
-function initialCommit(dir) {
-  writeFileSync(join(dir, '.gitkeep'), '');
-  execFileSync('git', ['add', '.'], { cwd: dir });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+  writeFileSync(join(dir, 'README.md'), 'initial\n', 'utf8');
+  execFileSync('git', ['add', 'README.md'], { cwd: dir, stdio: 'pipe' });
   execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir, stdio: 'pipe' });
 }
 
-/* ------------------------------------------------------------------ */
-/*  Test 1: 3 tasks with distinct branch references                    */
-/* ------------------------------------------------------------------ */
-test('delivery: 3 tasks with distinct branch references', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-test-'));
-  const repo = join(root, 'repo');
-  mkdirSync(repo, { recursive: true });
-  initGitRepo(repo);
-  initialCommit(repo);
-
-  const tasks = [
-    { id: 'task_001', goal: 'goal_login' },
-    { id: 'task_002', goal: 'goal_search' },
-    { id: 'task_003', goal: 'goal_broken' },
-  ];
-
-  const worktreePaths = [];
-  for (const t of tasks) {
-    const wtPath = join(root, 'worktrees', t.id);
-    mkdirSync(wtPath, { recursive: true });
-    execFileSync('git', ['worktree', 'add', wtPath, '-b', `gptwork/${t.id}`, 'HEAD'], {
-      cwd: repo, stdio: 'pipe', timeout: 30000,
-    });
-    worktreePaths.push(wtPath);
-  }
-
-  assert.equal(worktreePaths.length, 3, 'should have 3 worktrees');
-
-  for (let i = 0; i < 3; i++) {
-    const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], {
-      cwd: worktreePaths[i], encoding: 'utf8', timeout: 5000,
-    });
-    assert.ok(branch.trim().startsWith('gptwork/'),
-      `worktree ${i} should be on gptwork branch: ${branch.trim()}`);
-  }
-
-  for (const wt of worktreePaths) {
-    execFileSync('git', ['worktree', 'remove', '--force', wt], { cwd: repo, stdio: 'pipe' });
-  }
-});
-
-/* ------------------------------------------------------------------ */
-/*  Test 2: Multi-worktree isolation                                   */
-/* ------------------------------------------------------------------ */
-test('delivery: multi-worktree isolation', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-isolation-'));
-  const repo = join(root, 'repo');
-  mkdirSync(repo, { recursive: true });
-  initGitRepo(repo);
-  initialCommit(repo);
-
-  const wt1 = join(root, 'wt_a');
-  const wt2 = join(root, 'wt_b');
-  mkdirSync(wt1, { recursive: true });
-  mkdirSync(wt2, { recursive: true });
-
-  execFileSync('git', ['worktree', 'add', wt1, '-b', 'gptwork/task_a', 'HEAD'], {
-    cwd: repo, stdio: 'pipe', timeout: 30000,
-  });
-  execFileSync('git', ['worktree', 'add', wt2, '-b', 'gptwork/task_b', 'HEAD'], {
-    cwd: repo, stdio: 'pipe', timeout: 30000,
-  });
-
-  // Commit in worktree A
-  writeFileSync(join(wt1, 'a.txt'), 'change from A');
-  execFileSync('git', ['add', '-A'], { cwd: wt1, stdio: 'pipe' });
-  execFileSync('git', ['commit', '-m', 'change in A'], { cwd: wt1, stdio: 'pipe' });
-
-  // Isolation check: B should NOT see A's commit on its own branch
-  // B's own log (HEAD) should only show the initial commit
-  const bHead = execFileSync('git', ['log', '--oneline', 'HEAD'], {
-    cwd: wt2, encoding: 'utf8', timeout: 5000,
-  });
-  const bLines = bHead.trim().split('\n').filter(Boolean);
-  assert.equal(bLines.length, 1, `isolation: worktree B's HEAD should show 1 commit, got ${bLines.length}`);
-
-  // A's own log (HEAD) should show 2 commits (initial + A)
-  const aHead = execFileSync('git', ['log', '--oneline', 'HEAD'], {
-    cwd: wt1, encoding: 'utf8', timeout: 5000,
-  });
-  const aLines = aHead.trim().split('\n').filter(Boolean);
-  assert.ok(aLines.length >= 2, `worktree A should have at least 2 commits, got ${aLines.length}`);
-
-  // A's branch-specific commits (not on main)
-  const aBranchOnly = execFileSync('git', ['log', '--oneline', 'HEAD', '--not', 'main'], {
-    cwd: wt1, encoding: 'utf8', timeout: 5000,
-  });
-  assert.ok(aBranchOnly.trim().length > 0, 'A should have commits not on main');
-
-  execFileSync('git', ['worktree', 'remove', '--force', wt1], { cwd: repo, stdio: 'pipe' });
-  execFileSync('git', ['worktree', 'remove', '--force', wt2], { cwd: repo, stdio: 'pipe' });
-});
-
-/* ------------------------------------------------------------------ */
-/*  Test 3: Simulate acceptance failure and repair flow                */
-/* ------------------------------------------------------------------ */
-test('delivery: acceptance failure and repair flow', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-repair-'));
-  const repo = join(root, 'repo');
-  mkdirSync(repo, { recursive: true });
-  initGitRepo(repo);
-  initialCommit(repo);
-
-  const wtPath = join(root, 'worktrees', 'task_broken');
-  mkdirSync(wtPath, { recursive: true });
-  execFileSync('git', ['worktree', 'add', wtPath, '-b', 'gptwork/task_broken', 'HEAD'], {
-    cwd: repo, stdio: 'pipe', timeout: 30000,
-  });
-
-  // Write broken file with TODO marker
-  writeFileSync(join(wtPath, 'broken.js'), '// TODO: fix this\nthrow new Error("broken");');
-  execFileSync('git', ['add', '-A'], { cwd: wtPath, stdio: 'pipe' });
-  execFileSync('git', ['commit', '-m', 'broken change (intentional)'], { cwd: wtPath, stdio: 'pipe' });
-
-  // Acceptance check: detect failure via TODO marker
-  const content = readFileSync(join(wtPath, 'broken.js'), 'utf8');
-  assert.ok(content.includes('TODO'), 'should detect TODO marker as acceptance failure');
-
-  // Create repair worktree and fix
-  const repairPath = join(root, 'worktrees', 'task_broken-repair-1');
-  mkdirSync(repairPath, { recursive: true });
-  execFileSync('git', ['worktree', 'add', repairPath, '-b', 'gptwork/task_broken-repair-1', 'HEAD'], {
-    cwd: repo, stdio: 'pipe', timeout: 30000,
-  });
-
-  writeFileSync(join(repairPath, 'broken.js'), '// fixed implementation');
-  execFileSync('git', ['add', '-A'], { cwd: repairPath, stdio: 'pipe' });
-  execFileSync('git', ['commit', '-m', 'fix: complete broken implementation'], { cwd: repairPath, stdio: 'pipe' });
-
-  const repairLog = execFileSync('git', ['log', '--oneline', '-1', '--format=%s'], {
-    cwd: repairPath, encoding: 'utf8', timeout: 5000,
-  });
-  assert.ok(repairLog.includes('fix'), `repair commit should exist: ${repairLog.trim()}`);
-
-  execFileSync('git', ['worktree', 'remove', '--force', wtPath], { cwd: repo, stdio: 'pipe' });
-  execFileSync('git', ['worktree', 'remove', '--force', repairPath], { cwd: repo, stdio: 'pipe' });
-});
-
-/* ------------------------------------------------------------------ */
-/*  Test 4: waiting_for_review state simulation                        */
-/* ------------------------------------------------------------------ */
-test('delivery: waiting_for_review state', async () => {
-  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-review-'));
-  const repo = join(root, 'repo');
-  mkdirSync(repo, { recursive: true });
-  initGitRepo(repo);
-  initialCommit(repo);
-
-  const taskDir = join(root, 'tasks', 'task_flaky');
-  mkdirSync(taskDir, { recursive: true });
-
-  const marker = {
-    status: 'waiting_for_review',
-    reason: 'Repair budget exceeded after 2 attempts',
-    parent_task: 'task_flaky',
-    repair_attempts: 2,
+function makeState(root, goals) {
+  const now = new Date().toISOString();
+  return {
+    users: [{ id: 'user_default', name: 'Default User' }],
+    teams: [{ id: 'team_default', name: 'Default Team' }],
+    projects: [{ id: 'default', team_id: 'team_default', name: 'Default Project', default_workspace_id: 'hosted-default', created_at: now, updated_at: now }],
+    workspaces: [{ id: 'hosted-default', project_id: 'default', name: 'Hosted Workspace', type: 'hosted', root, default: true, created_at: now, updated_at: now }],
+    goals: goals.map((id, index) => ({
+      id,
+      project_id: 'default',
+      workspace_id: 'hosted-default',
+      conversation_id: `conv_${id}`,
+      user_request: `Deliver ${id}`,
+      goal_prompt: `Implement ${id}`,
+      context_summary: '',
+      title: `Delivery ${index + 1}`,
+      created_by: 'user_default',
+      assignee: 'codex',
+      status: 'assigned',
+      mode: 'builder',
+      created_at: now,
+      updated_at: now,
+    })),
+    conversations: goals.map((id) => ({
+      id: `conv_${id}`,
+      goal_id: id,
+      project_id: 'default',
+      workspace_id: 'hosted-default',
+      messages: [{ role: 'user', content: `Deliver ${id}`, id: `msg_${id}`, author_id: 'user_default', created_at: now }],
+      created_at: now,
+      updated_at: now,
+    })),
+    memories: [],
+    tasks: [],
+    goal_queue: [],
+    activities: [],
+    audit: [],
   };
+}
 
-  const markerPath = join(taskDir, 'waiting_for_review.json');
-  writeFileSync(markerPath, JSON.stringify(marker, null, 2));
+async function makeStore(root, goals) {
+  const statePath = join(root, 'state.json');
+  writeFileSync(statePath, JSON.stringify(makeState(root, goals), null, 2), 'utf8');
+  const store = new StateStore({ statePath, defaultWorkspaceRoot: root });
+  await store.load();
+  return store;
+}
 
-  // Verify file exists
-  assert.ok(existsSync(markerPath), 'waiting_for_review.json should exist');
+function makeConfig(root, canonicalRepoPath, autoStarted) {
+  return {
+    defaultWorkspaceRoot: root,
+    defaultRepoPath: canonicalRepoPath,
+    defaultBranch: 'HEAD',
+    codexExecTimeout: 10,
+    enableTaskWorktrees: true,
+    maxRepairAttempts: 2,
+    discoverVerificationCommands: false,
+    repoResolver: async () => ({
+      repo_id: 'github.com/acme/repo',
+      canonical_repo_path: canonicalRepoPath,
+      lock_repo_path: canonicalRepoPath,
+      uses_default_fallback: false,
+      worktree_lifecycle: null,
+    }),
+    autoStarted,
+  };
+}
 
-  // Verify content
-  const parsed = JSON.parse(readFileSync(markerPath, 'utf8'));
-  assert.equal(parsed.status, 'waiting_for_review', 'should be waiting_for_review');
-  assert.equal(parsed.repair_attempts, 2, 'should have 2 repair attempts');
-  assert.ok(parsed.reason.includes('Repair budget'), 'should include reason');
+async function runQueuedTask({ store, config, autoStarted, statusByTaskId = new Map(), repair = false }) {
+  let state = await store.load();
+  let runningItem = state.goal_queue.find((item) => item.status === 'running' && item.task_id && !statusByTaskId.has(item.task_id));
+  let task = runningItem ? state.tasks.find((candidate) => candidate.id === runningItem.task_id) : null;
+  let started = { started: false, item: runningItem, task };
+  if (!task) {
+    started = await startNextQueuedGoal(store, config);
+    assert.equal(started.started, true);
+    task = started.task;
+  }
 
-  // Verify it's a valid terminal state
-  assert.ok(
-    parsed.status === 'waiting_for_review' || parsed.status === 'completed',
-    'terminal states: waiting_for_review or completed'
-  );
+  const result = await processGeneralTaskWithDeps(store, config, task, ctx, { syncTask: async () => {} }, {
+    acquireRepoLockFn: async () => ({ acquired: true }),
+    releaseLockForTaskFn: async () => {},
+    loadRestartMarkerFn: async () => null,
+    releaseRepoLockFn: async () => {},
+    prepareCodexTaskRunFn: async ({ goalStateDir }) => {
+      await mkdir(goalStateDir, { recursive: true });
+      const promptFile = join(goalStateDir, 'prompt.txt');
+      await writeFile(promptFile, 'prompt', 'utf8');
+      return { promptFile, runFilePath: null, runId: `run_${task.id}` };
+    },
+    executeCodexTaskRunFn: async ({ executionCwd, resultJsonPath }) => {
+      const taskWorktreePath = join(config.defaultWorkspaceRoot, '.gptwork', 'worktrees', 'github.com-acme-repo', task.id);
+      assert.equal(executionCwd, taskWorktreePath);
+      writeFileSync(join(executionCwd, `${task.id}.txt`), `change for ${task.id}\n`, 'utf8');
+      execFileSync('git', ['add', `${task.id}.txt`], { cwd: executionCwd, stdio: 'pipe' });
+      execFileSync('git', ['commit', '-m', `change ${task.id}`], { cwd: executionCwd, stdio: 'pipe' });
+      const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executionCwd, encoding: 'utf8' }).trim();
+      const parsedResult = {
+        structured: true,
+        status: 'completed',
+        summary: `completed ${task.id}`,
+        changed_files: [`${task.id}.txt`],
+        tests: 'fake executeCodexTaskRunFn: passed',
+        commit,
+        verification: { passed: true, commands: [{ cmd: 'fake verification', exit_code: 0 }] },
+        acceptance_findings: [],
+      };
+      await writeFile(resultJsonPath, JSON.stringify(parsedResult, null, 2), 'utf8');
+      return { cr: { returncode: 0, stdout: '', stderr: '', timed_out: false }, summary: parsedResult.summary, parsedResult };
+    },
+    appendGoalMessageFn: async () => {},
+    selectWorkspaceFn: async () => ({ type: 'hosted', root: config.defaultWorkspaceRoot, id: 'hosted-default' }),
+    runAcceptanceAgentFn: async () => repair
+      ? {
+          passed: false,
+          status: 'needs_fix',
+          profile: 'e2e_repair',
+          findings: [{ severity: 'blocker', code: 'verification_failed', message: 'Acceptance failed', source: 'e2e' }],
+          repair_proposals: [{ title: 'Fix acceptance', proposed_action: 'Address acceptance failure' }],
+          next_tasks: [],
+          reviewer_decision: { role: 'acceptance_agent', summary: 'failed', decision: { status: 'needs_fix', passed: false } },
+        }
+      : {
+          passed: true,
+          status: 'accepted',
+          profile: 'e2e',
+          findings: [],
+          repair_proposals: [],
+          next_tasks: [],
+          reviewer_decision: { role: 'acceptance_agent', summary: 'accepted', decision: { status: 'accepted', passed: true } },
+        },
+    runIntegrationQueueFn: async () => ({ ok: true, status: 'completed' }),
+    verifyTaskCompletionFn: async ({ resultJson, resultJsonPath, repoPath }) => {
+      assert.equal(repoPath, join(config.defaultWorkspaceRoot, '.gptwork', 'worktrees', 'github.com-acme-repo', task.id));
+      assert.equal(resultJson.status, 'completed');
+      const verification = {
+        passed: true,
+        status: 'completed',
+        commands: [{ cmd: 'fake verification', exit_code: 0, stdout_tail: '', stderr_tail: '' }],
+        changed_files: resultJson.changed_files || [],
+        reason_no_tests: null,
+        failure_class: null,
+        requires_review: false,
+        findings: [],
+      };
+      await writeFile(join(resultJsonPath, '..', 'verification.json'), JSON.stringify(verification, null, 2), 'utf8');
+      return verification;
+    },
+    shouldAttemptRepairFn: async () => ({ should_repair: true, reason: 'Repair attempt 1/2' }),
+    createRepairGoalFromFindingsFn: async ({ task: failedTask, findings, repairProposals }) => ({
+      id: `repair_${failedTask.id}_1`,
+      parent_task_id: failedTask.id,
+      root_task_id: failedTask.id,
+      repair_attempt: 1,
+      acceptance_findings: findings,
+      repair_proposals: repairProposals,
+      user_request: `Repair: ${failedTask.title} (attempt 1)`,
+      goal_prompt: `Repair prompt for ${failedTask.id}`,
+      mode: 'builder',
+      workspace_id: 'hosted-default',
+    }),
+    autoStartNextOnTaskCompletedFn: async (storeArg, configArg, completedTask) => {
+      autoStarted.push(completedTask.id);
+      const { autoStartNextOnTaskCompleted } = await import('../src/goal-queue.mjs');
+      return autoStartNextOnTaskCompleted(storeArg, configArg, completedTask);
+    },
+  });
+  statusByTaskId.set(task.id, result.status);
+  return { started, task, result };
+}
+
+test('delivery e2e: queue -> task -> processor -> finalizer creates isolated worktrees and autostarts next', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-real-'));
+  try {
+    const canonicalRepoPath = join(root, 'repo');
+    initGitRepo(canonicalRepoPath);
+    const store = await makeStore(root, ['goal_one', 'goal_two', 'goal_three']);
+    const autoStarted = [];
+    const config = makeConfig(root, canonicalRepoPath, autoStarted);
+
+    for (const goalId of ['goal_one', 'goal_two', 'goal_three']) {
+      const queued = await enqueueGoal(store, goalId, { repo_id: 'github.com/acme/repo', auto_start: true });
+      assert.equal(queued.ok, true);
+    }
+
+    const runs = [];
+    const statuses = new Map();
+    runs.push(await runQueuedTask({ store, config, autoStarted, statusByTaskId: statuses }));
+    runs.push(await runQueuedTask({ store, config, autoStarted, statusByTaskId: statuses }));
+    runs.push(await runQueuedTask({ store, config, autoStarted, statusByTaskId: statuses }));
+
+    assert.equal(runs.length, 3);
+    assert.equal(new Set(runs.map((run) => run.task.result.repo_resolution.task_worktree_path)).size, 3);
+    assert.deepEqual(runs.map((run) => run.result.status), ['completed', 'completed', 'completed']);
+
+    for (const run of runs) {
+      const taskWorktreePath = join(root, '.gptwork', 'worktrees', 'github.com-acme-repo', run.task.id);
+      const task = await store.findTaskById(run.task.id);
+      assert.equal(task.status, 'completed');
+      assert.equal(task.result.repo_resolution.task_worktree_path, taskWorktreePath);
+      assert.equal(task.result.execution_cwd, taskWorktreePath);
+      assert.equal(task.result.execution_cwd_proof.used_task_worktree_path, true);
+      assert.equal(task.result.repo_resolution.worktree_lifecycle.branch_name, `gptwork/task/${run.task.id}`);
+      assert.ok(existsSync(join(root, '.gptwork', 'goals', task.goal_id, 'verification.json')), 'completed task should have verification.json');
+      const verification = JSON.parse(readFileSync(join(root, '.gptwork', 'goals', task.goal_id, 'verification.json'), 'utf8'));
+      assert.equal(verification.passed, true);
+    }
+
+    const state = await store.load();
+    assert.equal(state.goal_queue.length, 3);
+    assert.ok(state.goal_queue.every((item) => item.status === 'completed'));
+    assert.equal(autoStarted.length, 3, 'autoStartNextOnTaskCompleted should be triggered for each completion');
+  } finally {
+    if (!process.env.KEEP_E2E_TMP) rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('delivery e2e: acceptance failure creates repair goal/task and parks original task', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-e2e-repair-real-'));
+  try {
+    const canonicalRepoPath = join(root, 'repo');
+    initGitRepo(canonicalRepoPath);
+    const store = await makeStore(root, ['goal_repair']);
+    const autoStarted = [];
+    const config = makeConfig(root, canonicalRepoPath, autoStarted);
+    const queued = await enqueueGoal(store, 'goal_repair', { repo_id: 'github.com/acme/repo', auto_start: true });
+    assert.equal(queued.ok, true);
+
+    const { task, result } = await runQueuedTask({ store, config, autoStarted, repair: true });
+    assert.equal(result.status, 'waiting_for_repair');
+
+    const originalTask = await store.findTaskById(task.id);
+    assert.equal(originalTask.status, 'waiting_for_repair');
+    assert.equal(originalTask.result.repair_goal.parent_task_id, task.id);
+    assert.ok(originalTask.result.repair_goal_id, 'repair_goal_id should be recorded');
+    assert.ok(originalTask.result.repair_task_id, 'repair_task_id should be recorded');
+
+    const repairGoal = await store.findGoalById(originalTask.result.repair_goal_id);
+    const repairTask = await store.findTaskById(originalTask.result.repair_task_id);
+    assert.ok(repairGoal, 'createGoal should persist a repair goal');
+    assert.ok(repairTask, 'createGoal should persist a repair task');
+    assert.equal(repairTask.status, 'assigned');
+    assert.equal(repairTask.assignee, 'codex');
+
+    const state = await store.load();
+    const queueItem = state.goal_queue.find((item) => item.task_id === task.id);
+    assert.equal(queueItem.status, 'waiting_for_repair');
+    assert.equal(queueItem.failure_class, 'verification_failed');
+  } finally {
+    if (!process.env.KEEP_E2E_TMP) rmSync(root, { recursive: true, force: true });
+  }
 });

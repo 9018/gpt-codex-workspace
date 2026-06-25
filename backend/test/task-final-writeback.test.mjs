@@ -451,3 +451,105 @@ test("task-final-writeback: completed task triggers queue autostart hook", async
   assert.equal(autoStartedTask.id, "task_label_test");
   assert.equal(result.auto_start.auto_started, true);
 });
+
+test("task-final-writeback: synchronizes queue item for terminal and waiting states", async () => {
+  for (const status of ["completed", "failed", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]) {
+    let savedState = null;
+    const args = makeMinimalArgs(status);
+    args.goal = { id: `goal_${status}`, workspace_id: "hosted-default", title: status };
+    args.task = { id: `task_${status}`, goal_id: args.goal.id, logs: [] };
+    args.store = {
+      mutate: async (updater) => {
+        const state = {
+          tasks: [{ id: args.task.id, goal_id: args.goal.id, logs: [] }],
+          goals: [args.goal],
+          goal_queue: [{ queue_id: `queue_${status}`, goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+          activities: [],
+        };
+        const result = await updater(state);
+        savedState = state;
+        return result;
+      },
+    };
+    args.taskResult = {
+      kind: "codex_executed",
+      summary: `${status} summary`,
+      changed_files: [],
+      warnings: [],
+      followups: [],
+      reason: status === "waiting_for_repair" ? "verification_failed: Repair attempt 1/2" : undefined,
+      failure_class: status === "waiting_for_repair" ? "verification_failed" : null,
+    };
+    args.verifyTaskCompletionFn = async () => ({
+      passed: true,
+      status: "completed",
+      commands: [],
+      changed_files: [],
+      reason_no_tests: null,
+      failure_class: null,
+      requires_review: false,
+      findings: [],
+    });
+    args.autoStartNextOnTaskCompletedFn = async () => ({ auto_started: false, details: [] });
+
+    await finalizeCodexTaskRun(args);
+
+    const queueItem = savedState.goal_queue[0];
+    assert.equal(queueItem.status, status);
+    assert.equal(queueItem.completed_task_id, args.task.id);
+    assert.equal(savedState.tasks[0].status, status);
+    assert.equal(savedState.goals[0].status, status);
+  }
+});
+
+test("task-final-writeback: verification failure creates repair goal and records repair ids", async () => {
+  let savedState = null;
+  const args = makeMinimalArgs("completed");
+  args.task = {
+    id: "task_repair_writeback",
+    goal_id: args.goal.id,
+    title: "Original task",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    logs: [],
+  };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ ...args.task, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_repair_writeback", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = { kind: "codex_executed", summary: "needs repair", changed_files: ["src/app.mjs"], warnings: [], followups: [] };
+  args.config.maxRepairAttempts = 2;
+  args.verifyTaskCompletionFn = async () => ({
+    passed: false,
+    status: "waiting_for_review",
+    commands: [{ cmd: "npm test", exit_code: 1, stdout_tail: "", stderr_tail: "failed" }],
+    changed_files: ["src/app.mjs"],
+    reason_no_tests: null,
+    failure_class: "verification_failed",
+    requires_review: true,
+    findings: [{ severity: "blocker", code: "verification_failed", message: "Tests failed", source: "test" }],
+  });
+  args.createGoalFn = async (store, config, payload) => {
+    assert.match(payload.user_request, /^Repair:/);
+    return { goal: { id: "goal_repair_created" }, task: { id: "task_repair_created" } };
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_repair");
+  assert.equal(savedState.tasks[0].status, "waiting_for_repair");
+  assert.equal(savedState.goal_queue[0].status, "waiting_for_repair");
+  assert.equal(savedState.tasks[0].result.repair_goal_id, "goal_repair_created");
+  assert.equal(savedState.tasks[0].result.repair_task_id, "task_repair_created");
+  assert.equal(savedState.tasks[0].result.repair_goal.parent_task_id, "task_repair_writeback");
+});

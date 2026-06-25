@@ -47,7 +47,7 @@ export class StateStore {
     this._idxMemoriesByGoalId = new Map();
 
     // Split codex task indexes: active (pending work) vs terminal (done/failed)
-    const codexActiveStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review"]);
+    const codexActiveStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]);
     const codexTerminalStatuses = new Set(["completed", "failed"]);
 
     this._idxCodexActiveTasksByStatus = new Map();
@@ -149,7 +149,7 @@ export class StateStore {
     const counts = {};
     const allTasks = [];
     // Active statuses only for the task list (terminal tasks don't need processing)
-    const activeStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review"];
+    const activeStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"];
     for (const st of activeStatuses) {
       const tasks = this.getCodexTasksByStatus(st);
       counts[st] = tasks.length;

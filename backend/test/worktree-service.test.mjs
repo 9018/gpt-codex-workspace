@@ -45,6 +45,7 @@ test('worktree-service creates three ordinary task worktrees with distinct branc
     assert.equal(entry.worktree.enabled, true);
     assert.equal(entry.worktree.status, 'created');
     assert.equal(entry.worktree.branch, `gptwork/task/${tasks[i]}`);
+    assert.equal(entry.worktree.path, join(root, '.gptwork', 'worktrees', 'github.com-acme-repo', tasks[i]));
     assert.ok(existsSync(join(entry.worktree.path, '.git')));
     const branch = execFileSync('git', ['branch', '--show-current'], {
       cwd: entry.worktree.path,

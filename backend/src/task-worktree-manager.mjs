@@ -27,12 +27,12 @@ export function sanitizeWorktreeSegment(value) {
 }
 
 export function sanitizeTaskBranchName(taskId) {
-  return `gptwork/${sanitizeWorktreeSegment(taskId)}`;
+  return `gptwork/task/${sanitizeWorktreeSegment(taskId)}`;
 }
 
 export function getTaskWorktreePath(workspaceRoot, repoId, taskId) {
   const root = resolve(workspaceRoot || process.cwd());
-  return join(root, "worktrees", sanitizeWorktreeSegment(repoId), sanitizeWorktreeSegment(taskId));
+  return join(root, ".gptwork", "worktrees", sanitizeWorktreeSegment(repoId), sanitizeWorktreeSegment(taskId));
 }
 
 function normalizeOptions(repoId, taskId, options = {}) {

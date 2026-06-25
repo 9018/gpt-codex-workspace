@@ -6,7 +6,7 @@
  *   2. materializeTaskWorktree — actual git worktree creation (only during execution)
  */
 
-import { getTaskWorktreePath, ensureTaskWorktree } from './task-worktree-manager.mjs';
+import { getTaskWorktreePath, ensureTaskWorktree, sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 
 export function deriveTaskRepoId(task = {}, goal = {}) {
   return task.repo_id || goal.repo_id || task.repository_id || goal.repository_id || '';
@@ -40,7 +40,7 @@ export async function resolveTaskRepositoryPlan({ task = {}, goal = {}, config =
   const targetBranch = record?.default_branch || config.defaultBranch || 'HEAD';
   const taskId = task.id || goal.task_id || goal.id || 'unknown-task';
   const taskWorktreePath = getTaskWorktreePath(workspaceRoot, repoId, taskId);
-  const taskBranch = `gptwork/${taskId.replace(/[^a-zA-Z0-9._-]/g, '-').replace(/-+/g, '-').replace(/^[.-]+|[.-]+$/g, '').slice(0, 96)}`;
+  const taskBranch = sanitizeTaskBranchName(taskId);
 
   const plan = {
     repo_id: repoId,

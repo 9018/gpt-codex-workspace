@@ -381,6 +381,11 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
         status: "assigned",
         mode: "builder",
       });
+      if (candidate.repo_id) {
+        task.repo_id = candidate.repo_id;
+        const goal = Array.isArray(state.goals) ? state.goals.find((item) => item.id === candidate.goal_id) : null;
+        if (goal) goal.repo_id = candidate.repo_id;
+      }
 
       // Update queue item
       candidate.status = QUEUE_STATUS_RUNNING;

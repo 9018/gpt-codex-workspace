@@ -87,9 +87,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // for true concurrent execution on the same canonical repo.
   let repoLockPath = null;
   // Enter materializing_worktree state (only now do we create the worktree)
-  const enableWorktrees = config.enableTaskWorktrees !== false;
+  const taskMode = task.mode || goal?.mode || "builder";
+  const enableWorktrees = config.enableTaskWorktrees !== false && taskMode === "builder";
   let resolvedRepo = resolvedRepoPlan;
-  let executionCwd = workspace.root;
+  let executionCwd = resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || workspace.root;
 
   if (enableWorktrees) {
     await updateTaskFn(store, task.id, (item) => {
@@ -433,6 +434,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         taskStatus = 'waiting_for_repair';
         taskResult.repair_goal = repairGoal;
         taskResult.repair_attempt = repairGoal.repair_attempt;
+        taskResult.failure_class = mergedFindings.find((finding) => finding.severity === 'blocker')?.code || taskResult.failure_class || 'acceptance_failed';
         taskResult.reason = 'acceptance_failed: ' + canRepair.reason;
 
         // Create repair goal/task in the store so it can be picked up by the worker
@@ -512,6 +514,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             taskStatus = 'waiting_for_repair';
             taskResult.repair_goal = intRepairGoal;
             taskResult.repair_attempt = intRepairGoal.repair_attempt;
+            taskResult.failure_class = conflictFindings[0]?.code || taskResult.failure_class || 'integration_failed';
             taskResult.reason = 'integration_' + integrationResult.status + ': ' + (integrationResult.error || 'unknown');
 
             try {
@@ -536,9 +539,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             taskResult.repair_denied_reason = intCanRepair.reason;
             taskResult.reason = 'integration_' + integrationResult.status + ': ' + (integrationResult.error || 'unknown');
           }
-      } else {
-        // Integration locked or other non-terminal state
-        taskStatus = 'waiting_for_integration';
+        } else {
+          // Integration locked or other non-terminal state
+          taskStatus = 'waiting_for_integration';
+        }
       }
       // NOTE: For multi-process integration, replace INTEGRATION_LOCKS Map with
       // persistent repo-lock-lifecycle locks.
@@ -566,6 +570,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     github,
     appendGoalMessageFn,
     resultJsonPath: _resultJsonPath,
+    verifyTaskCompletionFn: deps.verifyTaskCompletionFn,
+    autoStartNextOnTaskCompletedFn: deps.autoStartNextOnTaskCompletedFn,
+    runIntegrationQueueFn,
+    shouldAttemptRepairFn,
+    createRepairGoalFromFindingsFn,
+    createGoalFn,
   });
-}
 }

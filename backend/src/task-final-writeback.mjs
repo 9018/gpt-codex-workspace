@@ -1,5 +1,5 @@
 import { dirname, join } from "node:path";
-import { writeFile as nodeWriteFile } from "node:fs/promises";
+import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
@@ -8,6 +8,7 @@ import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecyc
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
+import { failureClassRequiresRepair } from "./task-retry.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
@@ -44,6 +45,10 @@ export async function finalizeCodexTaskRun({
   writeFileFn = nodeWriteFile,
   verifyTaskCompletionFn = verifyTaskCompletion,
   autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted,
+  runIntegrationQueueFn = runIntegrationQueue,
+  shouldAttemptRepairFn = shouldAttemptRepair,
+  createRepairGoalFromFindingsFn = createRepairGoalFromFindings,
+  createGoalFn = createGoal,
 }) {
   if (runFilePath) {
     const _resolvedRjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
@@ -66,7 +71,7 @@ export async function finalizeCodexTaskRun({
     try {
       const gitPath = (resolvedRepo && resolvedRepo.task_worktree_path) || (resolvedRepo && resolvedRepo.canonical_repo_path) || null;
       if (gitPath && resolvedRepo && resolvedRepo.repo_id) {
-        const integrationResult = await runIntegrationQueue({
+        const integrationResult = await runIntegrationQueueFn({
           repoId: resolvedRepo.repo_id,
           targetBranch: config.defaultBranch || "main",
           worktreePath: gitPath,
@@ -83,9 +88,9 @@ export async function finalizeCodexTaskRun({
           taskResult.integration = { status: "completed", ...integrationResult };
         } else if (integrationResult.status === "conflict" || integrationResult.status === "check_failed") {
           // Integration failed — create repair or escalate
-          const intCanRepair = shouldAttemptRepair({ task, maxAttempts: 1 });
+          const intCanRepair = shouldAttemptRepairFn({ task, maxAttempts: 1 });
           if (intCanRepair.should_repair) {
-            const intRepairGoal = createRepairGoalFromFindings({
+            const intRepairGoal = createRepairGoalFromFindingsFn({
               task,
               goal,
               findings: [{ severity: "blocker", code: "integration_" + integrationResult.status, message: integrationResult.error || "Integration " + integrationResult.status, source: "integration_queue" }],
@@ -97,7 +102,7 @@ export async function finalizeCodexTaskRun({
             taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
             // Attempt to create repair goal
             try {
-              await createGoal(store, config, {
+              const created = await createGoalFn(store, config, {
                 user_request: intRepairGoal.user_request,
                 goal_prompt: intRepairGoal.goal_prompt,
                 title: "Repair: " + task.title + " (integration conflict)",
@@ -107,6 +112,8 @@ export async function finalizeCodexTaskRun({
                 assign_to_codex: true,
                 skip_created_notification: false,
               });
+              taskResult.repair_goal_id = created.goal?.id || null;
+              taskResult.repair_task_id = created.task?.id || null;
             } catch {}
           } else {
             taskStatus = "waiting_for_review";
@@ -164,10 +171,45 @@ export async function finalizeCodexTaskRun({
     taskResult.failure_class = verification.failure_class || taskResult.failure_class || null;
 
     if (resultJsonPath) {
-      await writeFileFn(join(dirname(resultJsonPath), "verification.json"), JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
+      const verificationPath = join(dirname(resultJsonPath), "verification.json");
+      await mkdir(dirname(verificationPath), { recursive: true }).catch(() => {});
+      await writeFileFn(verificationPath, JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
     }
     if (verification.passed !== true) {
-      taskStatus = "waiting_for_review";
+      const repairDecision = shouldAttemptRepairFn({ task, maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
+      if (repairDecision.should_repair && failureClassRequiresRepairCompat(verification.failure_class)) {
+        const repairGoal = createRepairGoalFromFindingsFn({
+          task,
+          goal,
+          findings: verification.findings || [],
+          repairProposals: [{ title: `Repair ${verification.failure_class || "verification"}`, proposed_action: "Fix verification failure and rerun verifier." }],
+        });
+        taskStatus = "waiting_for_repair";
+        taskResult.repair_goal = repairGoal;
+        taskResult.repair_attempt = repairGoal.repair_attempt;
+        taskResult.reason = `verification_failed: ${repairDecision.reason}`;
+        try {
+          const created = await createGoalFn(store, config, {
+            user_request: repairGoal.user_request,
+            goal_prompt: repairGoal.goal_prompt,
+            title: `Repair: ${task.title || task.id} (attempt ${repairGoal.repair_attempt})`,
+            project_id: task.project_id || goal?.project_id || "default",
+            workspace_id: repairGoal.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
+            mode: repairGoal.mode || "builder",
+            assign_to_codex: true,
+            skip_created_notification: false,
+          });
+          taskResult.repair_goal_id = created.goal?.id || null;
+          taskResult.repair_task_id = created.task?.id || null;
+        } catch (err) {
+          taskStatus = "waiting_for_review";
+          taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+          taskResult.warnings.push("Repair goal creation failed: " + (err?.message || String(err)));
+        }
+      } else {
+        taskStatus = "waiting_for_review";
+        taskResult.repair_denied_reason = repairDecision.reason;
+      }
       taskResult.kind = taskResult.kind || "verification_failed";
       taskResult.requires_review = true;
       taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
@@ -314,6 +356,10 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
   };
 }
 
+function failureClassRequiresRepairCompat(failureClass) {
+  return failureClassRequiresRepair(failureClass) || failureClass === "verification_failed" || failureClass === "unknown";
+}
+
 function buildWorktreeLifecycleProof(taskResult = {}) {
   const lifecycle = taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null;
   if (!lifecycle) return null;
@@ -373,6 +419,12 @@ function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config 
     : taskResult.kind === "codex_timeout"
       ? "[worker] timed out after " + config.codexExecTimeout + "s"
       : "[worker] completed: task processed by Codex CLI" });
+  if (taskResult.failure_class || taskResult.repair_attempt !== undefined) {
+    item.logs.push({
+      time: doneAt,
+      message: `[worker] failure_class=${taskResult.failure_class || "none"} attempt=${item.attempt} repair_of_attempt=${taskResult.repair_attempt ?? "none"}`,
+    });
+  }
 }
 
 function deriveExecutionMode(taskResult = {}, existingTask = {}) {
@@ -422,6 +474,21 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
         goalItem.status = goalStatus;
         goalItem.updated_at = doneAt;
         state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });
+      }
+    }
+
+    if (Array.isArray(state.goal_queue)) {
+      const queueItem = state.goal_queue.find((candidate) => candidate.task_id === task.id || (goal && candidate.goal_id === goal.id && candidate.status === "running"));
+      if (queueItem) {
+        queueItem.status = taskStatus;
+        queueItem.failure_class = taskResult.failure_class || taskResult.verification?.failure_class || null;
+        queueItem.completed_task_id = task.id;
+        queueItem.updated_at = doneAt;
+        if (taskStatus !== "completed") {
+          queueItem.blocked_reason = taskResult.reason || taskResult.repair_denied_reason || taskResult.summary || null;
+        } else {
+          queueItem.blocked_reason = null;
+        }
       }
     }
     return { task: item };

@@ -33,9 +33,9 @@ test('resolveTaskRepositoryPlan returns a plan without creating worktree (no git
   assert.equal(plan.canonical_repo_path, '/repos/target');
   assert.equal(plan.target_branch, 'main');
   assert.equal(plan.base_ref, 'main');
-  assert.ok(plan.task_branch.startsWith('gptwork/'));
+  assert.equal(plan.task_branch, 'gptwork/task/task_plan');
   assert.equal(plan.task_id, 'task_plan');
-  assert.ok(plan.task_worktree_path.includes('task_plan'));
+  assert.equal(plan.task_worktree_path, '/tmp/ws/.gptwork/worktrees/github.com-acme-test/task_plan');
   assert.equal(plan.uses_default_fallback, false);
   assert.equal(plan.worktree_lifecycle, null); // not materialized yet
 });
@@ -85,7 +85,9 @@ test('resolveTaskRepository creates a real task worktree by default', async () =
   assert.equal(resolved.worktree_lifecycle.lifecycle_events.length, 1);
   assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].event, 'git_worktree_add');
   assert.equal(resolved.worktree_lifecycle.lifecycle_events[0].ok, true);
-  assert.equal(resolved.task_worktree_path, join(workspaceRoot, 'worktrees/github.com-acme-target/task_123'));
+  assert.equal(resolved.task_branch, 'gptwork/task/task_123');
+  assert.equal(resolved.worktree_lifecycle.branch_name, 'gptwork/task/task_123');
+  assert.equal(resolved.task_worktree_path, join(workspaceRoot, '.gptwork/worktrees/github.com-acme-target/task_123'));
 });
 
 test('resolveTaskRepository respects enableTaskWorktrees: false', async () => {
@@ -134,6 +136,8 @@ test('materializeTaskWorktree creates worktree from plan', async () => {
   assert.equal(materialized.worktree_lifecycle.source_root, canonical);
   assert.ok(materialized.worktree_lifecycle.base_sha);
   assert.equal(materialized.worktree_lifecycle.branch_name, plan.task_branch);
+  assert.equal(plan.task_branch, 'gptwork/task/task_mat');
+  assert.equal(plan.task_worktree_path, join(workspaceRoot, '.gptwork/worktrees/github.com-acme-materialize/task_mat'));
   assert.equal(materialized.worktree_lifecycle.dirty_source, false);
   assert.deepEqual(materialized.worktree_lifecycle.dirty_paths, []);
   assert.ok(materialized.worktree_lifecycle.created_at);
