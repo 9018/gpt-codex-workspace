@@ -42,7 +42,7 @@ import { getRepoLockSummary, listRepoLocks } from "../repo-lock.mjs";
 import { forceReleaseRepoLock } from "../repo-lock-lifecycle.mjs";
 import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
-import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus } from "../safe-restart.mjs";
+import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 
 // ---------------------------------------------------------------------------
@@ -644,25 +644,48 @@ export function createRecoveryToolsGroup({
         }
       }
 
-      // Dry run
+            // Dry run — enhanced with runtime mismatch detection
       const restartStrategy = getRestartStrategy(config);
       const restartSummary = getRestartSummary(restartStrategy);
+      const expectedCommit = expected_commit || gitInfoR.running_commit || null;
+      const restartMarkerPath = getPendingRestartsDir(config.defaultWorkspaceRoot);
+      const isSafe = expectedCommit && gitInfoR.running_commit
+        ? (expectedCommit === gitInfoR.running_commit)
+        : null;
+      const runtimeMismatch = gitInfoR.running_commit && gitInfoR.repo_head
+        ? (gitInfoR.running_commit !== gitInfoR.repo_head)
+        : null;
+      const hasActiveRestartMarker = (() => {
+        try {
+          const markers = require('node:fs').readdirSync(restartMarkerPath);
+          return markers.length > 0;
+        } catch { return false; }
+      })();
       return {
         marker_id: markerId,
         old_pid: oldPid,
-        target_commit: expected_commit || gitInfoR.running_commit,
-        status: "dry_run",
-        message: "Would create restart marker and trigger service restart.",
+        expected_commit: expectedCommit,
+        running_commit: gitInfoR.running_commit,
+        repo_head: gitInfoR.repo_head,
+        remote_head: gitInfoR.remote_head,
+        status: 'dry_run',
+        message: 'Would create restart marker and trigger service restart.',
+        safe_to_restart: isSafe,
+        runtime_mismatch_detected: runtimeMismatch,
+        runtime_mismatch_detail: runtimeMismatch
+          ? 'Repo HEAD (' + gitInfoR.repo_head.slice(0, 12) + ') differs from running_commit (' + gitInfoR.running_commit.slice(0, 12) + '). A restart is required for the runtime to pick up the latest code.'
+          : null,
+        has_active_restart_markers: hasActiveRestartMarker,
+        restart_marker_dir: restartMarkerPath,
         restart_strategy: {
           mode: restartStrategy.mode,
           marker_kind: restartStrategy.markerKind,
-          command: restartStrategy.mode === "npm" ? "npm run start" : (restartStrategy.command || ""),
+          command: restartStrategy.mode === 'npm' ? 'npm run start' : (restartStrategy.command || ''),
           cwd: restartStrategy.cwd,
           instruction: restartSummary.restart_instruction,
         },
         systemctl_used: false,
-      };
-    },
+      };    },
   });
 
   // ================================================================

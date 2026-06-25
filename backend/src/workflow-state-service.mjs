@@ -178,6 +178,7 @@ export async function collectWorkflowDiagnostics({
         }
       : null,
     runtime: {
+      restart_required: gitInfo.running_commit && gitInfo.repo_head ? (gitInfo.running_commit !== gitInfo.repo_head) : false,
       running_commit: gitInfo.running_commit,
       repo_head: gitInfo.repo_head,
       remote_head: gitInfo.remote_head,
@@ -312,7 +313,8 @@ export function generateProposal({
   const isSafe =
     !diagnostics.worker.running &&
     diagnostics.repo_locks.active === 0 &&
-    !diagnostics.worktree.dirty;
+    !diagnostics.worktree.dirty &&
+    !diagnostics.runtime.restart_required;
 
   // Review-state tasks must consume acceptance metadata before global runtime
   // safety gates. Auto-accepting a valid review task only updates task/goal
@@ -374,6 +376,9 @@ export function generateProposal({
     if (diagnostics.worker.running) reasons.push("worker is currently running");
     if (diagnostics.repo_locks.active > 0) reasons.push(`${diagnostics.repo_locks.active} active repo lock(s)`);
     if (diagnostics.worktree.dirty) reasons.push("worktree is dirty");
+  if (diagnostics.runtime.restart_required) {
+    reasons.push("runtime restart required: running_commit (" + (diagnostics.runtime.running_commit || "?").slice(0, 12) + ") does not match repo_head (" + (diagnostics.runtime.repo_head || "?").slice(0, 12) + ")");
+  }
     return {
       next_action: "blocked",
       proposed_next_task: null,
