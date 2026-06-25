@@ -214,7 +214,7 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
     await store.save();
 
     const task = store.state.tasks[0];
-    const taskWorktreePath = join(tmpDir, "worktrees", "github.com-acme-repo", "task_worktree_chain");
+    const taskWorktreePath = join(tmpDir, ".gptwork", "worktrees", "github.com-acme-repo", "task_worktree_chain");
     let observedExecutionCwd = null;
     let finalizedTaskResult = null;
     let finalizedResolvedRepo = null;
@@ -251,7 +251,7 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
             ok: true,
             source_root: plan.canonical_repo_path,
             worktree_path: taskWorktreePath,
-            branch_name: "gptwork/task_worktree_chain",
+            branch_name: "gptwork/task/task_worktree_chain",
             dirty_source: false,
             created_at: new Date().toISOString(),
             cleanup_policy: "remove_on_success_retain_on_failure",
@@ -338,7 +338,7 @@ test("processGeneralTaskWithDeps: acceptance passed + no changes -> completed", 
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_pass_noop", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_acc_pass_noop", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_pass_noop", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -390,7 +390,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_int_ok", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_acc_int_ok", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_int_ok", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -445,7 +445,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_lock", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_int_lock", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_int_lock", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -497,7 +497,7 @@ test("processGeneralTaskWithDeps: acceptance failed + repair possible -> waiting
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_repair", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_fail_repair", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_fail_repair", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -567,7 +567,7 @@ test("processGeneralTaskWithDeps: acceptance failed + no repair -> waiting_for_r
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_review", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_fail_review", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_fail_review", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -620,7 +620,7 @@ test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", a
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_conflict", tmpDir, "github.com/acme/repo"),
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
-        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task_int_conflict", created_at: new Date().toISOString() },
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_int_conflict", created_at: new Date().toISOString() },
       }),
       acquireRepoLockFn: async () => ({ acquired: true }),
       prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
@@ -773,7 +773,7 @@ console.log("task-general-processor PR0 integration tests loaded");
  * Create a mock repo plan for testing.
  */
 function makeRepoPlan(taskId, tmpDir, repoId) {
-  const worktreePath = join(tmpDir, "worktrees", repoId.replace(/\//g, "-"), taskId);
+  const worktreePath = join(tmpDir, ".gptwork", "worktrees", repoId.replace(/\//g, "-"), taskId);
   return {
     repo_id: repoId,
     canonical_repo_path: join(tmpDir, "canonical", repoId.replace(/\//g, "-")),

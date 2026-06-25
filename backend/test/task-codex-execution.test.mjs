@@ -95,7 +95,7 @@ test('executeCodexTaskRun uses task worktree cwd and writes child pid to repo lo
   const result = await executeCodexTaskRun({
     config: { defaultWorkspaceRoot: '/workspace', codexExecArgs: '', codexExecTimeout: 5 },
     workspaceRoot: '/workspace',
-    executionCwd: '/workspace/worktrees/repo/task_1',
+    executionCwd: '/workspace/.gptwork/worktrees/repo/task_1',
     task: { id: 'task_1' },
     goal: { id: 'goal_1' },
     promptFile: '/tmp/prompt.txt',
@@ -117,7 +117,7 @@ test('executeCodexTaskRun uses task worktree cwd and writes child pid to repo lo
   });
 
   assert.equal(result.summary, 'ok');
-  assert.equal(calls.find((call) => call.type === 'shell').cwd, '/workspace/worktrees/repo/task_1');
+  assert.equal(calls.find((call) => call.type === 'shell').cwd, '/workspace/.gptwork/worktrees/repo/task_1');
   assert.deepEqual(calls.find((call) => call.type === 'lock'), {
     type: 'lock',
     workspaceRoot: '/workspace',

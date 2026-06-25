@@ -27,11 +27,11 @@ async function initGitRepo(dir) {
 
 test("task worktree manager sanitizes repo/task path segments and branch names", () => {
   assert.equal(sanitizeWorktreeSegment("github.com/acme/../target repo"), "github.com-acme-target-repo");
-  assert.equal(sanitizeTaskBranchName("task/../../bad name"), "gptwork/task-bad-name");
+  assert.equal(sanitizeTaskBranchName("task/../../bad name"), "gptwork/task/task-bad-name");
 
   const root = "/tmp/gptwork";
   const path = getTaskWorktreePath(root, "github.com/acme/../target repo", "task/../../bad name");
-  assert.equal(path, join(root, "worktrees", "github.com-acme-target-repo", "task-bad-name"));
+  assert.equal(path, join(root, ".gptwork", "worktrees", "github.com-acme-target-repo", "task-bad-name"));
 });
 
 test("ensureTaskWorktree creates and reuses a real git worktree, then remove/prune clean it", async () => {
@@ -47,7 +47,7 @@ test("ensureTaskWorktree creates and reuses a real git worktree, then remove/pru
 
   assert.equal(ensured.ok, true);
   assert.equal(ensured.git_worktree_created, true);
-  assert.equal(ensured.branch_name, "gptwork/task_001");
+  assert.equal(ensured.branch_name, "gptwork/task/task_001");
   assert.ok(existsSync(join(ensured.worktree_path, ".git")), "worktree should contain git metadata");
 
   const common = execFileSync("git", ["rev-parse", "--git-common-dir"], {
@@ -112,7 +112,7 @@ test("pruneStaleWorktrees removes orphan task worktree directories after git pru
   const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-orphan-"));
   const repo = join(root, "canonical");
   await initGitRepo(repo);
-  const orphan = join(root, "worktrees", "github.com-acme-repo", "task_orphan");
+  const orphan = join(root, ".gptwork", "worktrees", "github.com-acme-repo", "task_orphan");
   await mkdir(orphan, { recursive: true });
   await writeFile(join(orphan, "leftover.txt"), "orphan\n", "utf8");
 

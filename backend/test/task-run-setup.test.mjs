@@ -72,7 +72,7 @@ test('prepareCodexTaskRun records executionRepoPath in run metadata', async (t) 
   t.after(() => rm(workspaceRoot, { recursive: true, force: true }));
 
   const task = { id: 'task_worktree_setup', title: 'Setup task', description: 'Prepare run', workspace_id: 'ws_1' };
-  const executionRepoPath = join(workspaceRoot, 'worktrees', 'repo', 'task_worktree_setup');
+  const executionRepoPath = join(workspaceRoot, '.gptwork', 'worktrees', 'repo', 'task_worktree_setup');
   const result = await prepareCodexTaskRun({
     task,
     goal: null,

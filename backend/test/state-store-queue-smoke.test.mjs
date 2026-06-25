@@ -20,9 +20,11 @@ function populateFixtures(state) {
     { id: 't3', assignee: 'codex', status: 'running', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
     { id: 't4', assignee: 'codex', status: 'waiting_for_lock', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
     { id: 't5', assignee: 'codex', status: 'waiting_for_review', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
-    { id: 't6', assignee: 'codex', status: 'completed', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
-    { id: 't7', assignee: 'codex', status: 'failed', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
-    { id: 't8', assignee: 'user_default', status: 'assigned', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    { id: 't6', assignee: 'codex', status: 'waiting_for_repair', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    { id: 't7', assignee: 'codex', status: 'waiting_for_integration', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    { id: 't8', assignee: 'codex', status: 'completed', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    { id: 't9', assignee: 'codex', status: 'failed', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    { id: 't10', assignee: 'user_default', status: 'assigned', project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
   );
   return state;
 }
@@ -35,9 +37,11 @@ test('StateStore: indexes split active and terminal tasks', async () => {
     populateFixtures(store.state);
     store._buildIndexes();
 
-    assert.equal(store._idxCodexActiveTasksByStatus.size, 5);
+    assert.equal(store._idxCodexActiveTasksByStatus.size, 7);
     assert.equal(store._idxCodexTerminalTasksByStatus.size, 2);
     assert.equal(store.getCodexTasksByStatus('assigned').length, 1);
+    assert.equal(store.getCodexTasksByStatus('waiting_for_repair').length, 1);
+    assert.equal(store.getCodexTasksByStatus('waiting_for_integration').length, 1);
     assert.equal(store.getCodexTasksByStatus('completed').length, 1);
     assert.equal(store.getCodexTasksByStatus('failed').length, 1);
   } finally {
@@ -107,9 +111,13 @@ test('StateStore: getCodexTaskQueue excludes terminal tasks from task list but i
 
     const q = store.getCodexTaskQueue();
     const taskIds = q.tasks.map(t => t.id);
-    assert(!taskIds.includes('t6'));
-    assert(!taskIds.includes('t7'));
+    assert(taskIds.includes('t6'));
+    assert(taskIds.includes('t7'));
+    assert(!taskIds.includes('t8'));
+    assert(!taskIds.includes('t9'));
     assert.equal(q.counts.assigned, 1);
+    assert.equal(q.counts.waiting_for_repair, 1);
+    assert.equal(q.counts.waiting_for_integration, 1);
     assert.equal(q.counts.completed, 1);
     assert.equal(q.counts.failed, 1);
   } finally {

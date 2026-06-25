@@ -184,15 +184,15 @@ test("task-final-writeback: git worktree cleanup failure is fail-closed and reco
   args.resolvedRepo = {
     repo_id: "github.com/acme/repo",
     canonical_repo_path: "/tmp/canonical-repo",
-    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: { mode: "git_worktree", ok: true },
   };
   args.removeTaskWorktreeFn = async () => ({
     ok: false,
     removed: false,
     error: "worktree remove failed: dirty files",
-    command: "git -C /tmp/canonical-repo worktree remove /tmp/worktrees/repo/task_label_test",
-    worktree_path: "/tmp/worktrees/repo/task_label_test",
+    command: "git -C /tmp/canonical-repo worktree remove /tmp/.gptwork/worktrees/repo/task_label_test",
+    worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
   });
 
   await finalizeCodexTaskRun(args);
@@ -220,8 +220,8 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
   args.taskResult.repo_resolution = {
     repo_id: "github.com/acme/repo",
     canonical_repo_path: "/tmp/canonical-repo",
-    lock_repo_path: "/tmp/worktrees/repo/task_label_test",
-    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    lock_repo_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: {
       mode: "git_worktree",
       ok: true,
@@ -231,17 +231,17 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
     },
   };
   args.taskResult.worktree_lifecycle = args.taskResult.repo_resolution.worktree_lifecycle;
-  args.taskResult.execution_cwd = "/tmp/worktrees/repo/task_label_test";
+  args.taskResult.execution_cwd = "/tmp/.gptwork/worktrees/repo/task_label_test";
   args.resolvedRepo = {
     repo_id: "github.com/acme/repo",
     canonical_repo_path: "/tmp/canonical-repo",
-    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: args.taskResult.repo_resolution.worktree_lifecycle,
   };
   args.removeTaskWorktreeFn = async () => ({
     ok: true,
     removed: true,
-    worktree_path: "/tmp/worktrees/repo/task_label_test",
+    worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
   });
   args.writeFileFn = async (path, content) => {
     if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
@@ -276,12 +276,12 @@ test("task-final-writeback: persists spec-shaped task.worktree record", async ()
   args.taskResult.repo_resolution = {
     repo_id: "github.com/acme/repo",
     canonical_repo_path: "/tmp/canonical-repo",
-    lock_repo_path: "/tmp/worktrees/repo/task_label_test",
-    task_worktree_path: "/tmp/worktrees/repo/task_label_test",
+    lock_repo_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
+    task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: {
       mode: "git_worktree",
       ok: true,
-      worktree_path: "/tmp/worktrees/repo/task_label_test",
+      worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
       branch_name: "gptwork/task/task_label_test",
       base_ref: "main",
       base_sha: "a".repeat(40),
@@ -290,13 +290,13 @@ test("task-final-writeback: persists spec-shaped task.worktree record", async ()
   };
   args.taskResult.worktree_lifecycle = args.taskResult.repo_resolution.worktree_lifecycle;
   args.resolvedRepo = args.taskResult.repo_resolution;
-  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/worktrees/repo/task_label_test" });
+  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test" });
 
   await finalizeCodexTaskRun(args);
 
   assert.deepEqual(savedTask.worktree, {
     enabled: true,
-    path: "/tmp/worktrees/repo/task_label_test",
+    path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     branch: "gptwork/task/task_label_test",
     base_ref: "main",
     base_sha: "a".repeat(40),

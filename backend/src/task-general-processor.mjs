@@ -16,6 +16,7 @@ import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { determineHealingAction } from './self-healing-policy.mjs';
+import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 
 
 export async function processGeneralTask(store, config, task, context, github) {
@@ -476,7 +477,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           targetBranch: config.defaultBranch || 'main',
           worktreePath: gitPath,
           canonicalRepoPath: resolvedRepo.canonical_repo_path,
-          taskBranch: (resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || 'gptwork/' + task.id,
+          taskBranch: (resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || sanitizeTaskBranchName(task.id),
           integrationMode: config.integrationMode || 'push_branch',
           checkCommands: config.integrationCheckCommands,
           locksBasePath: config.defaultWorkspaceRoot,

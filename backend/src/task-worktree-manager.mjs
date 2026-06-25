@@ -355,7 +355,7 @@ export async function pruneStaleWorktrees(options = {}) {
   await git(pruneArgs, { timeout: 60_000 });
 
   // Collect and clean orphans
-  const orphans = await collectOrphans(join(workspaceRoot, "worktrees"));
+  const orphans = await collectOrphans(join(workspaceRoot, ".gptwork", "worktrees"));
   const removedOrphans = [];
   const orphanErrors = [];
   for (const orphan of orphans) {

@@ -67,10 +67,10 @@ export function deriveCanonicalPath(workspaceRoot, repo_id) {
 
 /**
  * Derive the worktree relpath:
- *   worktrees/<host>/<owner>/<repo>/<taskId>
+ *   .gptwork/worktrees/<host>/<owner>/<repo>/<taskId>
  */
 export function deriveWorktreeRelPath(repo_id, taskId) {
-  return `worktrees/${repo_id}/${taskId}`;
+  return `.gptwork/worktrees/${repo_id}/${taskId}`;
 }
 
 /**

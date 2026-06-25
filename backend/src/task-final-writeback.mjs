@@ -9,6 +9,7 @@ import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
 import { failureClassRequiresRepair } from "./task-retry.mjs";
+import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
@@ -76,7 +77,7 @@ export async function finalizeCodexTaskRun({
           targetBranch: config.defaultBranch || "main",
           worktreePath: gitPath,
           canonicalRepoPath: (resolvedRepo && resolvedRepo.canonical_repo_path) || null,
-          taskBranch: (resolvedRepo && resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || "gptwork/" + task.id,
+          taskBranch: (resolvedRepo && resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || sanitizeTaskBranchName(task.id),
           integrationMode: config.integrationMode || "push_branch",
           checkCommands: config.integrationCheckCommands,
           locksBasePath: config.defaultWorkspaceRoot,

@@ -397,10 +397,10 @@ test("resolveRepoId returns null for ambiguous repo name", async () => {
 
 test("deriveWorktreeRelPath and deriveWorktreePath", () => {
   const rel = deriveWorktreeRelPath("github.com/owner/repo", "task_abc123");
-  assert.equal(rel, "worktrees/github.com/owner/repo/task_abc123");
+  assert.equal(rel, ".gptwork/worktrees/github.com/owner/repo/task_abc123");
 
   const abs = deriveWorktreePath("/ws", "github.com/owner/repo", "task_abc123");
-  assert.equal(resolve(abs), resolve("/ws/worktrees/github.com/owner/repo/task_abc123"));
+  assert.equal(resolve(abs), resolve("/ws/.gptwork/worktrees/github.com/owner/repo/task_abc123"));
 });
 
 test("deriveTmpRelPath and deriveTmpPath", () => {
@@ -419,7 +419,7 @@ test("RepoRegistry.generateWorktreePath and generateTmpPath", async () => {
   const reg = new RepoRegistry({ registryPath, workspaceRoot: wsRoot });
 
   const wt = reg.generateWorktreePath("github.com/owner/repo", "run_42");
-  assert.equal(resolve(wt), resolve(join(wsRoot, "worktrees/github.com/owner/repo/run_42")));
+  assert.equal(resolve(wt), resolve(join(wsRoot, ".gptwork/worktrees/github.com/owner/repo/run_42")));
 
   const tp = reg.generateTmpPath("run_42");
   assert.equal(resolve(tp), resolve(join(wsRoot, "tmp/codex/run_42")));

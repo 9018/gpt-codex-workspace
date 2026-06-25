@@ -827,7 +827,7 @@ test("goal-queue: queue no longer blocks on dirty canonical repo — defers to e
     repoResolver: async (taskLike) => ({
       repo_id: taskLike.repo_id,
       canonical_repo_path: targetRepo,
-      task_worktree_path: join(dir, "worktrees", taskLike.repo_id, taskLike.task_id || taskLike.goal_id),
+      task_worktree_path: join(dir, ".gptwork", "worktrees", taskLike.repo_id, taskLike.task_id || taskLike.goal_id),
       uses_default_fallback: false,
       worktree_lifecycle: null,
     }),
@@ -1052,4 +1052,3 @@ test("goal-queue: dry_run does not write any state changes", async () => {
   assert.equal(store.state.goal_queue[0].task_id, null, "task_id should not be set in dry_run");
   assert.equal(store.state.tasks.length, 0, "no tasks should be created in dry_run");
 });
-

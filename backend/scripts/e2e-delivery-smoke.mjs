@@ -45,7 +45,7 @@ async function main() {
   console.log('E2E delivery smoke test root:', root);
 
   const repo = join(root, 'repo');
-  const worktreesDir = join(root, 'worktrees');
+  const worktreesDir = join(root, '.gptwork', 'worktrees', 'github.com-acme-repo');
 
   /* Step 1 — Init Git repo and verify commit */
   await step('Initialize canonical git repo', async () => {
@@ -84,7 +84,7 @@ async function main() {
     for (const t of tasks) {
       const wtPath = join(worktreesDir, t.id);
       await mkdir(wtPath, { recursive: true });
-      execFileSync('git', ['worktree', 'add', wtPath, '-b', `gptwork/${t.id}`, 'HEAD'], {
+      execFileSync('git', ['worktree', 'add', wtPath, '-b', `gptwork/task/${t.id}`, 'HEAD'], {
         cwd: repo, stdio: 'pipe', timeout: 30000,
       });
       const status = execFileSync('git', ['status', '--porcelain'], {
@@ -138,7 +138,7 @@ async function main() {
   await step('Simulate repair loop (repair worktree + fix)', async () => {
     const repairPath = join(worktreesDir, 'task_003-repair-1');
     await mkdir(repairPath, { recursive: true });
-    execFileSync('git', ['worktree', 'add', repairPath, '-b', 'gptwork/task_003-repair-1', 'HEAD'], {
+    execFileSync('git', ['worktree', 'add', repairPath, '-b', 'gptwork/task/task_003-repair-1', 'HEAD'], {
       cwd: repo, stdio: 'pipe', timeout: 30000,
     });
     await mkdir(join(repairPath, 'src'), { recursive: true });
