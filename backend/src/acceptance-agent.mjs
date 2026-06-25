@@ -220,7 +220,8 @@ function getProfileChecks(profile) {
     default: {
       required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
-        'no_blocker_or_major_findings'],
+        'no_blocker_or_major_findings', 'git_diff_check', 'commit_or_patch_evidence',
+        'changed_files_match_git'],
       relaxed: [],
     },
     code_change: {
@@ -320,7 +321,10 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       return null;
 
     case 'commit_or_patch_evidence':
-      if (evidence.commit_exists !== true && !result?.commit && !result?.patch_evidence) {
+      // Only require commit/patch evidence when there are actual changed files
+      const commitHasChangedFiles = (evidence.changed_files && evidence.changed_files.length > 0)
+        || (result?.changed_files && result.changed_files.length > 0);
+      if (commitHasChangedFiles && evidence.commit_exists !== true && !result?.commit && !result?.patch_evidence) {
         return { severity: 'major', code: 'commit_or_patch_missing', message: 'No commit or patch evidence for changed files', source: 'acceptance_agent' };
       }
       return null;
@@ -328,10 +332,44 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
    case 'changed_files_match_git':
      const resultFiles = new Set((result?.changed_files || []).map(f => f.replace(/^\/+/, '')));
       const gitFiles = new Set((evidence.git_changed_files || evidence.changed_files || []).map(f => f.replace(/^\/+/, '')));
+     // Skip check if neither side has files — no changes to verify
+     if (resultFiles.size === 0 && gitFiles.size === 0) return null;
      if (resultFiles.size > 0 && gitFiles.size > 0) {
        const missing = [...resultFiles].filter(f => !gitFiles.has(f));
+       const extra = [...gitFiles].filter(f => !resultFiles.has(f));
        if (missing.length > 0) {
           return { severity: 'major', code: 'changed_files_mismatch', message: `Files in result not found in git diff: ${missing.join(', ')}`, source: 'acceptance_agent' };
+        }
+       if (extra.length > 0) {
+          return { severity: 'major', code: 'changed_files_extra_in_git', message: `Files in git diff not listed in result: ${extra.join(', ')}`, source: 'acceptance_agent' };
+        }
+      }
+     // P0: If only one side has files but the other doesn't, that's a mismatch
+     if (resultFiles.size > 0 && gitFiles.size === 0) {
+       return { severity: 'major', code: 'changed_files_mismatch', message: `Result claims changed_files but git diff shows no changes: ${[...resultFiles].join(', ')}`, source: 'acceptance_agent' };
+     }
+     if (resultFiles.size === 0 && gitFiles.size > 0) {
+       return { severity: 'major', code: 'changed_files_mismatch', message: `Git diff shows changes but result.changed_files is empty: ${[...gitFiles].join(', ')}`, source: 'acceptance_agent' };
+     }
+      return null;
+
+    case 'git_diff_check':
+      // Check that git diff --check passes (no whitespace errors).
+      // If the path is not a git repo, skip silently — the worktree_clean
+      // check covers repo availability separately.
+      if (repoPath) {
+        try {
+          const { execFileSync } = await import('node:child_process');
+          execFileSync('git', ['rev-parse', '--git-dir'], { cwd: repoPath, encoding: 'utf8', timeout: 5000, maxBuffer: 1024 * 1024, stdio: 'ignore' });
+          execFileSync('git', ['diff', '--check'], { cwd: repoPath, encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024 });
+        } catch (err) {
+          // Only report if git rev-parse succeeded (it's a git repo) but diff --check failed
+          // If rev-parse failed, the path is not a git repo — skip silently
+          if (err.message && err.message.includes('rev-parse')) {
+            return null; // not a git repo, skip
+          }
+          const stderr = err.stderr?.toString()?.trim() || err.message || 'git diff --check failed';
+          return { severity: 'blocker', code: 'git_diff_check_failed', message: `Git diff --check reported issues: ${stderr.slice(0, 500)}`, source: 'acceptance_agent' };
         }
       }
       return null;
