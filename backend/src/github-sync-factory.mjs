@@ -232,7 +232,7 @@ function shouldPostResultComment(task) {
 
     async syncChatGptRequest(request) {
       if (!enabled) return { ok: false, reason: "github not configured" };
-      const isTaskIntake = request.escalation && request.escalation.category === "task_intake";
+      const isTaskIntake = _satisfiesRequestTaskIntakeCondition(request);
       const labels = isTaskIntake ? ["gptwork-task"] : ["gptwork-question"];
       const prefix = isTaskIntake ? "Task" : "Question";
       let body = requestToIssueBody(request);
