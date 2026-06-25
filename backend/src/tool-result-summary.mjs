@@ -1,7 +1,12 @@
 import { runtimeStatusCard, workerStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
+import { renderCardText } from "./card-render-text.mjs";
 
 export function summarizeToolResult(name, structuredContent) {
       if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
+
+      if (structuredContent.card && typeof structuredContent.card === "object") {
+        return renderCardText(structuredContent.card);
+      }
 
       // Use compact card formatting for targeted tools
       switch (name) {

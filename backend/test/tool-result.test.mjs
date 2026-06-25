@@ -243,6 +243,36 @@ test("shapeToolResult: with card metadata returns _meta", () => {
   assert.equal(result._meta.tool, "health_check");
 });
 
+test("shapeToolResult: card-enabled runtime_status injects unified card and legacy fields", () => {
+  const result = shapeToolResult({
+    name: "runtime_status",
+    toolDescriptor: {
+      metadata: {
+        outputTemplate: "ui://widget/gptwork-card-v2.html",
+        name: "Runtime Status",
+      },
+    },
+    rawStructuredContent: {
+      pid: 123,
+      worktree_dirty: false,
+      running_commit: "abcdef1234567890",
+      worker: { enabled: true, running: true, health: { phase: "healthy" }, queue: { assigned: 1 } },
+      queue: { assigned: 1, running: 0, waiting_for_review: 0, failed: 0 },
+    },
+    summarizeToolResult: undefined,
+  });
+
+  assert.equal(result.structuredContent.card?.card_version, "gptwork-card-v1");
+  assert.equal(result.structuredContent.card?.card_type, "runtime_health");
+  assert.equal(result.structuredContent.card?.identity?.tool, "runtime_status");
+  assert.equal(result.structuredContent.summary, result.structuredContent.card.summary);
+  assert.equal(result.structuredContent.status, result.structuredContent.card.status);
+  assert.ok(Array.isArray(result.structuredContent.keyValues), "legacy keyValues must be available");
+  assert.ok(Array.isArray(result.structuredContent.items), "legacy items must be available");
+  assert.match(result.content[0].text, /Runtime Status/);
+  assert.match(result.content[0].text, /queue.assigned/);
+});
+
 test("shapeToolResult: without card metadata no _meta", () => {
   const result = shapeToolResult({
     name: "no_card_tool",
