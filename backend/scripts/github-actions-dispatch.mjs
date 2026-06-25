@@ -336,7 +336,7 @@ async function handlePush(payload) {
 }
 
 /**
- * Handle issues events — only process if the issue has the gptwork-task label.
+ * Handle issues events — only process if the issue has the gptwork-dispatch or gptwork-task label.
  */
 async function handleIssues(payload) {
   const issue = payload.issue;
@@ -349,15 +349,15 @@ async function handleIssues(payload) {
     typeof label === "string" ? label : (label.name || "")
   );
 
-  const hasLabel = labels.some((l) => l === "gptwork-task");
+  const isDispatch = labels.some((l) => l === "gptwork-dispatch");
+  const isTask = labels.some((l) => l === "gptwork-task");
 
-  if (!hasLabel) {
-    console.log(`[dispatch] Issue #${issue.number} does not have gptwork-task label, skipping.`);
-    return { handled: false, reason: "no_gptwork_label" };
+  if (!isDispatch && !isTask) {
+    console.log(`[dispatch] Issue #${issue.number} does not have gptwork-dispatch or gptwork-task label, skipping.`);
+    return { handled: false, reason: "no_dispatch_label" };
   }
 
-  console.log(`[dispatch] Processing issue #${issue.number} with gptwork-task label`);
-
+  console.log(`[dispatch] Processing issue #${issue.number} (dispatch=${isDispatch}, task=${isTask})`);
   const body = issue.body || "";
   const workspaceRoot = getEnv("GPTWORK_WORKSPACE_ROOT", process.cwd());
 
@@ -389,18 +389,17 @@ async function handleIssues(payload) {
   }
 
   if (!payloadPath) {
-    const msg = "Could not find a payload reference in issue body. Expected `ZIP base64: <path>`, `Restore instructions: <path>`, or `Fallback queued task file: <path>`.";
-    console.log(`[dispatch] ${msg}`);
-    try {
-      await commentOnIssue(issue.number, `GPTWork dispatch failed: ${msg}`);
-    } catch { /* best effort */ }
+    // Regular gptwork-task issues without dispatch label are handled by sync_from_github
+    if (isTask && !isDispatch) {
+      console.log(`[dispatch] Issue #${issue.number} has gptwork-task but no dispatch payload, skipping (handled by sync_from_github).`);
+      appendSummary(`### GPTWork Dispatch: Skipped\n\nIssue #${issue.number} has \`gptwork-task\` label without dispatch payload. Handled by \`sync_from_github\`.`);
+      return { handled: false, reason: "no_payload_ref_regular_task" };
+    }
+    // gptwork-dispatch without payload: write step summary, do not comment on issue
+    console.log(`[dispatch] Issue #${issue.number} has dispatch label but no payload reference.`);
+    appendSummary(`### GPTWork Dispatch: No Payload\n\nIssue #${issue.number} has dispatch label but no payload reference.`);
     return { handled: false, reason: "no_payload_ref" };
   }
-
-  // Resolve payload path
-  const fullPayloadPath = payloadPath.startsWith("/")
-    ? payloadPath
-    : `${workspaceRoot}/${payloadPath}`;
 
   if (!existsSync(fullPayloadPath)) {
     const msg = `Payload file not found at ${payloadPath}`;
@@ -477,8 +476,8 @@ async function handleWorkflowDispatch(payload) {
       typeof label === "string" ? label : (label.name || "")
     );
 
-    if (!labels.includes("gptwork-task")) {
-      const msg = `Issue #${issueNumber} does not have gptwork-task label, skipping.`;
+    if (!labels.includes("gptwork-task") && !labels.includes("gptwork-dispatch")) {
+      const msg = `Issue #${issueNumber} does not have gptwork-dispatch or gptwork-task label, skipping.`;
       console.log(`[dispatch] ${msg}`);
       return { handled: false, reason: "no_gptwork_label" };
     }

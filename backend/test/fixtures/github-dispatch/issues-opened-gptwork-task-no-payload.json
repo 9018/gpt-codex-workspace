@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 102,
+    "title": "[GPTWork Task] Regular task without dispatch payload",
+    "body": "This is a regular gptwork-task issue that was created via sync_to_github.\n\nIt should be handled by sync_from_github, not the dispatch bot.",
+    "labels": [
+      { "name": "gptwork-task" }
+    ]
+  }
+}

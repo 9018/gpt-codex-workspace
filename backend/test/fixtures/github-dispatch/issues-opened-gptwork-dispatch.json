@@ -1,0 +1,11 @@
+{
+  "action": "opened",
+  "issue": {
+    "number": 101,
+    "title": "[GPTWork Dispatch] Test issue with dispatch label",
+    "body": "ZIP base64: `.gptwork/goal-inbox/foo.zip.b64`\n\nThis issue should be processed by the dispatch bot.",
+    "labels": [
+      { "name": "gptwork-dispatch" }
+    ]
+  }
+}
