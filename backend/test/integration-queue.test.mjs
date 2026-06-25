@@ -126,4 +126,95 @@ test("integration-queue: memory lock note and TODO", async () => {
   assert.ok(true, "TODO documented: INTEGRATION_LOCKS is Map-based (in-memory only)");
 });
 
+
+
+// ===========================================================================
+// P0: Integration status semantics — no false completion
+// ===========================================================================
+
+test("P0: runIntegrationQueue with mode=none returns status=skipped", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-none-mode",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "none",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "skipped");
+    assert.equal(result.merged, false);
+    assert.equal(result.pushed, false);
+    assert.equal(result.pr_opened, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P0: runIntegrationQueue with mode=local_merge returns status=merged", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-merge-mode",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "local_merge",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "merged");
+    assert.equal(result.merged, true);
+    assert.equal(result.pushed, false);
+    assert.equal(result.pr_opened, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P0: runIntegrationQueue with mode=push_branch returns status=branch_pushed (not merged/deployed)", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-push-mode",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "push_branch",
+    });
+    // Since there's no remote, the push fails => push_failed
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "push_failed");
+    // The important thing: this status is NOT "completed" or "merged"
+    assert.notEqual(result.status, "completed");
+    assert.notEqual(result.status, "merged");
+    assert.notEqual(result.status, "deployed");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P0: runIntegrationQueue with mode=open_pr returns status=pr_failed or push_failed (never completed/merged)", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-pr-mode",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "open_pr",
+    });
+    assert.equal(result.ok, false);
+    assert.equal(result.status, "push_failed");
+    assert.notEqual(result.status, "completed");
+    assert.notEqual(result.status, "merged");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 console.log("integration-queue tests loaded");

@@ -123,3 +123,154 @@ test("pruneStaleWorktrees removes orphan task worktree directories after git pru
   assert.ok(pruned.removed_orphans.includes(orphan));
   assert.equal(existsSync(orphan), false);
 });
+
+// ===========================================================================
+// P0: Concurrent worktree isolation — same repo, three tasks, independent paths
+// ===========================================================================
+
+test("P0: ensureTaskWorktree creates three independent worktrees for same repo", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-concurrent-wtm-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const taskIds = ["task_a", "task_b", "task_c"];
+  const worktrees = [];
+
+  // Create three worktrees concurrently (simulating parallel workers)
+  const results = await Promise.all(taskIds.map((taskId) =>
+    ensureTaskWorktree("github.com/acme/repo", taskId, {
+      workspaceRoot: root,
+      canonicalRepoPath: repo,
+      baseRef: "HEAD",
+    })
+  ));
+
+  // All three should succeed with independent paths
+  for (let i = 0; i < taskIds.length; i++) {
+    const result = results[i];
+    assert.equal(result.ok, true, `Task ${taskIds[i]} should succeed`);
+    assert.equal(result.git_worktree_created, true, `Task ${taskIds[i]} should create a new worktree`);
+    assert.ok(result.worktree_path, `Task ${taskIds[i]} should have a worktree_path`);
+    worktrees.push(result);
+
+    // Verify each worktree is a real git worktree
+    const common = execFileSync("git", ["rev-parse", "--git-common-dir"], {
+      cwd: result.worktree_path,
+      encoding: "utf8",
+    }).trim();
+    assert.match(common, /canonical\/.git$/, `Worktree ${taskIds[i]} should link to canonical repo`);
+  }
+
+  // Verify all worktree paths are unique (no path collision)
+  const paths = worktrees.map((w) => w.worktree_path);
+  const uniquePaths = new Set(paths);
+  assert.equal(uniquePaths.size, taskIds.length, "All worktrees should have unique paths");
+
+  // Verify branch names are unique
+  const branches = worktrees.map((w) => w.branch_name);
+  const uniqueBranches = new Set(branches);
+  assert.equal(uniqueBranches.size, taskIds.length, "All worktrees should have unique branch names");
+
+  // Verify each worktree exists on disk
+  for (const taskId of taskIds) {
+    const wtPath = getTaskWorktreePath(root, "github.com/acme/repo", taskId);
+    assert.ok(existsSync(join(wtPath, ".git")), `Worktree ${taskId} should exist on disk`);
+  }
+
+  // Verify that worktrees are independent (writing to one doesn't affect others)
+  await writeFile(join(worktrees[0].worktree_path, "task_a_only.txt"), "only in task_a\n", "utf8");
+  execFileSync("git", ["add", "task_a_only.txt"], { cwd: worktrees[0].worktree_path, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "task_a change"], { cwd: worktrees[0].worktree_path, stdio: "ignore" });
+
+  // The other worktrees should not see this file
+  const taskBGitFile = execFileSync("git", ["status", "--porcelain"], {
+    cwd: worktrees[1].worktree_path,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(taskBGitFile, "", `Worktree task_b should be clean after task_a commit`);
+
+  // Remove all three worktrees
+  for (const taskId of taskIds) {
+    const removed = await removeTaskWorktree(taskId, {
+      workspaceRoot: root,
+      repoId: "github.com/acme/repo",
+      canonicalRepoPath: repo,
+    });
+    assert.equal(removed.ok, true);
+  }
+
+  // Verify all removed from disk
+  for (const taskId of taskIds) {
+    const wtPath = getTaskWorktreePath(root, "github.com/acme/repo", taskId);
+    assert.equal(existsSync(wtPath), false, `Worktree ${taskId} should be removed from disk`);
+  }
+});
+
+test("P0: ensureTaskWorktree concurrent worktrees have no lock contention", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-concurrent-lock-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const taskIds = ["task_l1", "task_l2", "task_l3"];
+
+  // Simulate concurrent creation by running Promise.all
+  const results = await Promise.all(taskIds.map((taskId) =>
+    ensureTaskWorktree("github.com/acme/repo", taskId, {
+      workspaceRoot: root,
+      canonicalRepoPath: repo,
+      baseRef: "HEAD",
+    })
+  ));
+
+  // All should succeed without lock errors
+  for (let i = 0; i < taskIds.length; i++) {
+    assert.equal(results[i].ok, true, `Task ${taskIds[i]} should not be blocked by other worktree creation`);
+  }
+
+  // Verify all worktree paths are under the same worktrees root
+  const wtRoot = join(root, ".gptwork", "worktrees", "github.com-acme-repo");
+  for (const taskId of taskIds) {
+    const wtPath = getTaskWorktreePath(root, "github.com/acme/repo", taskId);
+    assert.ok(wtPath.startsWith(wtRoot), `Worktree path ${wtPath} should be under ${wtRoot}`);
+  }
+
+  // Clean up
+  for (const taskId of taskIds) {
+    await removeTaskWorktree(taskId, {
+      workspaceRoot: root,
+      repoId: "github.com/acme/repo",
+      canonicalRepoPath: repo,
+    });
+  }
+});
+
+test("P0: ensureTaskWorktree records execution_cwd and worktree_lifecycle metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-metadata-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const result = await ensureTaskWorktree("github.com/acme/repo", "task_meta", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+    baseRef: "HEAD",
+  });
+
+  assert.equal(result.ok, true);
+  assert.ok(result.repo_id, "Should include repo_id");
+  assert.ok(result.task_id, "Should include task_id");
+  assert.ok(result.canonical_repo_path, "Should include canonical_repo_path");
+  assert.ok(result.worktree_path, "Should include worktree_path");
+  assert.ok(result.branch_name, "Should include branch_name");
+  assert.ok(result.base_ref, "Should include base_ref");
+  assert.equal(typeof result.dirty_source, "boolean", "Should include dirty_source boolean");
+  assert.ok(Array.isArray(result.dirty_paths), "Should include dirty_paths array");
+
+  // Clean up
+  await removeTaskWorktree("task_meta", {
+    workspaceRoot: root,
+    repoId: "github.com/acme/repo",
+    canonicalRepoPath: repo,
+  });
+});
+
+console.log("P0 worktree concurrency tests loaded");

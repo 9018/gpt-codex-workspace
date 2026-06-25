@@ -401,7 +401,7 @@ export async function tryCreateZvecStore(options = {}) {
           fieldName: "embedding",
           vector: queryVector,
           topk: topK,
-          filter: buildZvecFilter(filters),
+          ...(buildZvecFilter(filters) ? { filter: buildZvecFilter(filters) } : {}),
           outputFields: [
             "workspace_id",
             "goal_id",
