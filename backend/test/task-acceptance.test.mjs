@@ -102,7 +102,7 @@ test('verifyTaskCompletion fails when completed result lacks summary', async () 
 
 test('verifyTaskCompletion fails when completed result lacks verification object', async () => {
   const verification = await verifyTaskCompletion({
-    resultJson: { status: 'completed', summary: 'done', changed_files: [] },
+    resultJson: { status: 'completed', summary: 'done', changed_files: ['src/index.js'] },
     config: { discoverVerificationCommands: false },
     runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
   });

@@ -97,10 +97,20 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings.push({ severity: "blocker", code: "summary_missing", message: "Completed result must include summary", source: "task_acceptance" });
   }
   if (status === "completed" && result.verification?.passed !== true) {
-    findings.push({ severity: "blocker", code: "verification_failed", message: "Completed result requires verification.passed === true", source: "task_acceptance" });
+    // P0: Pure-sync tasks (no changed files) don't need verification.passed
+    const changedFiles = Array.isArray(result.changed_files) ? result.changed_files
+      : Array.isArray(task.changed_files) ? task.changed_files : [];
+    if (changedFiles.length > 0 || task.mode === "deploy") {
+      findings.push({ severity: "blocker", code: "verification_failed", message: "Completed result requires verification.passed === true", source: "task_acceptance" });
+    }
   }
   if (status === "completed" && !result.verification) {
-    findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
+    // P0: Pure-sync tasks (no changed files) don't need verification
+    const changedFiles = Array.isArray(result.changed_files) ? result.changed_files
+      : Array.isArray(task.changed_files) ? task.changed_files : [];
+    if (changedFiles.length > 0 || task.mode === "deploy") {
+      findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
+    }
   }
 
   if (repoPath) {
@@ -130,7 +140,12 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
   findings.push(...(acceptance.findings || []).filter((finding) => finding.severity === "blocker" || finding.severity === "major"));
 
   const hardFailed = findings.some((finding) => finding.severity === "blocker" || finding.severity === "major");
-  const passed = parsed.ok && status === "completed" && result.verification?.passed === true && commands.every((command) => command.exit_code === 0) && !hardFailed;
+  // P0: Pure-sync tasks (no changed files) can pass without verification
+  const pureSyncNoChanges = (status === "completed" || parsed.ok) &&
+    Array.isArray(result.changed_files) && result.changed_files.length === 0 &&
+    Array.isArray(task.changed_files) && task.changed_files.length === 0 &&
+    task.mode !== "deploy";
+  const passed = parsed.ok && status === "completed" && (pureSyncNoChanges || result.verification?.passed === true) && commands.every((command) => command.exit_code === 0) && !hardFailed;
   const failureClass = passed ? null : classifyFailure({ resultJson: result, message: findings.map((f) => f.code).join(" ") }) || "unknown";
   const verification = {
     passed,

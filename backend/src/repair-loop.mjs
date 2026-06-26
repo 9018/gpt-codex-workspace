@@ -248,12 +248,39 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
       parent.logs ||= [];
       parent.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Repair task ${completedTask.id} passed; parent ${parentTaskId} completed` });
 
-      // Update goal status too
-      if (completedTask.goal_id) {
-        const goal = state.goals.find((g) => g.id === completedTask.goal_id);
-        if (goal) {
-          goal.status = "completed";
-          goal.updated_at = new Date().toISOString();
+      // --- P0: Update parent task's goal status ---
+      // The repair task has its own goal; we must also update the parent's
+      // original goal so the system shows the correct overall status.
+      if (parent.goal_id) {
+        const parentGoal = state.goals.find((g) => g.id === parent.goal_id);
+        if (parentGoal) {
+          parentGoal.status = "completed";
+          parentGoal.updated_at = new Date().toISOString();
+        }
+      }
+
+      // --- P0: Cascade to root task if different from parent ---
+      // When parent_task_id !== root_task_id, the root task must also
+      // be auto-closed to prevent an incomplete task chain.
+      const rootTaskId = parent.root_task_id || completedTask.root_task_id;
+      if (rootTaskId && rootTaskId !== parent.id && rootTaskId !== parentTaskId) {
+        const rootTask = state.tasks.find((t) => t.id === rootTaskId);
+        if (rootTask && !["completed", "failed", "cancelled"].includes(rootTask.status)) {
+          rootTask.status = "completed";
+          rootTask.result = rootTask.result || {};
+          rootTask.result.repair_outcome = "completed_via_child";
+          rootTask.result.summary = `Root task completed via repair cascade from ${parentTaskId}`;
+          rootTask.updated_at = new Date().toISOString();
+          rootTask.logs ||= [];
+          rootTask.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Root task auto-closed via repair cascade from ${parentTaskId}` });
+          // Update root task's goal
+          if (rootTask.goal_id) {
+            const rootGoal = state.goals.find((g) => g.id === rootTask.goal_id);
+            if (rootGoal) {
+              rootGoal.status = "completed";
+              rootGoal.updated_at = new Date().toISOString();
+            }
+          }
         }
       }
 

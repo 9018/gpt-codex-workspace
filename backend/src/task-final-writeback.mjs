@@ -8,7 +8,7 @@ import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecyc
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
-import { failureClassRequiresRepair } from "./task-retry.mjs";
+import { failureClassRequiresRepair, failureClassIsTerminalNonRepairable } from "./task-retry.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from './repair-loop.mjs';
@@ -421,6 +421,10 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
 }
 
 function failureClassRequiresRepairCompat(failureClass) {
+  // P0: Network and terminal failures are NOT repairable — retrying rate
+  // limiting or gateway errors is counterproductive and may exacerbate
+  // resource exhaustion. Unknown failures may be repairable.
+  if (failureClassIsTerminalNonRepairable(failureClass)) return false;
   return failureClassRequiresRepair(failureClass) || failureClass === "verification_failed" || failureClass === "unknown";
 }
 
