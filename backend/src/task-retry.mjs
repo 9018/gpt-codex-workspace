@@ -20,6 +20,8 @@ import {
 // Re-export for backward compatibility
 export { classifyFailure, failureClassRequiresRepair, failureClassIsTerminalNonRepairable, classifyFailureStructured, getFailureClassDefinition, failureClassIsQuarantined };
 
+// Delivery-spec compatible re-exports -- repair-loop functions for task finalizer
+export { shouldAttemptRepair, createRepairGoalFromFindings } from './repair-loop.mjs';
 // ---------------------------------------------------------------------------
 // Retry policy definitions
 // ---------------------------------------------------------------------------

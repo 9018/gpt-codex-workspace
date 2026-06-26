@@ -9,6 +9,7 @@ import { isCodexSessionInventoryTask } from "./task-status.mjs";
 import { completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
 import { startQueuedGoals } from "./goal-queue.mjs";
+import { sweepStaleTaskStates, applySweepActions } from "./stale-state-sweeper.mjs";
 import { runIntegrationQueue } from "./integration-queue.mjs";
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from "./repair-loop.mjs";
 import { createGoal } from "./goal-task-goals.mjs";
@@ -301,6 +302,20 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   const failed = results.filter((item) => item.failed || item.status === "failed").length;
   const skipped = results.filter((item) => item.skipped).length;
   const transitioned = results.filter((item) => item.transitioned).length;
+
+  // P0: Stale-state sweeper — auto-resolve tasks stuck in non-terminal states
+  try {
+    const sweepActions = sweepStaleTaskStates({ tasks: store.state?.tasks || [], now: new Date().toISOString() });
+    if (Array.isArray(sweepActions) && sweepActions.length > 0) {
+      const sweepResult = await applySweepActions(store, sweepActions);
+      if (sweepResult.swept && sweepResult.swept > 0) {
+        Object.assign(results, { swept: sweepResult.swept, sweep_errors: sweepResult.errors });
+      }
+    }
+  } catch (sweepErr) {
+    // Non-fatal: sweep failures should not prevent normal operation
+    Object.assign(results, { sweep_error: sweepErr.message });
+  }
   const progressed = results.filter((item) => item.progressed).length;
 
   return {

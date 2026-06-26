@@ -9,7 +9,7 @@ import { loadRuntimeEnv } from "./runtime-env.mjs";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { toolList, initializeResult, jsonResult, jsonError, resourceList, readResource, shapeToolResult } from "./mcp-tooling.mjs";
 import { parseTokens, parseTokenContexts, normalizeTokenContexts, defaultTokenContext, assertAuthorized } from "./auth-context.mjs";
-import { setTerminalNotifier } from "./task-lifecycle.mjs";
+import { setTerminalNotifier, setLifecycleEventEmitter } from "./task-lifecycle.mjs";
 import { setCreatedTaskNotifier } from "./goal-task-lifecycle.mjs";
 import { processGeneralTask } from "./task-general-processor.mjs";
 import { determineBarkConfigSource } from "./diagnostics-service.mjs";
@@ -24,6 +24,7 @@ import { createEventLogger } from "./event-log-service.mjs";
 import { createHookBus } from "./hook-service.mjs";
 let notifyTerminalTaskIfNeeded = null;
 let notifyCreatedTaskIfNeeded = null;
+let emitTaskLifecycleEvent = null;
 
 const PROCESS_STARTED_AT = new Date();
 
@@ -132,6 +133,7 @@ export async function createGptWorkServer(options = {}) {
   ({ notifyTerminalTaskIfNeeded, notifyCreatedTaskIfNeeded } = createNotificationService(bark));
   const serverContext = createServerContext({ config, store, browser, github, bark, barkConfigSource, envLoadResult, earlyEnvResult });
 setTerminalNotifier(notifyTerminalTaskIfNeeded);
+setLifecycleEventEmitter(emitTaskLifecycleEvent);
   setCreatedTaskNotifier(notifyCreatedTaskIfNeeded);
   const reconciler = createReconciler({ store, config, github, notifyTerminalTaskIfNeeded });
 

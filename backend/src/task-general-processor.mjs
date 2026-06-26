@@ -17,6 +17,7 @@ import { runIntegrationQueue } from './integration-queue.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { determineHealingAction } from './self-healing-policy.mjs';
 import { classifyFailure, failureClassIsTerminalNonRepairable } from './failure-classifier.mjs';
+import { convergeTaskAfterRun } from './task-convergence.mjs';
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 
 const RETRY_HEALING_ACTIONS = new Set([
@@ -505,6 +506,33 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     if (Array.isArray(acceptanceResult.next_tasks) && acceptanceResult.next_tasks.length > 0) {
       taskResult.next_tasks = acceptanceResult.next_tasks;
     }
+
+    // ================================================================
+    // PR0: Task state convergence — auto-closure and retry decisions
+    // ================================================================
+    const convergenceResult = convergeTaskAfterRun({
+      task,
+      taskResult,
+      acceptance: acceptanceResult,
+      runtimeState: taskResult.runtime_state || {},
+      attempt: task.repair_attempt || 0,
+      now: new Date().toISOString(),
+    });
+    // Merge convergence findings with acceptance findings
+    if (Array.isArray(convergenceResult.findings)) {
+      for (const f of convergenceResult.findings) {
+        const isDup = mergedFindings.some(function(ex) { return ex.code === f.code && ex.message === f.message; });
+        if (!isDup) mergedFindings.push(f);
+      }
+      taskResult.acceptance_findings = mergedFindings;
+    }
+    // Store convergence metadata for downstream use
+    taskResult.convergence = {
+      nextStatus: convergenceResult.nextStatus,
+      closureReason: convergenceResult.closureReason,
+      profile: convergenceResult.profile,
+    };
+
 
     if (!acceptanceResult.passed) {
       // === Acceptance FAILED → attempt repair or escalate ===
