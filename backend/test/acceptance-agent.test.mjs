@@ -390,3 +390,116 @@ test("runAcceptanceAgent: changed_files_match_git detects mismatch via git_chang
   assert.ok(mismatchFindings.length > 0, "Expected changed_files_mismatch when result files not in git diff");
   assert.ok(mismatchFindings.some(f => f.severity === "major"), "Expected major severity");
 });
+
+// ===========================================================================
+// P0: Issue 5 — Resolved findings should not block acceptance
+// ===========================================================================
+
+test("runAcceptanceAgent: resolved findings are not counted as blockers in no_blocker_or_major_findings", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_resolved" },
+    result: {
+      status: "completed",
+      summary: "Task with resolved findings",
+      changed_files: ["src/fixed.mjs"],
+      verification: { commands: ["npm test"], passed: true },
+      commit: "abc123",
+      acceptance_findings: [
+        { severity: "blocker", code: "summary_missing", message: "Summary missing", resolved: true, explanation: "Fixed in repair" },
+        { severity: "major", code: "verification_missing", message: "Verification missing", resolved: true, explanation: "Added in repair" },
+        { severity: "major", code: "changed_files_mismatch", message: "Files mismatch", resolved: true, explanation: "Resolved in repair" },
+      ],
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with resolved findings",
+      changed_files: ["src/fixed.mjs"],
+      git_changed_files: ["src/fixed.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  // Should NOT generate existing_blocking_findings
+  const blockingFindings = result.findings.filter(f => f.code === "existing_blocking_findings");
+  assert.equal(blockingFindings.length, 0,
+    "Should not produce existing_blocking_findings when all previous findings are resolved");
+  assert.equal(result.passed, true,
+    "Acceptance should pass when all previous findings are resolved and no new issues");
+});
+
+test("runAcceptanceAgent: unresolved findings still block acceptance", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_unresolved" },
+    result: {
+      status: "completed",
+      summary: "Task with unresolved findings",
+      changed_files: ["src/broken.mjs"],
+      verification: { commands: ["npm test"], passed: true },
+      commit: "abc123",
+      acceptance_findings: [
+        { severity: "blocker", code: "summary_missing", message: "Summary still missing", resolved: false },
+        { severity: "major", code: "still_broken", message: "Still broken", resolved: false },
+      ],
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with unresolved findings",
+      changed_files: ["src/broken.mjs"],
+      git_changed_files: ["src/broken.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  // SHOULD generate existing_blocking_findings
+  const blockingFindings = result.findings.filter(f => f.code === "existing_blocking_findings");
+  assert.ok(blockingFindings.length > 0,
+    "Should produce existing_blocking_findings when unresolved findings remain");
+  assert.ok(blockingFindings.some(f => f.severity === "blocker"),
+    "existing_blocking_findings should be severity blocker");
+  assert.equal(result.passed, false,
+    "Acceptance should fail when unresolved blockers exist");
+});
+
+test("runAcceptanceAgent: mixed resolved and unresolved findings only count unresolved", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_mixed" },
+    result: {
+      status: "completed",
+      summary: "Task with mixed findings",
+      changed_files: ["src/mixed.mjs"],
+      verification: { commands: ["npm test"], passed: true },
+      commit: "abc123",
+      acceptance_findings: [
+        { severity: "blocker", code: "summary_missing", message: "Summary missing", resolved: true },
+        { severity: "blocker", code: "real_blocker", message: "Real blocking issue", resolved: false },
+        { severity: "major", code: "real_major", message: "Real major issue", resolved: false },
+        { severity: "major", code: "verification_missing", message: "Verification missing", resolved: true },
+      ],
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with mixed findings",
+      changed_files: ["src/mixed.mjs"],
+      git_changed_files: ["src/mixed.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  // Should produce existing_blocking_findings with count=2 (not 4)
+  const blockingFindings = result.findings.filter(f => f.code === "existing_blocking_findings");
+  assert.ok(blockingFindings.length > 0,
+    "Should produce existing_blocking_findings when unresolved findings remain");
+  assert.match(blockingFindings[0].message, /has 2 existing/,
+    "Should count only unresolved findings, not resolved ones");
+  assert.equal(result.passed, false,
+    "Acceptance should fail when unresolved blockers exist");
+});

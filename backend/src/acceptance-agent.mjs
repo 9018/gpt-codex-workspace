@@ -307,7 +307,7 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
     case 'no_blocker_or_major_findings':
       // Check result for existing findings
       if (Array.isArray(result?.acceptance_findings)) {
-        const blockers = result.acceptance_findings.filter(f => f.severity === 'blocker' || f.severity === 'major');
+        const blockers = result.acceptance_findings.filter(f => (f.severity === 'blocker' || f.severity === 'major') && !f.resolved);
         if (blockers.length > 0) {
           return { severity: 'blocker', code: 'existing_blocking_findings', message: `Task has ${blockers.length} existing blocker/major finding(s)`, source: 'acceptance_agent' };
         }
