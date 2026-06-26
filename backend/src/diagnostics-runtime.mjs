@@ -8,7 +8,9 @@ export function resolveRepoDir() {
   let dir = start;
   for (let i = 0; i < 6; i++) {
     try {
-      if (statSync(join(dir, ".git")).isDirectory()) return dir;
+      // Handle both regular repos (.git is a directory) and git worktrees
+      // (.git is a file containing "gitdir: <path>")
+      if (statSync(join(dir, ".git")).isDirectory() || statSync(join(dir, ".git")).isFile()) return dir;
     } catch (e) {}
     const parent = dirname(dir);
     if (parent === dir) break;
