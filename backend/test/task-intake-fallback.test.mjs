@@ -395,6 +395,65 @@ test("syncChatGptRequest uses gptwork-task label for task_intake requests", asyn
 });
 
 // =========================================================================
+
+// =========================================================================
+// Test: importFromIssues Request ID dedup - issue with matching source_request_id skipped
+// =========================================================================
+test("importFromIssues Request ID dedup: issue with matching source_request_id is skipped", async () => {
+  const github = createGithubSync({
+    githubRepo: "test/test",
+    githubToken: "test",
+    githubEnabled: true,
+    defaultWorkspaceRoot: process.cwd(),
+  });
+
+  // Mock issue that has Request ID in body but NO Task ID
+  const mockIssues = [
+    {
+      number: 50,
+      title: "[Task] Some task [queued]",
+      body: "---\ngptwork_intake: task\nassign_to: codex\n---\n\n**Request ID**: `chatreq_converted-1`\n",
+      labels: ["gptwork-task"],
+      state: "open",
+      html_url: "https://github.com/test/test/issues/50",
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    },
+  ];
+  github.pollIssues = async () => mockIssues;
+  github.enabled = true;
+
+  // Store has an existing task that was converted from request (has source_request_id, no github_issue_number)
+  const store = createStore({
+    tasks: [
+      {
+        id: "task_converted_1",
+        project_id: "default",
+        workspace_id: "hosted-default",
+        title: "Some task",
+        description: "desc",
+        created_by: "chatgpt-request-convert",
+        source_request_id: "chatreq_converted-1",
+        assignee: "codex",
+        status: "queued",
+        mode: "builder",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      }
+    ]
+  });
+
+  // Run import - the issue with matching Request ID should be skipped
+  const result = await github.importFromIssues(store, { dryRun: false });
+  assert.equal(result.length, 0, "No tasks imported because issue matches existing source_request_id");
+  const state = await store.load();
+  assert.equal(state.tasks.length, 1, "Still only one task (no duplicate created)");
+
+  // Verify the skip reason includes duplicate_by_request_id
+  const diag = github.getSyncDiagnostics();
+  const reasons = diag.skipped_reasons.map(s => s.reason);
+  assert.ok(reasons.includes("duplicate_by_request_id"), "Skipped by request ID dedup");
+});
 // Test: IDEMPOTENCY - same issue not imported twice
 // =========================================================================
 test("importFromIssues idempotent: same issue not imported twice", async () => {
