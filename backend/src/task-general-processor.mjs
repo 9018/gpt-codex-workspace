@@ -18,7 +18,7 @@ import { createGoal } from './goal-task-goals.mjs';
 import { determineHealingAction } from './self-healing-policy.mjs';
 import { classifyFailure, failureClassIsTerminalNonRepairable } from './failure-classifier.mjs';
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
-import { convergeTaskAfterRun } from "./task-convergence.mjs";
+import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergence.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -28,6 +28,12 @@ const RETRY_HEALING_ACTIONS = new Set([
   "recover_and_retry",
   "fallback_parse_and_retry",
 ]);
+
+function isNonBlockingContractCodeForProfile(code, profile) {
+  if (code === "tests_missing") return ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry"].includes(profile);
+  if (code === "changed_files_mismatch") return ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop"].includes(profile);
+  return false;
+}
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -409,12 +415,23 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     const validateRepoPath = resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot;
     const contractValidation = validateResultContract(parsedResult, { repoPath: validateRepoPath });
     if (!contractValidation.valid) {
-      taskStatus = "waiting_for_review";
+      const profile = detectAcceptanceProfile(task, taskResult);
       const diagnosisMsg = "Contract violation: " + contractValidation.diagnosis_codes.join(", ");
-      taskResult.warnings = taskResult.warnings || [];
-      taskResult.warnings.push(diagnosisMsg);
-      for (const code of contractValidation.diagnosis_codes) {
-        acceptanceFindings.push({ severity: "major", code, message: diagnosisMsg, source: "result_contract" });
+      const blockingCodes = contractValidation.diagnosis_codes.filter((code) => !isNonBlockingContractCodeForProfile(code, profile));
+      const nonBlockingCodes = contractValidation.diagnosis_codes.filter((code) => isNonBlockingContractCodeForProfile(code, profile));
+      if (blockingCodes.length > 0) {
+        taskStatus = "waiting_for_review";
+        taskResult.warnings = taskResult.warnings || [];
+        taskResult.warnings.push(diagnosisMsg);
+        for (const code of blockingCodes) {
+          acceptanceFindings.push({ severity: "major", code, message: diagnosisMsg, source: "result_contract" });
+        }
+      } else {
+        taskResult.warnings = taskResult.warnings || [];
+        taskResult.warnings.push("Non-blocking contract finding for " + profile + ": " + nonBlockingCodes.join(", "));
+        for (const code of nonBlockingCodes) {
+          acceptanceFindings.push({ severity: "followup", code, message: diagnosisMsg, source: "result_contract" });
+        }
       }
     }
   }
