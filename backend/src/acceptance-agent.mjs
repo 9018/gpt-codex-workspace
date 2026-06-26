@@ -15,10 +15,18 @@ import { join } from 'node:path';
 export const ACCEPTANCE_PROFILES = {
   DEFAULT: 'default',
   CODE_CHANGE: 'code_change',
+  RUNTIME_CHANGE: 'runtime_change',
+  SYNC_ONLY: 'sync_only',
+  GITHUB_SYNC_ONLY: 'github_sync_only',
+  NOOP: 'noop',
+  REPAIR_NOOP: 'repair_noop',
+  REPAIR_CODE_CHANGE: 'repair_code_change',
+  VERIFICATION_ONLY: 'verification_only',
+  NETWORK_RETRY: 'network_retry',
+  INTEGRATION_ONLY: 'integration_only',
   DOCS_ONLY: 'docs_only',
   CONFIG_CHANGE: 'config_change',
   DEPLOY: 'deploy',
-  NOOP: 'noop',
 };
 
 function isManagedGitStatusLine(line) {
@@ -215,11 +223,34 @@ export async function runAcceptanceAgent({ task, goal, result, repoPath, profile
 // ---------------------------------------------------------------------------
 
 function inferProfileFromTask(task = {}, result = {}) {
+  // Check for explicit mode-based profiles
+  if (task.mode === 'sync') return ACCEPTANCE_PROFILES.SYNC_ONLY;
+  if (task.mode === 'github_sync') return ACCEPTANCE_PROFILES.GITHUB_SYNC_ONLY;
+  if (task.mode === 'verification') return ACCEPTANCE_PROFILES.VERIFICATION_ONLY;
+  if (task.mode === 'integration') return ACCEPTANCE_PROFILES.INTEGRATION_ONLY;
+  if (task.mode === 'network_retry') return ACCEPTANCE_PROFILES.NETWORK_RETRY;
   if (task.mode === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
   if (result.noop === true || task.noop === true || task.mode === 'noop') return ACCEPTANCE_PROFILES.NOOP;
 
+  // Check for repair tasks
+  if (task.parent_task_id || task.repair_of_task_id) {
+    const changed = Array.isArray(result.changed_files) ? result.changed_files :
+      Array.isArray(task.changed_files) ? task.changed_files : [];
+    if (changed.length > 0) return ACCEPTANCE_PROFILES.REPAIR_CODE_CHANGE;
+    return ACCEPTANCE_PROFILES.REPAIR_NOOP;
+  }
+
+  // Check for runtime change (deploy or runtime files)
+  if (task.mode === 'runtime_change' || task.mode === 'runtime') return ACCEPTANCE_PROFILES.RUNTIME_CHANGE;
+
   const changed = Array.isArray(result.changed_files) ? result.changed_files :
     Array.isArray(task.changed_files) ? task.changed_files : [];
+
+  // No changed files: return DEFAULT for backward compatibility
+  // (default profile still checks verification and changed_files_match_git)
+  // sync_only is only returned for explicit sync mode tasks
+  if (changed.length === 0) return ACCEPTANCE_PROFILES.DEFAULT;
+
   const allDocs = changed.length > 0 && changed.every((f) => f.startsWith('docs/') || f.endsWith('.md'));
   if (allDocs) return ACCEPTANCE_PROFILES.DOCS_ONLY;
 
@@ -228,11 +259,33 @@ function inferProfileFromTask(task = {}, result = {}) {
   );
   if (allConfig) return ACCEPTANCE_PROFILES.CONFIG_CHANGE;
 
-  if (changed.length > 0) return ACCEPTANCE_PROFILES.CODE_CHANGE;
-  return ACCEPTANCE_PROFILES.DEFAULT;
+  // Changed files with runtime/server paths (specific paths only)
+  const runtimeFiles = changed.filter(f =>
+    f.startsWith('backend/src/') ||
+    f.includes('/worker') || f.includes('/runtime') || f.includes('/server') ||
+    f.includes('codex-worker') || f.includes('gptwork-server')
+  );
+  if (runtimeFiles.length > 0 && (task.mode === 'deploy' || task.mode === 'runtime' || task.mode === 'runtime_change')) {
+    return ACCEPTANCE_PROFILES.RUNTIME_CHANGE;
+  }
+
+  return ACCEPTANCE_PROFILES.CODE_CHANGE;
 }
 
 function getProfileChecks(profile) {
+  // Profile contract definitions matching GOAL.md requirements:
+  // sync_only: changed_files not required, tests not required, verification required
+  // github_sync_only: changed_files not required, tests not required, verification required
+  // verification_only: changed_files not required, tests not required, verification required
+  // noop: changed_files not required, tests not required, verification optional
+  // repair_noop: changed_files not required, tests not required, verification required
+  // network_retry: changed_files not required, tests not required, verification optional
+  // integration_only: changed_files optional, tests not required, verification required
+  // runtime_change: changed_files required, tests required, verification required + restart check
+  // repair_code_change: changed_files required, tests required, verification required
+  // code_change: changed_files required, tests required, verification required
+  // docs_only: changed_files required, tests relaxed
+  // config_change: changed_files required, tests relaxed
   const profiles = {
     default: {
       required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
@@ -241,11 +294,58 @@ function getProfileChecks(profile) {
         'changed_files_match_git'],
       relaxed: [],
     },
+    sync_only: {
+      required: ['result_json_valid', 'summary_present',
+        'worktree_clean', 'no_blocker_or_major_findings', 'git_diff_check'],
+      relaxed: [],
+    },
+    github_sync_only: {
+      required: ['result_json_valid', 'summary_present',
+        'worktree_clean', 'no_blocker_or_major_findings'],
+      relaxed: [],
+    },
+    verification_only: {
+      required: ['result_json_valid', 'summary_present',
+        'worktree_clean', 'no_blocker_or_major_findings',
+        'verification_present_for_non_noop', 'verification_passed'],
+      relaxed: [],
+    },
+    noop: {
+      required: ['result_json_valid', 'summary_present', 'noop_reason_present'],
+      relaxed: [],
+    },
+    repair_noop: {
+      required: ['result_json_valid', 'summary_present',
+        'worktree_clean', 'no_blocker_or_major_findings'],
+      relaxed: ['tests_present', 'changed_files_match_git'],
+    },
+    repair_code_change: {
+      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+        'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
+        'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence',
+        'changed_files_match_git'],
+      relaxed: [],
+    },
+    network_retry: {
+      required: ['result_json_valid', 'summary_present'],
+      relaxed: ['tests_present', 'verification_passed', 'changed_files_match_git'],
+    },
+    integration_only: {
+      required: ['result_json_valid', 'summary_present',
+        'worktree_clean', 'no_blocker_or_major_findings'],
+      relaxed: [],
+    },
     code_change: {
       required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
         'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence',
         'changed_files_match_git'],
+      relaxed: [],
+    },
+    runtime_change: {
+      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+        'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
+        'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence'],
       relaxed: [],
     },
     docs_only: {

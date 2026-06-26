@@ -3,21 +3,13 @@
  *
  * Classifies failures into categories that determine repair eligibility,
  * notification strategy, and terminal-state decisions.
+ *
+ * Provides both simple string-based classification (classifyFailure) and
+ * structured classification (classifyFailureStructured) with retryable,
+ * repairable, confidence, nextStatusHint, and evidence fields.
  */
 
-/**
- * Classify a task failure into a named category.
- *
- * Network-level failures are checked first to prevent transient network issues
- * from being misclassified as repairable code-level failures.
- *
- * @param {object} [input={}] - Diagnostics input
- * @param {object} [input.resultJson] - Parsed result.json
- * @param {object} [input.result] - Result object (alias for resultJson)
- * @param {object} [input.error] - Error object
- * @param {string} [input.message] - Error message string
- * @returns {string} Failure class name
- */
+/** Simple string-based classification (backward compatible) */
 export function classifyFailure(input = {}) {
   const result = input.resultJson || input.result || {};
   const error = input.error || {};
@@ -108,10 +100,190 @@ export function failureClassRequiresRepair(failureClass) {
 export function failureClassIsTerminalNonRepairable(failureClass) {
   return new Set([
     "rate_limited",
+    "quota_exceeded",
     "gateway_error",
+    "service_unavailable",
     "transient_network_error",
+    "provider_interruption",
+    "execution_timeout",
+    "startup_timeout",
+    "result_missing",
     "codex_timeout",
     "stale_running_task",
     "task_failed",
   ]).has(failureClass);
+}
+
+// ---------------------------------------------------------------------------
+// Structured failure classification (P0)
+// ---------------------------------------------------------------------------
+// Returns a full structured object with retryable, repairable, nextStatusHint,
+// confidence, and evidence fields. This is the preferred interface for the
+// unified convergence module.
+
+const FAILURE_CLASS_STRUCTURED = {
+  rate_limited: {
+    class: "rate_limited",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "quota_wait",
+    confidence: "high",
+    description: "Rate limited by API provider",
+  },
+  quota_exceeded: {
+    class: "quota_exceeded",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "quota_wait",
+    confidence: "high",
+    description: "Quota exceeded for API usage",
+  },
+  gateway_error: {
+    class: "gateway_error",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "high",
+    description: "Gateway error from upstream provider",
+  },
+  service_unavailable: {
+    class: "service_unavailable",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "high",
+    description: "Service unavailable from upstream provider",
+  },
+  transient_network_error: {
+    class: "transient_network_error",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "high",
+    description: "Transient network error (connection reset, timeout, DNS)",
+  },
+  provider_interruption: {
+    class: "provider_interruption",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "medium",
+    description: "Provider interruption (stdout empty, stderr large, exit 1)",
+  },
+  execution_timeout: {
+    class: "execution_timeout",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "high",
+    description: "Codex execution timed out",
+  },
+  startup_timeout: {
+    class: "startup_timeout",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "high",
+    description: "Codex startup timed out (no first output)",
+  },
+  result_missing: {
+    class: "result_missing",
+    retryable: true,
+    repairable: false,
+    nextStatusHint: "retry_wait",
+    confidence: "medium",
+    description: "Result.json missing from task execution",
+  },
+  verification_failed: {
+    class: "verification_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Task acceptance verification failed",
+  },
+  implementation_failed: {
+    class: "implementation_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "medium",
+    description: "Task implementation failed",
+  },
+  test_failed: {
+    class: "test_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Tests failed during verification",
+  },
+  unknown_failure: {
+    class: "unknown_failure",
+    retryable: false,
+    repairable: false,
+    nextStatusHint: "failed",
+    confidence: "low",
+    description: "Unclassified failure",
+  },
+};
+
+/**
+ * Classify a task failure into a structured object with full metadata.
+ *
+ * @param {object} [input={}] - Same input as classifyFailure
+ * @returns {{
+ *   class: string,
+ *   retryable: boolean,
+ *   repairable: boolean,
+ *   nextStatusHint: string,
+ *   confidence: string,
+ *   evidence: string[],
+ *   description: string
+ * }}
+ */
+export function classifyFailureStructured(input = {}) {
+  const simple = classifyFailure(input);
+  const evidence = [];
+
+  // Collect evidence
+  if (input.error) evidence.push(`error: ${input.error.message || String(input.error)}`);
+  if (input.message) evidence.push(`message: ${input.message}`);
+  if (input.rateLimited) evidence.push("rateLimited flag set");
+  if (input.gatewayError) evidence.push("gatewayError flag set");
+  if (input.transientNetworkError) evidence.push("transientNetworkError flag set");
+  if (input.codexTimeout) evidence.push("codexTimeout flag set");
+  if (input.missingResultJson) evidence.push("missingResultJson flag set");
+  if (input.noFirstOutputTimeout) evidence.push("noFirstOutputTimeout flag set");
+
+  // Map simple class to structured definition
+  const structured = FAILURE_CLASS_STRUCTURED[simple];
+  if (structured) {
+    return { ...structured, evidence };
+  }
+
+  // Fallback: unknown
+  return { ...FAILURE_CLASS_STRUCTURED.unknown_failure, evidence, class: simple || "unknown_failure" };
+}
+
+/**
+ * Get the structured definition for a given failure class name.
+ *
+ * @param {string} failureClass - Failure class name
+ * @returns {object|null} Structured definition or null if unknown
+ */
+export function getFailureClassDefinition(failureClass) {
+  return FAILURE_CLASS_STRUCTURED[failureClass] || null;
+}
+
+/**
+ * Check if a failure class has a quarantine/backoff hint (quota_wait or retry_wait).
+ *
+ * @param {string} failureClass
+ * @returns {boolean}
+ */
+export function failureClassIsQuarantined(failureClass) {
+  const def = getFailureClassDefinition(failureClass);
+  if (!def) return false;
+  return def.nextStatusHint === "quota_wait" || def.nextStatusHint === "retry_wait";
 }
