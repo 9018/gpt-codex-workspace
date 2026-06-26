@@ -252,6 +252,31 @@ test("converge: result missing + no diff → retry_wait", () => {
   assert.equal(result.nextStatus, CONVERGENCE_STATUSES.RETRY_WAIT);
 });
 
+
+test("converge: result_missing execution failure → retry_wait without repair", () => {
+  const result = convergeTaskAfterRun({
+    task: { id: "no-result", status: "running" },
+    taskResult: { kind: "failed", failure_class: "result_missing", changed_files: [], tests: null, commit: null, from_json: false },
+    acceptance: { passed: false, status: "needs_fix", findings: [{ severity: "blocker", code: "summary_missing", message: "missing" }] },
+    attempt: 0,
+  });
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.RETRY_WAIT);
+  assert.equal(result.repairPlan, null);
+  assert.ok(result.retryPlan);
+});
+
+test("converge: exhausted result_missing repair/no-result chain → failed without review", () => {
+  const result = convergeTaskAfterRun({
+    task: { id: "no-result-repair", status: "running", parent_task_id: "root", repair_attempt: 1 },
+    taskResult: { kind: "failed", failure_class: "result_missing", changed_files: [], tests: null, commit: null, from_json: false },
+    acceptance: { passed: false, status: "needs_fix", findings: [{ severity: "blocker", code: "summary_missing", message: "missing" }] },
+    attempt: 1,
+  });
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.FAILED);
+  assert.equal(result.repairPlan, null);
+  assert.ok(result.retryPlan?.exhausted);
+});
+
 // ---------------------------------------------------------------------------
 // 8. result missing + diff → waiting_for_review
 // ---------------------------------------------------------------------------

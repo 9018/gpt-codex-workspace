@@ -550,18 +550,28 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       closureReason: convergenceResult.closureReason,
       profile: convergenceResult.profile,
     };
-    // P0: Use convergence result to drive task status
-    // e.g., verification_only/sync_only with non-blocker findings -> completed
-    if (convergenceResult.nextStatus === "completed" && taskStatus !== "completed") {
-      taskStatus = "completed";
+    // P0: Use convergence result to drive task status before repair creation.
+    // Execution/provider failures such as result_missing must not be converted
+    // into summary_missing repair loops by the acceptance layer.
+    const convergenceTerminalOrRetryStatuses = new Set(["completed", "retry_wait", "quota_wait", "failed", "blocked", "restart_pending"]);
+    if (convergenceTerminalOrRetryStatuses.has(convergenceResult.nextStatus) && taskStatus !== convergenceResult.nextStatus) {
+      taskStatus = convergenceResult.nextStatus;
     }
 
     if (!acceptanceResult.passed) {
       // === Acceptance FAILED → attempt repair or escalate ===
-      const canRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts });
       taskResult.acceptance_decision = acceptanceResult.reviewer_decision?.decision || null;
 
-      if (canRepair.should_repair) {
+      const convergenceBlocksRepair = convergenceResult.repairPlan === null
+        && ["retry_wait", "quota_wait", "failed", "blocked", "restart_pending"].includes(convergenceResult.nextStatus);
+      if (convergenceBlocksRepair) {
+        taskStatus = convergenceResult.nextStatus;
+        taskResult.reason = convergenceResult.reason || ("non_repairable_failure: " + (taskResult.failure_class || "unknown"));
+        taskResult.repair_denied_reason = "Convergence classified this as non-repairable; no repair task created.";
+      } else {
+        const canRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts });
+
+        if (canRepair.should_repair) {
         const repairGoal = await createRepairGoalFromFindingsFn({
           task: taskWithRepairContext(task, resolvedRepo),
           goal,
@@ -593,10 +603,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
           taskResult.warnings.push('Repair goal creation failed (non-blocking): ' + repairErr.message);
         }
-      } else {
-        taskStatus = 'waiting_for_review';
-        taskResult.repair_denied_reason = canRepair.reason;
-        taskResult.reason = 'acceptance_failed: ' + canRepair.reason;
+        } else {
+          taskStatus = taskResult.failure_class === 'result_missing' ? 'failed' : 'waiting_for_review';
+          taskResult.repair_denied_reason = canRepair.reason;
+          taskResult.reason = 'acceptance_failed: ' + canRepair.reason;
+        }
       }
     } else {
       // === Acceptance PASSED → check if integration is needed ===

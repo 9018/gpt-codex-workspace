@@ -113,6 +113,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If STATUS=completed (success)
   if (parsed.status === "completed") {
     const isNoop = _isNoop(parsed);
+    const resultMissingNoop = isNoop && Boolean(cr) && parsed.from_json !== true && !parsed.commit && !parsed.tests;
     const warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
     if (isNoop) {
       warnings.push(
@@ -125,10 +126,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       );
     }
     return {
-      kind: isNoop ? "noop" : KIND_EXECUTED,
+      kind: resultMissingNoop ? KIND_FAILED : (isNoop ? "noop" : KIND_EXECUTED),
       summary: isNoop
         ? "NO-OP: Codex execution completed with no changes. See diagnostics for details."
         : (parsed.summary || "Codex execution completed (no structured summary)"),
+      failure_class: resultMissingNoop ? "result_missing" : undefined,
+      repairable: resultMissingNoop ? false : undefined,
+      retryable: resultMissingNoop ? true : undefined,
       diagnostics: isNoop && cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
       structured: parsed.structured,
       from_json: parsed.from_json,
@@ -194,11 +198,14 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     );
   }
   return {
-    kind: isNoop ? "noop" : KIND_EXECUTED,
+    kind: resultMissingNoop ? KIND_FAILED : (isNoop ? "noop" : KIND_EXECUTED),
     summary: isNoop
       ? "NO-OP: Codex execution completed with no changes. See diagnostics for details."
       : (parsed.summary || "Codex execution completed (no structured summary)"),
-    diagnostics: isNoop && cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
+    failure_class: resultMissingNoop ? "result_missing" : undefined,
+      repairable: resultMissingNoop ? false : undefined,
+      retryable: resultMissingNoop ? true : undefined,
+      diagnostics: isNoop && cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
     structured: parsed.structured,
     from_json: parsed.from_json,
     changed_files: parsed.changed_files || [],

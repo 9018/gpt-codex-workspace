@@ -272,6 +272,19 @@ export function classifyRunFailure(input = {}) {
       };
     }
 
+    if ((hasStdout || hasStderr) && !hasCommit && !hasGitChanges && exitCode === 0) {
+      return {
+        failure_class: "result_missing",
+        detected_reason: "Runner produced no valid result.json, no commit, and no git changes. This is an execution/provider no-result failure, not a repairable code defect.",
+        severity: "failed",
+        operator_action: "Retry within the execution retry budget or fail/block when exhausted. Do not create a code repair task unless git changes exist.",
+        creates_repair_task: false,
+        creates_retry_followup: true,
+        diagnostics,
+      };
+    }
+
+
     if (!hasStdout && !hasStderr && !hasCommit && !hasGitChanges && exitCode !== null) {
       return {
         failure_class: "no_result_json_no_changes",

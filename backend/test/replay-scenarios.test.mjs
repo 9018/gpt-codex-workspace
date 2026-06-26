@@ -212,6 +212,18 @@ test("replay: provider_interruption → retry_wait, no repair", () => {
     "provider_interruption should NOT create repair plan");
 });
 
+
+test("replay: no-result execution failure does not create repair or review", () => {
+  const task = { id: "replay_no_result", status: "running", title: "Provider no-result" };
+  const taskResult = { kind: "failed", failure_class: "result_missing", changed_files: [], tests: null, commit: null, from_json: false, repairable: false, retryable: true };
+  const acceptance = { passed: false, status: "needs_fix", findings: [{ severity: "blocker", code: "summary_missing", message: "missing" }] };
+  const convergence = convergeTaskAfterRun({ task, taskResult, acceptance, attempt: 0 });
+  assert.equal(convergence.nextStatus, CONVERGENCE_STATUSES.RETRY_WAIT);
+  assert.equal(convergence.repairPlan, null);
+  assert.ok(convergence.retryPlan);
+  assert.ok(convergence.notifications.some((n) => n.event === "task_retry_wait"));
+});
+
 // ===========================================================================
 // 4. verification failed → waiting_for_repair → parent/root auto-completed
 // ===========================================================================
