@@ -503,3 +503,91 @@ test("runAcceptanceAgent: mixed resolved and unresolved findings only count unre
   assert.equal(result.passed, false,
     "Acceptance should fail when unresolved blockers exist");
 });
+
+// ===========================================================================
+// P0: Issue 1 — git_changed_files must use baseSha..HEAD (multi-commit task)
+// ===========================================================================
+
+test("buildEvidence: git_changed_files covers all commits in baseSha..HEAD (multi-commit task)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-multi-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+
+  // Initial commit
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+  // Commit 1: file A
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src/a.mjs"), "a", "utf8");
+  execFileSync("git", ["add", "src/a.mjs"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add a.mjs"], { cwd: repo, stdio: "ignore" });
+
+  // Commit 2: file B
+  await writeFile(join(repo, "src/b.mjs"), "b", "utf8");
+  execFileSync("git", ["add", "src/b.mjs"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add b.mjs"], { cwd: repo, stdio: "ignore" });
+
+  // Commit 3: file C
+  await writeFile(join(repo, "src/c.mjs"), "c", "utf8");
+  execFileSync("git", ["add", "src/c.mjs"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add c.mjs"], { cwd: repo, stdio: "ignore" });
+
+  const mod = await import("../src/acceptance-agent.mjs");
+  const evidence = await mod.buildEvidence({ repoPath: repo, baseSha });
+
+  // Verify all three files are in git_changed_files
+  assert.ok(evidence.git_changed_files.includes("src/a.mjs"), "Should include a.mjs from commit 1");
+  assert.ok(evidence.git_changed_files.includes("src/b.mjs"), "Should include b.mjs from commit 2");
+  assert.ok(evidence.git_changed_files.includes("src/c.mjs"), "Should include c.mjs from commit 3");
+
+  // With baseSha, commit_exists should also be true
+  assert.equal(evidence.commit_exists, true, "commit_exists should be true with 3 new commits after baseSha");
+
+  // Verify old behavior (HEAD~1..HEAD) would only capture the last commit's files
+  const oldStdout = execFileSync("git", ["diff", "--name-only", "HEAD~1..HEAD", "--relative"], {
+    cwd: repo, encoding: "utf8", timeout: 10000, maxBuffer: 1024 * 1024,
+  });
+  const oldFiles = oldStdout.trim().split("\n").filter(Boolean);
+  assert.equal(oldFiles.length, 1, "OLD behavior (HEAD~1) only shows last commit's files");
+  assert.equal(oldFiles[0], "src/c.mjs", "OLD behavior only shows c.mjs");
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("buildEvidence: git_changed_files falls back to HEAD~1..HEAD when no baseSha", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-fallback-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+
+  // Initial commit
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+
+  // A change: add a file in a subdirectory
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src", "new.mjs"), "content", "utf8");
+  execFileSync("git", ["add", "src/new.mjs"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add new.mjs"], { cwd: repo, stdio: "ignore" });
+
+  const mod = await import("../src/acceptance-agent.mjs");
+  const evidence = await mod.buildEvidence({ repoPath: repo });
+
+  // Without baseSha, should fallback to HEAD~1..HEAD
+  assert.ok(evidence.git_changed_files.includes("src/new.mjs"), "Should find new.mjs via HEAD~1..HEAD fallback");
+
+  // commit_exists should be false without baseSha
+  assert.equal(evidence.commit_exists, false, "commit_exists false without baseSha");
+
+  rmSync(dir, { recursive: true, force: true });
+});

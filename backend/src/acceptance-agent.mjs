@@ -73,11 +73,16 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       evidence.git_diff_summary = '(git diff failed)';
     }
 
-    // Check for task-specific commits using baseSha diff range
+    // Determine diff range for task-scoped evidence
+    // Use baseSha..HEAD when available; fall back to HEAD~1..HEAD for
+    // backward compatibility when no baseSha is provided.
+    const diffRange = baseSha ? `${baseSha}..HEAD` : 'HEAD~1..HEAD';
+
+    // Check for task-specific commits using diff range
     // This prevents unrelated repo history from falsely satisfying commit_or_patch_evidence
     if (baseSha) {
       try {
-        const stdout = execFileSync('git', ['rev-list', '--count', `${baseSha}..HEAD`], {
+        const stdout = execFileSync('git', ['rev-list', '--count', diffRange], {
           cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
         });
         const count = parseInt(stdout.trim(), 10);
@@ -89,9 +94,9 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       evidence.commit_exists = false;
     }
 
-    // Changed files from git
+    // Changed files from git diff over the task-scoped range
     try {
-      const stdout = execFileSync('git', ['diff', '--name-only', 'HEAD~1..HEAD', '--relative'], {
+      const stdout = execFileSync('git', ['diff', '--name-only', diffRange, '--relative'], {
         cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
       });
       const files = stdout.trim().split('\n').filter(Boolean);
@@ -100,7 +105,19 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
         evidence.git_changed_files = files;
       }
     } catch {
-      // HEAD~1 might not exist; try diff against empty tree
+      // HEAD~1 might not exist on first commit; try diff against empty tree
+      try {
+        const stdout = execFileSync('git', ['diff', '--name-only', '4b825dc642cb6eb9a060e54bf899d1530366c0a', 'HEAD', '--relative'], {
+          cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
+        });
+        const files = stdout.trim().split('\n').filter(Boolean);
+        if (files.length > 0) {
+          evidence.changed_files = files;
+          evidence.git_changed_files = files;
+        }
+      } catch {
+        // If everything fails, leave changed_files empty
+      }
     }
   }
 
