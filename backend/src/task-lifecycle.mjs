@@ -145,12 +145,27 @@ export async function updateTask(store, task_id, updater) {
     ? await store.findTaskById(task_id)
     : state.tasks.find((item) => item.id === task_id);
   if (!task) throw new Error(`task not found: ${task_id}`);
+  const prevStatus = task.status;
   updater(task);
   task.updated_at = new Date().toISOString();
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
 
   // Use shared notification helper for terminal task states (deduplicated per task/status/channel)
   await notifyTerminalTask(task);
+
+  // Emit lifecycle event for status transitions (non-terminal events get deduplicated Bark notifications)
+  if (_lifecycleEventEmitter && prevStatus !== task.status) {
+    try {
+      await _lifecycleEventEmitter({
+        task,
+        event: "task_" + task.status,
+        previousStatus: prevStatus,
+        nextStatus: task.status,
+      });
+    } catch (leErr) {
+      /* Non-fatal: lifecycle event failures should not block task updates */
+    }
+  }
 
   await store.save();
   return { task };
@@ -172,4 +187,15 @@ export async function updateGoalStatus(store, goalId, status, updatedAt = new Da
   state.activities.push({ time: updatedAt, type: `goal.${status}`, goal_id: goal.id, title: goal.title });
   await store.save();
   return goal;
+}
+
+// ---------------------------------------------------------------------------
+// Lifecycle event emitter setter
+// (called by gptwork-server.mjs during startup to wire in Bark lifecycle events)
+// ---------------------------------------------------------------------------
+
+let _lifecycleEventEmitter = null;
+
+export function setLifecycleEventEmitter(fn) {
+  _lifecycleEventEmitter = fn;
 }

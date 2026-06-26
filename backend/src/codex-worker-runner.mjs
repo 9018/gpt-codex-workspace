@@ -13,6 +13,7 @@ import { runIntegrationQueue } from "./integration-queue.mjs";
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from "./repair-loop.mjs";
 import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
+import { sweepStaleTaskStates, applySweepActions } from "./stale-state-sweeper.mjs";
 
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
@@ -302,6 +303,20 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   const skipped = results.filter((item) => item.skipped).length;
   const transitioned = results.filter((item) => item.transitioned).length;
   const progressed = results.filter((item) => item.progressed).length;
+  // P0: Stale-state sweeper — auto-resolve tasks stuck in non-terminal states
+  try {
+    const now = Date.now();
+    const sweepActions = sweepStaleTaskStates({ tasks: (store.state && store.state.tasks) || [], now });
+    if (Array.isArray(sweepActions) && sweepActions.length > 0) {
+      const sweepResult = await applySweepActions(store, sweepActions);
+      if (sweepResult.applied && sweepResult.applied > 0) {
+        Object.assign(results, { swept: sweepResult.applied, sweep_errors: sweepResult.errors });
+      }
+    }
+  } catch (sweepErr) {
+    Object.assign(results, { sweep_error: sweepErr.message });
+  }
+
 
   return {
     ok: true,

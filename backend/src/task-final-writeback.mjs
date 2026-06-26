@@ -1,4 +1,5 @@
 import { dirname, join } from "node:path";
+import { appendFileSync } from "node:fs";
 import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
@@ -394,11 +395,11 @@ export async function finalizeCodexTaskRun({
         passed: true,
       });
       if (repairResult.parent_updated) {
-        const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) require("node:fs").appendFileSync(_lp, `[gptwork-worker] repair completion: parent ${repairResult.parent_task_id} updated to ${repairResult.parent_status}
+        const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] repair completion: parent ${repairResult.parent_task_id} updated to ${repairResult.parent_status}
 `);
       }
     } catch (repairErr) {
-      const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) require("node:fs").appendFileSync(_lp, `[gptwork-worker] repair completion handler error: ${repairErr.message}
+      const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] repair completion handler error: ${repairErr.message}
 `);
     }
   }

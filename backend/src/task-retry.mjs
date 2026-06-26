@@ -18,6 +18,8 @@ import {
 } from "./failure-classifier.mjs";
 
 // Re-export for backward compatibility
+// Delivery-spec compatible re-exports - repair-loop functions for task finalizer and tests
+export { shouldAttemptRepair, createRepairGoalFromFindings } from "./repair-loop.mjs";
 export { classifyFailure, failureClassRequiresRepair, failureClassIsTerminalNonRepairable, classifyFailureStructured, getFailureClassDefinition, failureClassIsQuarantined };
 
 // ---------------------------------------------------------------------------
