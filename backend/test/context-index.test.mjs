@@ -766,3 +766,119 @@ describe("zvec-store — maxGoalsScanned limits (Issue 6)", () => {
     }
   });
 });
+
+// ===========================================================================
+// 7b. P0: Real zvec regression — score semantics, project_id/repo_id
+// ===========================================================================
+
+describe("P0: zvec store regression — score semantics and filters", () => {
+
+  it("zvec score normalization: same vector gets higher score than orthogonal", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-score-"));
+    try {
+      const store = await zvecStore.tryCreateZvecStore({
+        workspaceRoot: tmpDir,
+        dimension: 4,
+      });
+      if (!store) {
+        // If zvec is somehow unavailable, fail hard (goal requirement)
+        assert.fail("@zvec/zvec should be available in test environment");
+      }
+
+      await store.addChunks(
+        [
+          { id: "v_same", text: "same direction", tokens: 2, metadata: { goal_id: "g_zvec_test", source_type: "goal" } },
+          { id: "v_orth", text: "orthogonal", tokens: 2, metadata: { goal_id: "g_zvec_test", source_type: "goal" } },
+        ],
+        [[1, 0, 0, 0], [0, 1, 0, 0]]
+      );
+
+      // Query with [1,0,0,0] — same vector is [1,0,0,0], orthogonal is [0,1,0,0]
+      const results = await store.search([1, 0, 0, 0], 5, { goal_id: "g_zvec_test" });
+
+      assert.ok(results.length >= 2, "should return at least 2 results");
+
+      // The identical vector should be first (higher score = more relevant)
+      assert.strictEqual(results[0].id, "v_same",
+        "identical vector should rank first after score normalization");
+      assert.strictEqual(results[1].id, "v_orth",
+        "orthogonal vector should rank second");
+
+      // Assert same-vector score > orthogonal-vector score
+      assert.ok(results[0].score > results[1].score,
+        `same-vector score (${results[0].score}) should be > orthogonal score (${results[1].score})`);
+
+      // Assert the score values are sensible: same vector => ~1.0, orthogonal => ~0.0
+      assert.ok(results[0].score > 0.99,
+        `same-vector normalized score should be ~1.0, got ${results[0].score}`);
+      assert.ok(results[1].score < 0.01,
+        `orthogonal normalized score should be ~0.0, got ${results[1].score}`);
+
+      // Assert raw_score and score_kind are present
+      assert.ok(results[0].raw_score !== undefined, "result should include raw_score");
+      assert.strictEqual(typeof results[0].raw_score, "number", "raw_score should be a number");
+      assert.strictEqual(results[0].score_kind, "cosine_similarity", "score_kind should be cosine_similarity");
+      assert.strictEqual(results[1].score_kind, "cosine_similarity", "score_kind should be cosine_similarity");
+
+      // Verify raw_score is inverted from score
+      // raw_score is the original zvec distance (0 for identical, 1 for orthogonal)
+      assert.ok(results[0].raw_score < results[1].raw_score,
+        "raw_score should preserve original zvec distance ordering (lower = more similar)");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("zvec search with project_id and repo_id filters", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-filter-"));
+    try {
+      const store = await zvecStore.tryCreateZvecStore({
+        workspaceRoot: tmpDir,
+        dimension: 4,
+      });
+      if (!store) {
+        assert.fail("@zvec/zvec should be available in test environment");
+      }
+
+      // Add chunks with different project_id and repo_id
+      await store.addChunks(
+        [
+          { id: "c1", text: "project-A content", tokens: 2, metadata: { goal_id: "g_filter", source_type: "goal", project_id: "proj_a", repo_id: "repo_1" } },
+          { id: "c2", text: "project-B content", tokens: 2, metadata: { goal_id: "g_filter", source_type: "goal", project_id: "proj_b", repo_id: "repo_1" } },
+          { id: "c3", text: "repo-2 content", tokens: 2, metadata: { goal_id: "g_filter", source_type: "goal", project_id: "proj_a", repo_id: "repo_2" } },
+        ],
+        [[1, 0, 0, 0], [0, 1, 0, 0], [0, 0, 1, 0]]
+      );
+
+      // Filter by project_id
+      const projAResults = await store.search([1, 0, 0, 0], 5, { goal_id: "g_filter", project_id: "proj_a" });
+      assert.ok(projAResults.length >= 1, "should match project_a chunks");
+      for (const r of projAResults) {
+        assert.strictEqual(r.metadata?.project_id, "proj_a",
+          `result ${r.id} should have project_id=proj_a`);
+      }
+
+      // Filter by repo_id
+      const repo1Results = await store.search([0, 1, 0, 0], 5, { goal_id: "g_filter", repo_id: "repo_1" });
+      assert.ok(repo1Results.length >= 2, "should match both repo_1 chunks");
+      for (const r of repo1Results) {
+        assert.strictEqual(r.metadata?.repo_id, "repo_1",
+          `result ${r.id} should have repo_id=repo_1`);
+      }
+
+      // Filter by both project_id and repo_id
+      const combinedResults = await store.search([1, 0, 0, 0], 5, {
+        goal_id: "g_filter",
+        project_id: "proj_a",
+        repo_id: "repo_1",
+      });
+      assert.ok(combinedResults.length >= 1, "should match combined filter");
+      for (const r of combinedResults) {
+        assert.strictEqual(r.metadata?.project_id, "proj_a");
+        assert.strictEqual(r.metadata?.repo_id, "repo_1");
+      }
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+});

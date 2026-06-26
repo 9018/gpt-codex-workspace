@@ -88,7 +88,7 @@ function escapeZvecString(value) {
 
 function buildZvecFilter(filters = {}) {
   const clauses = [];
-  for (const key of ["goal_id", "workspace_id", "source_type"]) {
+  for (const key of ["goal_id", "workspace_id", "source_type", "project_id", "repo_id"]) {
     if (filters[key] !== undefined && filters[key] !== null && filters[key] !== "") {
       clauses.push(`${key} = "${escapeZvecString(filters[key])}"`);
     }
@@ -283,6 +283,8 @@ export function createLocalStore(options = {}) {
             if (filters.source_type && chunk.metadata?.source_type !== filters.source_type) continue;
             if (filters.goal_id && chunk.metadata?.goal_id !== filters.goal_id) continue;
             if (filters.workspace_id && chunk.metadata?.workspace_id !== filters.workspace_id) continue;
+            if (filters.project_id && chunk.metadata?.project_id !== filters.project_id) continue;
+            if (filters.repo_id && chunk.metadata?.repo_id !== filters.repo_id) continue;
 
             const vec = entry.vectors[i];
             if (!vec || vec.length !== queryVector.length) continue;
@@ -368,6 +370,8 @@ export async function tryCreateZvecStore(options = {}) {
         { name: "goal_id", dataType: ZVecDataType.STRING },
         { name: "task_id", dataType: ZVecDataType.STRING },
         { name: "source_type", dataType: ZVecDataType.STRING },
+        { name: "project_id", dataType: ZVecDataType.STRING, nullable: true },
+        { name: "repo_id", dataType: ZVecDataType.STRING, nullable: true },
         { name: "role", dataType: ZVecDataType.STRING, nullable: true },
         { name: "source_path", dataType: ZVecDataType.STRING, nullable: true },
         { name: "chunk_index", dataType: ZVecDataType.INT64 },
@@ -402,6 +406,8 @@ export async function tryCreateZvecStore(options = {}) {
             goal_id: String(metadataValue(chunk.metadata, "goal_id", "unknown")),
             task_id: String(metadataValue(chunk.metadata, "task_id", "")),
             source_type: String(metadataValue(chunk.metadata, "source_type", "unknown")),
+            project_id: String(metadataValue(chunk.metadata, "project_id", "")),
+            repo_id: String(metadataValue(chunk.metadata, "repo_id", "")),
             role: metadataValue(chunk.metadata, "role", ""),
             source_path: metadataValue(chunk.metadata, "source_path", ""),
             chunk_index: Number(metadataValue(chunk.metadata, "chunk_index", chunk.index ?? 0)),
@@ -426,6 +432,8 @@ export async function tryCreateZvecStore(options = {}) {
             "goal_id",
             "task_id",
             "source_type",
+            "project_id",
+            "repo_id",
             "role",
             "source_path",
             "chunk_index",
@@ -434,7 +442,7 @@ export async function tryCreateZvecStore(options = {}) {
             "text",
           ],
         });
-        return results.map((r) => ({
+        const mapped = results.map((r) => ({
           id: r.id,
           text: r.fields?.text || "",
           tokens: Number(r.fields?.tokens || 0),
@@ -444,13 +452,19 @@ export async function tryCreateZvecStore(options = {}) {
             goal_id: r.fields?.goal_id || "",
             task_id: r.fields?.task_id || "",
             source_type: r.fields?.source_type || "unknown",
+            project_id: r.fields?.project_id || "",
+            repo_id: r.fields?.repo_id || "",
             role: r.fields?.role || "",
             source_path: r.fields?.source_path || "",
             chunk_index: Number(r.fields?.chunk_index || 0),
             created_at: r.fields?.created_at || "",
           },
-          score: r.score || 0,
+          score: 1 - (r.score || 0),
+          raw_score: r.score || 0,
+          score_kind: "cosine_similarity",
         }));
+        mapped.sort((a, b) => b.score - a.score);
+        return mapped;
       },
 
       async removeGoalChunks(goalId) {
