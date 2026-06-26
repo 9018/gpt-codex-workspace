@@ -122,8 +122,14 @@ export async function finalizeCodexTaskRun({
         });
 
         if (integrationResult.ok) {
-          taskStatus = "completed";
+          // Integration completion semantics:
+          // Only merged/skipped are terminal; branch_pushed/pr_opened are not merged
           taskResult.integration = { ...integrationResult };
+          if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
+            taskStatus = "completed";
+          } else {
+            taskStatus = "waiting_for_review";
+          }
         } else if (isIntegrationRepairableStatus(integrationResult.status)) {
           // Integration failed — create repair or escalate
           const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });

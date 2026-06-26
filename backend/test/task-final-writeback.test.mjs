@@ -452,6 +452,87 @@ test("task-final-writeback: completed task triggers queue autostart hook", async
   assert.equal(result.auto_start.auto_started, true);
 });
 
+test("task-final-writeback: waiting_for_integration branch_pushed does NOT mark completed", async () => {
+  // P0: When finalizer runs integration and gets branch_pushed (NOT merged),
+  // taskStatus must NOT become "completed"
+  let savedTask = null;
+  const args = makeMinimalArgs("waiting_for_integration");
+  args.task = { id: "task_wfi_branch_pushed", logs: [] };
+  args.goal = { id: "goal_wfi_branch_pushed", workspace_id: "hosted-default" };
+  // Override store to capture saved task
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_wfi_branch_pushed", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/test" },
+  };
+  args.runIntegrationQueueFn = async () => {
+    // Simulate push_branch mode: NOT merged
+    return { ok: true, status: "branch_pushed", merged: false, pushed: true, pr_opened: false };
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true, status: "completed", commands: [], changed_files: [], reason_no_tests: null,
+    failure_class: null, requires_review: false, findings: [],
+  });
+  args.autoStartNextOnTaskCompletedFn = async () => ({ auto_started: false, details: [] });
+  args.github = { syncTask: async () => {} };
+  args.workspaceFiles = { result_md: "/tmp/test.md", dir: "/tmp/test" };
+
+  await finalizeCodexTaskRun(args);
+
+  // Branch pushed with merged:false should NOT set task completed
+  assert.notEqual(savedTask.status, "completed", "branch_pushed finalizer should NOT set completed");
+  assert.equal(savedTask.status, "waiting_for_review", "branch_pushed finalizer should set waiting_for_review");
+  assert.equal(savedTask.result.integration.status, "branch_pushed");
+});
+
+test("task-final-writeback: waiting_for_integration merged -> completed", async () => {
+  // P0: When finalizer runs integration and gets merged, task should complete
+  let savedTask = null;
+  const args = makeMinimalArgs("waiting_for_integration");
+  args.task = { id: "task_wfi_merged", logs: [] };
+  args.goal = { id: "goal_wfi_merged", workspace_id: "hosted-default" };
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_wfi_merged", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/test" },
+  };
+  args.runIntegrationQueueFn = async () => {
+    // Simulate local_merge mode: actually merged
+    return { ok: true, status: "merged", merged: true };
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true, status: "completed", commands: [], changed_files: [], reason_no_tests: null,
+    failure_class: null, requires_review: false, findings: [],
+  });
+  args.autoStartNextOnTaskCompletedFn = async () => ({ auto_started: false, details: [] });
+  args.github = { syncTask: async () => {} };
+  args.workspaceFiles = { result_md: "/tmp/test.md", dir: "/tmp/test" };
+
+  await finalizeCodexTaskRun(args);
+
+  // Merged should set task completed
+  assert.equal(savedTask.status, "completed", "merged integration should set completed");
+  assert.equal(savedTask.result.integration.status, "merged");
+});
+
 test("task-final-writeback: synchronizes queue item for terminal and waiting states", async () => {
   for (const status of ["completed", "failed", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]) {
     let savedState = null;

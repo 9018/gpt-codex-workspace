@@ -421,7 +421,9 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       runIntegrationQueueFn: async (opts) => {
         integrationCalled = true;
         assert.equal(opts.repoId, "github.com/acme/repo");
-        return { ok: true, status: "completed", merged: false, pushed: true, pr_opened: false };
+        // Real integration queue returns status='merged' with merged=true for local_merge mode.
+        // This is a terminal state that should result in completed taskStatus.
+        return { ok: true, status: "merged", merged: true };
       },
       createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
     });
@@ -829,6 +831,174 @@ test("processGeneralTaskWithDeps: integration push_failed creates repair when al
     assert.equal(result.status, "waiting_for_repair");
     assert.equal(createGoalArgs.repair_of_task_id, task.id);
     assert.equal(createGoalArgs.repair_of_worktree, join(tmpDir, ".gptwork", "worktrees", "github.com-acme-repo", "task_int_push_failed"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+// ===========================================================================
+// P0: Integration Completion Semantics — branch_pushed/pr_opened are NOT terminal
+// ===========================================================================
+
+test("processGeneralTaskWithDeps: integration branch_pushed does NOT mark task completed", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-branch-pushed-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_branch_pushed", "goal_branch_pushed");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        // branch_pushed with merged:false should NOT produce completed
+        assert.notEqual(taskStatus, "completed", "branch_pushed must NOT set task completed");
+        assert.equal(taskStatus, "waiting_for_review", "branch_pushed should set task to waiting_for_review");
+        assert.equal(taskResult.integration.status, "branch_pushed");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        // push_branch mode returns branch_pushed (NOT merged)
+        return { ok: true, status: "branch_pushed", merged: false, pushed: true, pr_opened: false };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(result.status, "waiting_for_review", "branch_pushed should result in waiting_for_review, not completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: integration pr_opened does NOT mark task completed", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-pr-opened-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_pr_opened", "goal_pr_opened");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_pr_opened", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_pr_opened", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        // pr_opened with merged:false should NOT produce completed
+        assert.notEqual(taskStatus, "completed", "pr_opened must NOT set task completed");
+        assert.equal(taskStatus, "waiting_for_review", "pr_opened should set task to waiting_for_review");
+        assert.equal(taskResult.integration.status, "pr_opened");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        // open_pr mode returns pr_opened (NOT merged)
+        return { ok: true, status: "pr_opened", merged: false, pushed: true, pr_opened: true };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(result.status, "waiting_for_review", "pr_opened should result in waiting_for_review, not completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: integration skipped is still terminal (completed)", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-skipped-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_skipped", "goal_skipped");
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_skipped", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_skipped", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "abc123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        // skipped is explicitly terminal — integration was bypassed, e.g. mode=none
+        assert.equal(taskStatus, "completed", "skipped integration is terminal → completed");
+        assert.equal(taskResult.integration.status, "skipped");
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        // mode=none returns skipped with merged:false — but skipped is terminal by design
+        return { ok: true, status: "skipped", merged: false, pushed: false, pr_opened: false };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(result.status, "completed", "skipped integration should result in completed");
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
