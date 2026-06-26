@@ -13,6 +13,7 @@ import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
+import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -308,6 +309,17 @@ export async function finalizeCodexTaskRun({
     }
   }
 
+
+  // ---- P0: Auto-closure classification and consistency ----
+  // Classify the task type and closure path for auditing.
+  // This classification is persisted in the task result for downstream tools.
+  const _closureResult = classifyClosure(taskResult, task, null);
+  taskResult.closure_type = _closureResult.taskType.type;
+  taskResult.closure_path = _closureResult.closurePath.path;
+  taskResult.closure_summary = _closureResult.summary;
+  taskResult.needs_restart_check = _closureResult.needsRestartCheck;
+  taskResult.needs_integration = _closureResult.needsIntegration;
+
   const result = typeof store.mutate === "function"
     ? await mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn: notifyTerminalTask })
     : await updateTaskFn(store, task.id, (item) => {
@@ -391,7 +403,13 @@ export async function finalizeCodexTaskRun({
     }
   }
 
-  try { await github.syncTask(result.task); } catch {}
+  try {
+    const _gs = await github.syncTask(result.task);
+    taskResult.github_sync = { ok: _gs?.ok === true, issue: _gs?.issue || null, updated: _gs?.updated === true || _gs?.created === true || false, comment_posted: _gs?.comment_posted === true };
+  } catch (_ge) {
+    taskResult.github_sync = { ok: false, error: _ge?.message || String(_ge) };
+    // Non-critical — do not fail finalization
+  }
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind, auto_start: autoStartResult };
 }
 

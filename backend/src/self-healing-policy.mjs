@@ -8,6 +8,7 @@
  * - Worker crashes
  * - Missing result.json
  * - Safe restart interruptions
+ * - Network-level failures (rate_limited, gateway, transient) — P0 auto-closure
  */
 
 /**
@@ -21,6 +22,8 @@ export const ERROR_CATEGORIES = {
   RESULT_MISSING: 'result_missing',
   RESTART_INTERRUPTED: 'restart_interrupted',
   TIMEOUT: 'timeout',
+  /** P0: Network-level failures — retry with backoff, NOT code repair */
+  NETWORK: 'network',
   UNKNOWN: 'unknown',
 };
 
@@ -32,6 +35,45 @@ export const ERROR_CATEGORIES = {
  */
 export function classifyError(error) {
   const msg = String(error?.message || error || '').toLowerCase();
+
+  // ---- P0: Network failure patterns (checked first, before infra errors) ----
+  // Rate limiting / 429
+  if (
+    msg.includes('429') ||
+    msg.includes('rate limit') ||
+    msg.includes('too many requests') ||
+    msg.includes('quota exceeded') ||
+    msg.includes('retry later') ||
+    msg.includes('request was throttled')
+  ) {
+    return { category: ERROR_CATEGORIES.NETWORK, code: 'rate_limited', recoverable: true, retry_budget: 3 };
+  }
+  // Gateway errors / 502 / 503
+  if (
+    msg.includes('502') ||
+    msg.includes('503') ||
+    msg.includes('gateway') ||
+    msg.includes('service unavailable') ||
+    msg.includes('bad gateway') ||
+    msg.includes('upstream') ||
+    msg.includes('overloaded')
+  ) {
+    return { category: ERROR_CATEGORIES.NETWORK, code: 'gateway_error', recoverable: true, retry_budget: 3 };
+  }
+  // Transient network errors (DNS / connection reset / timeout / refused)
+  if (
+    msg.includes('econnrefused') ||
+    msg.includes('econnreset') ||
+    msg.includes('etimedout') ||
+    msg.includes('enotfound') ||
+    msg.includes('network error') ||
+    msg.includes('fetch failed') ||
+    msg.includes('failed to fetch') ||
+    msg.includes('socket hang up') ||
+    msg.includes('unable to connect')
+  ) {
+    return { category: ERROR_CATEGORIES.NETWORK, code: 'transient_network_error', recoverable: true, retry_budget: 2 };
+  }
 
   if (msg.includes('enospc') || msg.includes('no space') || msg.includes('disk full')) {
     return { category: ERROR_CATEGORIES.ENOSPC, code: 'ENOSPC', recoverable: true, retry_budget: 1 };
@@ -98,6 +140,17 @@ export function determineHealingAction({ error, task = {}, retryCount = 0 } = {}
         compact_context: true,
         cleanup_tmp: false,
         reason: 'No first output: building smaller context bundle and retrying',
+      };
+
+    // ---- P0: Network failures = retry with backoff, NOT code repair ----
+    case ERROR_CATEGORIES.NETWORK:
+      return {
+        action: 'retry_with_backoff',
+        next_status: 'queued',
+        compact_context: false,
+        cleanup_tmp: false,
+        reason: `Network error (${classified.code}): retrying task after backoff (attempt ${retryCount + 1}/${classified.retry_budget})`,
+        retry_budget: classified.retry_budget,
       };
 
     case ERROR_CATEGORIES.STALE_LOCK:

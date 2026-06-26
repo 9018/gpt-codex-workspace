@@ -16,9 +16,11 @@ import { createRepairGoalFromFindings, shouldAttemptRepair } from './repair-loop
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { determineHealingAction } from './self-healing-policy.mjs';
+import { classifyFailure, failureClassIsTerminalNonRepairable } from './failure-classifier.mjs';
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 
 const RETRY_HEALING_ACTIONS = new Set([
+  "retry_with_backoff",
   "cleanup_and_retry",
   "compact_and_retry",
   "reconcile_lock_and_retry",
@@ -357,6 +359,34 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     canonical_repo_path: resolvedRepo.canonical_repo_path || null,
     used_task_worktree_path: Boolean(resolvedRepo.task_worktree_path) && executionCwd === resolvedRepo.task_worktree_path,
   };
+
+
+  // ---- P0: Network failure retry gate ----
+  // If Codex CLI failed with a network-class error (rate_limited, gateway_error,
+  // transient_network_error), retry with backoff instead of entering the
+  // acceptance/repair pipeline. Network failures are NOT code-level failures
+  // and should NOT trigger code repair loops.
+  const _fc = taskResult.failure_class || classifyFailure({
+    resultJson: taskResult,
+    result: taskResult,
+    message: taskResult.summary || '',
+    codexTimeout: taskResult.kind === 'codex_timeout',
+    missingResultJson: taskResult.kind === 'codex_failed' && !parsedResult,
+    noFirstOutputTimeout: taskResult.no_first_output_timeout,
+  });
+  taskResult.failure_class = _fc;
+  if (_fc && failureClassIsTerminalNonRepairable(_fc)) {
+    const _healing = determineHealingActionFn({
+      error: new Error(taskResult.summary || _fc),
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
+    if (_healing.action === 'retry_with_backoff') {
+      return parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error: new Error(taskResult.summary || _fc), healingAction: _healing, prefix: '[worker] network/terminal failure during Codex execution' });
+    }
+    // Budget exceeded — fall through to acceptance; the repair-is-terminal check
+    // in the finalizer will also prevent code-repair for network failures.
+  }
 
   const doneAt = new Date().toISOString();
   let taskStatus = deriveTaskStatusFromTaskResult(taskResult);
