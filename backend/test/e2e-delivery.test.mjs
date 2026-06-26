@@ -157,7 +157,7 @@ async function runQueuedTask({ store, config, autoStarted, statusByTaskId = new 
           next_tasks: [],
           reviewer_decision: { role: 'acceptance_agent', summary: 'accepted', decision: { status: 'accepted', passed: true } },
         },
-    runIntegrationQueueFn: async () => ({ ok: true, status: 'completed' }),
+    runIntegrationQueueFn: async () => ({ ok: true, status: 'merged', merged: true }),
     verifyTaskCompletionFn: async ({ resultJson, resultJsonPath, repoPath }) => {
       assert.equal(repoPath, join(config.defaultWorkspaceRoot, '.gptwork', 'worktrees', 'github.com-acme-repo', task.id));
       assert.equal(resultJson.status, 'completed');
