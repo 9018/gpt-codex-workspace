@@ -149,6 +149,27 @@ export function createRecoveryToolsGroup({
 
   function now() { return new Date().toISOString(); }
 
+  function runtimeEnvFileStatus() {
+    const rawPath = envLoadResult.loadedPath
+      || process.env.GPTWORK_RUNTIME_ENV_FILE
+      || config.runtimeEnvFile
+      || ".gptwork/runtime.env";
+    if (!rawPath) return { path: null, exists: false };
+    const root = config.defaultWorkspaceRoot || config.workspaceRoot || process.env.GPTWORK_WORKSPACE_ROOT || process.cwd();
+    const path = String(rawPath).startsWith("/") ? String(rawPath) : resolve(root, String(rawPath));
+    return { path, exists: existsSync(path) };
+  }
+
+  function runtimeEnvLoaded() {
+    const file = runtimeEnvFileStatus();
+    return (envLoadResult.keys || []).length > 0 || file.exists;
+  }
+
+  function runtimeEnvConfigured() {
+    return runtimeEnvLoaded() || Object.keys(process.env).some(k => k.startsWith("GPTWORK_"));
+  }
+
+
   async function audit(rec) {
     return auditLogger.appendRecord(rec);
   }
@@ -203,9 +224,9 @@ export function createRecoveryToolsGroup({
         recovery_plane_enabled: config.recoveryPlaneEnabled,
         break_glass_enabled: config.breakGlassEnabled,
         shell_exec_enabled: config.recoveryUnrestrictedLocalCommandEnabled,
-        runtime_env_loaded: envLoadResult.keys.length > 0,
-        runtime_env_file_path: envLoadResult.loadedPath || null,
-        runtime_env_configured: envLoadResult.keys.length > 0,
+        runtime_env_loaded: runtimeEnvLoaded(),
+        runtime_env_file_path: runtimeEnvFileStatus().path,
+        runtime_env_configured: runtimeEnvConfigured(),
         runtime_env_keys_loaded: envLoadResult.keys.filter(k =>
           !k.includes("TOKEN") && !k.includes("KEY") && !k.includes("SECRET") && !k.includes("PASSWORD")
         ),
@@ -275,7 +296,7 @@ export function createRecoveryToolsGroup({
       if (lockSummary.active_repo_locks > 0) issues.push({ severity: "info", category: "locks", detail: lockSummary.active_repo_locks + " active lock(s)" });
 
       // Env
-      if (envLoadResult.keys.length === 0) issues.push({ severity: "high", category: "runtime_env", detail: "runtime.env not loaded" });
+      if (!runtimeEnvLoaded()) issues.push({ severity: "high", category: "runtime_env", detail: "runtime.env not loaded" });
 
       // Restart markers
       if (restartMarkersResult.active_count > 0) issues.push({ severity: "info", category: "restart", detail: restartMarkersResult.active_count + " active restart marker(s)" });
@@ -308,7 +329,7 @@ export function createRecoveryToolsGroup({
         queue_counts: queueCounts,
         repo_locks: lockSummary,
         restart_markers: restartMarkersResult,
-        runtime_env_loaded: envLoadResult.keys.length > 0,
+        runtime_env_loaded: runtimeEnvLoaded(),
         api_failure_state: apiState ? {
           last_status: apiState.last_status, failure_count: apiState.failure_count,
           circuit_breaker: apiState.circuit_breaker || "closed", next_retry_at: apiState.next_retry_at,
@@ -548,7 +569,8 @@ export function createRecoveryToolsGroup({
     ...common,
     handler: async () => {
       const start = Date.now();
-      const envFile = envLoadResult.loadedPath || process.env.GPTWORK_RUNTIME_ENV_FILE || "default .gptwork/runtime.env";
+      const envStatus = runtimeEnvFileStatus();
+      const envFile = envStatus.path || "default .gptwork/runtime.env";
       const envVarsAtStart = Object.keys(process.env).filter(k => k.startsWith("GPTWORK_"));
       const loadedKeys = envLoadResult.keys || [];
       const configuredKeys = Object.keys(sources || {}).filter(k => sources[k] === "runtime.env" || sources[k] === "process.env");
@@ -559,18 +581,19 @@ export function createRecoveryToolsGroup({
       }
 
       const issues = [];
-      if (loadedKeys.length === 0 && configuredKeys.length > 0) {
+      const loaded = loadedKeys.length > 0 || envStatus.exists;
+      if (!loaded && configuredKeys.length > 0) {
         issues.push({ severity: "high", detail: "runtime.env configured but no keys loaded — env file may be missing or empty" });
       }
-      if (loadedKeys.length === 0 && !envFile) {
+      if (!loaded && !envFile) {
         issues.push({ severity: "high", detail: "No runtime.env file found and no GPTWORK_ vars in process.env" });
       }
 
       const result = {
         runtime_env_file_path: envFile,
-        runtime_env_file_exists: existsSync(resolve("../.gptwork/runtime.env")),
-        runtime_env_loaded: loadedKeys.length > 0,
-        runtime_env_configured: configuredKeys.length > 0,
+        runtime_env_file_exists: envStatus.exists,
+        runtime_env_loaded: loaded,
+        runtime_env_configured: loaded || configuredKeys.length > 0,
         loaded_config_key_names: loadedKeys.filter(k => !/TOKEN|KEY|SECRET|PASSWORD/i.test(k)),
         config_source_found_loaded_keys: loadedKeys.length,
         configured_keys_by_source: keysBySource,
@@ -583,7 +606,7 @@ export function createRecoveryToolsGroup({
           "4. buildRuntimeConfig() — resolves final config values",
           "5. createTools() — tools registered with final config",
         ],
-        fix_recommendation: loadedKeys.length === 0
+        fix_recommendation: !loaded
           ? "Ensure .gptwork/runtime.env exists with GPTWORK_* variables, or set them in process.env before starting GPTWork."
           : "runtime.env is loaded correctly.",
         elapsed_ms: Date.now() - start,
