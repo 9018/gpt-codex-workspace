@@ -342,10 +342,22 @@ function isNonBlockerForProfile(code, profile) {
 
 function detectProfileFromTask(task, result) {
   if (task.mode === "sync" || task.mode === "github_sync") return task.mode === "github_sync" ? "github_sync_only" : "sync_only";
+  if (looksLikeSyncOnlyTask(task, result)) return "sync_only";
   if (task.mode === "verification") return "verification_only";
   if (result.noop || task.mode === "noop") return "noop";
   if (task.parent_task_id || task.repair_of_task_id) return "repair_noop";
   return "code_change";
+}
+
+function looksLikeSyncOnlyTask(task = {}, result = {}) {
+  const files = result.changed_files || task.changed_files || [];
+  if (Array.isArray(files) && files.length > 0) return false;
+  const text = String([task.title, task.description, result.summary, result.kind].filter(Boolean).join(" ")).toLowerCase();
+  const hasSyncIntent = /\b(sync|synchroni[sz]e|remote|origin\/main|ahead\/behind|local_head|remote_head)\b/.test(text) ||
+    text.includes("同步") || text.includes("远端");
+  if (!hasSyncIntent) return false;
+  return result.verification?.passed === true || Boolean(result.remote_head) || Boolean(result.commit) ||
+    text.includes("ahead") || text.includes("behind") || text.includes("local=remote");
 }
 
 function computeMinBackoffMs(failureClass, attempt) {

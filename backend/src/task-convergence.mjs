@@ -80,8 +80,11 @@ export function detectAcceptanceProfile(task = {}, taskResult = {}) {
   // Check for noop
   if (taskResult.noop === true || taskResult.kind === "noop" || task.mode === "noop") return "noop";
 
-  // Check for sync-only: task explicitly marked or has sync/github_sync mode
+  // Check for sync-only: explicit mode, structured result, or repository-sync intent.
+  // Real GPTWork sync tasks often run in ordinary builder mode, so relying only
+  // on task.mode leaves them stuck on tests_missing review gates.
   if (task.mode === "sync" || task.mode === "github_sync") return task.mode === "github_sync" ? "github_sync_only" : "sync_only";
+  if (looksLikeSyncOnlyTask(task, taskResult)) return "sync_only";
 
   // Check for verification-only: no changed files expected, just verification
   if (taskResult.verification_only === true || task.mode === "verification") return "verification_only";
@@ -104,6 +107,19 @@ export function detectAcceptanceProfile(task = {}, taskResult = {}) {
 function hasChangedFiles(task, taskResult) {
   const files = taskResult.changed_files || task.changed_files || (task.result && task.result.changed_files) || [];
   return Array.isArray(files) && files.length > 0;
+}
+
+function looksLikeSyncOnlyTask(task = {}, taskResult = {}) {
+  if (hasChangedFiles(task, taskResult)) return false;
+  const text = String([task.title, task.description, taskResult.summary, taskResult.kind].filter(Boolean).join(" ")).toLowerCase();
+  const hasSyncIntent = /\b(sync|synchroni[sz]e|remote|origin\/main|ahead\/behind|local_head|remote_head)\b/.test(text) ||
+    text.includes("同步") || text.includes("远端");
+  if (!hasSyncIntent) return false;
+  const hasRepoEvidence = taskResult.verification?.passed === true ||
+    Boolean(taskResult.remote_head) ||
+    Boolean(taskResult.commit) ||
+    text.includes("ahead") || text.includes("behind") || text.includes("local=remote");
+  return hasRepoEvidence;
 }
 
 function hasRuntimeChanges(task, taskResult) {

@@ -138,9 +138,59 @@ test("converge: verification failed → waiting_for_repair", () => {
   assert.ok(result.repairPlan !== null, "Should have a repair plan");
 });
 
+
+test("detectAcceptanceProfile: builder-mode repository sync task is sync_only", () => {
+  const profile = detectAcceptanceProfile(
+    {
+      id: "sync-builder",
+      mode: "builder",
+      title: "P0: 同步本地 main 到远端 main",
+      description: "同步当前本地 main 到远端 main，报告 local_head remote_head ahead/behind",
+    },
+    {
+      kind: "codex_executed",
+      changed_files: [],
+      commit: "abc123",
+      remote_head: "abc123",
+      verification: { passed: true },
+      summary: "remote head updated, ahead/behind 0/0",
+    }
+  );
+  assert.equal(profile, "sync_only");
+});
+
 // ---------------------------------------------------------------------------
 // 5. sync_only success → completed (no tests/changed_files needed)
 // ---------------------------------------------------------------------------
+
+test("converge: builder-mode repository sync with tests_missing → completed", () => {
+  const result = convergeTaskAfterRun({
+    task: {
+      id: "sync-builder-converge",
+      status: "running",
+      mode: "builder",
+      title: "P0: 同步1b6a359到远端main",
+      description: "同步当前本地 main 到远端 main，报告 local_head remote_head ahead/behind",
+    },
+    taskResult: {
+      status: "completed",
+      summary: "remote head updated, ahead/behind 0/0",
+      changed_files: [],
+      commit: "abc123",
+      remote_head: "abc123",
+      verification: { passed: true },
+    },
+    acceptance: {
+      passed: false,
+      status: "needs_fix",
+      findings: [{ severity: "major", code: "tests_missing", message: "Contract violation: tests_missing" }],
+    },
+    attempt: 0,
+  });
+
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.COMPLETED);
+  assert.equal(result.profile, "sync_only");
+});
 
 test("converge: sync_only with non-blocker findings → completed", () => {
   // sync_only with tests_missing finding should still complete
