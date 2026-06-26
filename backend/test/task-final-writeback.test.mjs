@@ -553,3 +553,39 @@ test("task-final-writeback: verification failure creates repair goal and records
   assert.equal(savedState.tasks[0].result.repair_task_id, "task_repair_created");
   assert.equal(savedState.tasks[0].result.repair_goal.parent_task_id, "task_repair_writeback");
 });
+
+
+test("task-final-writeback: waiting_for_integration + branch_pushed -> waiting_for_review (P0 regression)", async () => {
+  // P0: branch_pushed integration result must NOT escalate to completed
+  const args = makeMinimalArgs("waiting_for_integration");
+  let savedTask = null;
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.taskResult = { kind: "codex_executed", summary: "branch pushed", changed_files: ["src/app.mjs"], warnings: [], followups: [] };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical-repo",
+    task_worktree_path: "/tmp/worktrees/repo/task_int_branch",
+  };
+  args.runIntegrationQueueFn = async (opts) => ({
+    ok: true,
+    status: "branch_pushed",
+    merged: false,
+    pushed: true,
+    pr_opened: false,
+  });
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_review", "P0: branch_pushed must not complete the task");
+  assert.equal(savedTask.status, "waiting_for_review");
+  assert.equal(savedTask.result.integration.status, "branch_pushed");
+  assert.equal(savedTask.result.integration.merged, false);
+  assert.equal(savedTask.result.integration.pushed, true);
+});

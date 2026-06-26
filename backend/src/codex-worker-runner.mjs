@@ -109,12 +109,27 @@ async function retryIntegrationForTask(store, config, task) {
     });
 
     if (integrationResult.ok) {
-      // Integration succeeded!
-      await transitionTaskForWorker(
-        store, task, "completed",
-        "[worker] integration retry succeeded",
-        { result: { integration: { ...integrationResult }, integration_retried: true } }
-      );
+      // P0: Distinguish actual merged from branch_pushed/pr_opened
+      if (integrationResult.merged === true || integrationResult.status === 'merged') {
+        await transitionTaskForWorker(
+          store, task, "completed",
+          "[worker] integration retry succeeded (merged)",
+          { result: { integration: { ...integrationResult }, integration_retried: true } }
+        );
+      } else if (integrationResult.status === 'skipped') {
+        await transitionTaskForWorker(
+          store, task, "completed",
+          "[worker] integration skipped",
+          { result: { integration: { ...integrationResult }, integration_retried: true } }
+        );
+      } else {
+        // branch_pushed or pr_opened — transition to waiting_for_review
+        await transitionTaskForWorker(
+          store, task, "waiting_for_review",
+          "[worker] integration pushed branch (not merged), needs review",
+          { result: { integration: { ...integrationResult }, integration_retried: true } }
+        );
+      }
 
       // P0: Repair parent-child loop — propagate completion to parent/root task
       if (task.parent_task_id || task.repair_of_task_id) {

@@ -421,13 +421,72 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       runIntegrationQueueFn: async (opts) => {
         integrationCalled = true;
         assert.equal(opts.repoId, "github.com/acme/repo");
-        return { ok: true, status: "completed", merged: false, pushed: true, pr_opened: false };
+        return { ok: true, status: 'merged', merged: true, pushed: false, pr_opened: false };
       },
       createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
     });
 
     assert.equal(integrationCalled, true, "integration should have been called");
     assert.equal(result.status, "completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: acceptance passed + code changes + integration branch_pushed -> waiting_for_review (P0 regression)", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-branch-pushed-"));
+  try {
+    const { store, task, goal } = createTaskStore(tmpDir, "task_branch_pushed", "goal_branch_pushed");
+    let integrationCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code pushed to branch",
+        parsedResult: { structured: true, status: "completed", summary: "code pushed", changed_files: ["src/app.mjs"], tests: "pass", commit: "branch_abc", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_review", "P0: branch_pushed should NOT mark task as completed");
+        assert.equal(taskResult.integration.status, "branch_pushed", "should record branch_pushed status");
+        assert.equal(taskResult.integration.merged, false, "should record merged:false for branch_pushed");
+        assert.equal(taskResult.integration.pushed, true, "should record pushed:true for branch_pushed");
+        integrationCalled = true;
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async (opts) => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async (opts) => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async (opts) => {
+        integrationCalled = true;
+        assert.equal(opts.repoId, "github.com/acme/repo");
+        return { ok: true, status: "branch_pushed", merged: false, pushed: true, pr_opened: false };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(integrationCalled, true, "integration should have been called");
+    assert.equal(result.status, "waiting_for_review", "branch_pushed should result in waiting_for_review, not completed");
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

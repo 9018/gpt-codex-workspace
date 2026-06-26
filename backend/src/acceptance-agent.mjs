@@ -89,9 +89,10 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
       evidence.commit_exists = false;
     }
 
-    // Changed files from git
+    // Changed files from git — use baseSha..HEAD when available for multi-commit tasks
     try {
-      const stdout = execFileSync('git', ['diff', '--name-only', 'HEAD~1..HEAD', '--relative'], {
+      const diffRange = baseSha ? `${baseSha}..HEAD` : 'HEAD~1..HEAD';
+      const stdout = execFileSync('git', ['diff', '--name-only', diffRange, '--relative'], {
         cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
       });
       const files = stdout.trim().split('\n').filter(Boolean);

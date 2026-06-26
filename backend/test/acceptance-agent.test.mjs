@@ -361,6 +361,49 @@ test("buildEvidence: commit_exists is false when baseSha is not provided (Issue 
   rmSync(dir, { recursive: true, force: true });
 });
 
+test("buildEvidence: git_changed_files uses baseSha..HEAD when baseSha is provided (P0 regression)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-baseSha-changed-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+  const firstSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+  // Second commit — this is the task scope
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src", "app.mjs"), "// code", "utf8");
+  await writeFile(join(repo, "src", "lib.mjs"), "// lib", "utf8");
+  execFileSync("git", ["add", "src/"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "task changes"], { cwd: repo, stdio: "ignore" });
+
+  const mod = await import("../src/acceptance-agent.mjs");
+
+  // Without baseSha, git_changed_files uses HEAD~1..HEAD (last commit only)
+  const evidenceNoBase = await mod.buildEvidence({ repoPath: repo });
+  assert.ok(evidenceNoBase.git_changed_files.length > 0, "should have git_changed_files without baseSha");
+
+  // With baseSha=firstSha, git_changed_files should use firstSha..HEAD
+  const evidenceWithBase = await mod.buildEvidence({ repoPath: repo, baseSha: firstSha });
+  assert.ok(evidenceWithBase.git_changed_files.length >= 2, "baseSha..HEAD should find at least 2 files from both commits");
+  assert.ok(evidenceWithBase.git_changed_files.some(f => f.includes("app.mjs")), "should include app.mjs from second commit");
+  assert.ok(evidenceWithBase.git_changed_files.some(f => f.includes("lib.mjs")), "should include lib.mjs from second commit");
+  // README.md is from the first commit, not in firstSha..HEAD diff range
+  assert.equal(evidenceWithBase.git_changed_files.length, 2, "baseSha..HEAD should find exactly 2 files from second commit");
+  assert.ok(evidenceWithBase.git_changed_files.some(f => f.includes("app.mjs")), "should include app.mjs from second commit");
+  assert.ok(evidenceWithBase.git_changed_files.some(f => f.includes("lib.mjs")), "should include lib.mjs from second commit");
+
+  // With baseSha=HEAD (no new commits), git_changed_files should be empty
+  const headSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  const evidenceNoChanges = await mod.buildEvidence({ repoPath: repo, baseSha: headSha });
+  assert.equal(evidenceNoChanges.git_changed_files.length, 0, "baseSha===HEAD means no changed files");
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
 // ===========================================================================
 // P0: Issue 4 — changed_files_match_git uses git_changed_files (not result_changed_files)
 // ===========================================================================

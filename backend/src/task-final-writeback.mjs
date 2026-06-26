@@ -121,9 +121,17 @@ export async function finalizeCodexTaskRun({
           taskId: task.id,
         });
 
-        if (integrationResult.ok) {
-          taskStatus = "completed";
+       if (integrationResult.ok) {
           taskResult.integration = { ...integrationResult };
+          // P0: Distinguish actual merged from branch_pushed/pr_opened
+          if (integrationResult.merged === true || integrationResult.status === 'merged') {
+            taskStatus = "completed";
+          } else if (integrationResult.status === 'skipped') {
+            taskStatus = "completed";
+          } else {
+            // branch_pushed or pr_opened — not merged/deployed
+            taskStatus = "waiting_for_review";
+          }
         } else if (isIntegrationRepairableStatus(integrationResult.status)) {
           // Integration failed — create repair or escalate
           const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
