@@ -10,7 +10,7 @@ import { completeCodexSessionInventoryTask } from "./tool-groups/session-invento
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
 import { startQueuedGoals } from "./goal-queue.mjs";
 import { runIntegrationQueue } from "./integration-queue.mjs";
-import { createRepairGoalFromFindings, shouldAttemptRepair } from "./repair-loop.mjs";
+import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from "./repair-loop.mjs";
 import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 
@@ -115,6 +115,20 @@ async function retryIntegrationForTask(store, config, task) {
         "[worker] integration retry succeeded",
         { result: { integration: { ...integrationResult }, integration_retried: true } }
       );
+
+      // P0: Repair parent-child loop — propagate completion to parent/root task
+      if (task.parent_task_id || task.repair_of_task_id) {
+        try {
+          await handleRepairCompletion({
+            store,
+            config,
+            completedTask: task,
+            passed: true,
+          });
+        } catch (repairErr) {
+          // Non-fatal: parent update failure should not fail integration
+        }
+      }
       return { task_id: task.id, status: "completed", progressed: true, transitioned: true };
     }
 
