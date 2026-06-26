@@ -1,29 +1,22 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
+import { track, afterEachHook } from "./helpers/temp-cleanup.mjs";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
+afterEachHook(test);
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const CLI_BIN = resolve(TEST_DIR, "../bin/gptwork.mjs");
 
-/** Track temp dirs for cleanup after each test that uses mkdtemp. */
-const _tempDirs = new Set();
-
-test.afterEach(async () => {
-  for (const d of _tempDirs) {
-    await rm(d, { recursive: true, force: true }).catch(() => {});
-  }
-  _tempDirs.clear();
-});
 
 async function makeServer() {
   const root = await mkdtemp(join(tmpdir(), "gptwork-p0-"));
-  _tempDirs.add(root);
+  track(root);
   return createGptWorkServer({
     statePath: join(root, "state.json"),
     defaultWorkspaceRoot: join(root, "workspace"),
@@ -57,7 +50,7 @@ test("open_project_context returns bounded first-step project context", async ()
 
 test("gptwork CLI settings show/set edits runtime env file", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-cli-settings-"));
-  _tempDirs.add(root);
+  track(root);
   const envFile = join(root, "runtime.env");
   await writeFile(envFile, "GPTWORK_PORT=8787\n", "utf8");
 
@@ -77,7 +70,7 @@ test("gptwork CLI settings show/set edits runtime env file", async () => {
 
 test("gptwork CLI doctor and status print compact local summaries", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-cli-status-"));
-  _tempDirs.add(root);
+  track(root);
   const statePath = join(root, "state.json");
   const env = {
     ...process.env,

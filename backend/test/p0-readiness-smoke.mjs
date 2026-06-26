@@ -141,3 +141,54 @@ test("worktree: repo_root ends with canonical repo name", (t) => {
   const topLevel = git("rev-parse --show-toplevel");
   assert.ok(topLevel.includes("gpt-codex-workspace"), `repo root should include canonical name, got: ${topLevel}`);
 });
+
+test("tmpdir: gptwork temp dirs not over-accumulated and tmpdir writable", async (t) => {
+  const { readdirSync, statSync, mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+
+  const tmp = tmpdir();
+
+  // 1. Check writability by creating and removing a test dir
+  const probe = mkdtempSync(join(tmp, "gptwork-p0-check-"));
+  assert.ok(probe.startsWith(tmp), "gptwork test temp dir should be under tmpdir");
+  rmSync(probe, { recursive: true, force: true });
+
+  // 2. Scan for existing gptwork temp dirs
+  let entries;
+  try {
+    entries = readdirSync(tmp);
+  } catch {
+    console.warn("[tmp-inode] cannot read tmpdir, skipping accumulation check");
+    return;
+  }
+
+  const gptworkDirs = entries.filter((e) => e.startsWith("gptwork-"));
+  const total = gptworkDirs.length;
+
+  // Warning threshold: > 500 suggests moderate buildup
+  if (total > 500) {
+    console.warn(`[tmp-inode] high gptwork temp dir count: ${total} (threshold: 500, max: 5000)`);
+  }
+
+  // Fail threshold: > 500 suggests problematic accumulation that could affect /tmp inode usage
+  assert.ok(total <= 5000, `gptwork temp dirs in tmpdir: ${total} (max allowed: 5000)`);
+
+  // 3. Check for stale dirs (> 7 days old)
+  const now = Date.now();
+  const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days in ms
+  let staleCount = 0;
+  for (const name of gptworkDirs) {
+    try {
+      const st = statSync(join(tmp, name));
+      if (now - st.mtimeMs > maxAge) {
+        staleCount++;
+      }
+    } catch {
+      // skip entries we cannot stat (e.g., removed by another process)
+    }
+  }
+  if (staleCount > 0) {
+    console.warn(`[tmp-inode] found ${staleCount} gptwork temp dir(s) older than 7 days in ${tmp}`);
+  }
+});
