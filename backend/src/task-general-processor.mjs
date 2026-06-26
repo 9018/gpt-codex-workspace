@@ -542,9 +542,17 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
         taskResult.integration = { ...integrationResult };
 
-        if (integrationResult.ok) {
-          // Integration succeeded — task completes
-          taskStatus = 'completed';
+       if (integrationResult.ok) {
+          // P0: Distinguish actual merged from branch_pushed/pr_opened
+          // Only merged (or skipped with integrationMode=none) counts as completed.
+          if (integrationResult.merged === true || integrationResult.status === 'merged') {
+            taskStatus = 'completed';
+          } else if (integrationResult.status === 'skipped') {
+            taskStatus = 'completed';
+          } else {
+            // branch_pushed or pr_opened — branch was pushed/PR opened, not merged/deployed
+            taskStatus = 'waiting_for_review';
+          }
         } else if (isIntegrationRepairableStatus(integrationResult.status)) {
           // Integration failure — create repair or escalate
           const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
