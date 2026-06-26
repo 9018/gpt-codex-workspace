@@ -591,3 +591,135 @@ test("buildEvidence: git_changed_files falls back to HEAD~1..HEAD when no baseSh
 
   rmSync(dir, { recursive: true, force: true });
 });
+
+// ===========================================================================
+// P0: Issue #177 — changed_files_match_git false positive fix
+// When result.json doesn't claim any changed_files, don't flag mismatch
+// even if git shows changes (repair/noop tasks with shared worktree)
+// ===========================================================================
+
+test("runAcceptanceAgent: changed_files_match_git skips when result has no changed_files but git shows changes (Issue 177)", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_issue177_noop_repair" },
+    result: {
+      status: "completed",
+      summary: "Repair task with no changed_files field",
+      verification: { commands: ["true"], passed: true },
+      commit: "abc123",
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Repair task with no changed_files field",
+      git_changed_files: ["src/parent-task.mjs", "src/lib.mjs"],
+      changed_files: ["src/parent-task.mjs", "src/lib.mjs"],
+      result_changed_files: [],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch" || f.code === "changed_files_extra_in_git");
+  assert.equal(mismatchFindings.length, 0,
+    "Should NOT produce changed_files_mismatch when result doesn't claim changed_files");
+});
+
+test("runAcceptanceAgent: changed_files_match_git still flags when result explicitly claims files that disagree with git (Issue 177)", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_issue177_real_mismatch" },
+    result: {
+      status: "completed",
+      summary: "Task with real changed_files mismatch",
+      changed_files: ["src/claimed.mjs", "src/not-in-git.mjs"],
+      verification: { commands: ["true"], passed: true },
+      commit: "abc123",
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with real changed_files mismatch",
+      git_changed_files: ["src/claimed.mjs"],
+      changed_files: ["src/claimed.mjs"],
+      result_changed_files: ["src/claimed.mjs", "src/not-in-git.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch");
+  assert.ok(mismatchFindings.length > 0,
+    "Should STILL produce changed_files_mismatch when result explicitly claims files that disagree with git");
+});
+
+// ===========================================================================
+// P0: Issue #177 — buildEvidence result_changed_files flows
+// ===========================================================================
+
+test("buildEvidence: result_changed_files captures result.json changed_files when present", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-issue177-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  await mkdir(join(repo, "src"), { recursive: true });
+  await writeFile(join(repo, "src", "new.mjs"), "content", "utf8");
+  execFileSync("git", ["add", "src/new.mjs"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add new.mjs"], { cwd: repo, stdio: "ignore" });
+
+  const goalDir = join(dir, "goal");
+  await mkdir(goalDir, { recursive: true });
+  const resultJsonPath = join(goalDir, "result.json");
+  await writeFile(resultJsonPath, JSON.stringify({
+    status: "completed",
+    summary: "test",
+    changed_files: ["src/new.mjs"],
+    verification: { passed: true },
+  }), "utf8");
+
+  const mod = await import("../src/acceptance-agent.mjs");
+  const evidence = await mod.buildEvidence({ repoPath: repo, resultJsonPath, baseSha });
+
+  assert.ok(Array.isArray(evidence.result_changed_files), "result_changed_files should be an array");
+  assert.equal(evidence.result_changed_files.length, 1, "should have 1 changed file from result.json");
+  assert.equal(evidence.result_changed_files[0], "src/new.mjs", "should match the result.json changed_files");
+
+  rmSync(dir, { recursive: true, force: true });
+});
+
+test("buildEvidence: result_changed_files is empty when result.json has no changed_files", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-issue177-nocf-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "README.md"), "initial", "utf8");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: repo, stdio: "ignore" });
+
+  const baseSha = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  const goalDir = join(dir, "goal");
+  await mkdir(goalDir, { recursive: true });
+  const resultJsonPath = join(goalDir, "result.json");
+  await writeFile(resultJsonPath, JSON.stringify({
+    status: "completed",
+    summary: "test - no changed files reported",
+    verification: { passed: true },
+  }), "utf8");
+
+  const mod = await import("../src/acceptance-agent.mjs");
+  const evidence = await mod.buildEvidence({ repoPath: repo, resultJsonPath, baseSha });
+
+  assert.ok(Array.isArray(evidence.result_changed_files), "result_changed_files should be an array");
+  assert.equal(evidence.result_changed_files.length, 0, "should be empty when result.json has no changed_files");
+
+  rmSync(dir, { recursive: true, force: true });
+});

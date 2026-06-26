@@ -429,6 +429,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         outputDir: _goalStateDir,
         resultJsonPath: _resultJsonPath,
         acceptanceFindings,
+        baseSha: resolvedRepo.worktree_lifecycle?.base_sha,
       });
       if (evidenceResult && evidenceResult.evidence_paths) {
         taskResult.evidence_paths = evidenceResult.evidence_paths;

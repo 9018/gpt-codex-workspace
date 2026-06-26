@@ -33,6 +33,7 @@ export async function collectVerificationEvidence({
   outputDir,
   resultJsonPath,
   acceptanceFindings,
+  baseSha,
 } = {}) {
   const gitPath = worktreePath || repoPath;
   const evidence = {
@@ -58,10 +59,13 @@ export async function collectVerificationEvidence({
     }
   }
 
-  // 2. Collect git diff patch (HEAD~1..HEAD preferred, fallback to --cached, then unstaged)
+  // Determine diff range: use baseSha..HEAD when available, fall back to HEAD~1..HEAD
+  const diffRange = baseSha ? `${baseSha}..HEAD` : 'HEAD~1..HEAD';
+
+  // 2. Collect git diff patch (baseSha..HEAD or HEAD~1..HEAD preferred, fallback to --cached, then unstaged)
   if (gitPath) {
     try {
-      const diffStdout = execFileSync('git', ['diff', 'HEAD~1..HEAD', '--'], {
+      const diffStdout = execFileSync('git', ['diff', diffRange, '--'], {
         cwd: gitPath, encoding: 'utf8', timeout: 15000, maxBuffer: 5 * 1024 * 1024,
       });
       evidence.implementation_diff_patch = diffStdout || null;
@@ -87,7 +91,7 @@ export async function collectVerificationEvidence({
   // 3. Collect git diff stat
   if (gitPath) {
     try {
-      const diffStatStdout = execFileSync('git', ['diff', 'HEAD~1..HEAD', '--stat'], {
+      const diffStatStdout = execFileSync('git', ['diff', diffRange, '--stat'], {
         cwd: gitPath, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
       });
       evidence.diff_stat = diffStatStdout || null;
@@ -104,7 +108,7 @@ export async function collectVerificationEvidence({
   // 4. Collect changed files list from git
   if (gitPath) {
     try {
-      const filesStdout = execFileSync('git', ['diff', 'HEAD~1..HEAD', '--name-only'], {
+      const filesStdout = execFileSync('git', ['diff', diffRange, '--name-only'], {
         cwd: gitPath, encoding: 'utf8', timeout: 15000, maxBuffer: 1024 * 1024,
       });
       evidence.changed_files = filesStdout ? filesStdout.trim().split('\n').filter(Boolean) : [];

@@ -347,27 +347,35 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       return null;
 
    case 'changed_files_match_git':
-     const resultFiles = new Set((result?.changed_files || []).map(f => f.replace(/^\/+/, '')));
+      // Use evidence.result_changed_files (from actual result.json parse) as primary
+      // source. Only flag a mismatch when the result EXPLICITLY claims changed files
+      // that disagree with git. When result doesn't claim any files, skip the check
+      // to avoid false positives from repair/noop tasks where git shows parent-task
+      // changes but the repair result didn't list changed_files.
+      const resultHasExplicitFiles = evidence.result_changed_files && evidence.result_changed_files.length > 0;
+      const resultFiles = new Set(
+        (resultHasExplicitFiles ? evidence.result_changed_files : (result?.changed_files || [])).map(f => f.replace(/^\/+/, ''))
+      );
       const gitFiles = new Set((evidence.git_changed_files || evidence.changed_files || []).map(f => f.replace(/^\/+/, '')));
-     // Skip check if neither side has files — no changes to verify
-     if (resultFiles.size === 0 && gitFiles.size === 0) return null;
-     if (resultFiles.size > 0 && gitFiles.size > 0) {
-       const missing = [...resultFiles].filter(f => !gitFiles.has(f));
-       const extra = [...gitFiles].filter(f => !resultFiles.has(f));
-       if (missing.length > 0) {
+      // Skip check if neither side has files — no changes to verify
+      if (resultFiles.size === 0 && gitFiles.size === 0) return null;
+      // P0: If result didn't claim any files, skip mismatch check even if git shows
+      // changes. Prevents false positives for repair/noop tasks.
+      if (resultFiles.size === 0 && gitFiles.size > 0) return null;
+      if (resultFiles.size > 0 && gitFiles.size > 0) {
+        const missing = [...resultFiles].filter(f => !gitFiles.has(f));
+        const extra = [...gitFiles].filter(f => !resultFiles.has(f));
+        if (missing.length > 0) {
           return { severity: 'major', code: 'changed_files_mismatch', message: `Files in result not found in git diff: ${missing.join(', ')}`, source: 'acceptance_agent' };
         }
-       if (extra.length > 0) {
+        if (extra.length > 0) {
           return { severity: 'major', code: 'changed_files_extra_in_git', message: `Files in git diff not listed in result: ${extra.join(', ')}`, source: 'acceptance_agent' };
         }
       }
-     // P0: If only one side has files but the other doesn't, that's a mismatch
-     if (resultFiles.size > 0 && gitFiles.size === 0) {
-       return { severity: 'major', code: 'changed_files_mismatch', message: `Result claims changed_files but git diff shows no changes: ${[...resultFiles].join(', ')}`, source: 'acceptance_agent' };
-     }
-     if (resultFiles.size === 0 && gitFiles.size > 0) {
-       return { severity: 'major', code: 'changed_files_mismatch', message: `Git diff shows changes but result.changed_files is empty: ${[...gitFiles].join(', ')}`, source: 'acceptance_agent' };
-     }
+      // P0: If result claims files but git shows none, that's a real mismatch
+      if (resultFiles.size > 0 && gitFiles.size === 0) {
+        return { severity: 'major', code: 'changed_files_mismatch', message: `Result claims changed_files but git diff shows no changes: ${[...resultFiles].join(', ')}`, source: 'acceptance_agent' };
+      }
       return null;
 
     case 'git_diff_check':
