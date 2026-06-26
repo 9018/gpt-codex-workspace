@@ -13,6 +13,7 @@
 import {
   classifyNotification,
   classifyCreatedNotification,
+  classifyTaskNotificationSuppression,
   formatNotification,
   formatCreatedNotification,
 } from "./bark-notifier.mjs";
@@ -218,6 +219,20 @@ export function createNotificationService(barkNotifier) {
     if (task[notifiedKey]) {
       return { ok: true, dedupeKey: dk, deduplicated: true };
     }
+    // Check task-level notification suppression BEFORE sending Bark
+    // This ensures lifecycle events respect the same suppression policies
+    // as notifyTerminalTaskIfNeeded and notifyCreatedTaskIfNeeded.
+    const suppression = classifyTaskNotificationSuppression(task);
+    if (suppression.suppressed) {
+      task.last_notification_policy = suppression.reason;
+      // Mark as notified so dedupe key is consumed and subsequent
+      // lifecycle events for the same dedupe key are skipped.
+      task[notifiedKey] = true;
+      task.notifications ||= [];
+      task.notifications.push({ channel: "bark", lifecycle_event: event, dedupe_key: dk, suppressed: true, reason: suppression.reason, attempted_at: new Date().toISOString() });
+      return { ok: false, dedupeKey: dk, suppressed: true, reason: suppression.reason, deduplicated: false };
+    }
+
 
     // Format and send Bark notification
     if (barkNotifier && barkNotifier.isEnabled()) {

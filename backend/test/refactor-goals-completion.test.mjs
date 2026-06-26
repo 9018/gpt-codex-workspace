@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -33,7 +33,7 @@ async function makeStore(root) {
 
 test('refactor goals: deploy/admin tasks default to canonical execution, builder uses worktree', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-schema-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
   const store = await makeStore(root);
   const context = defaultTokenContext('test');
 
@@ -67,7 +67,7 @@ test('refactor goals: queue-created deploy task defaults to canonical execution'
 
 test('refactor goals: deploy worker does not materialize worktree and locks canonical repo', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-deploy-worker-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
   const store = await makeStore(root);
   const now = new Date().toISOString();
   const goal = { id: 'goal_deploy_worker', project_id: 'default', workspace_id: 'hosted-default', conversation_id: 'conv_deploy_worker', title: 'Deploy', user_request: 'Deploy', goal_prompt: 'Deploy', context_summary: '', mode: 'deploy', status: 'assigned', created_at: now, updated_at: now };
@@ -104,7 +104,7 @@ test('refactor goals: deploy worker does not materialize worktree and locks cano
 
 test('refactor goals: finalizer synchronizes current queue item and creates repair on verifier failure', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-finalizer-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
   const goal = { id: 'goal_finalizer_sync', workspace_id: 'hosted-default', project_id: 'default', title: 'Goal' };
   const task = { id: 'task_finalizer_sync', goal_id: goal.id, workspace_id: 'hosted-default', project_id: 'default', title: 'Task', repair_attempt: 0, logs: [] };
   const store = await makeStore(root);
@@ -162,7 +162,7 @@ test('refactor goals: finalizer synchronizes current queue item and creates repa
 
 test('refactor goals: local context retrieval can search across workspace without current goal filter', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-context-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
   const embedder = createEmbeddingProvider({ provider: 'fallback' });
   const store = createLocalStore({ workspaceRoot: root, dimension: embedder.dimension });
   const vectors = await embedder.embed(['billing retry result from prior goal', 'frontend styling note']);
@@ -197,7 +197,7 @@ test('refactor goals: context bundle includes retrieval sources section', () => 
 
 test('refactor goals: agent pipeline completed runs produce subagents and failures block completion', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-agents-'));
-  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
   const store = await makeStore(root);
 
   const pipeline = await runAgentPipeline(store, { goal_id: 'goal_agents', task_id: 'task_agents' });
