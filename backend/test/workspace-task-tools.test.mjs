@@ -1366,6 +1366,66 @@ test("complete_task without admin_override completes normally with default optio
 });
 
 
+
+test("complete_task with summary completes linked goal", async () => {
+  const server = await makeServer();
+  const created = await callTool(server, "create_goal", {
+    user_request: "Linked goal completion test",
+    goal_prompt: "Test linked goal completion",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id,
+    summary: "Verified completion evidence present"
+  });
+  assert.equal(completed.task.status, "completed");
+
+  const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
+  assert.equal(context.goal.status, "completed");
+});
+
+test("complete_task with no summary does not complete linked goal", async () => {
+  const server = await makeServer();
+  const created = await callTool(server, "create_goal", {
+    user_request: "No evidence completion test",
+    goal_prompt: "Test no evidence completion",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  const completed = await callTool(server, "complete_task", {
+    task_id: created.task.id
+  });
+  assert.equal(completed.task.status, "completed");
+
+  const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
+  assert.notEqual(context.goal.status, "completed");
+});
+
+test("complete_task superseded stale-running summary completes linked goal idempotently", async () => {
+  const server = await makeServer();
+  const created = await callTool(server, "create_goal", {
+    user_request: "Superseded convergence test",
+    goal_prompt: "Test superseded stale running convergence",
+    workspace_id: "hosted-default",
+    mode: "deploy"
+  });
+
+  const args = {
+    task_id: created.task.id,
+    summary: "Closed as superseded/converged stale-running residual with verified later delivery"
+  };
+  const first = await callTool(server, "complete_task", args);
+  const second = await callTool(server, "complete_task", args);
+  assert.equal(first.task.status, "completed");
+  assert.equal(second.task.status, "completed");
+
+  const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
+  assert.equal(context.goal.status, "completed");
+});
+
 test("complete_task with admin_override completes the task", async () => {
   const server = await makeServer();
 

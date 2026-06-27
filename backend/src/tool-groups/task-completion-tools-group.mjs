@@ -1,4 +1,4 @@
-import { updateTask } from '../task-lifecycle.mjs';
+import { updateGoalStatus, updateTask } from '../task-lifecycle.mjs';
 import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
 import { validateResultContract, DIAGNOSIS_CODES } from '../task-result-status.mjs';
 
@@ -22,6 +22,9 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
 
         // P0: Auto-accept when result exists and is contract-valid
         // Only escalate to review for actual contract violations or when no result exists
+        let linkedGoalId = null;
+        let canCompleteLinkedGoal = false;
+
         if (!admin_override) {
           try {
             await store.load();
@@ -29,6 +32,7 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
               ? await store.findTaskById(task_id)
               : (store.state?.tasks || []).find(t => t.id === task_id);
             if (existingTask?.goal_id) {
+              linkedGoalId = existingTask.goal_id;
               const linkedGoal = typeof store.findGoalById === "function"
                 ? await store.findGoalById(existingTask.goal_id)
                 : (store.state?.goals || []).find(g => g.id === existingTask.goal_id);
@@ -42,6 +46,7 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
                   if (contractValidation.valid) {
                     // Auto-accept: result is contract-valid, no review needed
                     targetStatus = "completed";
+                    canCompleteLinkedGoal = true;
                   } else {
                     // Contract violation: escalate to review with diagnosis codes
                     targetStatus = "waiting_for_review";
@@ -72,10 +77,27 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
           resultFields.admin_override_used = true;
         }
 
+        const summaryEvidence = String(summary || resultFields.summary || "").trim();
+        if (admin_override || summaryEvidence) {
+          canCompleteLinkedGoal = true;
+        }
+
         const result = await updateTask(store, task_id, (task) => {
           task.status = targetStatus;
           task.result = resultFields;
         });
+
+        if (targetStatus === "completed" && result.task?.goal_id && canCompleteLinkedGoal) {
+          const state = await store.load();
+          const linkedGoal = typeof store.findGoalById === "function"
+            ? await store.findGoalById(result.task.goal_id)
+            : (state.goals || []).find((goal) => goal.id === result.task.goal_id);
+          const terminalGoalStatuses = new Set(["completed", "failed", "blocked", "cancelled"]);
+          if (linkedGoal && !terminalGoalStatuses.has(linkedGoal.status)) {
+            await updateGoalStatus(store, linkedGoal.id, "completed");
+          }
+        }
+
         github.syncTask(result.task).catch(() => {});
         await eventLogger?.append("task.completed", { task_id, status: targetStatus, summary });
         await hookBus?.emit("onTaskCompleted", { task: result.task });
