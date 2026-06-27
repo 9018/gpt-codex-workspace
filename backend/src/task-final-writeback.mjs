@@ -332,6 +332,7 @@ export async function finalizeCodexTaskRun({
   taskResult.closure_summary = _closureResult.summary;
   taskResult.needs_restart_check = _closureResult.needsRestartCheck;
   taskResult.needs_integration = _closureResult.needsIntegration;
+  taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
 
   const result = typeof store.mutate === "function"
     ? await mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn: notifyTerminalTask })
@@ -460,7 +461,58 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
     next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
     delivery_result_recovery: taskResult.delivery_result_recovery || null,
+    needs_integration: taskResult.needs_integration === true,
+    needs_restart_check: taskResult.needs_restart_check === true,
+    delivery_state_normalized: taskResult.delivery_state_normalized === true,
   };
+}
+
+function normalizeCompletedDeliveryState({ taskStatus, taskResult = {} } = {}) {
+  if (taskStatus !== "completed") return taskResult;
+  if (!hasIntegratedCommitEvidence(taskResult) || !hasRuntimeHeadConvergence(taskResult)) return taskResult;
+
+  const warnings = Array.isArray(taskResult.warnings)
+    ? taskResult.warnings.filter((warning) => !/^Worktree retained:/i.test(String(warning || "")))
+    : [];
+  const next = {
+    ...taskResult,
+    warnings,
+    needs_integration: false,
+    needs_restart_check: false,
+    delivery_state_normalized: true,
+  };
+  if (next.closure_path === "integrate") next.closure_path = "complete";
+  if (typeof next.closure_summary === "string") {
+    next.closure_summary = next.closure_summary
+      .replace(/Closure path: integrate/g, "Closure path: complete")
+      .replace(/Code change task \([^)]*\)\. Needs integration\./g, "Completed code change task is integrated and runtime-verified.")
+      .replace(/Restart check: required/g, "Restart check: not required");
+  }
+  return next;
+}
+
+function hasIntegratedCommitEvidence(taskResult = {}) {
+  const integration = taskResult.integration || {};
+  if (integration.merged === true) return true;
+  if (["merged", "skipped"].includes(integration.status)) return true;
+  if (taskResult.delivery_result_recovery?.commit_integrated === true) return true;
+  return false;
+}
+
+function hasRuntimeHeadConvergence(taskResult = {}) {
+  const commit = taskResult.commit || taskResult.delivery_result_recovery?.commit || null;
+  const localHead = taskResult.local_head || taskResult.delivery_result_recovery?.local_head || taskResult.repo_head || null;
+  const runningCommit = taskResult.running_commit || taskResult.runtime?.running_commit || null;
+  const repoHead = taskResult.repo_head || taskResult.runtime?.repo_head || localHead;
+  const remoteHead = taskResult.remote_head || taskResult.delivery_result_recovery?.remote_head || null;
+  const restartVerified = taskResult.restart_state === "verified" || taskResult.post_restart_verified === true || Boolean(taskResult.restart_verified_at);
+
+  if (!commit || !localHead) return false;
+  if (commit !== localHead) return false;
+  if (repoHead && repoHead !== commit) return false;
+  if (remoteHead && remoteHead !== commit) return false;
+  if (runningCommit && runningCommit !== commit) return false;
+  return restartVerified || !runningCommit;
 }
 
 function applyVerifiedDeliveryResultRecovery({ taskStatus, taskResult = {}, summary = "", deliveryResultRecovery = null }) {

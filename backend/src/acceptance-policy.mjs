@@ -105,3 +105,27 @@ export function buildWorktreeReliabilityFindings(signals = {}) {
 
   return findings;
 }
+
+export function buildDeliveryEvidenceFindings(result = {}) {
+  const findings = [];
+  const add = (code, message) => findings.push({ severity: 'blocker', code, message, source: 'delivery_evidence_policy' });
+
+  if (!result || typeof result !== 'object') return findings;
+  if (result.status && result.status !== 'completed') return findings;
+
+  if (result.needs_integration === true) {
+    add('stale_needs_integration', 'Completed task result still advertises needs_integration=true.');
+  }
+  if (result.needs_restart_check === true) {
+    add('stale_needs_restart_check', 'Completed task result still advertises needs_restart_check=true.');
+  }
+  if (result.dirty === true || result.worktree_dirty === true || result.dirty_worktree_after_codex === true) {
+    add('stale_dirty_flag', 'Completed task result still advertises a dirty worktree flag.');
+  }
+  const warnings = Array.isArray(result.warnings) ? result.warnings : [];
+  if (warnings.some((warning) => /^Worktree retained:/i.test(String(warning || '')))) {
+    add('stale_retained_worktree_warning', 'Completed task result still advertises a retained worktree warning.');
+  }
+
+  return findings;
+}

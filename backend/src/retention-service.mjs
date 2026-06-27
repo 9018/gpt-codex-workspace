@@ -626,25 +626,33 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
     const tasks = state.tasks || [];
     let total = 0;
     let removable = 0;
-    let retained = 0;
+    let currentActive = 0;
+    let manualReview = 0;
+    let otherHistorical = 0;
     for (const task of tasks) {
       const worktreePath = _taskWorktreePath(task);
       if (!worktreePath || !existsSync(worktreePath)) continue;
       total++;
       const decision = retainedWorktreeDecision(task);
       if (decision.action === "remove") removable++;
-      else retained++;
+      else if (decision.reason === "active_or_review" || decision.reason === "non_terminal") currentActive++;
+      else if (decision.reason === "needs_manual_review") manualReview++;
+      else otherHistorical++;
     }
-    families.push(_makeFamilyStatus("retained_worktrees", {
+    const family = _makeFamilyStatus("retained_worktrees", {
       type: "filesystem",
       total,
-      active: retained,
+      active: currentActive,
       terminal: removable,
       proposedAction: removable > 0
-        ? `remove ${removable} resolved terminal retained worktree(s), retain ${retained}`
+        ? `remove ${removable} resolved terminal retained worktree(s), keep ${currentActive} current active/review and ${manualReview} manual-review retained`
         : `no resolved terminal retained worktrees (${total} tracked)`,
       safe: true,
-    }));
+    });
+    family.historical_count = removable + otherHistorical;
+    family.manual_review_count = manualReview;
+    family.current_active_count = currentActive;
+    families.push(family);
   }
 
   return {

@@ -379,6 +379,70 @@ describe("retention-service", () => {
       }
     });
 
+    it("status classifies resolved terminal retained worktrees as historical, not active blockers", async () => {
+      const state = {
+        tasks: [
+          {
+            id: "task_fa4ac8ee",
+            status: "completed",
+            updated_at: "2026-01-01T00:00:00Z",
+            result: {
+              commit: "95577ea08ae68c1cf2234f220099ed2b8865ae84",
+              local_head: "95577ea08ae68c1cf2234f220099ed2b8865ae84",
+              remote_head: "95577ea08ae68c1cf2234f220099ed2b8865ae84",
+              running_commit: "95577ea08ae68c1cf2234f220099ed2b8865ae84",
+              repo_head: "95577ea08ae68c1cf2234f220099ed2b8865ae84",
+              integration: { status: "merged", merged: true },
+              verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
+              worktree_lifecycle: { worktree_path: "__SET_LATER__" },
+            },
+          },
+          {
+            id: "task_running",
+            status: "running",
+            updated_at: "2026-01-02T00:00:00Z",
+            result: { worktree_lifecycle: { worktree_path: "__SET_LATER__" } },
+          },
+          {
+            id: "task_failed_manual",
+            status: "failed",
+            updated_at: "2026-01-03T00:00:00Z",
+            result: { worktree_lifecycle: { worktree_path: "__SET_LATER__" } },
+          },
+        ],
+        goals: [], goal_queue: [], conversations: [], memories: [],
+        agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+      };
+      const { store: st, dir } = await createStore(state);
+      const wtRoot = join(dir, ".gptwork", "worktrees", "github.com-acme-repo");
+      const paths = {
+        task_fa4ac8ee: join(wtRoot, "task_fa4ac8ee"),
+        task_running: join(wtRoot, "task_running"),
+        task_failed_manual: join(wtRoot, "task_failed_manual"),
+      };
+      for (const [taskId, worktreePath] of Object.entries(paths)) {
+        await mkdir(worktreePath, { recursive: true });
+        await writeFile(join(worktreePath, "evidence.txt"), taskId, "utf8");
+        const task = state.tasks.find((item) => item.id === taskId);
+        task.result.worktree_lifecycle.worktree_path = worktreePath;
+      }
+      await st.save();
+
+      try {
+        const report = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+        const retained = report.families.find((family) => family.name === "retained_worktrees");
+
+        assert.equal(retained.current_count, 3);
+        assert.equal(retained.active_count, 1, "only the running worktree is a current blocker");
+        assert.equal(retained.terminal_count, 1, "resolved terminal worktree is historical/removable");
+        assert.equal(retained.historical_count, 1);
+        assert.equal(retained.manual_review_count, 1);
+        assert.match(retained.proposed_action, /remove 1 resolved terminal retained worktree/);
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
     it("should never remove active goals even when count exceeds limit", async () => {
       const goals = [];
       // 10 completed

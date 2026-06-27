@@ -5,6 +5,7 @@ import {
   evaluateAcceptance,
   buildReviewerDecision,
   buildWorktreeReliabilityFindings,
+  buildDeliveryEvidenceFindings,
   ACCEPTANCE_SEVERITIES,
 } from '../src/acceptance-policy.mjs';
 
@@ -214,4 +215,44 @@ test("P0: reviewer_decision with needs_gpt_review=true sets should_enter_review 
   assert.equal(reviewer.decision.passed, true);
   assert.equal(reviewer.decision.should_enter_review, true);
   assert.equal(reviewer.decision.review_reason, 'Repair budget exceeded');
+});
+
+test("P0: delivery evidence gate rejects stale integration, restart, dirty, and retained-worktree flags", () => {
+  const findings = buildDeliveryEvidenceFindings({
+    status: "completed",
+    summary: "Completed",
+    changed_files: ["backend/src/app.mjs"],
+    tests: "node --test: passed",
+    commit: "abc123",
+    verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
+    needs_integration: true,
+    needs_restart_check: true,
+    dirty: true,
+    warnings: ["Worktree retained: /tmp/wt (status=waiting_for_review)"],
+  });
+
+  assert.deepEqual(findings.map((finding) => finding.code), [
+    "stale_needs_integration",
+    "stale_needs_restart_check",
+    "stale_dirty_flag",
+    "stale_retained_worktree_warning",
+  ]);
+  assert.ok(findings.every((finding) => finding.severity === "blocker"));
+});
+
+test("P0: delivery evidence gate accepts completed integrated task with normalized flags", () => {
+  const findings = buildDeliveryEvidenceFindings({
+    status: "completed",
+    summary: "Completed",
+    changed_files: ["backend/src/app.mjs"],
+    tests: "node --test: passed",
+    commit: "abc123",
+    verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
+    integration: { status: "merged", merged: true },
+    needs_integration: false,
+    needs_restart_check: false,
+    warnings: [],
+  });
+
+  assert.deepEqual(findings, []);
 });

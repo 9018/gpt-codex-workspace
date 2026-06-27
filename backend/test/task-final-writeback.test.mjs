@@ -308,6 +308,70 @@ test("task-final-writeback: persists spec-shaped task.worktree record", async ()
   assert.equal(savedTask.max_attempts, 2);
 });
 
+test("task-final-writeback: completed integrated task normalizes stale restart and integration flags", async () => {
+  let savedTask = null;
+  let fallbackJson = null;
+  const head = "95577ea08ae68c1cf2234f220099ed2b8865ae84";
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_fa4ac8ee", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.task = { id: "task_fa4ac8ee", logs: [], title: "P0 completed integrated task" };
+  args.taskResult = {
+    kind: "codex_executed",
+    status: "completed",
+    summary: "Completed and integrated",
+    changed_files: ["backend/src/example.mjs"],
+    tests: "node --test backend/test/example.test.mjs: passed",
+    commit: head,
+    local_head: head,
+    remote_head: head,
+    running_commit: head,
+    repo_head: head,
+    restart_verified_at: "2026-06-27T20:00:00.000Z",
+    restart_state: "verified",
+    post_restart_verified: true,
+    integration: { status: "merged", merged: true, commit: head },
+    verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
+    warnings: [
+      "Worktree retained: /tmp/worktree (status=waiting_for_review)",
+      "ordinary warning",
+    ],
+    acceptance_findings: [],
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [{ cmd: "node --test", exit_code: 0 }],
+    changed_files: ["backend/src/example.mjs"],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+  });
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  await finalizeCodexTaskRun(args);
+
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.needs_integration, false);
+  assert.equal(savedTask.result.needs_restart_check, false);
+  assert.equal(savedTask.result.delivery_state_normalized, true);
+  assert.equal(savedTask.result.closure_path, "complete");
+  assert.equal(savedTask.result.closure_summary.includes("Restart check: not required"), true);
+  assert.deepEqual(savedTask.result.warnings, ["ordinary warning"]);
+  assert.equal(fallbackJson.needs_integration, false);
+  assert.equal(fallbackJson.needs_restart_check, false);
+  assert.deepEqual(fallbackJson.warnings, ["ordinary warning"]);
+});
+
 // ===========================================================================
 // Test: resultJsonPath param overrides local derivation
 // ===========================================================================

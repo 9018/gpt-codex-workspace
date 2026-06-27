@@ -6,7 +6,7 @@
  * worktree cleanliness, changed file safety, commit/patch evidence.
  */
 
-import { evaluateAcceptance, buildReviewerDecision } from './acceptance-policy.mjs';
+import { evaluateAcceptance, buildReviewerDecision, buildDeliveryEvidenceFindings } from './acceptance-policy.mjs';
 import { execFileSync } from 'node:child_process';
 import { readFile, access } from 'node:fs/promises';
 import { constants } from 'node:fs';
@@ -191,6 +191,8 @@ export async function runAcceptanceAgent({ task, goal, result, repoPath, profile
     if (chkResult) findings.push(chkResult);
     
   }
+
+  findings.push(...buildDeliveryEvidenceFindings(result));
 
   // Run relaxed checks (only if they fail — don't add findings for passes)
   if (Array.isArray(profileConfig.relaxed)) {
