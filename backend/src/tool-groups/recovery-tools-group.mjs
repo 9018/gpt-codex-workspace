@@ -146,7 +146,7 @@ const ALLOWLISTED_COMMANDS = {
   git_diff: { cmd: (rp) => `cd ${rp} && git diff --stat && echo "---" && git diff --no-color`, desc: "Git diff with stats" },
   git_log_recent: { cmd: (rp) => `cd ${rp} && git log --oneline -20`, desc: "Recent 20 git log entries" },
   npm_check_syntax: { cmd: (rp) => `cd ${shellQuote(backendDirFor(rp))} && find src -name '*.mjs' -type f -print0 | sort -z | xargs -0 -r -n 1 -P 8 node --check >/dev/null && echo 'syntax ok'`, desc: "Check syntax of backend src files" },
-  npm_check_imports: { cmd: (rp) => `cd ${rp}/backend && node src/cli.mjs --check-imports 2>&1 || node -e "import('./src/state-store.mjs').then(()=>console.log('imports ok')).catch(e=>{console.error(e.message);process.exit(1)})"`, desc: "Check ES module imports" },
+  npm_check_imports: { cmd: (rp) => `cd ${shellQuote(rp)} && npm --prefix backend run check:imports`, desc: "Check ES module imports" },
   node_test_selected: { cmd: (rp,args) => `cd ${shellQuote(backendDirFor(rp))} && node --test --test-reporter=dot ${normalizeNodeTestSelectedArgs(rp, args).map(shellQuote).join(" ")}`, desc: "Run selected Node tests" },
   queue_list: { cmd: (rp) => `cd ${rp}/backend && node -e "import('./src/state-store.mjs').then(s=>{const st=new s.StateStore({statePath:process.env.GPTWORK_STATE_PATH||'./data/state.json'});st.load().then(state=>{const q=state.goal_queue||[];q.forEach(i=>console.log(i.queue_id,i.status,i.blocked_reason||''))})})"`, desc: "List all queue items" },
   tmp_status: { cmd: (rp) => `cd ${rp}/backend && node -e "import('./src/gptwork-tmp.mjs').then(m=>m.scanManagedTmp({workspaceRoot:process.env.GPTWORK_WORKSPACE_ROOT||'.'}).then(r=>console.log(JSON.stringify(r,null,2))))"`, desc: "Temporary file diagnostics" },

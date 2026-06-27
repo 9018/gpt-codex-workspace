@@ -28,6 +28,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { GPTWORK_TOOL_CARD_URI } from "../mcp-tooling.mjs";
+import { buildImportCheckDiagnostics } from "../import-check-diagnostics.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -328,6 +329,15 @@ export function createSelfTestToolsGroup({ tool, schema, config, bark, github, s
           check: "noop_completion_handling",
           status: noopCheck.status,
           detail: noopCheck.detail,
+        });
+
+        const importDiag = buildImportCheckDiagnostics();
+        results.push({
+          check: "npm_check_imports_fallback",
+          status: importDiag.status,
+          detail: importDiag.detail,
+          classification: importDiag.classification,
+          local_fallback: importDiag.local_fallback,
         });
 
         // Overall summary

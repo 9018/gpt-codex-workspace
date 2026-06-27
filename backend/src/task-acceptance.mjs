@@ -71,6 +71,33 @@ function normalizeResultJson(input) {
   }
 }
 
+function changedFilesFrom(task = {}, result = {}) {
+  return Array.isArray(result.changed_files) ? result.changed_files
+    : Array.isArray(task.changed_files) ? task.changed_files : [];
+}
+
+function isNoopProfile(task = {}, result = {}) {
+  return task.mode === "noop" || task.noop === true || result.noop === true || result.kind === "noop";
+}
+
+function isEvidenceGatedNoChangeProfile(task = {}, result = {}) {
+  return ["sync", "github_sync", "admin", "restart"].includes(task.mode) ||
+    result.sync_only === true || result.admin === true || result.restart_state != null || result.restart_verified_at != null;
+}
+
+function hasNoopEvidence(result = {}) {
+  return result.noop === true || result.kind === "noop" || Boolean(result.noop_reason);
+}
+
+function hasProfileEvidence(task = {}, result = {}) {
+  if (isNoopProfile(task, result)) return hasNoopEvidence(result);
+  if (task.mode === "admin") return result.verification?.passed === true && Boolean(result.admin_action || result.audit_id || result.admin_evidence || result.tests);
+  if (task.mode === "restart" || result.restart_state != null || result.restart_verified_at != null) {
+    return result.verification?.passed === true && (result.restart_state === "verified" || Boolean(result.restart_verified_at) || result.post_restart_verified === true);
+  }
+  return result.verification?.passed === true;
+}
+
 export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, resultJson, resultJsonPath, config = {}, stateStore = null, runCommandFn = null } = {}) {
   const commands = [];
   const findings = [];
@@ -97,18 +124,14 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings.push({ severity: "blocker", code: "summary_missing", message: "Completed result must include summary", source: "task_acceptance" });
   }
   if (status === "completed" && result.verification?.passed !== true) {
-    // P0: Pure-sync tasks (no changed files) don't need verification.passed
-    const changedFiles = Array.isArray(result.changed_files) ? result.changed_files
-      : Array.isArray(task.changed_files) ? task.changed_files : [];
-    if (changedFiles.length > 0 || task.mode === "deploy") {
+    const changedFiles = changedFilesFrom(task, result);
+    if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
       findings.push({ severity: "blocker", code: "verification_failed", message: "Completed result requires verification.passed === true", source: "task_acceptance" });
     }
   }
   if (status === "completed" && !result.verification) {
-    // P0: Pure-sync tasks (no changed files) don't need verification
-    const changedFiles = Array.isArray(result.changed_files) ? result.changed_files
-      : Array.isArray(task.changed_files) ? task.changed_files : [];
-    if (changedFiles.length > 0 || task.mode === "deploy") {
+    const changedFiles = changedFilesFrom(task, result);
+    if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
       findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
     }
   }
@@ -139,13 +162,17 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
 
   findings.push(...(acceptance.findings || []).filter((finding) => finding.severity === "blocker" || finding.severity === "major"));
 
+  if (status === "completed" && isNoopProfile(task, result) && !hasNoopEvidence(result)) {
+    findings.push({ severity: "blocker", code: "noop_evidence_missing", message: "Completed noop tasks require noop=true, kind=noop, or noop_reason evidence", source: "task_acceptance" });
+  }
+  if (status === "completed" && isEvidenceGatedNoChangeProfile(task, result) && !hasProfileEvidence(task, result)) {
+    findings.push({ severity: "blocker", code: "profile_evidence_missing", message: "Completed sync/admin/restart no-change tasks require explicit verification/evidence", source: "task_acceptance" });
+  }
+
   const hardFailed = findings.some((finding) => finding.severity === "blocker" || finding.severity === "major");
-  // P0: Pure-sync tasks (no changed files) can pass without verification
-  const pureSyncNoChanges = (status === "completed" || parsed.ok) &&
-    Array.isArray(result.changed_files) && result.changed_files.length === 0 &&
-    Array.isArray(task.changed_files) && task.changed_files.length === 0 &&
-    task.mode !== "deploy";
-  const passed = parsed.ok && status === "completed" && (pureSyncNoChanges || result.verification?.passed === true) && commands.every((command) => command.exit_code === 0) && !hardFailed;
+  const noChangeProfileSatisfied = changedFilesFrom(task, result).length === 0 &&
+    (isNoopProfile(task, result) ? hasNoopEvidence(result) : isEvidenceGatedNoChangeProfile(task, result) && hasProfileEvidence(task, result));
+  const passed = parsed.ok && status === "completed" && (noChangeProfileSatisfied || result.verification?.passed === true) && commands.every((command) => command.exit_code === 0) && !hardFailed;
   const failureClass = passed ? null : classifyFailure({ resultJson: result, message: findings.map((f) => f.code).join(" ") }) || "unknown";
   const verification = {
     passed,

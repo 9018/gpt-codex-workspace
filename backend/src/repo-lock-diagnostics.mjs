@@ -67,15 +67,19 @@ export async function getRepoLockSummary(workspaceRoot) {
         released++;
         if (lockData.stale_reason) releasedWithStaleReason++;
         safeEntry.blocks_current_work = false;
+        safeEntry.diagnostic_level = "history";
+        safeEntry.stale_reason_scope = lockData.stale_reason ? "historical_released_lock" : null;
         historyLocks.push(safeEntry);
         continue;
       }
 
       if (lockData.status === "stale") {
         safeEntry.blocks_current_work = true;
+        safeEntry.diagnostic_level = "blocker";
         stale++;
       } else {
         safeEntry.blocks_current_work = true;
+        safeEntry.diagnostic_level = "active";
         active++;
       }
 
@@ -146,6 +150,8 @@ export async function listRepoLocks(workspaceRoot) {
         restart_state: lockData.restart_state || null,
         stale_reason: lockData.stale_reason || null,
         blocks_current_work: status !== "released",
+        diagnostic_level: status === "released" ? "history" : status === "stale" ? "blocker" : "active",
+        stale_reason_scope: status === "released" && lockData.stale_reason ? "historical_released_lock" : null,
       });
     }
   } catch {

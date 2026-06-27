@@ -265,9 +265,14 @@ test("released lock with stale_reason remains raw history but not active or stal
   assert.equal(summary.history.locks.length, 1);
   assert.equal(summary.history.locks[0].status, "released");
   assert.equal(summary.history.locks[0].stale_reason, "heartbeat stale before release");
+  assert.equal(summary.history.locks[0].blocks_current_work, false);
+  assert.equal(summary.history.locks[0].diagnostic_level, "history");
+  assert.equal(summary.history.locks[0].stale_reason_scope, "historical_released_lock");
   assert.equal(listed.length, 1);
   assert.equal(listed[0].status, "released");
   assert.equal(listed[0].blocks_current_work, false);
+  assert.equal(listed[0].diagnostic_level, "history");
+  assert.equal(listed[0].stale_reason_scope, "historical_released_lock");
 });
 
 // ================================================================

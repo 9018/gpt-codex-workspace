@@ -178,3 +178,94 @@ test('verifyTaskCompletion does not fabricate clean git status or commit evidenc
   assert.equal(verification.evidence.commit_exists, 'unknown');
   assert.ok(verification.findings.some((finding) => finding.code === 'commit_or_patch_missing'));
 });
+
+test('verifyTaskCompletion blocks explicit code-change completion without changed_files evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_code_change_missing_files', mode: 'code_change', changed_files: [] },
+    resultJson: {
+      status: 'completed',
+      summary: 'claims code work',
+      changed_files: [],
+      tests: 'npm test: passed',
+      verification: { passed: true, commands: ['npm test'] },
+      commit: 'abc123',
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, false);
+  assert.ok(verification.findings.some((finding) => finding.code === 'changed_files_missing'));
+});
+
+test('verifyTaskCompletion blocks admin no-change completion without evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_admin_no_evidence', mode: 'admin', changed_files: [] },
+    resultJson: {
+      status: 'completed',
+      summary: 'admin done',
+      changed_files: [],
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, false);
+  assert.ok(verification.findings.some((finding) => finding.code === 'verification_missing'));
+  assert.ok(verification.findings.some((finding) => finding.code === 'profile_evidence_missing'));
+});
+
+test('verifyTaskCompletion completes admin no-change task with explicit evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_admin_evidence', mode: 'admin', changed_files: [] },
+    resultJson: {
+      status: 'completed',
+      summary: 'admin audit completed',
+      changed_files: [],
+      admin_action: 'retention_status',
+      audit_id: 'audit_1',
+      tests: 'admin audit evidence recorded',
+      verification: { passed: true, commands: [{ cmd: 'retention_status', exit_code: 0 }] },
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, true);
+});
+
+test('verifyTaskCompletion blocks restart completion without verified restart evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_restart_missing_evidence', mode: 'restart', changed_files: [] },
+    resultJson: {
+      status: 'completed',
+      summary: 'restart scheduled',
+      changed_files: [],
+      verification: { passed: true, commands: [{ cmd: 'schedule_service_restart', exit_code: 0 }] },
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, false);
+  assert.ok(verification.findings.some((finding) => finding.code === 'profile_evidence_missing'));
+});
+
+test('verifyTaskCompletion completes restart task with verified restart evidence', async () => {
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_restart_evidence', mode: 'restart', changed_files: [] },
+    resultJson: {
+      status: 'completed',
+      summary: 'restart verified',
+      changed_files: [],
+      restart_state: 'verified',
+      restart_verified_at: '2026-06-28T00:00:00.000Z',
+      post_restart_verified: true,
+      verification: { passed: true, commands: [{ cmd: 'safe_restart_phase_c_verify', exit_code: 0 }] },
+    },
+    config: { discoverVerificationCommands: false },
+    runCommandFn: async (command) => ({ cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' }),
+  });
+
+  assert.equal(verification.passed, true);
+});

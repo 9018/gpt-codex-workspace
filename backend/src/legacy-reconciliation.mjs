@@ -2,6 +2,7 @@ const LEGACY_REVIEW_STATUSES = new Set(["failed", "timed_out", "blocked", "waiti
 const COMPLETED_STATUSES = new Set(["completed"]);
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "blocked", "cancelled"]);
 const ACTIVE_OR_REVIEW_TASK_STATUSES = new Set(["queued", "assigned", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]);
+const FAILED_LEGACY_STATUSES = new Set(["failed", "timed_out", "cancelled", "blocked"]);
 
 export function hasCompletionEvidence(taskResult = {}) {
   if (taskResult.reviewer_decision?.passed === true) return true;
@@ -15,6 +16,21 @@ export function isResolvedLegacyReviewTask(task = {}) {
   if (task.status !== "waiting_for_review") return false;
   const result = task.result || {};
   return Boolean(result.resolved_by_task_id || result.superseded_by_task_id || result.auto_accepted || result.accepted_at);
+}
+
+export function isResolvedLegacyTerminalTask(task = {}) {
+  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  const result = task.result || {};
+  const reconciliationStatus = result.legacy_reconciliation?.status || task.legacy_reconciliation?.status || null;
+  return Boolean(
+    task.resolved_legacy === true ||
+    result.resolved_legacy === true ||
+    result.resolved_by_task_id ||
+    result.superseded_by_task_id ||
+    task.resolved_by_task_id ||
+    task.superseded_by_task_id ||
+    ["superseded", "resolved", "resolved_legacy", "resolved_by_successor"].includes(reconciliationStatus)
+  );
 }
 
 export function legacyResolutionSummary(task = {}) {

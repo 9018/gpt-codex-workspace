@@ -24,6 +24,8 @@ export const ACCEPTANCE_PROFILES = {
   VERIFICATION_ONLY: 'verification_only',
   NETWORK_RETRY: 'network_retry',
   INTEGRATION_ONLY: 'integration_only',
+  ADMIN: 'admin',
+  RESTART: 'restart',
   DOCS_ONLY: 'docs_only',
   CONFIG_CHANGE: 'config_change',
   DEPLOY: 'deploy',
@@ -231,6 +233,9 @@ function inferProfileFromTask(task = {}, result = {}) {
   if (task.mode === 'verification') return ACCEPTANCE_PROFILES.VERIFICATION_ONLY;
   if (task.mode === 'integration') return ACCEPTANCE_PROFILES.INTEGRATION_ONLY;
   if (task.mode === 'network_retry') return ACCEPTANCE_PROFILES.NETWORK_RETRY;
+  if (task.mode === 'admin') return ACCEPTANCE_PROFILES.ADMIN;
+  if (task.mode === 'restart') return ACCEPTANCE_PROFILES.RESTART;
+  if (task.mode === 'code_change') return ACCEPTANCE_PROFILES.CODE_CHANGE;
   if (task.mode === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
   if (result.noop === true || task.noop === true || task.mode === 'noop') return ACCEPTANCE_PROFILES.NOOP;
 
@@ -322,7 +327,7 @@ function getProfileChecks(profile) {
       relaxed: ['tests_present', 'changed_files_match_git'],
     },
     repair_code_change: {
-      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+      required: ['result_json_valid', 'summary_present', 'changed_files_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
         'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence',
         'changed_files_match_git'],
@@ -337,15 +342,26 @@ function getProfileChecks(profile) {
         'worktree_clean', 'no_blocker_or_major_findings'],
       relaxed: [],
     },
+    admin: {
+      required: ['result_json_valid', 'summary_present',
+        'verification_passed', 'no_blocker_or_major_findings'],
+      relaxed: [],
+    },
+    restart: {
+      required: ['result_json_valid', 'summary_present',
+        'verification_passed', 'safe_restart_evidence', 'post_restart_verification',
+        'no_blocker_or_major_findings'],
+      relaxed: [],
+    },
     code_change: {
-      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+      required: ['result_json_valid', 'summary_present', 'changed_files_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
         'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence',
         'changed_files_match_git'],
       relaxed: [],
     },
     runtime_change: {
-      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+      required: ['result_json_valid', 'summary_present', 'changed_files_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
         'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence'],
       relaxed: [],
@@ -361,7 +377,7 @@ function getProfileChecks(profile) {
       relaxed: ['tests_present'],
     },
     deploy: {
-      required: ['result_json_valid', 'summary_present', 'changed_files_safe_paths',
+      required: ['result_json_valid', 'summary_present', 'changed_files_present', 'changed_files_safe_paths',
         'verification_present_for_non_noop', 'verification_passed', 'worktree_clean',
         'no_blocker_or_major_findings', 'tests_present', 'commit_or_patch_evidence',
         'changed_files_match_git', 'safe_restart_evidence', 'post_restart_verification'],
@@ -395,6 +411,13 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       const unsafe = files.filter(f => f.startsWith('/') || f.startsWith('..') || f.includes('node_modules'));
       if (unsafe.length > 0) {
         return { severity: 'blocker', code: 'unsafe_changed_file_paths', message: `Unsafe changed file paths: ${unsafe.join(', ')}`, source: 'acceptance_agent' };
+      }
+      return null;
+
+    case 'changed_files_present':
+      const requiredFiles = evidence.result_changed_files?.length ? evidence.result_changed_files : (result?.changed_files || evidence.changed_files || []);
+      if (!Array.isArray(requiredFiles) || requiredFiles.length === 0) {
+        return { severity: 'blocker', code: 'changed_files_missing', message: 'Code-change task completed without changed_files evidence', source: 'acceptance_agent' };
       }
       return null;
 

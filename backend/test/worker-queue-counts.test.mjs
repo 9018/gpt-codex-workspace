@@ -56,6 +56,42 @@ test('collectWorkerQueueCounts returns zero counts when load fails', async () =>
     completed: 0,
     failed: 0,
     actionable_review: 0,
+    legacy_failed_policy: {
+      policy: 'resolved_legacy_failed_excluded_from_current_blockers',
+      resolved_legacy_failed: 0,
+      unresolved_failed: 0,
+      resolved_legacy_review: 0,
+      blocks_current_work: false,
+    },
     oldest_age_ms: ZERO_AGES,
+  });
+});
+
+test('collectWorkerQueueCounts excludes resolved legacy failed tasks but keeps active failed visible', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_old_resolved', result: { resolved_legacy: true } },
+          { assignee: 'codex', status: 'failed', id: 'task_old_superseded', result: { superseded_by_task_id: 'task_successor' } },
+          { assignee: 'codex', status: 'waiting_for_review', id: 'task_review_resolved', result: { resolved_by_task_id: 'task_successor' } },
+          { assignee: 'codex', status: 'failed', id: 'task_real_failed', result: {} },
+          { assignee: 'codex', status: 'running', id: 'task_running' },
+        ],
+      };
+    },
+  };
+
+  const result = await collectWorkerQueueCounts(store);
+
+  assert.equal(result.failed, 1, 'only unresolved failed tasks count as current failed');
+  assert.equal(result.running, 1, 'active running tasks remain visible');
+  assert.equal(result.waiting_for_review, 0, 'resolved legacy review tasks are not actionable review');
+  assert.deepEqual(result.legacy_failed_policy, {
+    policy: 'resolved_legacy_failed_excluded_from_current_blockers',
+    resolved_legacy_failed: 2,
+    unresolved_failed: 1,
+    resolved_legacy_review: 1,
+    blocks_current_work: true,
   });
 });
