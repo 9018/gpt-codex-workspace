@@ -21,9 +21,14 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { createServer } from "node:net";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import { createAdminAuditLogger } from "../src/admin-audit-log.mjs";
+
+const BACKEND_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const REPO_ROOT = resolve(BACKEND_ROOT, "..");
 
 // ================================================================
 // Helper: create a server with recovery plane enabled or disabled
@@ -334,6 +339,45 @@ test("14. recovery_command_runner returns error for unknown command", async () =
     assert.ok(result.error.includes("Unknown command") || result.error.includes("unknown"));
   } finally {
     delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("14b. recovery_command_runner runtime_status uses bounded /health probe", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  const sockets = new Set();
+  const hangingServer = createServer((socket) => {
+    sockets.add(socket);
+    socket.once("close", () => sockets.delete(socket));
+    socket.on("error", () => {});
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    hangingServer.once("error", rejectListen);
+    hangingServer.listen(0, "127.0.0.1", resolveListen);
+  });
+
+  const previousPort = process.env.GPTWORK_PORT;
+  process.env.GPTWORK_PORT = String(hangingServer.address().port);
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const startedAt = Date.now();
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "runtime_status",
+      timeout_ms: 30000,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true);
+    assert.ok(elapsed < 10000, "runtime_status should honor the inner health probe timeout, elapsed=" + elapsed);
+    assert.match(result.stdout, /MCP health probe failed or timed out/);
+    assert.match(result.stdout, /GET \/health/);
+  } finally {
+    if (previousPort === undefined) delete process.env.GPTWORK_PORT;
+    else process.env.GPTWORK_PORT = previousPort;
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+    for (const socket of sockets) socket.destroy();
+    await new Promise((resolveClose) => hangingServer.close(resolveClose));
   }
 });
 

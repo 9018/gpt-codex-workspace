@@ -80,6 +80,14 @@ test("P0-5: recovery_diagnose handles 429", (t) => {
   assert.ok(source.includes("last_status === 429"));
 });
 
+test("P0-5: recovery runtime_status probes bounded JSON health endpoint", (t) => {
+  const source = readFileSync("./src/tool-groups/recovery-tools-group.mjs", "utf8");
+  assert.match(source, /runtime_status:[\s\S]*curl[\s\S]*--connect-timeout\s+2/);
+  assert.match(source, /runtime_status:[\s\S]*curl[\s\S]*--max-time\s+5/);
+  assert.match(source, /runtime_status:[\s\S]*http:\/\/localhost:\$\{process\.env\.GPTWORK_PORT\|\|8787\}\/health/);
+  assert.doesNotMatch(source, /runtime_status:[\s\S]*\/mcp\/health/);
+});
+
 test("P0-6: repair metadata in processor", (t) => {
   const source = readFileSync("./src/task-general-processor.mjs", "utf8");
   assert.ok(source.includes("repair_attempt"));
