@@ -523,6 +523,42 @@ test("buildTaskResult with failure includes warnings and followups", () => {
   assert.deepEqual(result.followups, ["Fix lint"]);
 });
 
+test("buildTaskResult handles successful unstructured no-result fallback without ReferenceError", () => {
+  const parsed = parseCodexResult("Codex produced output but no structured status line");
+
+  const result = buildTaskResult(parsed, {
+    returnCode: 0,
+    cr: { returncode: 0, stdout: "Codex produced output but no structured status line", stderr: "" },
+  });
+
+  assert.equal(result.kind, "codex_failed");
+  assert.equal(result.failure_class, "result_missing");
+  assert.equal(result.repairable, false);
+  assert.equal(result.retryable, true);
+  assert.equal(result.noop, true);
+  assert.ok(result.diagnostics);
+});
+
+test("buildTaskResult classifies structured no-result/no-diff completed output as retryable result_missing", () => {
+  const parsed = parseCodexResult([
+    "STATUS=completed",
+    "SUMMARY=No-op: Codex execution completed with no changes",
+    "CHANGED_FILES=none",
+    "COMMIT=none",
+    "REMOTE_HEAD=none",
+  ].join("\n"));
+
+  const result = buildTaskResult(parsed, {
+    returnCode: 0,
+    cr: { returncode: 0, stdout: "STATUS=completed", stderr: "" },
+  });
+
+  assert.equal(result.kind, "codex_failed");
+  assert.equal(result.failure_class, "result_missing");
+  assert.equal(result.repairable, false);
+  assert.equal(result.retryable, true);
+});
+
 test("buildTaskResult timeout includes warnings and followups", () => {
   const parsed = {
     status: "completed",

@@ -13,6 +13,19 @@ function acceptanceFields(parsed = {}) {
   };
 }
 
+function isNoResultNoop(parsed = {}, cr = null) {
+  const noChangedFiles = !Array.isArray(parsed.changed_files) || parsed.changed_files.length === 0;
+  const noTests = !parsed.tests || parsed.tests === "none";
+  const noCommit = !parsed.commit || parsed.commit === "none";
+  const noRemoteHead = !parsed.remote_head || parsed.remote_head === "none";
+  return noChangedFiles
+    && noTests
+    && noCommit
+    && noRemoteHead
+    && Boolean(cr)
+    && parsed.from_json !== true;
+}
+
 /**
  * Build a standardized task result from parsed Codex output.
  *
@@ -113,7 +126,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
   // If STATUS=completed (success)
   if (parsed.status === "completed") {
     const isNoop = _isNoop(parsed);
-    const resultMissingNoop = isNoop && Boolean(cr) && parsed.from_json !== true && !parsed.commit && !parsed.tests;
+    const resultMissingNoop = isNoop && isNoResultNoop(parsed, cr);
     const warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
     if (isNoop) {
       warnings.push(
@@ -189,6 +202,7 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
 
   // Fallback: executed but no structured STATUS
   const isNoop = _isNoop(parsed);
+  const resultMissingNoop = isNoop && isNoResultNoop(parsed, cr);
   const warnings = Array.isArray(parsed.warnings) ? parsed.warnings : [];
   if (isNoop) {
     warnings.push(

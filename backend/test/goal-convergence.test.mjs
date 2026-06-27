@@ -1,0 +1,129 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+
+import { determineGoalStatus, convergeStaleGoalStatuses } from "../src/goal-convergence.mjs";
+
+test("determineGoalStatus does not complete a completed task that lacks acceptance evidence", () => {
+  const status = determineGoalStatus(
+    { id: "goal_missing_evidence", status: "running" },
+    { id: "task_missing_evidence", status: "completed" },
+    { status: "completed", summary: "done", changed_files: ["backend/src/app.mjs"] },
+  );
+
+  assert.equal(status, "waiting_for_review");
+});
+
+test("determineGoalStatus completes a verified accepted code-change task", () => {
+  const status = determineGoalStatus(
+    { id: "goal_code_success", status: "running" },
+    { id: "task_code_success", status: "completed" },
+    {
+      status: "completed",
+      changed_files: ["backend/src/app.mjs"],
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+      convergence: { nextStatus: "completed", profile: "code_change" },
+    },
+  );
+
+  assert.equal(status, "completed");
+});
+
+test("determineGoalStatus treats changed_files_mismatch as blocker for code_change", () => {
+  const status = determineGoalStatus(
+    { id: "goal_mismatch", status: "running" },
+    { id: "task_mismatch", status: "completed" },
+    {
+      status: "completed",
+      changed_files: [],
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [{ severity: "major", code: "changed_files_mismatch", message: "real diff omitted" }],
+      convergence: { nextStatus: "completed", profile: "code_change" },
+    },
+  );
+
+  assert.equal(status, "waiting_for_repair");
+});
+
+test("determineGoalStatus treats tests_missing as blocker for implementation/code_change", () => {
+  const status = determineGoalStatus(
+    { id: "goal_tests_missing", status: "running" },
+    { id: "task_tests_missing", status: "completed" },
+    {
+      status: "completed",
+      changed_files: ["backend/src/app.mjs"],
+      verification: { passed: true, commands: [] },
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [{ severity: "major", code: "tests_missing", message: "tests missing" }],
+      convergence: { nextStatus: "completed", profile: "implementation" },
+    },
+  );
+
+  assert.equal(status, "waiting_for_repair");
+});
+
+test("determineGoalStatus allows tests_missing and changed_files_mismatch for sync/noop profiles", () => {
+  for (const profile of ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry"]) {
+    const status = determineGoalStatus(
+      { id: `goal_${profile}`, status: "running" },
+      { id: `task_${profile}`, status: "completed", mode: "sync" },
+      {
+        status: "completed",
+        changed_files: [],
+        verification: { passed: true, commands: [] },
+        acceptance_findings: [
+          { severity: "major", code: "tests_missing", message: "not required" },
+          { severity: "major", code: "changed_files_mismatch", message: "remote already aligned" },
+        ],
+        convergence: { nextStatus: "completed", profile },
+      },
+    );
+
+    assert.equal(status, "completed", profile);
+  }
+});
+
+test("determineGoalStatus maps terminal exhausted no-result to failed without review", () => {
+  const status = determineGoalStatus(
+    { id: "goal_no_result", status: "waiting_for_repair" },
+    { id: "task_no_result", status: "failed", repair_attempt: 2, max_attempts: 2 },
+    { failure_class: "result_missing", repair_plan: { exhausted: true } },
+  );
+
+  assert.equal(status, "failed");
+});
+
+test("convergeStaleGoalStatuses is idempotent and records one activity", async () => {
+  let saveCount = 0;
+  const state = {
+    goals: [{ id: "goal_stale", task_id: "task_stale", status: "running", title: "Goal" }],
+    tasks: [{
+      id: "task_stale",
+      status: "completed",
+      result: {
+        status: "completed",
+        changed_files: [],
+        verification: { passed: true, commands: [] },
+        reviewer_decision: { status: "accepted", passed: true },
+        acceptance_findings: [],
+        convergence: { nextStatus: "completed", profile: "sync_only" },
+      },
+    }],
+    activities: [],
+  };
+  const store = {
+    load: async () => state,
+    save: async () => { saveCount += 1; },
+  };
+
+  const first = await convergeStaleGoalStatuses(store);
+  const second = await convergeStaleGoalStatuses(store);
+
+  assert.equal(state.goals[0].status, "completed");
+  assert.equal(saveCount, 1);
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 0);
+  assert.equal(state.activities.filter((item) => item.type === "goal.completed").length, 1);
+});

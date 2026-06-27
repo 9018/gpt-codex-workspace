@@ -2,6 +2,7 @@ import { dirname, join } from "node:path";
 import { appendFileSync } from "node:fs";
 import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
+import { determineGoalStatus, convergeStaleGoalStatuses } from "./goal-convergence.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
 import { removeTaskWorktree } from "./task-worktree-manager.mjs";
@@ -344,7 +345,7 @@ export async function finalizeCodexTaskRun({
   }
 
   if (goal) {
-    const goalStatus = taskStatus === "timed_out" ? "failed" : taskStatus;
+    const goalStatus = determineGoalStatus(goal, result?.task || task, taskResult || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
     if (typeof store.mutate !== "function") {
       await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
     }
@@ -410,6 +411,16 @@ export async function finalizeCodexTaskRun({
   } catch (_ge) {
     taskResult.github_sync = { ok: false, error: _ge?.message || String(_ge) };
     // Non-critical — do not fail finalization
+  }
+
+  try {
+    const sweepChanges = await convergeStaleGoalStatuses(store);
+    if (sweepChanges.length > 0) {
+      const logPath = process.env.GPTWORK_LOG_PATH;
+      if (logPath) appendFileSync(logPath, `[gptwork-worker] goal sweep: converged ${sweepChanges.length} stale goal(s)\n`);
+    }
+  } catch {
+    // Non-critical — goal sweep must not fail finalization.
   }
   return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind, auto_start: autoStartResult };
 }
@@ -557,7 +568,7 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
     if (goal) {
       const goalItem = state.goals.find((candidate) => candidate.id === goal.id);
       if (goalItem) {
-        const goalStatus = taskStatus === "timed_out" ? "failed" : taskStatus;
+        const goalStatus = determineGoalStatus(goalItem, item, item.result || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
         goalItem.status = goalStatus;
         goalItem.updated_at = doneAt;
         state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });

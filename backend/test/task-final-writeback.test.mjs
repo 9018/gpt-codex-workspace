@@ -579,8 +579,51 @@ test("task-final-writeback: synchronizes queue item for terminal and waiting sta
     assert.equal(queueItem.status, status);
     assert.equal(queueItem.completed_task_id, args.task.id);
     assert.equal(savedState.tasks[0].status, status);
-    assert.equal(savedState.goals[0].status, status);
+    const expectedGoalStatus = status === "failed" || status === "timed_out" ? "waiting_for_repair" : status;
+    assert.equal(savedState.goals[0].status, expectedGoalStatus);
   }
+});
+
+test("task-final-writeback: completed task without evidence does not auto-complete linked goal", async () => {
+  let savedState = null;
+  const args = makeMinimalArgs("completed");
+  args.goal = { id: "goal_evidence_gate", workspace_id: "hosted-default", title: "Evidence gate", status: "running" };
+  args.task = { id: "task_evidence_gate", goal_id: args.goal.id, logs: [] };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ id: args.task.id, goal_id: args.goal.id, logs: [] }],
+        goals: [args.goal],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "missing acceptance evidence",
+    changed_files: ["backend/src/app.mjs"],
+    warnings: [],
+    followups: [],
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: false,
+    status: "waiting_for_review",
+    commands: [],
+    changed_files: ["backend/src/app.mjs"],
+    reason_no_tests: null,
+    failure_class: "unknown",
+    requires_review: true,
+    findings: [],
+  });
+  args.shouldAttemptRepairFn = () => ({ should_repair: false, reason: "not repairable" });
+
+  await finalizeCodexTaskRun(args);
+
+  assert.equal(savedState.tasks[0].status, "waiting_for_review");
+  assert.equal(savedState.goals[0].status, "waiting_for_review");
 });
 
 test("task-final-writeback: verification failure creates repair goal and records repair ids", async () => {
