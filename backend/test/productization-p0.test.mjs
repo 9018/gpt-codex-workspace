@@ -48,6 +48,48 @@ test("open_project_context returns bounded first-step project context", async ()
   assert.match(response.result.content[0].text, /Project Context/);
 });
 
+test("open_project_context reports current blockers separately from raw legacy history", async () => {
+  const server = await makeServer();
+  const store = server.getStoreForTests();
+  store.state.tasks = [
+    {
+      id: "task_legacy_zvec",
+      title: "Legacy failed zvec repair",
+      status: "waiting_for_review",
+      assignee: "codex",
+      updated_at: "2026-01-01T00:00:00Z",
+      result: { resolved_by_task_id: "task_successor_zvec", superseded_by_task_id: "task_successor_zvec" },
+    },
+    {
+      id: "task_successor_zvec",
+      title: "Completed zvec delivery",
+      status: "completed",
+      assignee: "codex",
+      updated_at: "2026-01-02T00:00:00Z",
+      result: { verification: { passed: true }, commit: "4ad576495f4101e39955ea7e4028da3c3d15b4d4" },
+    },
+  ];
+  store.state.goals = [
+    { id: "goal_legacy_zvec", task_id: "task_legacy_zvec", title: "Legacy zvec", status: "completed" },
+  ];
+  await store.save();
+
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 10,
+    method: "tools/call",
+    params: { name: "open_project_context", arguments: {} },
+  }, { authorization: "Bearer test-token" });
+
+  const context = response.result.structuredContent;
+  assert.equal(context.current_blockers.waiting_for_review, 0);
+  assert.equal(context.current_blockers.actionable_review, 0);
+  assert.equal(context.raw_history.resolved_legacy_review, 1);
+  const legacyTask = context.state_summary.recent_tasks.find((task) => task.id === "task_legacy_zvec");
+  assert.equal(legacyTask.legacy_resolution.resolved, true);
+  assert.equal(legacyTask.legacy_resolution.resolved_by_task_id, "task_successor_zvec");
+});
+
 test("gptwork CLI settings show/set edits runtime env file", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-cli-settings-"));
   track(root);

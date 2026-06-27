@@ -16,6 +16,7 @@ import { existsSync } from "node:fs";
 import { readFile, readdir, rm, mkdir, writeFile, appendFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createAdminAuditLogger } from "./admin-audit-log.mjs";
+import { retainedWorktreeDecision } from "./legacy-reconciliation.mjs";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -89,6 +90,18 @@ function _newestTs(records, field = "updated_at") {
     if (t > max) max = t;
   }
   return max > 0 ? new Date(max).toISOString() : null;
+}
+
+function _taskWorktreePath(task = {}) {
+  const result = task.result || {};
+  return task.worktree_path
+    || task.worktree?.path
+    || result.worktree_path
+    || result.repo_resolution?.task_worktree_path
+    || result.repo_resolution?.worktree_lifecycle?.worktree_path
+    || result.worktree_lifecycle?.worktree_path
+    || result.worktree_lifecycle?.path
+    || null;
 }
 
 function _oldestTs(records, field = "updated_at") {
@@ -604,6 +617,32 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
       total: sysTmpCount,
       bytes: sysTmpBytes,
       proposedAction: sysTmpCount > 0 ? `align age/size/count cap with retention (${sysTmpCount} files)` : "empty",
+      safe: true,
+    }));
+  }
+
+  // ── 17. retained task worktrees ─────────────────────────────────
+  {
+    const tasks = state.tasks || [];
+    let total = 0;
+    let removable = 0;
+    let retained = 0;
+    for (const task of tasks) {
+      const worktreePath = _taskWorktreePath(task);
+      if (!worktreePath || !existsSync(worktreePath)) continue;
+      total++;
+      const decision = retainedWorktreeDecision(task);
+      if (decision.action === "remove") removable++;
+      else retained++;
+    }
+    families.push(_makeFamilyStatus("retained_worktrees", {
+      type: "filesystem",
+      total,
+      active: retained,
+      terminal: removable,
+      proposedAction: removable > 0
+        ? `remove ${removable} resolved terminal retained worktree(s), retain ${retained}`
+        : `no resolved terminal retained worktrees (${total} tracked)`,
       safe: true,
     }));
   }
@@ -1200,6 +1239,41 @@ export async function retentionCleanup({
       }
     } else {
       _recordSkip("managed_tmp", "no_tmp_dir", "managed tmp directory does not exist");
+    }
+  }
+
+  // ── 16. retained task worktrees ───────────────────────────────
+  {
+    const tasks = state.tasks || [];
+    let removed = 0;
+    let candidates = 0;
+    for (const task of tasks) {
+      const worktreePath = _taskWorktreePath(task);
+      if (!worktreePath || !existsSync(worktreePath)) continue;
+      candidates++;
+      const decision = retainedWorktreeDecision(task);
+      if (decision.action === "remove") {
+        _recordChange("retained_worktrees", "remove_resolved_terminal", `task ${task.id} (${task.status}) reason=${decision.reason}`, worktreePath);
+        if (!dryRun) {
+          await rm(worktreePath, { recursive: true, force: true });
+          task.worktree_cleanup = {
+            status: "removed",
+            reason: decision.reason,
+            path: worktreePath,
+            cleaned_at: new Date().toISOString(),
+          };
+          task.result ||= {};
+          task.result.worktree_cleanup = task.worktree_cleanup;
+        }
+        removed++;
+      } else {
+        _recordSkip("retained_worktrees", decision.reason, `task ${task.id} (${task.status}) path=${worktreePath}`);
+      }
+    }
+    if (removed === 0) {
+      _recordSkip("retained_worktrees", "no_removable_worktrees", `${candidates} retained worktree candidate(s)`);
+    } else {
+      _recordChange("retained_worktrees", "summary", `removed ${removed} resolved terminal retained worktree(s)`, null);
     }
   }
 

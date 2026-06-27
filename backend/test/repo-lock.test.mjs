@@ -243,6 +243,33 @@ test("acquireRepoLock is re-entrant for same task", async () => {
   assert.equal(second.lock.run_id, "run_002", "run_id should be updated");
 });
 
+test("released lock with stale_reason remains raw history but not active or stale blocker", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-lock-released-stale-"));
+  const repoPath = "/test/repo-released-stale";
+  await acquireRepoLock(root, repoPath, { taskId: "task_legacy", mode: "builder" });
+  await forceReleaseRepoLock(root, repoPath, "legacy stale release", { taskId: "task_legacy" });
+
+  const lockPath = getLockFilePath(root, repoPath);
+  const lockData = JSON.parse(await readFile(lockPath, "utf8"));
+  lockData.stale_reason = "heartbeat stale before release";
+  await writeFile(lockPath, JSON.stringify(lockData, null, 2) + "\n", "utf8");
+
+  const summary = await getRepoLockSummary(root);
+  const listed = await listRepoLocks(root);
+
+  assert.equal(summary.active_repo_locks, 0);
+  assert.equal(summary.stale_repo_locks, 0);
+  assert.equal(summary.released_repo_locks, 1);
+  assert.equal(summary.history.released_with_stale_reason, 1);
+  assert.equal(summary.locks.length, 0);
+  assert.equal(summary.history.locks.length, 1);
+  assert.equal(summary.history.locks[0].status, "released");
+  assert.equal(summary.history.locks[0].stale_reason, "heartbeat stale before release");
+  assert.equal(listed.length, 1);
+  assert.equal(listed[0].status, "released");
+  assert.equal(listed[0].blocks_current_work, false);
+});
+
 // ================================================================
 // 4. Release semantics
 // ================================================================

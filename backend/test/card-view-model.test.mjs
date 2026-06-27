@@ -118,6 +118,40 @@ test("renderCardText uses the ViewModel fields consistently", () => {
   assert.match(text, /Recent tasks/);
 });
 
+test("list_tasks card separates current actionable review from resolved legacy history", () => {
+  const card = buildCardViewModel("list_tasks", {
+    tasks: [
+      {
+        id: "task_legacy_zvec",
+        title: "Legacy zvec failed repair",
+        status: "waiting_for_review",
+        assignee: "codex",
+        mode: "builder",
+        result: {
+          resolved_by_task_id: "task_successor_zvec",
+          superseded_by_task_id: "task_successor_zvec",
+        },
+      },
+      {
+        id: "task_current_review",
+        title: "Current manual review",
+        status: "waiting_for_review",
+        assignee: "codex",
+        mode: "builder",
+        waiting_for_review_reason: "manual_review",
+        result: {},
+      },
+    ],
+  });
+
+  assert.equal(card.key_values.find((row) => row.key === "waiting_for_review")?.value, 2);
+  assert.equal(card.key_values.find((row) => row.key === "actionable_review")?.value, 1);
+  assert.equal(card.key_values.find((row) => row.key === "resolved_legacy_review")?.value, 1);
+  assert.ok(card.sections.some((section) => section.title === "Resolved legacy history"));
+  assert.ok(card.diagnostics.some((diagnostic) => diagnostic.code === "wfr_actionable" && diagnostic.message.includes("1 review")));
+  assert.equal(card.diagnostics.some((diagnostic) => diagnostic.message.includes("2 review task(s) actionable")), false);
+});
+
 test("legacyFieldsFromCard derives keyValues and items for old widget compatibility", () => {
   const card = buildCardViewModel("worker_status", {
     enabled: true,

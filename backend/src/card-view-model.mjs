@@ -1,3 +1,5 @@
+import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
+
 const CARD_VERSION = "gptwork-card-v1";
 const CARD_ENABLED_TOOLS = new Set([
   "runtime_status",
@@ -197,7 +199,9 @@ function buildListTasksCard(tool, data, meta) {
   const card = baseCard(tool, data, { ...meta, title: "Task Queue" });
   const statusCounts = countBy(tasks, (task) => task.status || "unknown");
   const assigneeCounts = countBy(tasks, (task) => task.assignee || "unassigned");
-  const hasRisk = tasks.some((task) => ["failed", "waiting_for_review", "waiting_for_repair"].includes(task.status));
+  const actionableReviewTasks = tasks.filter((task) => task.status === "waiting_for_review" && !isResolvedLegacyReviewTask(task));
+  const resolvedReviewTasks = tasks.filter((task) => isResolvedLegacyReviewTask(task));
+  const hasRisk = tasks.some((task) => ["failed", "waiting_for_repair"].includes(task.status)) || actionableReviewTasks.length > 0;
 
   card.card_type = "queue";
   card.status = hasRisk ? "warning" : "ok";
@@ -207,6 +211,8 @@ function buildListTasksCard(tool, data, meta) {
     { key: "tasks", value: tasks.length },
     { key: "statuses", value: countsText(statusCounts) || "-" },
     { key: "assignees", value: countsText(assigneeCounts) || "-" },
+    { key: "actionable_review", value: actionableReviewTasks.length },
+    { key: "resolved_legacy_review", value: resolvedReviewTasks.length },
   ]);
   card.sections.push({
     title: "Recent tasks",
@@ -234,9 +240,25 @@ function buildListTasksCard(tool, data, meta) {
       })),
     });
     card.key_values.push({ key: "waiting_for_review", value: wfrTasks.length });
-    const actionableReasons = wfrTasks.filter((t) => t.waiting_for_review_reason === "manual_review" || !t.waiting_for_review_reason);
+    const actionableReasons = actionableReviewTasks.filter((t) => t.waiting_for_review_reason === "manual_review" || !t.waiting_for_review_reason);
     if (actionableReasons.length > 0) {
       card.diagnostics.push({ severity: "info", message: `${actionableReasons.length} review task(s) actionable — check reason column`, code: "wfr_actionable" });
+    }
+    if (resolvedReviewTasks.length > 0) {
+      card.sections.push({
+        title: "Resolved legacy history",
+        type: "table",
+        rows: resolvedReviewTasks.slice(0, 10).map((task) => {
+          const resolution = legacyResolutionSummary(task);
+          return {
+            id: task.id,
+            title: truncate(task.title || "", 50),
+            resolved_by: resolution.resolved_by_task_id || "-",
+            superseded_by: resolution.superseded_by_task_id || "-",
+            reason: resolution.reason || "resolved_history",
+          };
+        }),
+      });
     }
   }
 

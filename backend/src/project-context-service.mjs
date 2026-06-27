@@ -2,6 +2,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
+import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
 
 const TEXT_LIMIT = 8000;
 
@@ -72,6 +73,16 @@ export async function collectProjectContext({ config, store, workerState, regist
   const branch = safeGit(["branch", "--show-current"], repoRoot) || null;
   const dirty = safeGit(["status", "--short"], repoRoot).split("\n").filter(Boolean);
   const queue = await collectWorkerQueueCounts(store);
+  const tasks = state.tasks || [];
+  const resolvedLegacyReview = tasks.filter((task) => isResolvedLegacyReviewTask(task));
+  const actionableReview = tasks.filter((task) => task.assignee === "codex" && task.status === "waiting_for_review" && !isResolvedLegacyReviewTask(task));
+  const currentBlockers = {
+    running: queue.running || 0,
+    waiting_for_lock: queue.waiting_for_lock || 0,
+    waiting_for_review: actionableReview.length,
+    actionable_review: queue.actionable_review ?? actionableReview.length,
+    failed: queue.failed || 0,
+  };
   const packageScripts = scriptsFromPackage(repoRoot);
   const backendScripts = scriptsFromPackage(join(repoRoot, "backend"));
 
@@ -101,8 +112,24 @@ export async function collectProjectContext({ config, store, workerState, regist
       tasks: state.tasks?.length || 0,
       goals: state.goals?.length || 0,
       workspaces: state.workspaces?.length || 0,
-      recent_tasks: (state.tasks || []).slice(-5).reverse().map((task) => ({ id: task.id, title: task.title || "", status: task.status, assignee: task.assignee || "" })),
+      recent_tasks: tasks.slice(-5).reverse().map((task) => ({
+        id: task.id,
+        title: task.title || "",
+        status: task.status,
+        assignee: task.assignee || "",
+        legacy_resolution: legacyResolutionSummary(task),
+      })),
       recent_goals: (state.goals || []).slice(-5).reverse().map((goal) => ({ id: goal.id, title: goal.title || "", status: goal.status, assignee: goal.assignee || "" })),
+    },
+    current_blockers: currentBlockers,
+    raw_history: {
+      waiting_for_review_total: tasks.filter((task) => task.status === "waiting_for_review").length,
+      resolved_legacy_review: resolvedLegacyReview.length,
+      resolved_legacy_review_tasks: resolvedLegacyReview.slice(0, 20).map((task) => ({
+        id: task.id,
+        title: task.title || "",
+        ...legacyResolutionSummary(task),
+      })),
     },
     worker: {
       enabled: process.env.GPTWORK_CODEX_WORKER === "true",

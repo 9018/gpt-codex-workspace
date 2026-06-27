@@ -26,7 +26,10 @@ export async function getRepoLockSummary(workspaceRoot) {
 
   let active = 0;
   let stale = 0;
+  let released = 0;
+  let releasedWithStaleReason = 0;
   const locks = [];
+  const historyLocks = [];
 
   try {
     const entries = await readdir(lockDir, { withFileTypes: true });
@@ -40,8 +43,6 @@ export async function getRepoLockSummary(workspaceRoot) {
       } catch {
         continue;
       }
-
-      if (lockData.status === "released") continue;
 
       // Safe fields only — no secrets
       const safeEntry = {
@@ -58,10 +59,23 @@ export async function getRepoLockSummary(workspaceRoot) {
         safeEntry.restart_state = lockData.restart_state;
       }
 
-      if (lockData.status === "stale") {
+      if (lockData.stale_reason) {
         safeEntry.stale_reason = lockData.stale_reason;
+      }
+
+      if (lockData.status === "released") {
+        released++;
+        if (lockData.stale_reason) releasedWithStaleReason++;
+        safeEntry.blocks_current_work = false;
+        historyLocks.push(safeEntry);
+        continue;
+      }
+
+      if (lockData.status === "stale") {
+        safeEntry.blocks_current_work = true;
         stale++;
       } else {
+        safeEntry.blocks_current_work = true;
         active++;
       }
 
@@ -81,7 +95,13 @@ export async function getRepoLockSummary(workspaceRoot) {
   return {
     active_repo_locks: active,
     stale_repo_locks: stale,
-    locks
+    released_repo_locks: released,
+    locks,
+    history: {
+      released_repo_locks: released,
+      released_with_stale_reason: releasedWithStaleReason,
+      locks: historyLocks,
+    },
   };
 }
 
@@ -113,17 +133,19 @@ export async function listRepoLocks(workspaceRoot) {
       }
 
       // Safe fields only
+      const status = lockData.status;
       locks.push({
         safe_repo_id: lockData.safe_repo_id,
         canonical_repo_path: lockData.canonical_repo_path,
         task_id: lockData.task_id,
         run_id: lockData.run_id,
-        status: lockData.status,
+        status,
         mode: lockData.mode,
         acquired_at: lockData.acquired_at,
         last_heartbeat_at: lockData.last_heartbeat_at,
         restart_state: lockData.restart_state || null,
         stale_reason: lockData.stale_reason || null,
+        blocks_current_work: status !== "released",
       });
     }
   } catch {

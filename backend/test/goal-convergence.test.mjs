@@ -169,3 +169,65 @@ test("convergeStaleGoalStatuses is idempotent and records one activity", async (
   assert.equal(second.length, 0);
   assert.equal(state.activities.filter((item) => item.type === "goal.completed").length, 1);
 });
+
+test("convergeStaleGoalStatuses completes old waiting review goal when completed successor has evidence", async () => {
+  let saveCount = 0;
+  const state = {
+    goals: [
+      { id: "goal_legacy_zvec", task_id: "task_legacy_zvec", status: "waiting_for_review", title: "Old zvec repair" },
+      { id: "goal_successor_zvec", task_id: "task_successor_zvec", status: "completed", title: "New zvec delivery" },
+    ],
+    tasks: [
+      {
+        id: "task_legacy_zvec",
+        goal_id: "goal_legacy_zvec",
+        status: "waiting_for_review",
+        title: "Legacy failed zvec noop repair",
+        result: {
+          status: "failed",
+          summary: "Legacy zvec repair did not land",
+          failure_class: "noop_repair",
+          acceptance_findings: [{ severity: "major", code: "tests_missing", message: "old missing tests" }],
+        },
+      },
+      {
+        id: "task_successor_zvec",
+        goal_id: "goal_successor_zvec",
+        root_task_id: "task_legacy_zvec",
+        repair_of_task_id: "task_legacy_zvec",
+        status: "completed",
+        title: "Completed zvec delivery",
+        result: {
+          status: "completed",
+          summary: "Integrated zvec bounded context fix",
+          changed_files: ["backend/src/context-index/zvec-store.mjs"],
+          commit: "4ad576495f4101e39955ea7e4028da3c3d15b4d4",
+          verification: { passed: true, commands: [{ cmd: "node --test backend/test/context-index.test.mjs", exit_code: 0 }] },
+          reviewer_decision: { status: "accepted", passed: true },
+          acceptance_findings: [],
+          convergence: { nextStatus: "completed", profile: "code_change" },
+        },
+      },
+    ],
+    activities: [],
+  };
+  const store = {
+    load: async () => state,
+    save: async () => { saveCount += 1; },
+  };
+
+  const first = await convergeStaleGoalStatuses(store);
+  const second = await convergeStaleGoalStatuses(store);
+
+  const legacyGoal = state.goals.find((goal) => goal.id === "goal_legacy_zvec");
+  const legacyTask = state.tasks.find((task) => task.id === "task_legacy_zvec");
+  assert.equal(legacyGoal.status, "completed");
+  assert.equal(legacyGoal.resolved_by.task_id, "task_successor_zvec");
+  assert.equal(legacyGoal.resolved_by.commit, "4ad576495f4101e39955ea7e4028da3c3d15b4d4");
+  assert.equal(legacyGoal.superseded_by.task_id, "task_successor_zvec");
+  assert.equal(legacyTask.result.resolved_by_task_id, "task_successor_zvec");
+  assert.equal(legacyTask.result.superseded_by_task_id, "task_successor_zvec");
+  assert.equal(first.length, 1);
+  assert.equal(second.length, 0);
+  assert.equal(saveCount, 1);
+});

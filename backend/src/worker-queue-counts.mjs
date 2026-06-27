@@ -1,3 +1,5 @@
+import { isResolvedLegacyReviewTask } from "./legacy-reconciliation.mjs";
+
 const EMPTY_QUEUE_COUNTS = {
   assigned: 0,
   queued: 0,
@@ -18,12 +20,6 @@ function emptyQueueAges() {
 function taskTimestamp(task) {
   const ts = Date.parse(task.created_at || task.updated_at || "");
   return Number.isFinite(ts) ? ts : null;
-}
-
-function isResolvedReviewTask(task) {
-  if (task.status !== "waiting_for_review") return false;
-  const result = task.result || {};
-  return Boolean(result.resolved_by_task_id || result.superseded_by_task_id || result.auto_accepted || result.accepted_at);
 }
 
 function computeOldestAges(tasks = [], now = Date.now()) {
@@ -56,14 +52,14 @@ export async function collectWorkerQueueCounts(store) {
       }
       let resolvedCount = 0;
       for (const task of state.tasks || []) {
-        if (task.assignee === "codex" && isResolvedReviewTask(task)) resolvedCount++;
+        if (task.assignee === "codex" && isResolvedLegacyReviewTask(task)) resolvedCount++;
       }
       counts.waiting_for_review = Math.max(0, counts.waiting_for_review - resolvedCount);
       return { ...counts, actionable_review: counts.waiting_for_review, oldest_age_ms };
     }
     for (const task of state.tasks || []) {
       if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
-      if (isResolvedReviewTask(task)) continue;
+      if (isResolvedLegacyReviewTask(task)) continue;
       counts[task.status] += 1;
     }
     return { ...counts, actionable_review: counts.waiting_for_review, oldest_age_ms };

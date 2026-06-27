@@ -310,6 +310,75 @@ describe("retention-service", () => {
       }
     });
 
+    it("cleans only terminal superseded retained worktrees and keeps review/running worktrees", async () => {
+      const state = {
+        tasks: [
+          {
+            id: "task_done",
+            status: "completed",
+            updated_at: "2026-01-01T00:00:00Z",
+            result: {
+              resolved_by_task_id: "task_successor",
+              superseded_by_task_id: "task_successor",
+              integration: { status: "merged", commit: "abc123" },
+              worktree_lifecycle: { worktree_path: "__SET_LATER__" },
+            },
+          },
+          {
+            id: "task_review",
+            status: "waiting_for_review",
+            updated_at: "2026-01-02T00:00:00Z",
+            result: { worktree_lifecycle: { worktree_path: "__SET_LATER__" } },
+          },
+          {
+            id: "task_running",
+            status: "running",
+            updated_at: "2026-01-03T00:00:00Z",
+            result: { worktree_lifecycle: { worktree_path: "__SET_LATER__" } },
+          },
+          {
+            id: "task_failed_manual",
+            status: "failed",
+            updated_at: "2026-01-04T00:00:00Z",
+            result: { worktree_lifecycle: { worktree_path: "__SET_LATER__" } },
+          },
+        ],
+        goals: [], goal_queue: [], conversations: [], memories: [],
+        agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+      };
+      const { store: st, dir } = await createStore(state);
+      const wtRoot = join(dir, ".gptwork", "worktrees", "github.com-acme-repo");
+      const paths = {
+        task_done: join(wtRoot, "task_done"),
+        task_review: join(wtRoot, "task_review"),
+        task_running: join(wtRoot, "task_running"),
+        task_failed_manual: join(wtRoot, "task_failed_manual"),
+      };
+      for (const [taskId, worktreePath] of Object.entries(paths)) {
+        await mkdir(worktreePath, { recursive: true });
+        await writeFile(join(worktreePath, "evidence.txt"), taskId, "utf8");
+        const task = state.tasks.find((item) => item.id === taskId);
+        task.result.worktree_lifecycle.worktree_path = worktreePath;
+      }
+      await st.save();
+
+      try {
+        const first = await retentionCleanup({ config: {}, store: st, workspaceRoot: dir, limit: 50, dryRun: false });
+        const second = await retentionCleanup({ config: {}, store: st, workspaceRoot: dir, limit: 50, dryRun: false });
+
+        assert.equal(existsSync(paths.task_done), false, "superseded terminal worktree should be removed");
+        assert.equal(existsSync(paths.task_review), true, "review worktree must be retained");
+        assert.equal(existsSync(paths.task_running), true, "running worktree must be retained");
+        assert.equal(existsSync(paths.task_failed_manual), true, "manual-review failed worktree must be retained without evidence");
+        assert.ok(first.changes.some((change) => change.family === "retained_worktrees" && change.action === "remove_resolved_terminal"));
+        assert.ok(first.skipped.some((skip) => skip.family === "retained_worktrees" && skip.reason === "active_or_review"));
+        assert.ok(first.skipped.some((skip) => skip.family === "retained_worktrees" && skip.reason === "needs_manual_review"));
+        assert.ok(second.skipped.some((skip) => skip.family === "retained_worktrees" && skip.reason === "no_removable_worktrees"));
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
     it("should never remove active goals even when count exceeds limit", async () => {
       const goals = [];
       // 10 completed

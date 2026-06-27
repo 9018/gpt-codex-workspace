@@ -1,3 +1,5 @@
+import { applyLegacyResolution, findLegacySuccessor, hasCompletionEvidence as hasLegacyCompletionEvidence } from "./legacy-reconciliation.mjs";
+
 const TERMINAL_GOAL_STATUSES = new Set(["completed", "failed", "cancelled", "blocked"]);
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "blocked", "cancelled"]);
 const SYNC_LIKE_PROFILES = new Set([
@@ -65,11 +67,7 @@ function failedGoalStatus(task, taskResult) {
 }
 
 function hasCompletionEvidence(taskResult = {}) {
-  if (taskResult.reviewer_decision?.passed === true) return true;
-  if (["accepted", "accepted_with_followups"].includes(taskResult.reviewer_decision?.status)) return true;
-  if (taskResult.verification?.passed === true) return true;
-  if (taskResult.integration?.status === "merged" || taskResult.integration?.status === "skipped" || taskResult.integration?.merged === true) return true;
-  return false;
+  return hasLegacyCompletionEvidence(taskResult);
 }
 
 function genuineBlockers(taskResult = {}) {
@@ -126,6 +124,35 @@ export async function convergeStaleGoalStatuses(store) {
     if (TERMINAL_GOAL_STATUSES.has(goal.status)) continue;
     const linkedTask = tasks.find((task) => task.id === goal.task_id);
     if (!linkedTask) continue;
+    const legacySuccessor = findLegacySuccessor({ legacyTask: linkedTask, legacyGoal: goal, tasks, goals });
+    if (legacySuccessor) {
+      const previousStatus = goal.status;
+      const updatedAt = new Date().toISOString();
+      const changed = applyLegacyResolution({
+        goal,
+        task: linkedTask,
+        successor: legacySuccessor.task,
+        evidence: legacySuccessor.evidence,
+        timestamp: updatedAt,
+      });
+      if (changed) {
+        state.activities ||= [];
+        state.activities.push({
+          time: updatedAt,
+          type: "goal.completed",
+          goal_id: goal.id,
+          title: goal.title,
+          reason: `legacy goal converged from ${previousStatus} via successor task ${legacySuccessor.task.id}`,
+        });
+        changes.push({
+          goal_id: goal.id,
+          from: previousStatus,
+          to: "completed",
+          reason: `superseded_by=${legacySuccessor.task.id} commit=${legacySuccessor.evidence.commit || "none"}`,
+        });
+      }
+      continue;
+    }
     if (!TERMINAL_TASK_STATUSES.has(linkedTask.status) && !String(linkedTask.status || "").startsWith("waiting_for_")) continue;
 
     const nextStatus = determineGoalStatus(goal, linkedTask, linkedTask.result || {});
