@@ -309,6 +309,42 @@ describe("runtime-config — context vector store selection", () => {
       else process.env.GPTWORK_CONTEXT_VECTOR_STORE = previous;
     }
   });
+
+  it("reads bounded context bundle tuning from process.env", () => {
+    const previous = {
+      max: process.env.GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS,
+      chunks: process.env.GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS,
+      cross: process.env.GPTWORK_CONTEXT_CROSS_GOAL_TOP_K,
+      per: process.env.GPTWORK_CONTEXT_PER_GOAL_TOP_K,
+      scanned: process.env.GPTWORK_CONTEXT_MAX_GOALS_SCANNED,
+    };
+    process.env.GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS = "1536";
+    process.env.GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS = "6";
+    process.env.GPTWORK_CONTEXT_CROSS_GOAL_TOP_K = "3";
+    process.env.GPTWORK_CONTEXT_PER_GOAL_TOP_K = "5";
+    process.env.GPTWORK_CONTEXT_MAX_GOALS_SCANNED = "9";
+    try {
+      const { config, sources } = runtimeConfig.buildRuntimeConfig(process.cwd());
+      assert.strictEqual(config.contextBundleMaxTokens, 1536);
+      assert.strictEqual(config.contextBundleMaxChunks, 6);
+      assert.strictEqual(config.contextCrossGoalTopK, 3);
+      assert.strictEqual(config.contextPerGoalTopK, 5);
+      assert.strictEqual(config.contextMaxGoalsScanned, 9);
+      assert.strictEqual(sources.contextBundleMaxTokens, "process.env");
+      assert.strictEqual(sources.contextMaxGoalsScanned, "process.env");
+    } finally {
+      if (previous.max === undefined) delete process.env.GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS;
+      else process.env.GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS = previous.max;
+      if (previous.chunks === undefined) delete process.env.GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS;
+      else process.env.GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS = previous.chunks;
+      if (previous.cross === undefined) delete process.env.GPTWORK_CONTEXT_CROSS_GOAL_TOP_K;
+      else process.env.GPTWORK_CONTEXT_CROSS_GOAL_TOP_K = previous.cross;
+      if (previous.per === undefined) delete process.env.GPTWORK_CONTEXT_PER_GOAL_TOP_K;
+      else process.env.GPTWORK_CONTEXT_PER_GOAL_TOP_K = previous.per;
+      if (previous.scanned === undefined) delete process.env.GPTWORK_CONTEXT_MAX_GOALS_SCANNED;
+      else process.env.GPTWORK_CONTEXT_MAX_GOALS_SCANNED = previous.scanned;
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -362,6 +398,22 @@ describe("context-bundle-builder — bundle generation", () => {
     }));
     const result = bundleBuilder.buildContextBundle({ chunks, goal, maxTokens: 512 });
     assert.ok(result.tokenEstimate <= 512 || result.bundle.length < 3000);
+  });
+
+  it("buildContextBundle caps selected chunks and records budget metadata", () => {
+    const goal = { id: "goal_cap", title: "Cap", status: "assigned" };
+    const chunks = Array.from({ length: 12 }, (_, i) => ({
+      id: `chunk_cap_${i}`,
+      text: `Conversation chunk ${i} ` + "verbose context ".repeat(80),
+      tokens: 180,
+      metadata: { goal_id: "goal_cap", source_type: "conversation", chunk_index: i },
+      score: 1 - i * 0.01,
+    }));
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxTokens: 1024, maxChunks: 4 });
+    assert.ok(result.bundle.includes("- Total retrieved chunks: 12"));
+    assert.match(result.bundle, /- Selected bundle chunks: [1-4]/);
+    assert.ok(result.bundle.includes("- Bundle max tokens: 1024"));
+    assert.ok(!result.bundle.includes("Conversation chunk 8"), "late chunks should not enter bounded bundle");
   });
 
   it("buildContextBundle with retrieval metadata", () => {
@@ -418,8 +470,55 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.ok(result.ok);
       assert.ok(result.bundle);
       assert.ok(result.tokenEstimate > 0);
+      assert.strictEqual(result.retrievalJson.budget.bundle_max_tokens, 2048);
+      assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 8);
+      assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 20);
+      assert.strictEqual(result.retrievalJson.budget.filters.workspace_id, "ws-test");
       // Should include goal content in the bundle
       assert.ok(result.bundle.includes("Hook Test Goal") || result.bundle.includes("context retrieval MVP"));
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("maybeBuildContextBundle applies caller context budget and scoped retrieval filters", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-hook-budget-"));
+    try {
+      const config = {
+        defaultWorkspaceRoot: tmpDir,
+        contextBundleMaxTokens: 768,
+        contextBundleMaxChunks: 3,
+        contextCrossGoalTopK: 2,
+        contextPerGoalTopK: 2,
+        contextMaxGoalsScanned: 5,
+      };
+      const goal = {
+        id: "goal_hook_budget",
+        workspace_id: "ws-budget",
+        project_id: "proj-budget",
+        repo_id: "repo-budget",
+        title: "Budget Hook Goal",
+        user_request: "Keep context short",
+        goal_prompt: "Optimize zvec context bundle budget.",
+        status: "assigned",
+        mode: "builder",
+      };
+      const result = await contextIndexHooks.maybeBuildContextBundle(
+        { async load() { return { goals: [], memories: [] }; } },
+        config,
+        goal
+      );
+      assert.ok(result.ok);
+      assert.strictEqual(result.retrievalJson.budget.bundle_max_tokens, 768);
+      assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 3);
+      assert.strictEqual(result.retrievalJson.budget.cross_goal_top_k, 2);
+      assert.strictEqual(result.retrievalJson.budget.per_goal_top_k, 2);
+      assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 5);
+      assert.deepStrictEqual(result.retrievalJson.budget.filters, {
+        workspace_id: "ws-budget",
+        project_id: "proj-budget",
+        repo_id: "repo-budget",
+      });
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

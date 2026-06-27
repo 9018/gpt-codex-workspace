@@ -139,6 +139,7 @@ export async function indexGoalContext(ctx) {
     workspaceRoot,
     dimension: embedder.dimension,
     prefer: ctx.storePrefer ?? config?.contextVectorStore,
+    maxGoalsScanned: config?.contextMaxGoalsScanned,
   });
 
   await store.addChunks(chunks, vectors, { replace: true });
@@ -175,6 +176,7 @@ export async function retrieveContext(params) {
     workspaceRoot,
     dimension: embedder.dimension,
     prefer: options.storePrefer ?? options.contextVectorStore,
+    maxGoalsScanned: options.maxGoalsScanned,
   });
 
   const [queryVector] = await embedder.embed([queryText]);

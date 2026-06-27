@@ -156,6 +156,9 @@ test("codexInstruction contains required execution instructions", () => {
   assert.match(instr, /Only ask ChatGPT for/);
   assert.match(instr, /- credential\/account\/billing access/);
   assert.match(instr, /Read \.gptwork\/goals\/goal_codex_instr\/goal\.md/);
+  assert.match(instr, /Read \.gptwork\/goals\/goal_codex_instr\/context\.bundle\.md first when present/);
+  assert.match(instr, /transcript\.md only for explicit deep lookup/);
+  assert.doesNotMatch(instr, /transcript\.md before acting/);
 });
 
 // ---------------------------------------------------------------------------

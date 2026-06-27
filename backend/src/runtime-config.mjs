@@ -172,6 +172,11 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
 
     // Context index
     contextVectorStore: _get("GPTWORK_CONTEXT_VECTOR_STORE", "auto"),
+    contextBundleMaxTokens: _getNum("GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS", 2048),
+    contextBundleMaxChunks: _getNum("GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS", 8),
+    contextCrossGoalTopK: _getNum("GPTWORK_CONTEXT_CROSS_GOAL_TOP_K", 4),
+    contextPerGoalTopK: _getNum("GPTWORK_CONTEXT_PER_GOAL_TOP_K", 4),
+    contextMaxGoalsScanned: _getNum("GPTWORK_CONTEXT_MAX_GOALS_SCANNED", 20),
 
     _recoveryAllowedRootsArr: (() => {
       const raw = _get("GPTWORK_RECOVERY_ALLOWED_ROOTS", "");
@@ -234,6 +239,11 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     restartCwd: "GPTWORK_RESTART_CWD",
     restartMarkerKind: "GPTWORK_RESTART_MARKER_KIND",
     contextVectorStore: "GPTWORK_CONTEXT_VECTOR_STORE",
+    contextBundleMaxTokens: "GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS",
+    contextBundleMaxChunks: "GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS",
+    contextCrossGoalTopK: "GPTWORK_CONTEXT_CROSS_GOAL_TOP_K",
+    contextPerGoalTopK: "GPTWORK_CONTEXT_PER_GOAL_TOP_K",
+    contextMaxGoalsScanned: "GPTWORK_CONTEXT_MAX_GOALS_SCANNED",
 
   };
 

@@ -206,7 +206,8 @@ export function codexInstruction(goal) {
   return [
     "You are executing a GPTWork encoded/shared goal. A context bundle may be available",
     `at ${files.context_bundle_md} \u2014 prefer it over the full transcript for initial context.`,
-    `Read ${files.goal_md}, ${files.context_json}, and ${files.transcript_md} before acting.`,
+    `Read ${files.goal_md} and ${files.context_json} before acting.`,
+    `Read ${files.context_bundle_md} first when present; use ${files.transcript_md} only for explicit deep lookup when the bundle is insufficient.`,
     "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message.",
     "",
     "## Execution Requirements",

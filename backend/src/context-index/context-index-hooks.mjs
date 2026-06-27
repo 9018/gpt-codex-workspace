@@ -22,6 +22,53 @@ import { join } from "node:path";
 import { indexGoalContext, retrieveContext } from "./retriever.mjs";
 import { buildContextBundle } from "./context-bundle-builder.mjs";
 
+const DEFAULT_CROSS_GOAL_TOP_K = 4;
+const DEFAULT_PER_GOAL_TOP_K = 4;
+const DEFAULT_MERGED_CHUNK_LIMIT = 8;
+const DEFAULT_BUNDLE_MAX_TOKENS = 2048;
+const DEFAULT_MAX_GOALS_SCANNED = 20;
+
+function positiveInt(value, fallback, min = 1, max = 50) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+function scopedRetrievalFilters(goal) {
+  const filters = {};
+  for (const key of ["workspace_id", "project_id", "repo_id"]) {
+    const value = goal?.[key];
+    if (value !== undefined && value !== null && value !== "") filters[key] = value;
+  }
+  return filters;
+}
+
+function mergeRetrievedChunks({ perGoalRetrieved = [], crossGoalRetrieved = [], indexChunks = [], goalId, limit = DEFAULT_MERGED_CHUNK_LIMIT }) {
+  const selected = [];
+  const seen = new Set();
+  const cap = positiveInt(limit, DEFAULT_MERGED_CHUNK_LIMIT, 1, 20);
+  const push = (chunk) => {
+    if (!chunk || !chunk.id || seen.has(chunk.id) || selected.length >= cap) return;
+    seen.add(chunk.id);
+    selected.push(chunk);
+  };
+
+  // Keep current-goal context first, but cap it so cross-goal evidence can fit.
+  for (const chunk of perGoalRetrieved.slice(0, Math.min(4, cap))) push(chunk);
+
+  // Then add related prior context from the same workspace/project/repo scope.
+  for (const chunk of crossGoalRetrieved) {
+    if (chunk.metadata?.goal_id === goalId) continue;
+    push(chunk);
+  }
+
+  // Finally add current indexing output as a deterministic fallback.
+  const priority = { goal: 0, result: 1, conversation: 2 };
+  const fallback = [...indexChunks].sort((a, b) => (priority[a.metadata?.source_type] ?? 9) - (priority[b.metadata?.source_type] ?? 9));
+  for (const chunk of fallback) push(chunk);
+  return selected;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -109,7 +156,7 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
 /**
  * Build a retrieval metadata JSON object from retrieval results.
  */
-function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeName, stored, workload) {
+function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeName, stored, workload, budget = {}) {
   return {
     goal_id: goalId,
     store_name: storeName,
@@ -138,6 +185,14 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
       })),
     },
     merged_chunk_count: workload.length,
+    budget: {
+      cross_goal_top_k: budget.crossGoalTopK ?? null,
+      per_goal_top_k: budget.perGoalTopK ?? null,
+      merged_chunk_limit: budget.mergedChunkLimit ?? null,
+      bundle_max_tokens: budget.bundleMaxTokens ?? null,
+      max_goals_scanned: budget.maxGoalsScanned ?? null,
+      filters: budget.filters || {},
+    },
     retrieved_at: new Date().toISOString(),
   };
 }
@@ -245,18 +300,26 @@ export async function maybeBuildContextBundle(
     // This searches ALL indexed goals in the workspace for related context.
     // The local store's search method iterates all goal directories when
     // goal_id filter is absent, enabling cross-goal awareness.
-    const crossGoalRetrieved = await retrieveContext({
-      goalId: null,           // no goal filter — search all goals
+    const retrievalScope = scopedRetrievalFilters(goal);
+    const crossGoalTopK = positiveInt(config?.contextCrossGoalTopK, DEFAULT_CROSS_GOAL_TOP_K, 0, 20);
+    const perGoalTopK = positiveInt(config?.contextPerGoalTopK, DEFAULT_PER_GOAL_TOP_K, 1, 20);
+    const mergedChunkLimit = positiveInt(config?.contextBundleMaxChunks, DEFAULT_MERGED_CHUNK_LIMIT, 1, 20);
+    const bundleMaxTokens = positiveInt(config?.contextBundleMaxTokens, DEFAULT_BUNDLE_MAX_TOKENS, 256, 16000);
+    const maxGoalsScanned = positiveInt(config?.contextMaxGoalsScanned, DEFAULT_MAX_GOALS_SCANNED, 1, 100);
+
+    const crossGoalRetrieved = crossGoalTopK > 0 ? await retrieveContext({
+      goalId: null,           // no goal filter — search scoped prior goals
       queryText,
-      topK: 10,
+      topK: crossGoalTopK,
       options: {
         workspaceRoot,
         storePrefer: indexResult.store,
         contextVectorStore: config?.contextVectorStore,
+        maxGoalsScanned,
         embeddingConfig: { provider: "fallback" },
       },
-      filters: {},            // no goal_id filter — cross-goal search
-    });
+      filters: retrievalScope,
+    }) : [];
 
     // Phase 2: Per-goal retrieval (current goal only)
     // This ensures the current goal's context is always represented,
@@ -264,52 +327,35 @@ export async function maybeBuildContextBundle(
     const perGoalRetrieved = await retrieveContext({
       goalId: goal.id,
       queryText,
-      topK: 5,
+      topK: perGoalTopK,
       options: {
         workspaceRoot,
         storePrefer: indexResult.store,
         contextVectorStore: config?.contextVectorStore,
+        maxGoalsScanned,
         embeddingConfig: { provider: "fallback" },
       },
-      filters: { goal_id: goal.id },
+      filters: { ...retrievalScope, goal_id: goal.id },
     });
 
-    // Merge results: current-goal chunks first (priority), then cross-goal chunks
-    // Deduplicate by chunk ID
-    const seenIds = new Set();
-    const mergedChunks = [];
-
-    // Priority 1: Current goal chunks (per-goal retrieval)
-    for (const chunk of perGoalRetrieved) {
-      if (!seenIds.has(chunk.id)) {
-        seenIds.add(chunk.id);
-        mergedChunks.push(chunk);
-      }
-    }
-
-    // Priority 2: Cross-goal chunks that are not current goal (related context)
-    for (const chunk of crossGoalRetrieved) {
-      if (!seenIds.has(chunk.id) && chunk.metadata?.goal_id !== goal.id) {
-        seenIds.add(chunk.id);
-        mergedChunks.push(chunk);
-      }
-    }
-
-    // If we still have room, add remaining index chunks for context
-    if (mergedChunks.length < 10) {
-      for (const chunk of indexResult.chunks) {
-        if (!seenIds.has(chunk.id) && mergedChunks.length < 10) {
-          seenIds.add(chunk.id);
-          mergedChunks.push(chunk);
-        }
-      }
-    }
+    // Merge with hard caps: current goal first, scoped prior context second,
+    // deterministic current chunks as fallback. This prevents long GPTChat
+    // histories from expanding Codex's initial context.
+    const mergedChunks = mergeRetrievedChunks({
+      perGoalRetrieved,
+      crossGoalRetrieved,
+      indexChunks: indexResult.chunks,
+      goalId: goal.id,
+      limit: mergedChunkLimit,
+    });
 
     // Build bundle from merged chunks
     const bundleResult = buildContextBundle({
-      chunks: mergedChunks.length > 0 ? mergedChunks : indexResult.chunks.slice(0, 10),
+      chunks: mergedChunks.length > 0 ? mergedChunks : indexResult.chunks.slice(0, mergedChunkLimit),
       goal,
       workspaceFiles,
+      maxTokens: bundleMaxTokens,
+      maxChunks: mergedChunkLimit,
     });
 
     // Build retrieval JSON with cross-goal metadata
@@ -320,6 +366,7 @@ export async function maybeBuildContextBundle(
       indexResult.storeName,
       indexResult.stored,
       mergedChunks,
+      { crossGoalTopK, perGoalTopK, mergedChunkLimit, bundleMaxTokens, maxGoalsScanned, filters: retrievalScope },
     );
 
     return {

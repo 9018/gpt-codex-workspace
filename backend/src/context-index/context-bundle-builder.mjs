@@ -10,8 +10,57 @@
 // Defaults
 // ---------------------------------------------------------------------------
 
-const DEFAULT_MAX_TOKENS = 4096;   // soft target for total bundle size (estimated)
+const DEFAULT_MAX_TOKENS = 2048;   // hard target for total bundle size (estimated)
+const DEFAULT_MAX_CHUNKS = 8;       // keep selected context dense for Codex handoff
+const DEFAULT_SUMMARY_CHARS = 600;
+const DEFAULT_CONVERSATION_CHARS = 420;
+const DEFAULT_RESULT_CHARS = 360;
 const SECTION_HEADER = "<!-- context-bundle -->";
+
+function clampPositiveInt(value, fallback, min = 1, max = 100) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.min(max, Math.max(min, Math.floor(n)));
+}
+
+function truncateText(text = "", maxChars = 500) {
+  const s = String(text || "").trim();
+  if (s.length <= maxChars) return s;
+  return s.slice(0, Math.max(0, maxChars - 1)).trimEnd() + "…";
+}
+
+function chunkCostTokens(chunk) {
+  const explicit = Number(chunk?.tokens);
+  if (Number.isFinite(explicit) && explicit > 0) return explicit;
+  return estimateTokens(chunk?.text || "");
+}
+
+function trimUtf8ToBytes(text, maxBytes) {
+  const buf = Buffer.from(text, "utf8");
+  if (buf.length <= maxBytes) return text;
+  return buf.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD+$/u, "");
+}
+
+function selectBundleChunks(chunks = [], { maxTokens = DEFAULT_MAX_TOKENS, maxChunks = DEFAULT_MAX_CHUNKS } = {}) {
+  const cap = clampPositiveInt(maxChunks, DEFAULT_MAX_CHUNKS, 1, 20);
+  const sourceBudget = Math.max(220, Math.floor(clampPositiveInt(maxTokens, DEFAULT_MAX_TOKENS, 256, 16000) * 0.52));
+  const selected = [];
+  const seen = new Set();
+  let used = 0;
+
+  for (const chunk of Array.isArray(chunks) ? chunks : []) {
+    if (!chunk || !chunk.text) continue;
+    const id = chunk.id || `${chunk.metadata?.goal_id || "unknown"}:${chunk.metadata?.source_type || "unknown"}:${chunk.metadata?.chunk_index ?? selected.length}`;
+    if (seen.has(id)) continue;
+    const cost = Math.min(chunkCostTokens(chunk), 260);
+    if (selected.length > 0 && used + cost > sourceBudget) continue;
+    selected.push(chunk);
+    seen.add(id);
+    used += cost;
+    if (selected.length >= cap) break;
+  }
+  return selected;
+}
 
 // ---------------------------------------------------------------------------
 // Section builders
@@ -30,7 +79,7 @@ function buildContextSummarySection(goal, chunks) {
     // Include the highest-scored goal chunk for context
     const goalChunk = chunks.find((c) => c.metadata?.source_type === "goal");
     if (goalChunk) {
-      lines.push(goalChunk.text.substring(0, 800));
+      lines.push(truncateText(goalChunk.text, DEFAULT_SUMMARY_CHARS));
       lines.push("");
     }
   } else if (goal?.context_summary) {
@@ -59,9 +108,10 @@ function buildConversationSection(chunks) {
     "",
   ];
 
-  for (const chunk of convChunks.slice(0, 5)) {
+  for (const chunk of convChunks.slice(0, 3)) {
     const score = chunk.score !== undefined ? ` *(similarity: ${chunk.score.toFixed(3)})*` : "";
-    lines.push(`> ${chunk.text.replace(/\n/g, "\n> ")}${score}`);
+    const text = truncateText(chunk.text, DEFAULT_CONVERSATION_CHARS);
+    lines.push(`> ${text.replace(/\n/g, "\n> ")}${score}`);
     lines.push("");
   }
 
@@ -83,9 +133,9 @@ function buildResultsSection(chunks) {
     "",
   ];
 
-  for (const chunk of resultChunks.slice(0, 3)) {
+  for (const chunk of resultChunks.slice(0, 2)) {
     const score = chunk.score !== undefined ? ` *(similarity: ${chunk.score.toFixed(3)})*` : "";
-    lines.push(`- ${chunk.text.substring(0, 500)}${score}`);
+    lines.push(`- ${truncateText(chunk.text, DEFAULT_RESULT_CHARS)}${score}`);
     lines.push("");
   }
 
@@ -142,7 +192,7 @@ function buildRetrievalSourcesSection(chunks) {
     return lines.join("\n");
   }
 
-  for (const chunk of chunks.slice(0, 10)) {
+  for (const chunk of chunks.slice(0, 8)) {
     const meta = chunk.metadata || {};
     const sourceType = meta.source_type || "unknown";
     const goalId = meta.goal_id || "unknown-goal";
@@ -171,7 +221,11 @@ function buildRetrievalSourcesSection(chunks) {
  */
 export function buildContextBundle(options = {}) {
   const { chunks = [], goal, workspaceFiles } = options;
-  const maxTokens = options.maxTokens ?? DEFAULT_MAX_TOKENS;
+  const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 256, 16000);
+  const bundleChunks = selectBundleChunks(chunks, {
+    maxTokens,
+    maxChunks: clampPositiveInt(options.maxChunks, DEFAULT_MAX_CHUNKS, 1, 20),
+  });
 
   const sections = [];
 
@@ -186,14 +240,14 @@ export function buildContextBundle(options = {}) {
   sections.push("");
 
   // Section 2: selected context summary
-  sections.push(buildContextSummarySection(goal, chunks));
+  sections.push(buildContextSummarySection(goal, bundleChunks));
 
   // Section 3: relevant prior conversation
-  const convSection = buildConversationSection(chunks);
+  const convSection = buildConversationSection(bundleChunks);
   if (convSection) sections.push(convSection);
 
   // Section 4: relevant prior tasks/results
-  const resSection = buildResultsSection(chunks);
+  const resSection = buildResultsSection(bundleChunks);
   if (resSection) sections.push(resSection);
 
   // Section 5: constraints and acceptance hints
@@ -203,17 +257,19 @@ export function buildContextBundle(options = {}) {
   sections.push(buildTranscriptNoteSection(workspaceFiles));
 
   // Section 7: retrieval metadata
-  sections.push(buildRetrievalSourcesSection(chunks));
+  sections.push(buildRetrievalSourcesSection(bundleChunks));
 
   // Section 8: retrieval metadata
-  const retrievedTypes = [...new Set(chunks.map((c) => c.metadata?.source_type).filter(Boolean))];
+  const retrievedTypes = [...new Set(bundleChunks.map((c) => c.metadata?.source_type).filter(Boolean))];
   sections.push("## Retrieval Metadata");
   sections.push("");
   sections.push(`- Retrieved chunk types: ${retrievedTypes.join(", ") || "none"}`);
   sections.push(`- Total retrieved chunks: ${chunks.length}`);
-  if (chunks.some((c) => c.score !== undefined)) {
-    const maxScore = Math.max(...chunks.map((c) => c.score ?? 0));
-    const minScore = Math.min(...chunks.map((c) => c.score ?? 0));
+  sections.push(`- Selected bundle chunks: ${bundleChunks.length}`);
+  sections.push(`- Bundle max tokens: ${maxTokens}`);
+  if (bundleChunks.some((c) => c.score !== undefined)) {
+    const maxScore = Math.max(...bundleChunks.map((c) => c.score ?? 0));
+    const minScore = Math.min(...bundleChunks.map((c) => c.score ?? 0));
     sections.push(`- Score range: ${minScore.toFixed(3)} — ${maxScore.toFixed(3)}`);
   }
   sections.push("");
@@ -261,10 +317,11 @@ function trimToBudget({ sections, maxTokens }) {
 
   // If still over budget (unlikely), trim conversation section further
   if (tokenEstimate > maxTokens) {
+    const hardTrimmedBundle = trimUtf8ToBytes(bundle, maxTokens * 4);
     return {
-      bundle: bundle.substring(0, maxTokens * 4),
+      bundle: hardTrimmedBundle,
       sections: trimmedSections,
-      tokenEstimate: Math.min(tokenEstimate, maxTokens),
+      tokenEstimate: estimateTokens(hardTrimmedBundle),
     };
   }
 
