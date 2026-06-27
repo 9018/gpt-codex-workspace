@@ -412,8 +412,26 @@ describe("context-bundle-builder — bundle generation", () => {
     const result = bundleBuilder.buildContextBundle({ chunks, goal, maxTokens: 1024, maxChunks: 4 });
     assert.ok(result.bundle.includes("- Total retrieved chunks: 12"));
     assert.match(result.bundle, /- Selected bundle chunks: [1-4]/);
+    assert.ok(result.bundle.includes("- Bundle max chunks: 4"));
     assert.ok(result.bundle.includes("- Bundle max tokens: 1024"));
     assert.ok(!result.bundle.includes("Conversation chunk 8"), "late chunks should not enter bounded bundle");
+  });
+
+  it("buildContextBundle keeps required retrieval metadata after hard trimming", () => {
+    const goal = { id: "goal_tiny", title: "Tiny", status: "assigned" };
+    const chunks = Array.from({ length: 4 }, (_, i) => ({
+      id: `chunk_tiny_${i}`,
+      text: `Conversation chunk ${i} ` + "oversized context ".repeat(200),
+      tokens: 500,
+      metadata: { goal_id: "goal_tiny", source_type: "conversation", chunk_index: i },
+      score: 0.9 - i * 0.1,
+    }));
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxTokens: 256, maxChunks: 2 });
+    assert.ok(result.bundle.includes("- Total retrieved chunks: 4"));
+    assert.ok(result.bundle.includes("- Selected bundle chunks:"));
+    assert.ok(result.bundle.includes("- Bundle max chunks: 2"));
+    assert.ok(result.bundle.includes("- Bundle max tokens: 256"));
+    assert.ok(result.bundle.includes("- Score range:"));
   });
 
   it("buildContextBundle with retrieval metadata", () => {
@@ -474,6 +492,12 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 8);
       assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 20);
       assert.strictEqual(result.retrievalJson.budget.filters.workspace_id, "ws-test");
+      assert.deepStrictEqual(result.retrievalJson.embedding_provider, {
+        name: "fallback-hash-sha256",
+        dimension: 64,
+        semantic: false,
+        support_info: "non-semantic fallback embedding provider; deterministic hash-based vectors for testing/offline use",
+      });
       // Should include goal content in the bundle
       assert.ok(result.bundle.includes("Hook Test Goal") || result.bundle.includes("context retrieval MVP"));
     } finally {

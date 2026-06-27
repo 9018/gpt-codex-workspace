@@ -157,10 +157,15 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
  * Build a retrieval metadata JSON object from retrieval results.
  */
 function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeName, stored, workload, budget = {}) {
+  const embeddingProvider = budget.embeddingProvider ||
+    perGoalRetrieved.embeddingProvider ||
+    crossGoalRetrieved.embeddingProvider ||
+    null;
   return {
     goal_id: goalId,
     store_name: storeName,
     total_indexed: stored,
+    embedding_provider: embeddingProvider,
     cross_goal_retrieval: {
       enabled: true,
       retrieved_count: crossGoalRetrieved.length,
@@ -366,7 +371,15 @@ export async function maybeBuildContextBundle(
       indexResult.storeName,
       indexResult.stored,
       mergedChunks,
-      { crossGoalTopK, perGoalTopK, mergedChunkLimit, bundleMaxTokens, maxGoalsScanned, filters: retrievalScope },
+      {
+        crossGoalTopK,
+        perGoalTopK,
+        mergedChunkLimit,
+        bundleMaxTokens,
+        maxGoalsScanned,
+        filters: retrievalScope,
+        embeddingProvider: indexResult.embeddingProvider,
+      },
     );
 
     return {

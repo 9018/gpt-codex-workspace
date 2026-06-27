@@ -57,7 +57,7 @@ function hashEmbed(text, dimension = FALLBACK_DIMENSION) {
  */
 export const fallbackEmbeddingProvider = {
   semantic: false,
-  support_info: "hash-based deterministic fallback — NOT semantically meaningful; use only for testing or offline dev.",
+  support_info: "non-semantic fallback embedding provider; deterministic hash-based vectors for testing/offline use",
   name: "fallback-hash-sha256",
   dimension: FALLBACK_DIMENSION,
   async embed(texts) {
@@ -84,6 +84,8 @@ export function createOpenAiEmbeddingProvider(options) {
   return {
     name: `openai:${model}`,
     dimension,
+    semantic: true,
+    support_info: "semantic embedding provider",
     async embed(texts) {
       if (!Array.isArray(texts)) texts = [String(texts)];
       const response = await options.client.embeddings.create({
@@ -130,4 +132,13 @@ export function createEmbeddingProvider(config = {}) {
   }
   // Default: fallback deterministic provider
   return fallbackEmbeddingProvider;
+}
+
+export function embeddingProviderDiagnostics(provider) {
+  return {
+    name: provider?.name || "unknown",
+    dimension: Number.isFinite(Number(provider?.dimension)) ? Number(provider.dimension) : null,
+    semantic: provider?.semantic !== undefined ? Boolean(provider.semantic) : true,
+    ...(provider?.support_info ? { support_info: String(provider.support_info) } : {}),
+  };
 }

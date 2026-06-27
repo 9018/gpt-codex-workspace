@@ -222,9 +222,10 @@ function buildRetrievalSourcesSection(chunks) {
 export function buildContextBundle(options = {}) {
   const { chunks = [], goal, workspaceFiles } = options;
   const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 256, 16000);
+  const maxChunks = clampPositiveInt(options.maxChunks, DEFAULT_MAX_CHUNKS, 1, 20);
   const bundleChunks = selectBundleChunks(chunks, {
     maxTokens,
-    maxChunks: clampPositiveInt(options.maxChunks, DEFAULT_MAX_CHUNKS, 1, 20),
+    maxChunks,
   });
 
   const sections = [];
@@ -239,33 +240,15 @@ export function buildContextBundle(options = {}) {
   );
   sections.push("");
 
-  // Section 2: selected context summary
-  sections.push(buildContextSummarySection(goal, bundleChunks));
-
-  // Section 3: relevant prior conversation
-  const convSection = buildConversationSection(bundleChunks);
-  if (convSection) sections.push(convSection);
-
-  // Section 4: relevant prior tasks/results
-  const resSection = buildResultsSection(bundleChunks);
-  if (resSection) sections.push(resSection);
-
-  // Section 5: constraints and acceptance hints
-  sections.push(buildConstraintsSection(goal));
-
-  // Section 6: omitted/full transcript note
-  sections.push(buildTranscriptNoteSection(workspaceFiles));
-
-  // Section 7: retrieval metadata
-  sections.push(buildRetrievalSourcesSection(bundleChunks));
-
-  // Section 8: retrieval metadata
+  // Section 2: retrieval metadata. Keep this near the top so it survives
+  // hard trimming when a caller asks for an extremely small bundle.
   const retrievedTypes = [...new Set(bundleChunks.map((c) => c.metadata?.source_type).filter(Boolean))];
   sections.push("## Retrieval Metadata");
   sections.push("");
   sections.push(`- Retrieved chunk types: ${retrievedTypes.join(", ") || "none"}`);
   sections.push(`- Total retrieved chunks: ${chunks.length}`);
   sections.push(`- Selected bundle chunks: ${bundleChunks.length}`);
+  sections.push(`- Bundle max chunks: ${maxChunks}`);
   sections.push(`- Bundle max tokens: ${maxTokens}`);
   if (bundleChunks.some((c) => c.score !== undefined)) {
     const maxScore = Math.max(...bundleChunks.map((c) => c.score ?? 0));
@@ -273,6 +256,26 @@ export function buildContextBundle(options = {}) {
     sections.push(`- Score range: ${minScore.toFixed(3)} — ${maxScore.toFixed(3)}`);
   }
   sections.push("");
+
+  // Section 3: selected context summary
+  sections.push(buildContextSummarySection(goal, bundleChunks));
+
+  // Section 4: relevant prior conversation
+  const convSection = buildConversationSection(bundleChunks);
+  if (convSection) sections.push(convSection);
+
+  // Section 5: relevant prior tasks/results
+  const resSection = buildResultsSection(bundleChunks);
+  if (resSection) sections.push(resSection);
+
+  // Section 6: constraints and acceptance hints
+  sections.push(buildConstraintsSection(goal));
+
+  // Section 7: omitted/full transcript note
+  sections.push(buildTranscriptNoteSection(workspaceFiles));
+
+  // Section 8: retrieval sources
+  sections.push(buildRetrievalSourcesSection(bundleChunks));
 
   const bundle = sections.join("\n");
   const tokenEstimate = estimateTokens(bundle);

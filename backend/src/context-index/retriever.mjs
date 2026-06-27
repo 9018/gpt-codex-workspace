@@ -7,7 +7,7 @@
  */
 
 import { randomUUID } from "node:crypto";
-import { createEmbeddingProvider } from "./embeddings.mjs";
+import { createEmbeddingProvider, embeddingProviderDiagnostics } from "./embeddings.mjs";
 import { createVectorStore } from "./zvec-store.mjs";
 import {
   chunkGoalContent,
@@ -149,6 +149,7 @@ export async function indexGoalContext(ctx) {
     stored: chunks.length,
     chunks,
     store,
+    embeddingProvider: embeddingProviderDiagnostics(embedder),
   };
 }
 
@@ -216,6 +217,11 @@ export async function retrieveContext(params) {
     // Re-sort after time decay reweighting
     results.sort((a, b) => b.score - a.score);
   }
+
+  Object.defineProperty(results, "embeddingProvider", {
+    value: embeddingProviderDiagnostics(embedder),
+    enumerable: false,
+  });
 
   return results;
 }
