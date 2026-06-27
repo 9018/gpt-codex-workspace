@@ -30,6 +30,48 @@ test("determineGoalStatus completes a verified accepted code-change task", () =>
   assert.equal(status, "completed");
 });
 
+test("determineGoalStatus completes verified admin restart evidence without worktree", () => {
+  const head = "88546312e483f2ce4a338ae0486e31c9bc4dd739";
+  const status = determineGoalStatus(
+    { id: "goal_admin_restart", status: "assigned" },
+    { id: "task_admin_restart", status: "completed", mode: "admin" },
+    {
+      status: "completed",
+      kind: "admin_restart_verified",
+      changed_files: [],
+      commit: head,
+      local_head: head,
+      running_commit: head,
+      restart_required: false,
+      verification: {
+        passed: true,
+        commands: [{ cmd: "safe_restart_phase_c_verify", exit_code: 0 }],
+      },
+      acceptance_findings: [],
+      convergence: { nextStatus: "completed", profile: "admin_restart" },
+    },
+  );
+
+  assert.equal(status, "completed");
+});
+
+test("determineGoalStatus keeps admin restart without verification in review", () => {
+  const status = determineGoalStatus(
+    { id: "goal_admin_restart_missing", status: "assigned" },
+    { id: "task_admin_restart_missing", status: "completed", mode: "admin" },
+    {
+      status: "completed",
+      kind: "admin_restart_verified",
+      changed_files: [],
+      restart_required: false,
+      acceptance_findings: [],
+      convergence: { nextStatus: "completed", profile: "admin_restart" },
+    },
+  );
+
+  assert.equal(status, "waiting_for_review");
+});
+
 test("determineGoalStatus treats changed_files_mismatch as blocker for code_change", () => {
   const status = determineGoalStatus(
     { id: "goal_mismatch", status: "running" },

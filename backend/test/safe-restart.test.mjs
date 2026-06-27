@@ -21,6 +21,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
+import { reconcileRestartMarkers } from "../src/runtime-reconciler-restart-markers.mjs";
 import {
   writePendingRestartMarker,
   loadRestartMarker,
@@ -743,6 +744,133 @@ test("Phase C startup verification completes task when result.json exists", asyn
     assert.ok(marker.status === "verified" || marker.status === "failed",
       `marker status should be terminal: ${marker.status}`);
   }
+  const stateAfter = JSON.parse(await readFile(statePath, "utf8"));
+  if (stateAfter.tasks[0].status === "completed") {
+    const resultJson = JSON.parse(await readFile(join(goalDir, "result.json"), "utf8"));
+    const resultMd = await readFile(join(goalDir, "result.md"), "utf8");
+    assert.equal(resultJson.restart_required, false);
+    assert.equal(resultJson.verification.passed, true);
+    assert.ok(resultJson.verification.commands.some((command) => command.cmd === "safe_restart_phase_c_verify"));
+    assert.match(resultMd, /Safe restart verified|Deployment verified/);
+  }
+});
+
+test("Phase C verified admin restart without result files writes standard evidence and converges goal", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sr-admin-evidence-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoRoot = join(root, "repo");
+  await mkdir(workspaceRoot, { recursive: true });
+  await mkdir(repoRoot, { recursive: true });
+  execSync("git init -q", { cwd: repoRoot });
+  execSync("git config user.email test@example.com", { cwd: repoRoot });
+  execSync("git config user.name Test", { cwd: repoRoot });
+  await writeFile(join(repoRoot, "README.md"), "restart evidence\n", "utf8");
+  execSync("git add README.md && git commit -q -m initial", { cwd: repoRoot });
+  const head = execSync("git rev-parse HEAD", { cwd: repoRoot, encoding: "utf8" }).trim();
+
+  const taskId = "task_admin_restart_evidence";
+  const goalId = "goal_admin_restart_evidence";
+  const now = new Date().toISOString();
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  const state = {
+    goals: [{ id: goalId, task_id: taskId, workspace_id: "hosted-default", status: "assigned", title: "Admin restart evidence", updated_at: now }],
+    tasks: [{ id: taskId, goal_id: goalId, workspace_id: "hosted-default", status: "running", mode: "admin", logs: [], result: null, updated_at: now }],
+    goal_queue: [{ queue_id: "queue_admin_restart_evidence", goal_id: goalId, task_id: taskId, status: "running", auto_start: true }],
+    activities: [],
+  };
+  let saveCount = 0;
+  const store = {
+    load: async () => state,
+    save: async () => { saveCount += 1; },
+  };
+
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: head,
+    expected_remote_head: head,
+    repo_path: repoRoot,
+    restart_kind: "npm",
+  });
+  await updateRestartMarkerStatus(workspaceRoot, taskId, "scheduled");
+
+  const first = await reconcileRestartMarkers({
+    state,
+    store,
+    config: { defaultWorkspaceRoot: workspaceRoot, defaultRepoPath: repoRoot, defaultBranch: "main" },
+    github: { syncTask: async () => ({ ok: true }) },
+    notifyTerminalTaskIfNeeded: async () => {},
+  });
+
+  assert.equal(first.length, 1);
+  assert.equal(first[0].status, "completed");
+  assert.equal(state.tasks[0].status, "completed");
+  assert.equal(state.goals[0].status, "completed");
+  assert.equal(state.goal_queue[0].status, "completed");
+
+  const resultJson = JSON.parse(await readFile(join(goalDir, "result.json"), "utf8"));
+  const resultMd = await readFile(join(goalDir, "result.md"), "utf8");
+  assert.equal(resultJson.status, "completed");
+  assert.equal(resultJson.commit, head);
+  assert.equal(resultJson.local_head, head);
+  assert.equal(resultJson.running_commit, head);
+  assert.equal(resultJson.restart_required, false);
+  assert.equal(resultJson.verification.passed, true);
+  assert.ok(resultJson.verification.commands.some((command) => command.cmd === "safe_restart_phase_c_verify"));
+  assert.deepEqual(resultJson.acceptance_findings, []);
+  assert.match(resultMd, /Safe restart verified/);
+
+  const savesAfterFirstRun = saveCount;
+  const second = await reconcileRestartMarkers({
+    state,
+    store,
+    config: { defaultWorkspaceRoot: workspaceRoot, defaultRepoPath: repoRoot, defaultBranch: "main" },
+    github: { syncTask: async () => ({ ok: true }) },
+    notifyTerminalTaskIfNeeded: async () => {},
+  });
+
+  assert.equal(second.length, 0);
+  assert.equal(saveCount, savesAfterFirstRun, "idempotent reconcile should not rewrite state");
+});
+
+test("Phase C admin restart without verification evidence remains review and writes no result", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-sr-admin-missing-evidence-"));
+  const workspaceRoot = join(root, "workspace");
+  const repoRoot = join(root, "repo-missing");
+  await mkdir(workspaceRoot, { recursive: true });
+
+  const taskId = "task_admin_restart_missing_evidence";
+  const goalId = "goal_admin_restart_missing_evidence";
+  const now = new Date().toISOString();
+  const goalDir = join(workspaceRoot, ".gptwork/goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  const state = {
+    goals: [{ id: goalId, task_id: taskId, workspace_id: "hosted-default", status: "assigned", title: "Missing restart evidence", updated_at: now }],
+    tasks: [{ id: taskId, goal_id: goalId, workspace_id: "hosted-default", status: "running", mode: "admin", logs: [], result: null, updated_at: now }],
+    goal_queue: [{ queue_id: "queue_admin_restart_missing_evidence", goal_id: goalId, task_id: taskId, status: "running", auto_start: true }],
+    activities: [],
+  };
+  const store = { load: async () => state, save: async () => {} };
+
+  await writePendingRestartMarker(workspaceRoot, taskId, {
+    expected_commit: "abc123def456",
+    repo_path: repoRoot,
+    restart_kind: "npm",
+  });
+  await updateRestartMarkerStatus(workspaceRoot, taskId, "scheduled");
+
+  const result = await reconcileRestartMarkers({
+    state,
+    store,
+    config: { defaultWorkspaceRoot: workspaceRoot, defaultRepoPath: repoRoot, defaultBranch: "main" },
+    github: { syncTask: async () => ({ ok: true }) },
+    notifyTerminalTaskIfNeeded: async () => {},
+  });
+
+  assert.equal(result.length, 1);
+  assert.equal(result[0].status, "failed");
+  assert.equal(state.tasks[0].status, "waiting_for_review");
+  assert.equal(state.goals[0].status, "assigned");
+  assert.equal(existsSync(join(goalDir, "result.json")), false);
 });
 
 // ================================================================

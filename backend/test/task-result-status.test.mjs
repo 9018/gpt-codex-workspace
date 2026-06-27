@@ -466,6 +466,31 @@ test("validateResultContract returns COMMIT_MISSING when changed_files but no co
   assert.ok(validation.diagnosis_codes.includes("commit_missing"));
 });
 
+test("validateResultContract accepts verified admin restart evidence without changed files", () => {
+  const head = "88546312e483f2ce4a338ae0486e31c9bc4dd739";
+  const result = {
+    status: "completed",
+    kind: "admin_restart_verified",
+    changed_files: [],
+    commit: head,
+    local_head: head,
+    running_commit: head,
+    restart_required: false,
+    tests: "safe restart verified; runtime commit matched; health passed",
+    summary: "Safe restart verified",
+    verification: {
+      passed: true,
+      commands: [{ cmd: "safe_restart_phase_c_verify", exit_code: 0 }],
+    },
+    acceptance_findings: [],
+  };
+
+  const validation = validateResultContract(result, { skipWorktreeCheck: true });
+
+  assert.equal(validation.valid, true);
+  assert.deepEqual(validation.diagnosis_codes, []);
+});
+
 test("validateResultContract skips worktree check when skipWorktreeCheck is true", () => {
   const result = {
     status: "completed",
