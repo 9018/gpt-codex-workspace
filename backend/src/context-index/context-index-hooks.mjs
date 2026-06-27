@@ -69,6 +69,16 @@ function mergeRetrievedChunks({ perGoalRetrieved = [], crossGoalRetrieved = [], 
   return selected;
 }
 
+async function closeVectorStore(store) {
+  if (store && typeof store.close === "function") {
+    try {
+      await store.close();
+    } catch {
+      // Best-effort lifecycle cleanup; bundle generation should not fail only because teardown failed.
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -241,6 +251,7 @@ export async function maybeBuildContextBundle(
     return { ok: false, warning: `Goal ${goal.id} has no indexable content` };
   }
 
+  let indexResult = null;
   try {
     const workspaceRoot = config?.defaultWorkspaceRoot || process.cwd();
     const transcriptPath = workspaceFiles?.transcript_md || `.gptwork/goals/${goal.id}/transcript.md`;
@@ -262,7 +273,7 @@ export async function maybeBuildContextBundle(
     }
 
     // Index the goal context
-    const indexResult = await indexGoalContext({
+    indexResult = await indexGoalContext({
       goal,
       conversation,
       task,
@@ -392,6 +403,8 @@ export async function maybeBuildContextBundle(
     const warning = `Context index/bundle generation failed for goal ${goal.id}: ${err.message}`;
     console.warn("[context-index]", warning);
     return { ok: false, warning };
+  } finally {
+    await closeVectorStore(indexResult?.store);
   }
 }
 

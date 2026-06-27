@@ -122,6 +122,7 @@ function metadataValue(metadata, key, fallback = "") {
  * @property {(chunks: ChunkRecord[], vectors: number[][]) => Promise<void>}  addChunks
  * @property {(queryVector: number[], topK: number, filters?: object) => Promise<ChunkRecord[]>}  search
  * @property {(goalId: string) => Promise<void>}  removeGoalChunks
+ * @property {() => Promise<void>}  [close]
  */
 
 // ---------------------------------------------------------------------------
@@ -312,6 +313,8 @@ export function createLocalStore(options = {}) {
         // Dir doesn't exist — nothing to remove
       }
     },
+
+    async close() {},
   };
 }
 
@@ -382,12 +385,28 @@ export async function tryCreateZvecStore(options = {}) {
     });
 
     const collection = ZVecCreateAndOpen(collectionPath, schema);
+    let closed = false;
+
+    async function close() {
+      if (closed) return;
+      closed = true;
+      if (typeof collection?.close === "function") {
+        await collection.close();
+      } else if (typeof collection?.closeSync === "function") {
+        collection.closeSync();
+      }
+    }
+
+    function assertOpen(operation) {
+      if (closed) throw new Error(`Zvec ${operation} failed: collection is closed`);
+    }
 
     return {
       name: "zvec-collection-store",
       available: true,
 
       async addChunks(chunks, vectors, options = {}) {
+        assertOpen("upsert");
         if (chunks.length !== vectors.length) {
           throw new Error(`addChunks: chunks.length (${chunks.length}) !== vectors.length (${vectors.length})`);
         }
@@ -422,6 +441,7 @@ export async function tryCreateZvecStore(options = {}) {
       },
 
       async search(queryVector, topK = 5, filters = {}) {
+        assertOpen("query");
         const results = collection.querySync({
           fieldName: "embedding",
           vector: queryVector,
@@ -468,8 +488,11 @@ export async function tryCreateZvecStore(options = {}) {
       },
 
       async removeGoalChunks(goalId) {
+        assertOpen("deleteByFilter");
         assertZvecStatus(collection.deleteByFilterSync(`goal_id = "${escapeZvecString(goalId)}"`), "deleteByFilter");
       },
+
+      close,
     };
   } catch (err) {
     options.zvecFailureReason = err?.message || String(err);

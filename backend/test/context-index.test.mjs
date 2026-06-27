@@ -277,6 +277,41 @@ describe("zvec-store — adapter fallback", () => {
     });
     assert.strictEqual(store, null);
   });
+
+  it("zvec adapter close releases the upstream collection once", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-close-mock-"));
+    const calls = { close: 0 };
+    const collection = {
+      upsertSync() { return { ok: true }; },
+      querySync() { return []; },
+      deleteByFilterSync() { return { ok: true }; },
+      closeSync() { calls.close++; },
+    };
+    class ZVecCollectionSchema {
+      constructor(schema) { this.schema = schema; }
+    }
+
+    try {
+      const store = await zvecStore.tryCreateZvecStore({
+        workspaceRoot: tmpDir,
+        importZvec: async () => ({
+          ZVecCollectionSchema,
+          ZVecCreateAndOpen: () => collection,
+          ZVecDataType: { STRING: 2, INT64: 5, VECTOR_FP32: 23 },
+          ZVecIndexType: { FLAT: 3 },
+          ZVecMetricType: { COSINE: 3 },
+        }),
+      });
+
+      assert.ok(store, "mock zvec store should be created");
+      assert.strictEqual(typeof store.close, "function", "zvec adapter should expose close for test teardown");
+      await store.close();
+      await store.close();
+      assert.strictEqual(calls.close, 1, "close should be idempotent");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -901,8 +936,9 @@ describe("P0: zvec store regression — score semantics and filters", () => {
 
   it("zvec score normalization: same vector gets higher score than orthogonal", async (t) => {
     const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-score-"));
+    let store = null;
     try {
-      const store = await zvecStore.tryCreateZvecStore({
+      store = await zvecStore.tryCreateZvecStore({
         workspaceRoot: tmpDir,
         dimension: 4,
       });
@@ -951,14 +987,16 @@ describe("P0: zvec store regression — score semantics and filters", () => {
       assert.ok(results[0].raw_score < results[1].raw_score,
         "raw_score should preserve original zvec distance ordering (lower = more similar)");
     } finally {
+      await store?.close?.();
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("zvec search with project_id and repo_id filters", async (t) => {
     const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-filter-"));
+    let store = null;
     try {
-      const store = await zvecStore.tryCreateZvecStore({
+      store = await zvecStore.tryCreateZvecStore({
         workspaceRoot: tmpDir,
         dimension: 4,
       });
@@ -1005,6 +1043,7 @@ describe("P0: zvec store regression — score semantics and filters", () => {
         assert.strictEqual(r.metadata?.repo_id, "repo_1");
       }
     } finally {
+      await store?.close?.();
       rmSync(tmpDir, { recursive: true, force: true });
     }
   });
