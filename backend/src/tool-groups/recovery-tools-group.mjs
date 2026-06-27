@@ -29,11 +29,12 @@
  *  16. recovery_stale_queue_unblock
  */
 
-import { execSync } from "node:child_process";
+import { execFile, execSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir, rm, copyFile, stat, readdir, appendFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
+import { promisify } from "node:util";
 import { createAdminAuditLogger, redactSecrets, redactString } from "../admin-audit-log.mjs";
 import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, withCache } from "../diagnostics-service.mjs";
 import { scanManagedTmp, cleanupManagedTmp, scanSystemTmp, cleanupSystemTmp, getInodePressure } from "../gptwork-tmp.mjs";
@@ -44,6 +45,8 @@ import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
 import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
+
+const execFileAsync = promisify(execFile);
 
 // ---------------------------------------------------------------------------
 // Secret redaction
@@ -82,6 +85,51 @@ function assertInAllowedRoots(targetPath, allowedRoots) {
   throw new Error("Path is outside allowed roots: " + targetPath);
 }
 
+function shellQuote(value) {
+  return `'${String(value).replace(/'/g, `'\\''`)}'`;
+}
+
+function backendDirFor(repoPath) {
+  return join(repoPath, "backend");
+}
+
+function normalizeNodeTestSelectedArgs(repoPath, args) {
+  const backendDir = backendDirFor(repoPath);
+  const rawArgs = String(args || "test/recovery-plane.test.mjs").trim().split(/\s+/).filter(Boolean);
+  if (rawArgs.length === 0) rawArgs.push("test/recovery-plane.test.mjs");
+
+  return rawArgs.map((rawArg) => {
+    if (rawArg.includes("\0")) throw new Error("node_test_selected path contains NUL byte");
+    if (rawArg.startsWith("-")) throw new Error("node_test_selected accepts test file paths only");
+
+    const normalizedArg = rawArg.replace(/\\/g, "/");
+    const absolutePath = normalizedArg.startsWith("/")
+      ? resolve(normalizedArg)
+      : normalizedArg === "backend" || normalizedArg.startsWith("backend/")
+        ? resolve(repoPath, normalizedArg)
+        : resolve(backendDir, normalizedArg);
+
+    if (absolutePath !== backendDir && !absolutePath.startsWith(backendDir + sep)) {
+      throw new Error("node_test_selected path is outside backend: " + rawArg);
+    }
+    if (absolutePath === backendDir) {
+      throw new Error("node_test_selected path must name a test file: " + rawArg);
+    }
+    return relative(backendDir, absolutePath);
+  });
+}
+
+function runtimeHealthProbeCommand() {
+  const port = process.env.GPTWORK_PORT || 8787;
+  const url = `http://localhost:${port}/health`;
+  return {
+    file: "curl",
+    args: ["--fail", "--show-error", "--silent", "--connect-timeout", "2", "--max-time", "5", url],
+    display: `curl --fail --show-error --silent --connect-timeout 2 --max-time 5 ${url}`,
+    port,
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Queue & task status constants
 // ---------------------------------------------------------------------------
@@ -97,9 +145,9 @@ const ALLOWLISTED_COMMANDS = {
   repo_status: { cmd: (rp) => `cd ${rp} && git remote -v && git branch && echo "---" && git log --oneline -5`, desc: "Git remote and branch status" },
   git_diff: { cmd: (rp) => `cd ${rp} && git diff --stat && echo "---" && git diff --no-color`, desc: "Git diff with stats" },
   git_log_recent: { cmd: (rp) => `cd ${rp} && git log --oneline -20`, desc: "Recent 20 git log entries" },
-  npm_check_syntax: { cmd: (rp) => `cd ${rp}/backend && node -e "const f=require('fs');const r=f.readdirSync('src');r.forEach(d=>{const p='src/'+d;if(!f.statSync(p).isDirectory()){try{require('child_process').execFileSync('node',['--check',p],{stdio:'pipe'})}catch(e){console.log(p+': FAIL')}})"`, desc: "Check syntax of backend src files" },
+  npm_check_syntax: { cmd: (rp) => `cd ${shellQuote(backendDirFor(rp))} && find src -name '*.mjs' -type f -print0 | sort -z | xargs -0 -r -n 1 -P 8 node --check >/dev/null && echo 'syntax ok'`, desc: "Check syntax of backend src files" },
   npm_check_imports: { cmd: (rp) => `cd ${rp}/backend && node src/cli.mjs --check-imports 2>&1 || node -e "import('./src/state-store.mjs').then(()=>console.log('imports ok')).catch(e=>{console.error(e.message);process.exit(1)})"`, desc: "Check ES module imports" },
-  node_test_selected: { cmd: (rp,args) => `cd ${rp}/backend && node --test --test-reporter=dot ${args || 'test/recovery-plane.test.mjs'}`, desc: "Run selected Node tests" },
+  node_test_selected: { cmd: (rp,args) => `cd ${shellQuote(backendDirFor(rp))} && node --test --test-reporter=dot ${normalizeNodeTestSelectedArgs(rp, args).map(shellQuote).join(" ")}`, desc: "Run selected Node tests" },
   queue_list: { cmd: (rp) => `cd ${rp}/backend && node -e "import('./src/state-store.mjs').then(s=>{const st=new s.StateStore({statePath:process.env.GPTWORK_STATE_PATH||'./data/state.json'});st.load().then(state=>{const q=state.goal_queue||[];q.forEach(i=>console.log(i.queue_id,i.status,i.blocked_reason||''))})})"`, desc: "List all queue items" },
   tmp_status: { cmd: (rp) => `cd ${rp}/backend && node -e "import('./src/gptwork-tmp.mjs').then(m=>m.scanManagedTmp({workspaceRoot:process.env.GPTWORK_WORKSPACE_ROOT||'.'}).then(r=>console.log(JSON.stringify(r,null,2))))"`, desc: "Temporary file diagnostics" },
   goal_storage_status: { cmd: (rp) => `cd ${rp}/backend && node -e "import('./src/goal-storage-service.mjs').then(m=>m.scanGoals(process.env.GPTWORK_WORKSPACE_ROOT||'.').then(r=>console.log(JSON.stringify(r,null,2))))"`, desc: "Goal storage diagnostics" },
@@ -1001,14 +1049,42 @@ export function createRecoveryToolsGroup({
       let cmdStr, cmdDesc;
       const isUnrestricted = config.recoveryUnrestrictedLocalCommandEnabled;
 
-      if (custom_command && isUnrestricted) {
-        cmdStr = custom_command;
-        cmdDesc = "custom_command";
-      } else if (command && ALLOWLISTED_COMMANDS[command]) {
-        cmdStr = ALLOWLISTED_COMMANDS[command].cmd(repoPath, args || "");
-        cmdDesc = ALLOWLISTED_COMMANDS[command].desc;
-      } else {
-        return { ok: false, error: command ? "Unknown command: " + command + ". Allowed: " + Object.keys(ALLOWLISTED_COMMANDS).join(", ") : "No command specified", exit_code: -1 };
+      try {
+        if (custom_command && isUnrestricted) {
+          cmdStr = custom_command;
+          cmdDesc = "custom_command";
+        } else if (command && ALLOWLISTED_COMMANDS[command]) {
+          cmdStr = ALLOWLISTED_COMMANDS[command].cmd(repoPath, args || "");
+          cmdDesc = ALLOWLISTED_COMMANDS[command].desc;
+        } else {
+          return { ok: false, error: command ? "Unknown command: " + command + ". Allowed: " + Object.keys(ALLOWLISTED_COMMANDS).join(", ") : "No command specified", exit_code: -1 };
+        }
+      } catch (err) {
+        const elapsed = Date.now() - start;
+        cmdDesc = command && ALLOWLISTED_COMMANDS[command] ? ALLOWLISTED_COMMANDS[command].desc : "command validation";
+        await audit({ tool: "recovery_command_runner", action: "run_command", dry_run: false, result: "error", summary: cmdDesc + " validation", elapsed_ms: elapsed });
+        return { ok: false, command: cmdDesc, exit_code: -1, stdout: "", stderr: "", elapsed_ms: elapsed, error: err.message.slice(0, 500) };
+      }
+
+      if (!custom_command && command === "runtime_status") {
+        const probe = runtimeHealthProbeCommand();
+        try {
+          const { stdout, stderr } = await execFileAsync(probe.file, probe.args, {
+            cwd: backendDirFor(repoPath),
+            timeout: Math.min(tOut, 7000),
+            maxBuffer: 1024 * 1024,
+            encoding: "utf8",
+          });
+          const elapsed = Date.now() - start;
+          const output = String(stdout || "") + String(stderr || "");
+          await audit({ tool: "recovery_command_runner", action: "run_command", dry_run: false, result: "ok", summary: ALLOWLISTED_COMMANDS.runtime_status.desc, elapsed_ms: elapsed });
+          return { ok: true, command: ALLOWLISTED_COMMANDS.runtime_status.desc, exit_code: 0, stdout: redactText(output).slice(0, 50000), truncated: Buffer.byteLength(output) > 50000, elapsed_ms: elapsed, cmd: redactText(probe.display).slice(0, 200) };
+        } catch (err) {
+          const elapsed = Date.now() - start;
+          const output = String(err.stdout || "") + String(err.stderr || "") + `MCP health probe failed or timed out (GET /health port ${probe.port})\n`;
+          await audit({ tool: "recovery_command_runner", action: "run_command", dry_run: false, result: "ok", summary: ALLOWLISTED_COMMANDS.runtime_status.desc + " fallback", elapsed_ms: elapsed });
+          return { ok: true, command: ALLOWLISTED_COMMANDS.runtime_status.desc, exit_code: 0, stdout: redactText(output).slice(0, 50000), truncated: Buffer.byteLength(output) > 50000, elapsed_ms: elapsed, cmd: redactText(probe.display).slice(0, 200) };
+        }
       }
 
       try {

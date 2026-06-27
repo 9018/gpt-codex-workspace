@@ -381,6 +381,123 @@ test("14b. recovery_command_runner runtime_status uses bounded /health probe", a
   }
 });
 
+test("14c. recovery_command_runner runtime_status reports successful /health probe", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  const healthServer = createServer((socket) => {
+    socket.once("data", () => {
+      socket.end(
+        "HTTP/1.1 200 OK\r\n" +
+        "Content-Type: application/json\r\n" +
+        "Connection: close\r\n" +
+        "Content-Length: 40\r\n" +
+        "\r\n" +
+        '{"ok":true,"service":"gptwork-mcp-test"}'
+      );
+    });
+  });
+  await new Promise((resolveListen, rejectListen) => {
+    healthServer.once("error", rejectListen);
+    healthServer.listen(0, "127.0.0.1", resolveListen);
+  });
+
+  const previousPort = process.env.GPTWORK_PORT;
+  process.env.GPTWORK_PORT = String(healthServer.address().port);
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const startedAt = Date.now();
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "runtime_status",
+      timeout_ms: 30000,
+    });
+    const elapsed = Date.now() - startedAt;
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true);
+    assert.ok(elapsed < 10000, "runtime_status should return quickly, elapsed=" + elapsed);
+    assert.match(result.stdout, /"ok":true/);
+    assert.doesNotMatch(result.stdout, /MCP health probe failed or timed out/);
+  } finally {
+    if (previousPort === undefined) delete process.env.GPTWORK_PORT;
+    else process.env.GPTWORK_PORT = previousPort;
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+    await new Promise((resolveClose) => healthServer.close(resolveClose));
+  }
+});
+
+test("14d. recovery_command_runner npm_check_syntax validates backend src files", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "npm_check_syntax",
+      timeout_ms: 30000,
+    });
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true, result.stderr || result.stdout || result.error);
+    assert.match(result.stdout, /syntax ok/);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("14e. recovery_command_runner node_test_selected accepts backend-relative paths", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "node_test_selected",
+      args: "test/path-utils.test.mjs",
+      timeout_ms: 30000,
+    });
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true, result.stderr || result.stdout || result.error);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("14f. recovery_command_runner node_test_selected accepts repo-root backend paths", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "node_test_selected",
+      args: "backend/test/path-utils.test.mjs",
+      timeout_ms: 30000,
+    });
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true, result.stderr || result.stdout || result.error);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
+test("14g. recovery_command_runner node_test_selected rejects paths outside backend", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
+    const response = await callTool(server, "recovery_command_runner", {
+      command: "node_test_selected",
+      args: "../README.md",
+      timeout_ms: 30000,
+    });
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, false);
+    assert.match(result.error, /outside backend/i);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
 test("15. recovery_safe_restart dry_run returns marker_id and dry_run status", async () => {
   process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
   try {
