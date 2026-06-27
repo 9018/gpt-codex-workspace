@@ -194,6 +194,8 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     crossGoalRetrieved.embeddingProvider ||
     null;
   const diagnostics = mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved);
+  const selectedChunks = Array.isArray(budget.selectedChunks) ? budget.selectedChunks : [];
+  const selectionMetadata = budget.selectionMetadata || null;
   return {
     goal_id: goalId,
     store_name: storeName,
@@ -233,6 +235,24 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
       })),
     },
     merged_chunk_count: workload.length,
+    selected_bundle_chunks: selectedChunks.length,
+    selection: {
+      quota: selectionMetadata?.quotas || null,
+      bucket_counts: selectionMetadata?.bucket_counts || {},
+      source_budget_tokens: selectionMetadata?.source_budget_tokens || null,
+      boosts: selectionMetadata?.boosts || null,
+      results: selectedChunks.map((chunk) => ({
+        id: chunk.id,
+        goal_id: chunk.metadata?.goal_id || null,
+        source_type: chunk.metadata?.source_type || "unknown",
+        score: chunk.score ?? null,
+        tokens: chunk.tokens ?? null,
+        why_selected: chunk.metadata?.selection?.why_selected || null,
+        quota_bucket: chunk.metadata?.selection?.quota_bucket || null,
+        boost_reason: chunk.metadata?.selection?.boost_reason || null,
+        effective_score: chunk.metadata?.selection?.effective_score ?? null,
+      })),
+    },
     budget: {
       cross_goal_top_k: budget.crossGoalTopK ?? null,
       per_goal_top_k: budget.perGoalTopK ?? null,
@@ -404,6 +424,7 @@ export async function maybeBuildContextBundle(
     const bundleResult = buildContextBundle({
       chunks: mergedChunks.length > 0 ? mergedChunks : indexResult.chunks.slice(0, mergedChunkLimit),
       goal,
+      task,
       workspaceFiles,
       maxTokens: bundleMaxTokens,
       maxChunks: mergedChunkLimit,
@@ -425,6 +446,8 @@ export async function maybeBuildContextBundle(
         maxGoalsScanned,
         filters: retrievalScope,
         embeddingProvider: indexResult.embeddingProvider,
+        selectedChunks: bundleResult.selectedChunks,
+        selectionMetadata: bundleResult.selectionMetadata,
       },
     );
 

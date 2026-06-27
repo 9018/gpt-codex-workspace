@@ -627,6 +627,92 @@ describe("context-bundle-builder — bundle generation", () => {
     assert.ok(result.bundle.includes("result"));
     assert.ok(result.bundle.includes("conversation"));
   });
+
+  it("buildContextBundle keeps a current-goal chunk when cross-goal evidence scores higher", () => {
+    const goal = { id: "goal_current", title: "Current Goal", status: "assigned" };
+    const chunks = [
+      { id: "prior_result_1", text: "Accepted prior delivery evidence", tokens: 20, metadata: { goal_id: "goal_prior", source_type: "result", status: "accepted" }, score: 0.99 },
+      { id: "prior_result_2", text: "Integration result from another goal", tokens: 20, metadata: { goal_id: "goal_prior_2", source_type: "result", result_kind: "integration" }, score: 0.97 },
+      { id: "prior_conversation_1", text: "Prior conversation with very high score", tokens: 20, metadata: { goal_id: "goal_prior", source_type: "conversation" }, score: 0.96 },
+      { id: "current_goal_low_score", text: "Current goal acceptance requirements", tokens: 20, metadata: { goal_id: "goal_current", source_type: "goal" }, score: 0.05 },
+    ];
+
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxChunks: 3, maxTokens: 1024 });
+    const selectedIds = result.selectedChunks.map((chunk) => chunk.id);
+
+    assert.ok(selectedIds.includes("current_goal_low_score"), "current goal context should survive high-scoring prior evidence");
+    const currentGoal = result.selectedChunks.find((chunk) => chunk.id === "current_goal_low_score");
+    assert.strictEqual(currentGoal.metadata.selection.quota_bucket, "current_goal");
+    assert.match(currentGoal.metadata.selection.boost_reason, /current_goal/);
+  });
+
+  it("buildContextBundle enforces result and conversation quotas", () => {
+    const goal = { id: "goal_quota", title: "Quota Goal", status: "assigned" };
+    const chunks = [
+      { id: "goal", text: "Current goal context", tokens: 10, metadata: { goal_id: "goal_quota", source_type: "goal" }, score: 0.2 },
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `result_${i}`,
+        text: `Accepted result evidence ${i}`,
+        tokens: 10,
+        metadata: { goal_id: `prior_result_${i}`, source_type: "result", status: "accepted" },
+        score: 0.95 - i * 0.01,
+      })),
+      ...Array.from({ length: 5 }, (_, i) => ({
+        id: `conversation_${i}`,
+        text: `Conversation evidence ${i}`,
+        tokens: 10,
+        metadata: { goal_id: `prior_conv_${i}`, source_type: "conversation" },
+        score: 0.9 - i * 0.01,
+      })),
+    ];
+
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxChunks: 8, maxTokens: 2048 });
+    const byType = (sourceType) => result.selectedChunks.filter((chunk) => chunk.metadata.source_type === sourceType);
+
+    assert.ok(byType("result").length <= 2, "result quota should cap accepted/result evidence");
+    assert.ok(byType("conversation").length <= 3, "conversation quota should cap chat excerpts");
+    assert.ok(result.bundle.includes("- Result quota: max 2"));
+    assert.ok(result.bundle.includes("- Conversation quota: max 3"));
+  });
+
+  it("buildContextBundle selected chunk count matches selection metadata", () => {
+    const goal = { id: "goal_selection_meta", title: "Selection Metadata", status: "assigned" };
+    const chunks = [
+      { id: "g", text: "Current goal", tokens: 5, metadata: { goal_id: "goal_selection_meta", source_type: "goal" }, score: 0.3 },
+      { id: "r", text: "Accepted result", tokens: 5, metadata: { goal_id: "prior", source_type: "result", status: "accepted" }, score: 0.8 },
+      { id: "c", text: "Conversation", tokens: 5, metadata: { goal_id: "prior", source_type: "conversation" }, score: 0.7 },
+    ];
+
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxChunks: 8, maxTokens: 2048 });
+    const selectedCountLine = result.bundle.match(/- Selected bundle chunks: (\d+)/);
+
+    assert.ok(selectedCountLine, "bundle should include selected chunk count metadata");
+    assert.strictEqual(Number(selectedCountLine[1]), result.selectedChunks.length);
+    for (const chunk of result.selectedChunks) {
+      assert.ok(chunk.metadata.selection.why_selected, "selected chunk should explain why it was selected");
+      assert.ok(chunk.metadata.selection.quota_bucket, "selected chunk should record quota bucket");
+      assert.ok(chunk.metadata.selection.boost_reason, "selected chunk should record boost reason");
+    }
+  });
+
+  it("buildContextBundle applies quotas without exceeding the token budget", () => {
+    const goal = { id: "goal_quota_budget", title: "Quota Budget", status: "assigned" };
+    const chunks = [
+      { id: "g", text: "Current goal " + "budget ".repeat(100), tokens: 220, metadata: { goal_id: "goal_quota_budget", source_type: "goal" }, score: 0.9 },
+      ...Array.from({ length: 10 }, (_, i) => ({
+        id: `conv_budget_${i}`,
+        text: `Conversation budget ${i} ` + "context ".repeat(100),
+        tokens: 220,
+        metadata: { goal_id: `prior_${i}`, source_type: "conversation" },
+        score: 0.8 - i * 0.01,
+      })),
+    ];
+
+    const result = bundleBuilder.buildContextBundle({ chunks, goal, maxChunks: 8, maxTokens: 512 });
+
+    assert.ok(result.tokenEstimate <= 512 || result.bundle.length < 3000);
+    assert.ok(result.selectedChunks.length <= 8);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -674,6 +760,8 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 8);
       assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 20);
       assert.strictEqual(result.retrievalJson.budget.filters.workspace_id, "ws-test");
+      assert.strictEqual(result.retrievalJson.selected_bundle_chunks, result.retrievalJson.selection.results.length);
+      assert.ok(result.retrievalJson.selection.quota);
       assert.strictEqual(result.retrievalJson.retrieval_mode, "vector");
       assert.ok(result.retrievalJson.fallback_reason || result.retrievalJson.store_capabilities);
       assert.ok(Array.isArray(result.retrievalJson.query_terms));
