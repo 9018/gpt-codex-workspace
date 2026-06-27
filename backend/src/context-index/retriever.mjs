@@ -163,7 +163,7 @@ export async function indexGoalContext(ctx) {
  * @param {object} params
  * @param {string}   params.goalId
  * @param {string}   params.queryText          - The query text to search for.
- * @param {{ workspaceRoot?: string, dimension?: number, storePrefer?: string, contextVectorStore?: string, embeddingConfig?: object }} [params.options]
+ * @param {{ workspaceRoot?: string, dimension?: number, storePrefer?: string, contextVectorStore?: string, embeddingConfig?: object, retrievalMode?: string }} [params.options]
  * @param {number}   [params.topK=5]
  * @param {object}   [params.filters={}]
  * @returns {Promise<Array<{ id: string, text: string, tokens: number, metadata: object, score: number }>>}
@@ -199,7 +199,10 @@ export async function retrieveContext(params) {
   // since the vector store does not natively support time decay.
   const timeDecayDays = filters.time_decay ? Number(filters.time_decay) : 0;
 
-  const results = await store.search(queryVector, topK, searchFilters);
+  const results = await store.search(queryVector, topK, searchFilters, {
+    retrievalMode: options.retrievalMode || "vector",
+    queryText,
+  });
 
   if (timeDecayDays > 0 && results.length > 0) {
     const now = Date.now();

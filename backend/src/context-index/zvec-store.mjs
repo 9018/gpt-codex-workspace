@@ -18,6 +18,28 @@ const DEFAULT_INDEX_DIR = ".gptwork/context-index";
 const ZVEC_COLLECTION_PATH = ".gptwork/context-index/zvec/goal_context_chunks";
 const CHUNKS_FILE = "chunks.json";
 const VECTORS_FILE = "vectors.json";
+const DEFAULT_RETRIEVAL_MODE = "vector";
+const HYBRID_METHOD_CANDIDATES = [
+  "hybridSearchSync",
+  "hybridQuerySync",
+  "searchHybridSync",
+  "queryHybridSync",
+  "hybridSearch",
+  "hybridQuery",
+  "searchHybrid",
+  "queryHybrid",
+];
+const FTS_METHOD_CANDIDATES = [
+  "fullTextSearchSync",
+  "textSearchSync",
+  "ftsSearchSync",
+  "keywordSearchSync",
+  "fullTextSearch",
+  "textSearch",
+  "ftsSearch",
+  "keywordSearch",
+];
+const MULTI_QUERY_METHOD_CANDIDATES = ["multiQuerySync", "multiSearchSync", "multiQuery", "multiSearch"];
 
 
 // ---------------------------------------------------------------------------
@@ -99,6 +121,160 @@ function buildZvecFilter(filters = {}) {
 function metadataValue(metadata, key, fallback = "") {
   const value = metadata?.[key];
   return value === undefined || value === null ? fallback : value;
+}
+
+function normalizeRetrievalMode(value) {
+  const mode = String(value || DEFAULT_RETRIEVAL_MODE).trim().toLowerCase();
+  return mode === "hybrid" ? "hybrid" : "vector";
+}
+
+function keywordQueryFromText(text) {
+  return String(text || "")
+    .replace(/[`*_#>[\]().,:;!?{}|\\]/g, " ")
+    .split(/\s+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 3)
+    .slice(0, 32)
+    .join(" ");
+}
+
+function queryTermsFromText(text) {
+  const seen = new Set();
+  const terms = [];
+  for (const term of keywordQueryFromText(text).split(/\s+/).filter(Boolean)) {
+    const key = term.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    terms.push(term);
+    if (terms.length >= 16) break;
+  }
+  return terms;
+}
+
+function firstFunctionName(target, names) {
+  for (const name of names) {
+    if (typeof target?.[name] === "function") return name;
+  }
+  return null;
+}
+
+function attachRetrievalDiagnostics(results, diagnostics) {
+  Object.defineProperty(results, "retrievalDiagnostics", {
+    value: diagnostics,
+    enumerable: false,
+  });
+  return results;
+}
+
+function makeStoreCapabilities(storeName, detail = {}) {
+  return {
+    store_name: storeName,
+    vector: detail.vector !== false,
+    hybrid: Boolean(detail.hybrid),
+    full_text: Boolean(detail.full_text),
+    multi_query: Boolean(detail.multi_query),
+    methods: detail.methods || {},
+  };
+}
+
+function makeRetrievalDiagnostics({ storeName, requestedMode, effectiveMode, fallbackReason = null, queryText = "", capabilities }) {
+  const keywordQuery = keywordQueryFromText(queryText);
+  return {
+    requested_retrieval_mode: normalizeRetrievalMode(requestedMode),
+    retrieval_mode: normalizeRetrievalMode(effectiveMode),
+    fallback_reason: fallbackReason || null,
+    keyword_query: keywordQuery,
+    query_terms: queryTermsFromText(queryText),
+    store_capabilities: capabilities,
+    capabilities,
+    store_name: storeName,
+  };
+}
+
+function normalizeSignal(value, { distance = false } = {}) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  if (distance) return Math.max(0, Math.min(1, 1 - n));
+  if (n >= 0 && n <= 1) return n;
+  if (n > 1) return n / (n + 1);
+  return 0;
+}
+
+function fieldsFromZvecResult(r) {
+  return r?.fields || r?.document?.fields || r?.metadata || {};
+}
+
+function mapZvecResult(r, scoreKind = "cosine_similarity") {
+  const fields = fieldsFromZvecResult(r);
+  const rawScore = Number(r?.score || 0);
+  const vectorScore = normalizeSignal(r?.vector_score ?? r?.vectorScore, { distance: false });
+  const keywordScore = normalizeSignal(
+    r?.keyword_score ?? r?.keywordScore ?? r?.text_score ?? r?.textScore ?? r?.fts_score ?? r?.ftsScore ?? r?.bm25_score ?? r?.bm25Score,
+    { distance: false },
+  );
+  let score;
+  if (scoreKind === "hybrid_similarity" && (vectorScore !== null || keywordScore !== null)) {
+    score = ((vectorScore ?? normalizeSignal(rawScore, { distance: true }) ?? 0) * 0.65) + ((keywordScore ?? 0) * 0.35);
+  } else if (scoreKind === "hybrid_similarity") {
+    score = normalizeSignal(rawScore, { distance: true }) ?? 0;
+  } else {
+    score = 1 - rawScore;
+  }
+  return {
+    id: r.id,
+    text: fields?.text || "",
+    tokens: Number(fields?.tokens || 0),
+    index: Number(fields?.chunk_index || 0),
+    metadata: {
+      workspace_id: fields?.workspace_id || "",
+      goal_id: fields?.goal_id || "",
+      task_id: fields?.task_id || "",
+      source_type: fields?.source_type || "unknown",
+      project_id: fields?.project_id || "",
+      repo_id: fields?.repo_id || "",
+      role: fields?.role || "",
+      source_path: fields?.source_path || "",
+      chunk_index: Number(fields?.chunk_index || 0),
+      created_at: fields?.created_at || "",
+    },
+    score,
+    raw_score: rawScore,
+    score_kind: scoreKind,
+    ...(vectorScore !== null ? { vector_score: vectorScore } : {}),
+    ...(keywordScore !== null ? { keyword_score: keywordScore } : {}),
+  };
+}
+
+function combineVectorAndKeywordResults(vectorResults, keywordResults, topK) {
+  const byId = new Map();
+  for (const r of vectorResults || []) {
+    const mapped = mapZvecResult(r, "cosine_similarity");
+    byId.set(mapped.id, {
+      ...mapped,
+      score_kind: "hybrid_similarity",
+      vector_score: mapped.score,
+      keyword_score: 0,
+      score: mapped.score * 0.65,
+    });
+  }
+  for (const r of keywordResults || []) {
+    const mapped = mapZvecResult(r, "hybrid_similarity");
+    const keywordScore = mapped.keyword_score ?? normalizeSignal(r?.score, { distance: false }) ?? mapped.score;
+    const existing = byId.get(mapped.id);
+    if (existing) {
+      existing.keyword_score = keywordScore;
+      existing.score = (existing.vector_score * 0.65) + (keywordScore * 0.35);
+    } else {
+      byId.set(mapped.id, {
+        ...mapped,
+        score_kind: "hybrid_similarity",
+        vector_score: 0,
+        keyword_score: keywordScore,
+        score: keywordScore * 0.35,
+      });
+    }
+  }
+  return [...byId.values()].sort((a, b) => b.score - a.score).slice(0, topK);
 }
 
 // ---------------------------------------------------------------------------
@@ -249,7 +425,12 @@ export function createLocalStore(options = {}) {
       }
     },
 
-   async search(queryVector, topK = 5, filters = {}) {
+   async search(queryVector, topK = 5, filters = {}, searchOptions = {}) {
+     const requestedMode = normalizeRetrievalMode(searchOptions.retrievalMode);
+     const capabilities = makeStoreCapabilities("local-json-store", { hybrid: false });
+     const fallbackReason = requestedMode === "hybrid"
+       ? "hybrid retrieval requested but local JSON store only supports vector search"
+       : null;
      const goalId = filters.goal_id;
       let goalIds;
       if (goalId) {
@@ -270,7 +451,16 @@ export function createLocalStore(options = {}) {
           goalIds = [];
         }
       }
-     if (goalIds.length === 0) return [];
+     if (goalIds.length === 0) {
+       return attachRetrievalDiagnostics([], makeRetrievalDiagnostics({
+         storeName: "local-json-store",
+         requestedMode,
+         effectiveMode: "vector",
+         fallbackReason,
+         queryText: searchOptions.queryText,
+         capabilities,
+       }));
+     }
 
       const scored = [];
       for (const currentGoalId of goalIds) {
@@ -290,13 +480,20 @@ export function createLocalStore(options = {}) {
             const vec = entry.vectors[i];
             if (!vec || vec.length !== queryVector.length) continue;
             const score = cosineSimilarity(queryVector, vec);
-            scored.push({ ...chunk, score });
+            scored.push({ ...chunk, score, raw_score: score, score_kind: "cosine_similarity" });
           }
         });
       }
 
       scored.sort((a, b) => b.score - a.score);
-      return scored.slice(0, topK);
+      return attachRetrievalDiagnostics(scored.slice(0, topK), makeRetrievalDiagnostics({
+        storeName: "local-json-store",
+        requestedMode,
+        effectiveMode: "vector",
+        fallbackReason,
+        queryText: searchOptions.queryText,
+        capabilities,
+      }));
     },
 
     async removeGoalChunks(goalId) {
@@ -386,6 +583,34 @@ export async function tryCreateZvecStore(options = {}) {
 
     const collection = ZVecCreateAndOpen(collectionPath, schema);
     let closed = false;
+    const hybridMethod = firstFunctionName(collection, HYBRID_METHOD_CANDIDATES);
+    const ftsMethod = firstFunctionName(collection, FTS_METHOD_CANDIDATES);
+    const multiQueryMethod = firstFunctionName(collection, MULTI_QUERY_METHOD_CANDIDATES);
+    const capabilities = makeStoreCapabilities("zvec-collection-store", {
+      hybrid: Boolean(hybridMethod || ftsMethod),
+      full_text: Boolean(ftsMethod || hybridMethod),
+      multi_query: Boolean(multiQueryMethod),
+      methods: {
+        hybrid: hybridMethod,
+        full_text: ftsMethod,
+        multi_query: multiQueryMethod,
+        vector: "querySync",
+      },
+    });
+    const outputFields = [
+      "workspace_id",
+      "goal_id",
+      "task_id",
+      "source_type",
+      "project_id",
+      "repo_id",
+      "role",
+      "source_path",
+      "chunk_index",
+      "tokens",
+      "created_at",
+      "text",
+    ];
 
     async function close() {
       if (closed) return;
@@ -440,51 +665,76 @@ export async function tryCreateZvecStore(options = {}) {
         }
       },
 
-      async search(queryVector, topK = 5, filters = {}) {
+      async search(queryVector, topK = 5, filters = {}, searchOptions = {}) {
         assertOpen("query");
-        const results = collection.querySync({
+        const requestedMode = normalizeRetrievalMode(searchOptions.retrievalMode);
+        const filter = buildZvecFilter(filters);
+        const keywordQuery = keywordQueryFromText(searchOptions.queryText);
+        const vectorRequest = {
           fieldName: "embedding",
           vector: queryVector,
           topk: topK,
-          ...(buildZvecFilter(filters) ? { filter: buildZvecFilter(filters) } : {}),
-          outputFields: [
-            "workspace_id",
-            "goal_id",
-            "task_id",
-            "source_type",
-            "project_id",
-            "repo_id",
-            "role",
-            "source_path",
-            "chunk_index",
-            "tokens",
-            "created_at",
-            "text",
-          ],
-        });
-        const mapped = results.map((r) => ({
-          id: r.id,
-          text: r.fields?.text || "",
-          tokens: Number(r.fields?.tokens || 0),
-          index: Number(r.fields?.chunk_index || 0),
-          metadata: {
-            workspace_id: r.fields?.workspace_id || "",
-            goal_id: r.fields?.goal_id || "",
-            task_id: r.fields?.task_id || "",
-            source_type: r.fields?.source_type || "unknown",
-            project_id: r.fields?.project_id || "",
-            repo_id: r.fields?.repo_id || "",
-            role: r.fields?.role || "",
-            source_path: r.fields?.source_path || "",
-            chunk_index: Number(r.fields?.chunk_index || 0),
-            created_at: r.fields?.created_at || "",
-          },
-          score: 1 - (r.score || 0),
-          raw_score: r.score || 0,
-          score_kind: "cosine_similarity",
-        }));
+          ...(filter ? { filter } : {}),
+          outputFields,
+        };
+        let effectiveMode = "vector";
+        let fallbackReason = null;
+        let rawResults;
+        let mappedResults = null;
+        let scoreKind = "cosine_similarity";
+
+        if (requestedMode === "hybrid") {
+          if (!keywordQuery) {
+            fallbackReason = "hybrid retrieval requested but query text produced no keyword terms";
+          } else if (!hybridMethod && !ftsMethod) {
+            fallbackReason = "hybrid retrieval requested but zvec API does not expose supported hybrid or full-text search methods";
+          } else {
+            try {
+              if (hybridMethod) {
+                rawResults = await collection[hybridMethod]({
+                  ...vectorRequest,
+                  query: keywordQuery,
+                  text: keywordQuery,
+                  keywordQuery,
+                  queryTerms: queryTermsFromText(searchOptions.queryText),
+                  vectorWeight: 0.65,
+                  keywordWeight: 0.35,
+                });
+              } else {
+                const vectorResults = collection.querySync(vectorRequest);
+                const keywordResults = await collection[ftsMethod]({
+                  query: keywordQuery,
+                  text: keywordQuery,
+                  keywordQuery,
+                  topk: topK,
+                  ...(filter ? { filter } : {}),
+                  outputFields,
+                });
+                mappedResults = combineVectorAndKeywordResults(vectorResults, keywordResults, topK);
+              }
+              effectiveMode = "hybrid";
+              scoreKind = "hybrid_similarity";
+            } catch (err) {
+              fallbackReason = `hybrid retrieval failed; fell back to vector: ${err?.message || String(err)}`;
+              rawResults = null;
+            }
+          }
+        }
+
+        if (!rawResults && !mappedResults) {
+          rawResults = collection.querySync(vectorRequest);
+        }
+
+        const mapped = mappedResults || rawResults.map((r) => mapZvecResult(r, scoreKind));
         mapped.sort((a, b) => b.score - a.score);
-        return mapped;
+        return attachRetrievalDiagnostics(mapped, makeRetrievalDiagnostics({
+          storeName: "zvec-collection-store",
+          requestedMode,
+          effectiveMode,
+          fallbackReason,
+          queryText: searchOptions.queryText,
+          capabilities,
+        }));
       },
 
       async removeGoalChunks(goalId) {

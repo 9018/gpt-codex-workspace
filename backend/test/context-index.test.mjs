@@ -237,6 +237,9 @@ describe("zvec-store — adapter fallback", () => {
       assert.ok(results.length >= 1);
       assert.strictEqual(results[0].id, "c1");
       assert.ok(results[0].score > 0.8);
+      assert.strictEqual(results[0].score_kind, "cosine_similarity");
+      assert.strictEqual(typeof results[0].raw_score, "number");
+      assert.strictEqual(results.retrievalDiagnostics.retrieval_mode, "vector");
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -308,6 +311,150 @@ describe("zvec-store — adapter fallback", () => {
       await store.close();
       await store.close();
       assert.strictEqual(calls.close, 1, "close should be idempotent");
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("zvec adapter detects hybrid capability and keeps filters/ranking semantics", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-hybrid-mock-"));
+    const calls = { query: 0, hybrid: 0 };
+    const docs = new Map();
+    const collection = {
+      upsertSync(batch) {
+        for (const doc of batch) docs.set(doc.id, doc);
+        return { ok: true };
+      },
+      querySync() {
+        calls.query++;
+        return [
+          { id: "vec", score: 0.1, fields: docs.get("vec")?.fields },
+          { id: "kw", score: 0.4, fields: docs.get("kw")?.fields },
+        ];
+      },
+      hybridSearchSync(request) {
+        calls.hybrid++;
+        assert.strictEqual(request.filter, 'goal_id = "g_hybrid" AND workspace_id = "ws_h" AND project_id = "proj_h" AND repo_id = "repo_h"');
+        assert.strictEqual(request.query, "repair-goal task-final-writeback");
+        return [
+          { id: "kw", score: 0.02, fields: docs.get("kw")?.fields, keyword_score: 0.95, vector_score: 0.6 },
+          { id: "vec", score: 0.2, fields: docs.get("vec")?.fields, keyword_score: 0.1, vector_score: 0.9 },
+        ];
+      },
+      deleteByFilterSync() { return { ok: true }; },
+      closeSync() {},
+    };
+    class ZVecCollectionSchema {
+      constructor(schema) { this.schema = schema; }
+    }
+
+    try {
+      const store = await zvecStore.tryCreateZvecStore({
+        workspaceRoot: tmpDir,
+        dimension: 2,
+        importZvec: async () => ({
+          ZVecCollectionSchema,
+          ZVecCreateAndOpen: () => collection,
+          ZVecDataType: { STRING: 2, INT64: 5, VECTOR_FP32: 23 },
+          ZVecIndexType: { FLAT: 3 },
+          ZVecMetricType: { COSINE: 3 },
+        }),
+      });
+
+      await store.addChunks(
+        [
+          { id: "vec", text: "vector only content", tokens: 3, metadata: { goal_id: "g_hybrid", workspace_id: "ws_h", project_id: "proj_h", repo_id: "repo_h", source_type: "goal" } },
+          { id: "kw", text: "repair-goal task-final-writeback keyword match", tokens: 5, metadata: { goal_id: "g_hybrid", workspace_id: "ws_h", project_id: "proj_h", repo_id: "repo_h", source_type: "result" } },
+        ],
+        [[1, 0], [0.8, 0.2]]
+      );
+
+      const results = await store.search([1, 0], 2, {
+        goal_id: "g_hybrid",
+        workspace_id: "ws_h",
+        project_id: "proj_h",
+        repo_id: "repo_h",
+      }, {
+        retrievalMode: "hybrid",
+        queryText: "repair-goal task-final-writeback",
+      });
+
+      assert.strictEqual(calls.hybrid, 1, "hybrid API should be used when available");
+      assert.strictEqual(calls.query, 0, "vector query should not be used on supported hybrid path");
+      assert.strictEqual(results[0].id, "kw", "keyword signal should be able to affect hybrid ranking");
+      assert.ok(results[0].score > results[1].score, "score should remain higher-is-more-relevant");
+      assert.strictEqual(results[0].score_kind, "hybrid_similarity");
+      assert.strictEqual(results.retrievalDiagnostics.retrieval_mode, "hybrid");
+      assert.strictEqual(results.retrievalDiagnostics.fallback_reason, null);
+      assert.strictEqual(results.retrievalDiagnostics.keyword_query, "repair-goal task-final-writeback");
+      assert.strictEqual(results.retrievalDiagnostics.capabilities.hybrid, true);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("zvec adapter falls back to vector when hybrid is requested but unsupported", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-hybrid-fallback-"));
+    const collection = {
+      upsertSync() { return { ok: true }; },
+      querySync() {
+        return [
+          {
+            id: "vec",
+            score: 0,
+            fields: {
+              workspace_id: "ws_f",
+              goal_id: "g_fallback",
+              task_id: "",
+              source_type: "goal",
+              project_id: "proj_f",
+              repo_id: "repo_f",
+              role: "",
+              source_path: "",
+              chunk_index: 0,
+              tokens: 3,
+              created_at: "",
+              text: "vector fallback content",
+            },
+          },
+        ];
+      },
+      deleteByFilterSync() { return { ok: true }; },
+      closeSync() {},
+    };
+    class ZVecCollectionSchema {
+      constructor(schema) { this.schema = schema; }
+    }
+
+    try {
+      const store = await zvecStore.tryCreateZvecStore({
+        workspaceRoot: tmpDir,
+        dimension: 2,
+        importZvec: async () => ({
+          ZVecCollectionSchema,
+          ZVecCreateAndOpen: () => collection,
+          ZVecDataType: { STRING: 2, INT64: 5, VECTOR_FP32: 23 },
+          ZVecIndexType: { FLAT: 3 },
+          ZVecMetricType: { COSINE: 3 },
+        }),
+      });
+
+      const results = await store.search([1, 0], 1, {
+        goal_id: "g_fallback",
+        workspace_id: "ws_f",
+        project_id: "proj_f",
+        repo_id: "repo_f",
+      }, {
+        retrievalMode: "hybrid",
+        queryText: "repair-goal",
+      });
+
+      assert.strictEqual(results.length, 1);
+      assert.strictEqual(results[0].score_kind, "cosine_similarity");
+      assert.strictEqual(results.retrievalDiagnostics.retrieval_mode, "vector");
+      assert.match(results.retrievalDiagnostics.fallback_reason, /hybrid retrieval requested but zvec API does not expose/);
+      assert.strictEqual(results.retrievalDiagnostics.requested_retrieval_mode, "hybrid");
+      assert.strictEqual(results.retrievalDiagnostics.capabilities.hybrid, false);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }
@@ -527,6 +674,11 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 8);
       assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 20);
       assert.strictEqual(result.retrievalJson.budget.filters.workspace_id, "ws-test");
+      assert.strictEqual(result.retrievalJson.retrieval_mode, "vector");
+      assert.ok(result.retrievalJson.fallback_reason || result.retrievalJson.store_capabilities);
+      assert.ok(Array.isArray(result.retrievalJson.query_terms));
+      assert.ok(result.retrievalJson.keyword_query.includes("Implement context retrieval MVP"));
+      assert.ok(result.retrievalJson.store_capabilities);
       assert.deepStrictEqual(result.retrievalJson.embedding_provider, {
         name: "fallback-hash-sha256",
         dimension: 64,

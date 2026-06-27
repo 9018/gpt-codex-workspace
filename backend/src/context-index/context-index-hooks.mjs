@@ -69,6 +69,28 @@ function mergeRetrievedChunks({ perGoalRetrieved = [], crossGoalRetrieved = [], 
   return selected;
 }
 
+function retrievalDiagnosticsFrom(results) {
+  return results?.retrievalDiagnostics || null;
+}
+
+function mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved) {
+  const perGoal = retrievalDiagnosticsFrom(perGoalRetrieved);
+  const crossGoal = retrievalDiagnosticsFrom(crossGoalRetrieved);
+  const primary = perGoal || crossGoal || null;
+  const fallbackReasons = [crossGoal?.fallback_reason, perGoal?.fallback_reason].filter(Boolean);
+  return {
+    primary,
+    cross_goal: crossGoal,
+    per_goal: perGoal,
+    retrieval_mode: primary?.retrieval_mode || "vector",
+    requested_retrieval_mode: primary?.requested_retrieval_mode || "vector",
+    fallback_reason: fallbackReasons.length > 0 ? [...new Set(fallbackReasons)].join("; ") : null,
+    keyword_query: primary?.keyword_query || crossGoal?.keyword_query || perGoal?.keyword_query || "",
+    query_terms: primary?.query_terms || crossGoal?.query_terms || perGoal?.query_terms || [],
+    store_capabilities: primary?.store_capabilities || crossGoal?.store_capabilities || perGoal?.store_capabilities || null,
+  };
+}
+
 async function closeVectorStore(store) {
   if (store && typeof store.close === "function") {
     try {
@@ -171,13 +193,22 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     perGoalRetrieved.embeddingProvider ||
     crossGoalRetrieved.embeddingProvider ||
     null;
+  const diagnostics = mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved);
   return {
     goal_id: goalId,
     store_name: storeName,
     total_indexed: stored,
+    requested_retrieval_mode: diagnostics.requested_retrieval_mode,
+    retrieval_mode: diagnostics.retrieval_mode,
+    fallback_reason: diagnostics.fallback_reason,
+    keyword_query: diagnostics.keyword_query,
+    query_terms: diagnostics.query_terms,
+    store_capabilities: diagnostics.store_capabilities,
     embedding_provider: embeddingProvider,
     cross_goal_retrieval: {
       enabled: true,
+      retrieval_mode: diagnostics.cross_goal?.retrieval_mode || diagnostics.retrieval_mode,
+      fallback_reason: diagnostics.cross_goal?.fallback_reason || null,
       retrieved_count: crossGoalRetrieved.length,
       cross_goal_chunks: crossGoalRetrieved.filter((r) => r.metadata?.goal_id !== goalId).length,
       results: crossGoalRetrieved.map((r) => ({
@@ -190,6 +221,8 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
       })),
     },
     per_goal_retrieval: {
+      retrieval_mode: diagnostics.per_goal?.retrieval_mode || diagnostics.retrieval_mode,
+      fallback_reason: diagnostics.per_goal?.fallback_reason || null,
       retrieved_count: perGoalRetrieved.length,
       results: perGoalRetrieved.map((r) => ({
         id: r.id,
@@ -332,6 +365,7 @@ export async function maybeBuildContextBundle(
         storePrefer: indexResult.store,
         contextVectorStore: config?.contextVectorStore,
         maxGoalsScanned,
+        retrievalMode: "hybrid",
         embeddingConfig: { provider: "fallback" },
       },
       filters: retrievalScope,
@@ -349,6 +383,7 @@ export async function maybeBuildContextBundle(
         storePrefer: indexResult.store,
         contextVectorStore: config?.contextVectorStore,
         maxGoalsScanned,
+        retrievalMode: "hybrid",
         embeddingConfig: { provider: "fallback" },
       },
       filters: { ...retrievalScope, goal_id: goal.id },
