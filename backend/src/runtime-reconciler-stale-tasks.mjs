@@ -1,4 +1,4 @@
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { getLatestRun, getRunFilePath, fireHeartbeat } from "./codex-run-metadata.mjs";
@@ -20,10 +20,13 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
     } catch {}
     let shouldMark = false;
     let message = "";
+    const releasedLock = findReleasedLockForTask(config.defaultWorkspaceRoot, task.id);
     const run = await getLatestRun(config.defaultWorkspaceRoot, task.id);
     if (!run) {
       shouldMark = true;
-      message = "Startup reconciliation: task was in running state with no run metadata or restart marker. Marked as waiting_for_review/codex_stalled.";
+      message = releasedLock
+        ? "Startup reconciliation: task was in running state with no run metadata and a released lock. Marked as waiting_for_review/stale_running_released_lock."
+        : "Startup reconciliation: task was in running state with no run metadata or restart marker. Marked as waiting_for_review/codex_stalled.";
     } else {
       const ageMs = now - new Date(run.last_heartbeat_at).getTime();
       let processAlive = false;
@@ -95,11 +98,13 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
         const prevStatus = task.status;
         task.status = "waiting_for_review";
         task.result = task.result || {};
-        task.result.kind = "codex_stalled";
+        task.result.kind = releasedLock ? "stale_running_released_lock" : "codex_stalled";
         task.result.reconciliation_message = message;
+        if (releasedLock) task.result.released_lock = releasedLock;
         task.result.reconciled_at = new Date().toISOString();
         task.logs = task.logs || [];
         task.logs.push({ time: new Date().toISOString(), message });
+        try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
         reconciled.push({ task_id: task.id, previous_status: prevStatus, new_status: "waiting_for_review", message });
         if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${task.id} -> waiting_for_review (${message})\n`);
       }
@@ -110,4 +115,28 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
     if (_lp) appendFileSync(_lp, `[gptwork-worker] startup reconciliation: ${reconciled.length} stale tasks marked waiting_for_review\n`);
   }
   return reconciled;
+}
+
+function findReleasedLockForTask(workspaceRoot, taskId) {
+  if (!workspaceRoot || !taskId) return null;
+  const lockDir = join(workspaceRoot, ".gptwork", "locks", "repos");
+  if (!existsSync(lockDir)) return null;
+  try {
+    for (const entry of readdirSync(lockDir)) {
+      if (!entry.endsWith(".json")) continue;
+      const filePath = join(lockDir, entry);
+      try {
+        const lock = JSON.parse(readFileSync(filePath, "utf8"));
+        if (lock?.task_id !== taskId) continue;
+        if (lock.status !== "released") continue;
+        return {
+          path: filePath,
+          status: lock.status,
+          released_at: lock.released_at || null,
+          stale_reason: lock.stale_reason || null,
+        };
+      } catch {}
+    }
+  } catch {}
+  return null;
 }

@@ -53,6 +53,7 @@ export const CLOSURE_REASONS = {
   REPAIR_EXHAUSTED: "repair_exhausted",
   RESULT_MISSING_NO_DIFF: "result_missing_no_diff",
   RESULT_MISSING_WITH_DIFF: "result_missing_with_diff",
+  RESULT_MISSING_BUT_VERIFIED_COMMIT: "result_missing_but_verified_commit",
   INTEGRATION_DONE: "integration_done",
   INTEGRATION_PENDING: "integration_pending",
   RESTART_REQUIRED: "restart_required",
@@ -224,6 +225,31 @@ export function convergeTaskAfterRun({
       findings,
       notifications: [],
       githubWriteback: null,
+      repairPlan: null,
+      retryPlan: null,
+      restartPlan: null,
+    };
+  }
+
+  // ---- Step 2b: Delivery result writeback missing, but commit is verified ----
+  // This is intentionally narrow: it only closes the task when an independent
+  // finalizer/reconciler has already established commit integration, clean repo
+  // state, and passed verification commands. Missing or failed verification must
+  // remain a non-completed path.
+  if (hasVerifiedDeliveryResultRecovery(taskResult, repoState)) {
+    return {
+      nextStatus: CONVERGENCE_STATUSES.COMPLETED,
+      reason: "result.json/result.md missing, but commit is integrated and required verification passed.",
+      closureReason: CLOSURE_REASONS.RESULT_MISSING_BUT_VERIFIED_COMMIT,
+      profile,
+      findings: [{
+        severity: "followup",
+        code: "result_missing_but_verified_commit",
+        message: "Delivery result writeback was missing after Codex exit, but local evidence proves the commit is integrated and verified.",
+        source: "task_convergence",
+      }],
+      notifications: [{ event: "task_completed", taskId: task.id, timestamp }],
+      githubWriteback: { action: "close", status: "completed" },
       repairPlan: null,
       retryPlan: null,
       restartPlan: null,
@@ -433,6 +459,26 @@ function isNonBlockerForProfile(code, profile) {
     return ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop"].includes(profile);
   }
   return false;
+}
+
+function hasVerifiedDeliveryResultRecovery(taskResult = {}, repoState = {}) {
+  const recovery = taskResult.delivery_result_recovery || null;
+  if (!recovery || recovery.passed !== true) return false;
+  const recoveryReason = String(recovery.reason || "");
+  if (recoveryReason !== "result_missing_but_verified_commit" && recoveryReason !== "delivery_result_writeback_missing") return false;
+
+  const verification = taskResult.verification || recovery.verification || {};
+  const commands = Array.isArray(verification.commands) ? verification.commands : [];
+  if (verification.passed !== true || commands.length === 0) return false;
+
+  const canonicalClean = repoState.canonical_clean === true || recovery.canonical_clean === true;
+  const commitIntegrated = repoState.commit_integrated === true || recovery.commit_integrated === true;
+  if (!canonicalClean || !commitIntegrated) return false;
+
+  const commit = taskResult.commit || recovery.commit || repoState.local_head || repoState.commit;
+  const localHead = taskResult.local_head || recovery.local_head || repoState.local_head;
+  const remoteHead = taskResult.remote_head || recovery.remote_head || repoState.remote_head;
+  return Boolean(commit && localHead && remoteHead);
 }
 
 function acceptanceStatusIsOk(acceptance) {

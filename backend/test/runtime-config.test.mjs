@@ -64,6 +64,28 @@ test("buildRuntimeConfig defaults defaultRepoPath to empty string", () => {
   assert.equal(config.defaultRepoPath, "");
 });
 
+test("buildRuntimeConfig defaults delivery result recovery commands to empty list", () => {
+  clearGptWorkVars();
+  const { config, sources } = buildRuntimeConfig("/tmp/test-root");
+  assert.deepEqual(config.deliveryResultRecoveryCommands, []);
+  assert.equal(sources.deliveryResultRecoveryCommands, "default");
+});
+
+test("buildRuntimeConfig parses delivery result recovery commands from runtime.env", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile(
+    "GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS=npm --prefix backend run check:syntax||git diff --check\n" +
+    "GPTWORK_RESULT_RECOVERY_COMMAND_TIMEOUT=120\n"
+  );
+  const { config, sources } = buildRuntimeConfig(root);
+  assert.deepEqual(config.deliveryResultRecoveryCommands, [
+    "npm --prefix backend run check:syntax",
+    "git diff --check",
+  ]);
+  assert.equal(config.resultRecoveryCommandTimeout, 120);
+  assert.equal(sources.deliveryResultRecoveryCommands, "runtime.env");
+});
+
 test("buildRuntimeConfig defaults bark config", () => {
   clearGptWorkVars();
   const { config, sources } = buildRuntimeConfig("/tmp/test-root");

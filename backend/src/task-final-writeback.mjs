@@ -90,6 +90,7 @@ export async function finalizeCodexTaskRun({
   shouldAttemptRepairFn = shouldAttemptRepair,
   createRepairGoalFromFindingsFn = createRepairGoalFromFindings,
   createGoalFn = createGoal,
+  deliveryResultRecovery = null,
 }) {
   if (runFilePath) {
     const _resolvedRjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
@@ -176,6 +177,16 @@ export async function finalizeCodexTaskRun({
       taskResult.warnings.push("Integration queue execution failed: " + integrationErr.message);
     }
   }
+
+  const recoveryDecision = applyVerifiedDeliveryResultRecovery({
+    taskStatus,
+    taskResult,
+    summary,
+    deliveryResultRecovery,
+  });
+  taskStatus = recoveryDecision.taskStatus;
+  taskResult = recoveryDecision.taskResult;
+  summary = recoveryDecision.summary;
 
   const verifierRepoPath = taskResult?.execution_cwd
     || resolvedRepo?.task_worktree_path
@@ -432,6 +443,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     changed_files: Array.isArray(taskResult.changed_files) ? taskResult.changed_files : [],
     tests: taskResult.tests || null,
     commit: taskResult.commit || null,
+    local_head: taskResult.local_head || null,
     remote_head: taskResult.remote_head || null,
     warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
     followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
@@ -447,6 +459,68 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     reviewer_decision: taskResult.reviewer_decision || null,
     acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
     next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
+    delivery_result_recovery: taskResult.delivery_result_recovery || null,
+  };
+}
+
+function applyVerifiedDeliveryResultRecovery({ taskStatus, taskResult = {}, summary = "", deliveryResultRecovery = null }) {
+  const recovery = deliveryResultRecovery || taskResult.delivery_result_recovery || null;
+  if (!recovery) return { taskStatus, taskResult, summary };
+
+  const verification = recovery.verification || taskResult.verification || null;
+  const commands = Array.isArray(verification?.commands) ? verification.commands : [];
+  const verified = verification?.passed === true && commands.length > 0;
+  const canonicalClean = recovery.canonical_clean === true;
+  const commitIntegrated = recovery.commit_integrated === true;
+  const hasHeads = Boolean(recovery.commit && recovery.local_head && recovery.remote_head);
+
+  const nextTaskResult = {
+    ...taskResult,
+    delivery_result_recovery: {
+      ...recovery,
+      verification,
+      passed: verified && canonicalClean && commitIntegrated && hasHeads,
+    },
+  };
+
+  if (!(verified && canonicalClean && commitIntegrated && hasHeads)) {
+    return { taskStatus, taskResult: nextTaskResult, summary };
+  }
+
+  const findings = Array.isArray(nextTaskResult.acceptance_findings) ? [...nextTaskResult.acceptance_findings] : [];
+  findings.push({
+    severity: "followup",
+    code: "result_missing_but_verified_commit",
+    message: "Codex CLI/result writeback failed, but canonical commit integration and verification evidence are complete.",
+    source: "task_final_writeback",
+    resolved: true,
+  });
+
+  const recoveredSummary = recovery.summary || summary || nextTaskResult.summary || "Delivery result writeback recovered from verified commit evidence.";
+  return {
+    taskStatus: "completed",
+    summary: recoveredSummary,
+    taskResult: {
+      ...nextTaskResult,
+      kind: "codex_executed",
+      summary: recoveredSummary,
+      failure_class: "delivery_result_writeback_missing",
+      changed_files: Array.isArray(recovery.changed_files) ? recovery.changed_files : (Array.isArray(nextTaskResult.changed_files) ? nextTaskResult.changed_files : []),
+      tests: recovery.tests || nextTaskResult.tests || "verified fallback result; see verification.commands",
+      commit: recovery.commit,
+      local_head: recovery.local_head,
+      remote_head: recovery.remote_head,
+      verification,
+      reviewer_decision: nextTaskResult.reviewer_decision || { status: "accepted", passed: true },
+      acceptance_findings: findings,
+      followups: Array.isArray(nextTaskResult.followups) ? nextTaskResult.followups : [],
+      warnings: Array.isArray(nextTaskResult.warnings) ? nextTaskResult.warnings : [],
+      convergence: {
+        ...(nextTaskResult.convergence || {}),
+        nextStatus: "completed",
+        closureReason: "result_missing_but_verified_commit",
+      },
+    },
   };
 }
 

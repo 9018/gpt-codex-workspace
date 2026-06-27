@@ -1,4 +1,5 @@
 import { rm } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { selectWorkspace } from "./auth-context.mjs";
 import { goalWorkspaceFiles } from "./goal-files.mjs";
 import { acquireRepoLock, releaseLockForTask } from "./repo-lock.mjs";
@@ -96,6 +97,90 @@ function isIntegrationRepairableStatus(status) {
   return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
 }
 
+function gitOutput(repoPath, args) {
+  return execFileSync("git", args, { cwd: repoPath, encoding: "utf8", timeout: 10_000, maxBuffer: 1024 * 1024 }).trim();
+}
+
+function shortSha(value) {
+  return typeof value === "string" && value.length >= 7 ? value.slice(0, 7) : value;
+}
+
+function commandListFromConfig(config = {}) {
+  if (Array.isArray(config.deliveryResultRecoveryCommands)) return config.deliveryResultRecoveryCommands;
+  if (Array.isArray(config.resultRecoveryVerificationCommands)) return config.resultRecoveryVerificationCommands;
+  return [];
+}
+
+async function buildDeliveryResultRecoveryEvidence({ config, taskResult, resolvedRepo, cr, runCommandFn }) {
+  if (!resolvedRepo?.canonical_repo_path || !resolvedRepo?.task_worktree_path) return null;
+  const exitCode = cr?.returncode ?? null;
+  const isMissingResultFailure = taskResult?.failure_class === "result_missing" || taskResult?.kind === "codex_failed";
+  if (!isMissingResultFailure || exitCode === 0) return null;
+
+  let worktreeCommit = null;
+  let localHead = null;
+  let remoteHead = null;
+  let canonicalClean = false;
+  let commitIntegrated = false;
+  try {
+    worktreeCommit = gitOutput(resolvedRepo.task_worktree_path, ["rev-parse", "HEAD"]);
+    localHead = gitOutput(resolvedRepo.canonical_repo_path, ["rev-parse", "HEAD"]);
+    remoteHead = gitOutput(resolvedRepo.canonical_repo_path, ["rev-parse", "origin/" + (config.defaultBranch || "main")]);
+    canonicalClean = gitOutput(resolvedRepo.canonical_repo_path, ["status", "--short"]) === "";
+    commitIntegrated = worktreeCommit === localHead || worktreeCommit === remoteHead;
+    if (!commitIntegrated) {
+      try {
+        gitOutput(resolvedRepo.canonical_repo_path, ["merge-base", "--is-ancestor", worktreeCommit, localHead]);
+        commitIntegrated = true;
+      } catch {}
+    }
+  } catch {
+    return null;
+  }
+
+  const commandsToRun = commandListFromConfig(config);
+  if (!canonicalClean || !commitIntegrated || !commandsToRun.length) {
+    return {
+      reason: "result_missing_but_verified_commit",
+      canonical_clean: canonicalClean,
+      commit_integrated: commitIntegrated,
+      commit: localHead,
+      local_head: localHead,
+      remote_head: remoteHead,
+      worktree_commit: worktreeCommit,
+      verification: { passed: false, commands: [], reason: commandsToRun.length ? null : "no recovery verification commands configured" },
+      passed: false,
+    };
+  }
+
+  const commands = [];
+  for (const cmd of commandsToRun) {
+    const started = Date.now();
+    const result = await runCommandFn(cmd, resolvedRepo.canonical_repo_path, config.resultRecoveryCommandTimeout || config.shellTimeout || 600_000, config.maxShellOutputBytes || 1_000_000);
+    commands.push({
+      cmd,
+      exit_code: result?.returncode ?? 1,
+      duration_ms: Date.now() - started,
+      stdout_tail: typeof result?.stdout === "string" ? result.stdout.slice(-4000) : "",
+      stderr_tail: typeof result?.stderr === "string" ? result.stderr.slice(-4000) : "",
+    });
+  }
+  const verificationPassed = commands.length > 0 && commands.every((command) => command.exit_code === 0);
+  return {
+    reason: "result_missing_but_verified_commit",
+    canonical_clean: canonicalClean,
+    commit_integrated: commitIntegrated,
+    commit: localHead,
+    local_head: localHead,
+    remote_head: remoteHead,
+    worktree_commit: worktreeCommit,
+    summary: `Recovered missing delivery result: worktree ${shortSha(worktreeCommit)} integrated into canonical ${shortSha(localHead)} and verification passed.`,
+    tests: verificationPassed ? `${commands.length} recovery verification command(s) passed` : `${commands.filter((command) => command.exit_code !== 0).length} recovery verification command(s) failed`,
+    verification: { passed: verificationPassed, commands },
+    passed: verificationPassed,
+  };
+}
+
 function taskWithRepairContext(task, resolvedRepo) {
   return {
     ...task,
@@ -137,6 +222,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const createGoalFn = deps.createGoalFn || createGoal;
   const determineHealingActionFn = deps.determineHealingActionFn || determineHealingAction;
   const convergeTaskAfterRunFn = deps.convergeTaskAfterRunFn || convergeTaskAfterRun;
+  const runCommandFn = deps.runCommandFn;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
     delete item.lock_blocked_at;
@@ -454,6 +540,20 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     });
   }
 
+  let deliveryResultRecovery = null;
+  if (taskStatus === "failed" && taskResult.kind === "codex_failed") {
+    deliveryResultRecovery = await buildDeliveryResultRecoveryEvidence({
+      config,
+      taskResult,
+      resolvedRepo,
+      cr,
+      runCommandFn: runCommandFn || (await import("./workspace-service.mjs")).runLocalShell,
+    });
+    if (deliveryResultRecovery) {
+      taskResult.delivery_result_recovery = deliveryResultRecovery;
+    }
+  }
+
   const reviewer = buildReviewerDecision({
     result: { status: taskStatus, summary: taskResult.summary },
     findings: acceptanceFindings,
@@ -731,5 +831,6 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     shouldAttemptRepairFn,
     createRepairGoalFromFindingsFn,
     createGoalFn,
+    deliveryResultRecovery,
   });
 }

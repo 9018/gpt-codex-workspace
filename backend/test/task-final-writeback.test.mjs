@@ -677,3 +677,105 @@ test("task-final-writeback: verification failure creates repair goal and records
   assert.equal(savedState.tasks[0].result.repair_task_id, "task_repair_created");
   assert.equal(savedState.tasks[0].result.repair_goal.parent_task_id, "task_repair_writeback");
 });
+
+test("task-final-writeback: failed missing result with verified commit writes fallback result and completes", async () => {
+  let savedState = null;
+  let fallbackJson = null;
+  const args = makeMinimalArgs("failed");
+  args.goal = { id: "goal_verified_writeback", workspace_id: "hosted-default", title: "Verified writeback" };
+  args.task = { id: "task_verified_writeback", goal_id: args.goal.id, logs: [] };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ id: args.task.id, goal_id: args.goal.id, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_verified_writeback", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = {
+    kind: "codex_failed",
+    summary: "Codex execution failed (non-zero exit)",
+    failure_class: "result_missing",
+    changed_files: [],
+    warnings: [],
+    followups: [],
+  };
+  args.cr = { returncode: 1, stdout_bytes: 0, stderr_bytes: 1234 };
+  args.resultJsonPath = "/tmp/test-workspace/.gptwork/goals/goal_verified_writeback/result.json";
+  args.deliveryResultRecovery = {
+    reason: "result_missing_but_verified_commit",
+    canonical_clean: true,
+    commit_integrated: true,
+    commit: "88546312e483f2ce4a338ae0486e31c9bc4dd739",
+    local_head: "88546312e483f2ce4a338ae0486e31c9bc4dd739",
+    remote_head: "88546312e483f2ce4a338ae0486e31c9bc4dd739",
+    worktree_commit: "0f2808abbadc44c5b5c8bfa0547349878c4e8306",
+    verification: {
+      passed: true,
+      commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }],
+    },
+  };
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(savedState.tasks[0].status, "completed");
+  assert.equal(savedState.goals[0].status, "completed");
+  assert.equal(savedState.goal_queue[0].status, "completed");
+  assert.equal(savedState.tasks[0].result.failure_class, "delivery_result_writeback_missing");
+  assert.equal(savedState.tasks[0].result.delivery_result_recovery.reason, "result_missing_but_verified_commit");
+  assert.equal(savedState.tasks[0].result.verification.passed, true);
+  assert.equal(fallbackJson.status, "completed");
+  assert.equal(fallbackJson.commit, "88546312e483f2ce4a338ae0486e31c9bc4dd739");
+  assert.equal(fallbackJson.local_head, "88546312e483f2ce4a338ae0486e31c9bc4dd739");
+  assert.equal(fallbackJson.delivery_result_recovery.reason, "result_missing_but_verified_commit");
+});
+
+test("task-final-writeback: missing result recovery without verification does not complete", async () => {
+  let savedState = null;
+  const args = makeMinimalArgs("failed");
+  args.goal = { id: "goal_unverified_writeback", workspace_id: "hosted-default", title: "Unverified writeback" };
+  args.task = { id: "task_unverified_writeback", goal_id: args.goal.id, logs: [] };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ id: args.task.id, goal_id: args.goal.id, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_unverified_writeback", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = {
+    kind: "codex_failed",
+    summary: "Codex execution failed (non-zero exit)",
+    failure_class: "result_missing",
+    changed_files: [],
+    warnings: [],
+    followups: [],
+  };
+  args.deliveryResultRecovery = {
+    reason: "result_missing_but_verified_commit",
+    canonical_clean: true,
+    commit_integrated: true,
+    commit: "88546312e483f2ce4a338ae0486e31c9bc4dd739",
+    verification: { passed: false, commands: [] },
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.notEqual(result.status, "completed");
+  assert.equal(savedState.tasks[0].status, "failed");
+  assert.equal(savedState.goals[0].status, "failed");
+});

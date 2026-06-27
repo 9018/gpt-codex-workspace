@@ -108,6 +108,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
     codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),
     codexStallThreshold: _getNum("GPTWORK_CODEX_STALL_THRESHOLD_SECONDS", 600),
+    deliveryResultRecoveryCommands: parseCommandList(_get("GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS", "")),
+    resultRecoveryCommandTimeout: _getNum("GPTWORK_RESULT_RECOVERY_COMMAND_TIMEOUT", 600),
 
     // Git defaults
     defaultRepo: _get("GPTWORK_DEFAULT_REPO", ""),
@@ -197,6 +199,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     shellTranscript: "GPTWORK_SHELL_TRANSCRIPT",
     codexConcurrency: "GPTWORK_CODEX_CONCURRENCY",
     codexStallThreshold: "GPTWORK_CODEX_STALL_THRESHOLD_SECONDS",
+    deliveryResultRecoveryCommands: "GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS",
+    resultRecoveryCommandTimeout: "GPTWORK_RESULT_RECOVERY_COMMAND_TIMEOUT",
     defaultRepo: "GPTWORK_DEFAULT_REPO",
     defaultBranch: "GPTWORK_DEFAULT_BRANCH",
     defaultRepoPath: "GPTWORK_DEFAULT_REPO_PATH",
@@ -242,3 +246,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
 }
 
 export { loadRuntimeEnv };
+
+function parseCommandList(raw) {
+  if (!raw || typeof raw !== "string") return [];
+  return raw.split("||").map((item) => item.trim()).filter(Boolean);
+}

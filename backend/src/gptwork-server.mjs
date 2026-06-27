@@ -69,6 +69,8 @@ export async function createGptWorkServer(options = {}) {
     codexExecArgs: options.codexExecArgs || rcc.codexExecArgs,
     codexExecTimeout: Number(options.codexExecTimeout || rcc.codexExecTimeout),
     codexFirstOutputTimeout: Number(options.codexFirstOutputTimeout || rcc.codexFirstOutputTimeout || 180),
+    deliveryResultRecoveryCommands: options.deliveryResultRecoveryCommands || rcc.deliveryResultRecoveryCommands,
+    resultRecoveryCommandTimeout: Number(options.resultRecoveryCommandTimeout || rcc.resultRecoveryCommandTimeout || rcc.shellTimeout || 600),
     pythonCommand: options.pythonCommand || rcc.python,
     codexStallThreshold: Number(options.codexStallThreshold || rcc.codexStallThreshold),
     maxReadBytes: rcc.maxReadBytes,

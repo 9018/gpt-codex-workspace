@@ -2,6 +2,7 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
+import { writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
@@ -131,6 +132,32 @@ test("reconciliation: no result.json preserves codex_stalled", async () => {
   assert.ok(task.result, "task result should be set");
   assert.equal(task.result.kind, "codex_stalled",
     `expected codex_stalled, got ${task.result.kind}`);
+});
+
+test("reconciliation: stale_running_released_lock does not remain running", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-rec-"));
+  const wsRoot = join(root, "workspace");
+  await mkdir(wsRoot, { recursive: true });
+  const server = await makeServer(root);
+
+  const { taskId } = await setupRunningTask(server, wsRoot);
+  const lockDir = join(wsRoot, ".gptwork", "locks", "repos");
+  await mkdir(lockDir, { recursive: true });
+  writeFileSync(join(lockDir, `test-${taskId}.json`), JSON.stringify({
+    task_id: taskId,
+    status: "released",
+    released_at: new Date(Date.now() - 60_000).toISOString(),
+    stale_reason: "owner process not found",
+  }, null, 2));
+
+  const reconResult = await server.reconcileStaleTasks();
+  assert.equal(reconResult.ok, true);
+
+  const { task } = await callTool(server, "get_task", { task_id: taskId });
+  assert.notEqual(task.status, "running", "released-lock stale task must not remain running");
+  assert.equal(task.status, "waiting_for_review");
+  assert.equal(task.result.kind, "stale_running_released_lock");
+  assert.match(task.result.reconciliation_message, /released lock/i);
 });
 
 test("reconciliation: malformed result.json produces result_json_parse_failed", async () => {

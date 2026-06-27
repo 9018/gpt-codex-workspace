@@ -292,6 +292,96 @@ test("converge: result missing + diff → waiting_for_review", () => {
   assert.equal(result.nextStatus, CONVERGENCE_STATUSES.WAITING_FOR_REVIEW);
 });
 
+test("converge: result_missing_but_verified_commit → completed", () => {
+  const result = convergeTaskAfterRun({
+    task: { id: "verified-missing-result", status: "running" },
+    taskResult: {
+      kind: "codex_failed",
+      failure_class: "result_missing",
+      from_json: false,
+      delivery_result_recovery: {
+        reason: "result_missing_but_verified_commit",
+        passed: true,
+      },
+      verification: {
+        passed: true,
+        commands: [{ cmd: "npm test", exit_code: 0 }],
+      },
+      commit: "a".repeat(40),
+      remote_head: "a".repeat(40),
+    },
+    repoState: {
+      canonical_clean: true,
+      commit_integrated: true,
+      local_head: "a".repeat(40),
+      remote_head: "a".repeat(40),
+    },
+    attempt: 0,
+  });
+
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.COMPLETED);
+  assert.equal(result.closureReason, CLOSURE_REASONS.RESULT_MISSING_BUT_VERIFIED_COMMIT);
+  assert.equal(result.repairPlan, null);
+  assert.ok(result.findings.some((finding) => finding.code === "result_missing_but_verified_commit"));
+});
+
+test("converge: result_missing_without_verification does not complete", () => {
+  const result = convergeTaskAfterRun({
+    task: { id: "unverified-missing-result", status: "running" },
+    taskResult: {
+      kind: "codex_failed",
+      failure_class: "result_missing",
+      from_json: false,
+      delivery_result_recovery: {
+        reason: "result_missing_but_verified_commit",
+        passed: false,
+      },
+      commit: "a".repeat(40),
+      remote_head: "a".repeat(40),
+    },
+    repoState: {
+      canonical_clean: true,
+      commit_integrated: true,
+    },
+    attempt: 0,
+  });
+
+  assert.notEqual(result.nextStatus, CONVERGENCE_STATUSES.COMPLETED);
+  assert.equal(result.repairPlan, null);
+});
+
+test("converge: codex_exit_1_with_verified_commit avoids code repair", () => {
+  const result = convergeTaskAfterRun({
+    task: { id: "exit-one-verified", status: "running" },
+    taskResult: {
+      kind: "codex_failed",
+      failure_class: "codex_failed",
+      diagnostics: { exit_code: 1 },
+      delivery_result_recovery: {
+        reason: "delivery_result_writeback_missing",
+        passed: true,
+      },
+      verification: {
+        passed: true,
+        commands: [{ cmd: "node --test backend/test/task-convergence.test.mjs", exit_code: 0 }],
+      },
+      commit: "b".repeat(40),
+      remote_head: "b".repeat(40),
+    },
+    repoState: {
+      canonical_clean: true,
+      commit_integrated: true,
+      local_head: "b".repeat(40),
+      remote_head: "b".repeat(40),
+    },
+    attempt: 0,
+  });
+
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.COMPLETED);
+  assert.equal(result.repairPlan, null);
+  assert.equal(result.closureReason, CLOSURE_REASONS.RESULT_MISSING_BUT_VERIFIED_COMMIT);
+});
+
 // ---------------------------------------------------------------------------
 // 9. Runtime changes → restart_pending
 // ---------------------------------------------------------------------------
