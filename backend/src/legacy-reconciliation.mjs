@@ -80,7 +80,9 @@ export function isHistoricalProviderNoResultFailure(task = {}) {
 
   const providerShape =
     result.kind === "codex_failed" ||
+    result.kind === "codex_timeout" ||
     result.failure_class === "result_missing" ||
+    result.failure_class === "codex_timeout" ||
     result.noop === true;
   if (!providerShape) return false;
 
@@ -100,6 +102,8 @@ export function isHistoricalProviderNoResultFailure(task = {}) {
     "no commit",
     "no structured summary",
     "not found or invalid",
+    "codex execution failed",
+    "codex execution timed out",
     "no-op",
   ]);
 }

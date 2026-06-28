@@ -327,3 +327,71 @@ test('legacyFailedPolicySummary still blocks real code failures in mixed provide
   assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
   assert.equal(result.legacy_failed_policy.blocks_current_work, true);
 });
+
+test('legacyFailedPolicySummary excludes codex timeout without code evidence from current blockers', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          {
+            assignee: 'codex',
+            status: 'timed_out',
+            id: 'task_timeout_no_evidence',
+            result: {
+              kind: 'codex_timeout',
+              summary: 'Codex execution timed out',
+              changed_files: [],
+              tests: null,
+              commit: null,
+            },
+          },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.failed, 0);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+});
+
+test('legacyFailedPolicySummary excludes codex failed without code evidence from current blockers', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          {
+            assignee: 'codex',
+            status: 'failed',
+            id: 'task_codex_failed_no_evidence',
+            result: {
+              kind: 'codex_failed',
+              summary: 'Codex execution failed (non-zero exit)',
+              changed_files: [],
+              tests: null,
+              commit: null,
+            },
+          },
+          {
+            assignee: 'codex',
+            status: 'failed',
+            id: 'task_code_failure_still_blocks',
+            result: {
+              kind: 'codex_failed',
+              summary: 'Codex execution failed (non-zero exit)',
+              changed_files: ['backend/src/real-change.mjs'],
+              tests: 'node --test failed',
+              commit: null,
+            },
+          },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.failed, 1);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});
