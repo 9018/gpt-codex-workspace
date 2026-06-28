@@ -518,3 +518,32 @@ test("buildRuntimeConfig GPTWORK_GITHUB_ENABLED=false disables even with repo/to
   delete process.env.GPTWORK_GITHUB_REPO;
   delete process.env.GPTWORK_GITHUB_TOKEN;
 });
+
+test("buildRuntimeConfig supports Codex contentful progress timeout env keys", async () => {
+  clearGptWorkVars();
+  const defaults = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(defaults.config.codexContentFirstOutputTimeout, 0);
+  assert.equal(defaults.config.codexNoProgressTimeout, 0);
+  assert.equal(defaults.sources.codexContentFirstOutputTimeout, "default");
+  assert.equal(defaults.sources.codexNoProgressTimeout, "default");
+
+  const { root } = await makeEnvFile(
+    "GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT=300\n" +
+    "GPTWORK_CODEX_NO_PROGRESS_TIMEOUT=900\n"
+  );
+  const loaded = buildRuntimeConfig(root);
+  assert.equal(loaded.config.codexContentFirstOutputTimeout, 300);
+  assert.equal(loaded.config.codexNoProgressTimeout, 900);
+  assert.equal(loaded.sources.codexContentFirstOutputTimeout, "runtime.env");
+  assert.equal(loaded.sources.codexNoProgressTimeout, "runtime.env");
+
+  process.env.GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT = "111";
+  process.env.GPTWORK_CODEX_NO_PROGRESS_TIMEOUT = "222";
+  const overridden = buildRuntimeConfig(root);
+  assert.equal(overridden.config.codexContentFirstOutputTimeout, 111);
+  assert.equal(overridden.config.codexNoProgressTimeout, 222);
+  assert.equal(overridden.sources.codexContentFirstOutputTimeout, "process.env");
+  assert.equal(overridden.sources.codexNoProgressTimeout, "process.env");
+  delete process.env.GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT;
+  delete process.env.GPTWORK_CODEX_NO_PROGRESS_TIMEOUT;
+});
