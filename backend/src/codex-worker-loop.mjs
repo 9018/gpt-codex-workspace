@@ -71,9 +71,12 @@ export function startCodexWorker(server, {
         const now = Date.now();
         if (now - lastMaintenanceTime >= maintenanceIntervalMs) {
           lastMaintenanceTime = Date.now();
-          server.getDefaultWorkspaceRoot().then(wsRoot => {
+          try {
+            const wsRoot = await server.getDefaultWorkspaceRoot();
             if (wsRoot) runIdleMaintenance(wsRoot).catch(() => {});
-          }).catch(() => {});
+          } catch {
+            // Maintenance is best-effort and should not block task execution.
+          }
         }
       }
 

@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getWorkerProgressCount } from '../src/codex-worker-loop.mjs';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { getWorkerProgressCount, startCodexWorker } from '../src/codex-worker-loop.mjs';
+
+async function waitFor(predicate, { timeoutMs = 1000, intervalMs = 10 } = {}) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise(resolve => setTimeout(resolve, intervalMs));
+  }
+  throw new Error('timed out waiting for condition');
+}
 
 test('getWorkerProgressCount prefers explicit progressed counter without double-counting', () => {
   assert.equal(getWorkerProgressCount({ progressed: 2, completed: 1, failed: 1, tasks: [] }), 2);
@@ -81,4 +93,32 @@ test('getWorkerProgressCount fallback only counts each task once even with multi
     ],
   });
   assert.equal(result, 3);
+});
+
+test('startCodexWorker accepts synchronous default workspace root resolver', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-worker-loop-'));
+  const workerState = {};
+  let runAssignedCount = 0;
+  const server = {
+    getDefaultWorkspaceRoot: () => root,
+    reconcileStaleTasks: async () => ({ ok: true, reconciled: 0 }),
+    runAssignedCodexTasks: async () => {
+      runAssignedCount += 1;
+      return { inspected: 0, progressed: 0, completed: 0, failed: 0, tasks: [] };
+    },
+  };
+
+  const worker = startCodexWorker(server, {
+    intervalMs: 10000,
+    workerState,
+    maintenanceIntervalMs: 0,
+  });
+
+  try {
+    await waitFor(() => workerState.last_tick_finished_at);
+    assert.equal(workerState.last_error, null);
+    assert.equal(runAssignedCount, 1);
+  } finally {
+    worker.stop();
+  }
 });
