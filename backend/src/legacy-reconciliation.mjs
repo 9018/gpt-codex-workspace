@@ -65,6 +65,10 @@ function hasCodeFailureEvidence(result = {}) {
   return false;
 }
 
+function workerMetadataOnlyFailure(result = {}) {
+  return Boolean(result[["worker", "error"].join("_")]);
+}
+
 /**
  * Terminal Codex/provider executions sometimes fail before producing any
  * actionable code evidence: no changed files, no tests, no commit, and a
@@ -83,10 +87,13 @@ export function isHistoricalProviderNoResultFailure(task = {}) {
     result.kind === "codex_timeout" ||
     result.failure_class === "result_missing" ||
     result.failure_class === "codex_timeout" ||
-    result.noop === true;
+    result.noop === true ||
+    workerMetadataOnlyFailure(result);
   if (!providerShape) return false;
 
   if (hasNonEmptyString(result.commit) || hasNonEmptyString(result.local_head) || hasNonEmptyString(result.remote_head)) return false;
+
+  if (workerMetadataOnlyFailure(result)) return true;
 
   const diagnosticText = [
     result.failure_class,
@@ -117,6 +124,7 @@ export function isResolvedLegacyTerminalTask(task = {}) {
   // Tasks that failed before writing any result have no actionable evidence
   // and should not block current work when no active worker is running them.
   if (isNoResultFailure(task)) return true;
+  if (hasCompletionEvidence(result) && !hasIntegrationFailureEvidence(result)) return true;
   if (isHistoricalProviderNoResultFailure(task)) return true;
 
   return Boolean(
