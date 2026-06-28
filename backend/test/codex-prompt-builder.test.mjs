@@ -336,4 +336,119 @@ test("buildCodexPrompt: no conflicting instructions with all new params passed",
   assert.ok(fullPrompt.includes("All code changes must be made within"), "has execution instruction");
 });
 
+
+
+// ===========================================================================
+// P0: Context entry-first ordering — codex.entry.md before goal.md/transcript.md
+// ===========================================================================
+
+test('buildCodexPrompt references codex.entry.md first before goal.md/transcript.md', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_entry_first', title: 'Entry first', description: '' },
+    goal: { id: 'goal_entry_first' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_entry_first/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_entry_first/context.bundle.md',
+      context_json: '.gptwork/goals/goal_entry_first/context.json',
+      goal_md: '.gptwork/goals/goal_entry_first/goal.md',
+      transcript_md: '.gptwork/goals/goal_entry_first/transcript.md',
+      result_md: '.gptwork/goals/goal_entry_first/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  // codex.entry.md must appear FIRST in the goal context section
+  const entryIdx = fullPrompt.indexOf('codex.entry.md');
+  const goalIdx = fullPrompt.indexOf('goal.md');
+  const contextIdx = fullPrompt.indexOf('context.json');
+  const transcriptIdx = fullPrompt.indexOf('transcript.md');
+  const bundleIdx = fullPrompt.indexOf('context.bundle.md');
+
+  assert.ok(entryIdx >= 0, 'codex.entry.md must be referenced');
+  assert.ok(entryIdx < goalIdx || goalIdx < 0, 'codex.entry.md must appear before goal.md');
+  assert.ok(entryIdx < contextIdx || contextIdx < 0, 'codex.entry.md must appear before context.json');
+  assert.ok(entryIdx < transcriptIdx || transcriptIdx < 0, 'codex.entry.md must appear before transcript.md');
+  assert.ok(bundleIdx > entryIdx, 'context.bundle.md should come after codex.entry.md');
+});
+
+test('buildCodexPrompt: context.bundle.md is preferred over transcript.md', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_bundle_first', title: 'Bundle first', description: '' },
+    goal: { id: 'goal_bundle' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_bundle/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_bundle/context.bundle.md',
+      context_json: '.gptwork/goals/goal_bundle/context.json',
+      goal_md: '.gptwork/goals/goal_bundle/goal.md',
+      transcript_md: '.gptwork/goals/goal_bundle/transcript.md',
+      result_md: '.gptwork/goals/goal_bundle/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  // The prompt must instruct Codex to prefer context.bundle.md over goal.md/transcript.md
+  assert.ok(fullPrompt.includes('Prefer'), 'Should have "Prefer" directive');
+  assert.ok(fullPrompt.includes('context.bundle.md'), 'context.bundle.md must be referenced');
+  assert.ok(fullPrompt.includes('supporting context when present'), 'Should say "supporting context when present"');
+});
+
+test('buildCodexPrompt: transcript.md is only for explicit deep lookup', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_transcript_lookup', title: 'Transcript lookup', description: '' },
+    goal: { id: 'goal_transcript' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_transcript/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_transcript/context.bundle.md',
+      context_json: '.gptwork/goals/goal_transcript/context.json',
+      goal_md: '.gptwork/goals/goal_transcript/goal.md',
+      transcript_md: '.gptwork/goals/goal_transcript/transcript.md',
+      result_md: '.gptwork/goals/goal_transcript/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  // transcript.md should only be for explicit lookup, not force-read
+  assert.ok(fullPrompt.includes('only for explicit conversation lookup'), 'transcript.md must be for explicit lookup only');
+  assert.ok(fullPrompt.includes('when required'), 'transcript.md should only be read when required');
+});
+
+test('buildCodexPrompt: do not force long transcript reads unless bundle is insufficient', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_no_force_transcript', title: 'No force transcript', description: '' },
+    goal: { id: 'goal_nt' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_nt/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_nt/context.bundle.md',
+      context_json: '.gptwork/goals/goal_nt/context.json',
+      goal_md: '.gptwork/goals/goal_nt/goal.md',
+      transcript_md: '.gptwork/goals/goal_nt/transcript.md',
+      result_md: '.gptwork/goals/goal_nt/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  // The prompt should never say "read the entire transcript" or force long reads
+  assert.equal(fullPrompt.includes('read the entire transcript'), false, 'Must not force reading the entire transcript');
+  assert.equal(fullPrompt.includes('force-read'), false, 'Must not use force-read language');
+  // The context.bundle.md should be described as the preferred bounded context
+  assert.ok(fullPrompt.includes('bounded entrypoint'), 'Should reference bounded entrypoint');
+});
+
+test('buildCodexPrompt: preserves zvec/ZEVc quota and diagnostics behavior', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_zvec', title: 'Zvec test', description: '' },
+    goal: null,
+    workspaceFiles: null,
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  // The prompt must not force redesign of zvec/ZEVc
+  assert.equal(fullPrompt.includes('reimplement zvec'), false, 'Must not contain reimplement zvec');
+  assert.equal(fullPrompt.includes('Do not reimplement'), false, 'Must not reference internal tool constraints in prompt');
+});
 console.log("codex-prompt-builder.test.mjs loaded");

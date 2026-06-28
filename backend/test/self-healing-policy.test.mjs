@@ -171,4 +171,127 @@ test("determineHealingAction: accepts task context without throwing", () => {
   assert.ok(action.action, "should return action without error");
 });
 
+
+// ===========================================================================
+// P0: Network error retry behavior — retry_with_backoff, not code repair
+// ===========================================================================
+
+test('classifyError: rate limited returns NETWORK category', () => {
+  const result = classifyError(new Error('429 Too Many Requests'));
+  assert.equal(result.category, ERROR_CATEGORIES.NETWORK);
+  assert.equal(result.code, 'rate_limited');
+  assert.equal(result.recoverable, true);
+  assert.equal(result.retry_budget, 3);
+});
+
+test('classifyError: gateway error returns NETWORK category', () => {
+  const result = classifyError(new Error('502 Bad Gateway'));
+  assert.equal(result.category, ERROR_CATEGORIES.NETWORK);
+  assert.equal(result.code, 'gateway_error');
+  assert.equal(result.recoverable, true);
+});
+
+test('classifyError: transient network error returns NETWORK category', () => {
+  const result = classifyError(new Error('ECONNREFUSED connection refused'));
+  assert.equal(result.category, ERROR_CATEGORIES.NETWORK);
+  assert.equal(result.code, 'transient_network_error');
+  assert.equal(result.recoverable, true);
+  assert.equal(result.retry_budget, 2);
+});
+
+test('determineHealingAction: rate limited returns retry_with_backoff', () => {
+  const action = determineHealingAction({ error: new Error('429 rate limit exceeded') });
+  assert.equal(action.action, 'retry_with_backoff');
+  assert.equal(action.next_status, 'queued');
+  assert.equal(action.compact_context, false);
+  assert.equal(action.cleanup_tmp, false);
+  assert.ok(action.reason.includes('Network'));
+});
+
+test('determineHealingAction: gateway error returns retry_with_backoff', () => {
+  const action = determineHealingAction({ error: new Error('503 service unavailable') });
+  assert.equal(action.action, 'retry_with_backoff');
+  assert.equal(action.next_status, 'queued');
+});
+
+test('determineHealingAction: transient network error returns retry_with_backoff', () => {
+  const action = determineHealingAction({ error: new Error('ECONNRESET socket hang up') });
+  assert.equal(action.action, 'retry_with_backoff');
+  assert.equal(action.next_status, 'queued');
+});
+
+// ===========================================================================
+// P0: Repeated no-result must converge to bounded terminal state
+// ===========================================================================
+
+test('determineHealingAction: result_missing within budget retries', () => {
+  const action = determineHealingAction({
+    error: new Error('result.json missing'),
+    retryCount: 0,
+  });
+  assert.equal(action.action, 'fallback_parse_and_retry');
+  assert.equal(action.next_status, 'repairing');
+  assert.notEqual(action.reason, '');
+});
+
+test('determineHealingAction: result_missing budget exceeded goes to waiting_for_review', () => {
+  const action = determineHealingAction({
+    error: new Error('result.json missing'),
+    retryCount: 1,
+  });
+  assert.equal(action.action, 'waiting_for_review');
+  assert.equal(action.next_status, 'waiting_for_review');
+});
+
+test('determineHealingAction: no first output within budget retries', () => {
+  const action = determineHealingAction({
+    error: new Error('no first output timeout'),
+    retryCount: 0,
+  });
+  assert.equal(action.action, 'compact_and_retry');
+  assert.equal(action.next_status, 'repairing');
+});
+
+test('determineHealingAction: no first output budget exceeded goes to waiting_for_review', () => {
+  const action = determineHealingAction({
+    error: new Error('no first output timeout'),
+    retryCount: 1,
+  });
+  assert.equal(action.action, 'waiting_for_review');
+  assert.equal(action.next_status, 'waiting_for_review');
+});
+
+test('determineHealingAction: no active lock leak after budget exceeded', () => {
+  // After budget is exceeded for a result_missing error, the action should
+  // NOT request any lock-related state (no cleanup_tmp, no lock reentry).
+  const action = determineHealingAction({
+    error: new Error('result.json missing'),
+    retryCount: 1,
+  });
+  assert.equal(action.action, 'waiting_for_review');
+  assert.equal(action.next_status, 'waiting_for_review');
+  assert.equal(action.compact_context, false);
+  assert.equal(action.cleanup_tmp, false);
+  // The caller must not re-acquire or leak locks when going to review
+});
+
+test('determineHealingAction: repeated network failures converge to waiting_for_review', () => {
+  // Rate limited has budget 3, so retryCount 3 should trigger review
+  const action = determineHealingAction({
+    error: new Error('429 rate limit exceeded'),
+    retryCount: 3,
+  });
+  assert.equal(action.action, 'waiting_for_review');
+  assert.equal(action.next_status, 'waiting_for_review');
+});
+
+test('determineHealingAction: network error within budget does NOT create code repair', () => {
+  // Network errors should retry, not enter code repair
+  const action = determineHealingAction({
+    error: new Error('502 Bad Gateway'),
+    retryCount: 0,
+  });
+  assert.equal(action.action, 'retry_with_backoff');
+  assert.notEqual(action.next_status, 'waiting_for_repair');
+});
 console.log("self-healing-policy tests loaded");

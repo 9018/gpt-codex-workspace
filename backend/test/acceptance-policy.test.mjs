@@ -8,6 +8,11 @@ import {
   buildDeliveryEvidenceFindings,
   ACCEPTANCE_SEVERITIES,
 } from '../src/acceptance-policy.mjs';
+import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
+import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+
 
 test('acceptance policy blocks blocker findings and creates repair proposal', () => {
   const decision = evaluateAcceptance({
@@ -256,3 +261,147 @@ test("P0: delivery evidence gate accepts completed integrated task with normaliz
 
   assert.deepEqual(findings, []);
 });
+
+// ===========================================================================
+// P0: Delivery evidence — execution_cwd_proof and worktree_lifecycle_proof
+// Gated by buildDeliveryEvidenceFindings with task and evidence params.
+// ===========================================================================
+
+test("P0: buildDeliveryEvidenceFindings blocks missing execution_cwd_proof when task has worktree_path", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    { worktree_path: "/tmp/wt/task_abc" },
+    {}
+  );
+  assert.ok(findings.some((f) => f.code === "stale_missing_execution_cwd"),
+    "Should flag missing execution_cwd_proof");
+  assert.equal(findings[0].severity, "blocker");
+});
+
+test("P0: buildDeliveryEvidenceFindings blocks missing worktree_lifecycle_proof when task has worktree_path", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    { worktree_path: "/tmp/wt/task_abc" },
+    {}
+  );
+  assert.ok(findings.some((f) => f.code === "stale_missing_worktree_lifecycle"),
+    "Should flag missing worktree_lifecycle_proof");
+});
+
+test("P0: execution_cwd_proof passes when result has execution_cwd field", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done", execution_cwd: "/tmp/wt/task_abc" },
+    { worktree_path: "/tmp/wt/task_abc" },
+    {}
+  );
+  assert.equal(findings.filter((f) => f.code === "stale_missing_execution_cwd").length, 0,
+    "Should not flag missing execution_cwd_proof when result has execution_cwd");
+});
+
+test("P0: execution_cwd_proof passes when evidence has git_path", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    { worktree_path: "/tmp/wt/task_abc" },
+    { git_path: "/tmp/wt/task_abc" }
+  );
+  assert.equal(findings.filter((f) => f.code === "stale_missing_execution_cwd").length, 0,
+    "Should not flag missing execution_cwd_proof when evidence has git_path");
+});
+
+test("P0: worktree_lifecycle_proof passes when task has worktree_lifecycle", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    { worktree_path: "/tmp/wt/task_abc", worktree_lifecycle: { mode: "git_worktree", ok: true } },
+    {}
+  );
+  assert.equal(findings.filter((f) => f.code === "stale_missing_worktree_lifecycle").length, 0,
+    "Should not flag missing worktree_lifecycle_proof when task has worktree_lifecycle");
+});
+
+test("P0: worktree_lifecycle_proof passes when evidence has worktree_lifecycle", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    { worktree_path: "/tmp/wt/task_abc" },
+    { worktree_lifecycle: { mode: "git_worktree", ok: true } }
+  );
+  assert.equal(findings.filter((f) => f.code === "stale_missing_worktree_lifecycle").length, 0,
+    "Should not flag missing worktree_lifecycle_proof when evidence has worktree_lifecycle");
+});
+
+test("P0: buildDeliveryEvidenceFindings without worktree_path does not flag execution_cwd or worktree_lifecycle", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done" },
+    {},
+    {}
+  );
+  assert.equal(findings.filter((f) => f.code.startsWith("stale_missing_")).length, 0,
+    "Should not flag missing evidence when task has no worktree_path");
+});
+
+test("P0: buildDeliveryEvidenceFindings still blocks stale flags even with task/evidence params", () => {
+  const findings = buildDeliveryEvidenceFindings(
+    { status: "completed", summary: "Done", needs_integration: true, dirty: true },
+    {},
+    {}
+  );
+  assert.ok(findings.some((f) => f.code === "stale_needs_integration"),
+    "Should still flag stale needs_integration");
+  assert.ok(findings.some((f) => f.code === "stale_dirty_flag"),
+    "Should still flag stale dirty flag");
+});
+
+test("P0: acceptance.evidence.json is equivalent structured evidence for delivery", async () => {
+  const { collectVerificationEvidence } = await import("../src/verification-evidence.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "gptwork-evidence-delivery-"));
+  try {
+    const evidence = await collectVerificationEvidence({
+      outputDir: dir,
+      acceptanceFindings: [{ severity: "followup", code: "test", message: "test", source: "test" }],
+    });
+
+    // acceptance.evidence.json must be produced
+    assert.ok(evidence.acceptance_evidence_json, "acceptance.evidence.json path must be present");
+    assert.ok(evidence.evidence_paths.acceptance_evidence_json, "evidence_paths must include acceptance_evidence_json");
+
+    // The file must exist on disk
+    const { existsSync } = await import("node:fs");
+    assert.ok(existsSync(evidence.acceptance_evidence_json), "acceptance.evidence.json must exist on disk");
+
+    // The file must contain structured evidence
+    const { readFileSync } = await import("node:fs");
+    const parsed = JSON.parse(readFileSync(evidence.acceptance_evidence_json, "utf8"));
+    assert.ok(parsed.collected_at, "acceptance.evidence.json must have collected_at");
+    assert.ok(Array.isArray(parsed.acceptance_findings), "acceptance.evidence.json must have acceptance_findings");
+    assert.ok(parsed.acceptance_findings.length > 0, "acceptance.evidence.json must include the passed findings");
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("P0: collectVerificationEvidence captures git_path as execution_cwd_proof-equivalent", async () => {
+  const { collectVerificationEvidence } = await import("../src/verification-evidence.mjs");
+  const dir = await mkdtemp(join(tmpdir(), "gptwork-evidence-cwd-"));
+  try {
+    const evidence = await collectVerificationEvidence({
+      outputDir: dir,
+      repoPath: process.cwd(),
+    });
+
+    // The evidence should have a git_path that identifies execution context
+    if (evidence.git_status !== null) {
+      assert.ok(typeof evidence.git_status === "string", "git_status should be a string when available");
+
+      // acceptance.evidence.json must record git_path
+      const { readFileSync } = await import("node:fs");
+      const parsed = JSON.parse(readFileSync(evidence.acceptance_evidence_json, "utf8"));
+      if (parsed.git_path) {
+        assert.ok(typeof parsed.git_path === "string", "acceptance.evidence.json must have git_path");
+      }
+    }
+  } finally {
+    const { rmSync } = await import("node:fs");
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+

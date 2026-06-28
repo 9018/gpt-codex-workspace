@@ -106,7 +106,7 @@ export function buildWorktreeReliabilityFindings(signals = {}) {
   return findings;
 }
 
-export function buildDeliveryEvidenceFindings(result = {}) {
+export function buildDeliveryEvidenceFindings(result = {}, task = {}, evidence = {}) {
   const findings = [];
   const add = (code, message) => findings.push({ severity: 'blocker', code, message, source: 'delivery_evidence_policy' });
 
@@ -125,6 +125,16 @@ export function buildDeliveryEvidenceFindings(result = {}) {
   const warnings = Array.isArray(result.warnings) ? result.warnings : [];
   if (warnings.some((warning) => /^Worktree retained:/i.test(String(warning || '')))) {
     add('stale_retained_worktree_warning', 'Completed task result still advertises a retained worktree warning.');
+  }
+
+  // Check execution_cwd_proof: a task with a worktree_path must also have execution_cwd
+  // or the evidence must record the execution directory.
+  if (task?.worktree_path && !result?.execution_cwd && !result?.execution_cwd_proof && !evidence?.git_path && !evidence?.execution_cwd) {
+    add('stale_missing_execution_cwd', 'Completed task with worktree_path lacks execution_cwd_proof.');
+  }
+  // Check worktree_lifecycle_proof: a task with a worktree_path must have worktree_lifecycle metadata.
+  if (task?.worktree_path && !task?.worktree_lifecycle && !evidence?.worktree_lifecycle && !result?.worktree_lifecycle) {
+    add('stale_missing_worktree_lifecycle', 'Completed task with worktree_path lacks worktree_lifecycle_proof metadata.');
   }
 
   return findings;

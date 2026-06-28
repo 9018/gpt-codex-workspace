@@ -194,7 +194,7 @@ export async function runAcceptanceAgent({ task, goal, result, repoPath, profile
     
   }
 
-  findings.push(...buildDeliveryEvidenceFindings(result));
+  findings.push(...buildDeliveryEvidenceFindings(result, task, evidence));
 
   // Run relaxed checks (only if they fail — don't add findings for passes)
   if (Array.isArray(profileConfig.relaxed)) {

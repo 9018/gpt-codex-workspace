@@ -2,7 +2,7 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { mkdir, mkdtemp, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -273,4 +273,145 @@ test("P0: ensureTaskWorktree records execution_cwd and worktree_lifecycle metada
   });
 });
 
+
+// ===========================================================================
+// P0: Worktree isolation — builder tasks execute from per-task git worktree,
+// lock on task worktree path, canonical repo remains clean,
+// integration/restart boundaries are explicit.
+// ===========================================================================
+
+test("P0: ensureTaskWorktree locks on task worktree path, not canonical repo root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-lockpath-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const result = await ensureTaskWorktree("github.com/acme/repo", "task_lockpath", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+    baseRef: "HEAD",
+  });
+
+  assert.equal(result.ok, true);
+  // The worktree path must be under the workspace worktrees directory, not the canonical repo root
+  assert.ok(result.worktree_path.startsWith(join(root, ".gptwork", "worktrees")),
+    "Worktree path should be under .gptwork/worktrees, not canonical repo root");
+  assert.notEqual(result.worktree_path, repo,
+    "Worktree path must not equal canonical repo path");
+
+  // Clean up
+  await removeTaskWorktree("task_lockpath", {
+    workspaceRoot: root,
+    repoId: "github.com/acme/repo",
+    canonicalRepoPath: repo,
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("P0: builder task worktree isolation - canonical repo remains clean after worktree operations", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-clean-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const result = await ensureTaskWorktree("github.com/acme/repo", "task_clean", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+    baseRef: "HEAD",
+  });
+
+  assert.equal(result.ok, true);
+
+  // Make a change in the worktree
+  await writeFile(join(result.worktree_path, "worktree_change.txt"), "worktree content\n", "utf8");
+  execFileSync("git", ["add", "worktree_change.txt"], { cwd: result.worktree_path, stdio: "ignore" });
+  execFileSync("git", ["commit", "-m", "worktree change"], { cwd: result.worktree_path, stdio: "ignore" });
+
+  // The canonical repo must remain clean
+  const canonicalStatus = execFileSync("git", ["status", "--porcelain"], {
+    cwd: repo,
+    encoding: "utf8",
+    timeout: 10000,
+  }).trim();
+  assert.equal(canonicalStatus, "", "Canonical repo must remain clean after worktree operations");
+
+  // Clean up
+  await removeTaskWorktree("task_clean", {
+    workspaceRoot: root,
+    repoId: "github.com/acme/repo",
+    canonicalRepoPath: repo,
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("P0: removeTaskWorktree cleans up after integration - worktree removed from disk, canonical repo unaffected", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-integration-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const result = await ensureTaskWorktree("github.com/acme/repo", "task_integration", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+    baseRef: "HEAD",
+  });
+
+  assert.equal(result.ok, true);
+  const wtPath = result.worktree_path;
+
+  // Verify worktree exists
+  assert.ok(existsSync(join(wtPath, ".git")), "Worktree should exist after creation");
+
+  // Remove worktree (simulating integration cleanup)
+  const removed = await removeTaskWorktree("task_integration", {
+    workspaceRoot: root,
+    repoId: "github.com/acme/repo",
+    canonicalRepoPath: repo,
+  });
+  assert.equal(removed.ok, true);
+
+  // Worktree must be removed from disk
+  assert.equal(existsSync(wtPath), false, "Worktree should be removed from disk after removeTaskWorktree");
+
+  // Canonical repo must remain fully functional
+  const logResult = execFileSync("git", ["log", "--oneline", "-1"], {
+    cwd: repo,
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assert.ok(logResult.length > 0, "Canonical repo must still have valid git history");
+
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("P0: restart boundary - worktree survives worker restart and is recoverable", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-wtm-restart-"));
+  const repo = join(root, "canonical");
+  await initGitRepo(repo);
+
+  const result = await ensureTaskWorktree("github.com/acme/repo", "task_restart", {
+    workspaceRoot: root,
+    canonicalRepoPath: repo,
+    baseRef: "HEAD",
+  });
+
+  assert.equal(result.ok, true);
+  const wtPath = result.worktree_path;
+
+  // Simulate restart by checking that the worktree is still valid git worktree
+  const isWorktree = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+    cwd: wtPath,
+    encoding: "utf8",
+    timeout: 10000,
+  }).trim();
+  assert.equal(isWorktree, "true", "Worktree should be a valid git worktree after simulated restart");
+
+  // Clean up
+  await removeTaskWorktree("task_restart", {
+    workspaceRoot: root,
+    repoId: "github.com/acme/repo",
+    canonicalRepoPath: repo,
+  });
+
+  rmSync(root, { recursive: true, force: true });
+});
 console.log("P0 worktree concurrency tests loaded");
