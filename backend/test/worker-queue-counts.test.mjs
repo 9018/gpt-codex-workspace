@@ -251,3 +251,79 @@ test('legacyFailedPolicySummary clean idle completed state does not block', asyn
   assert.equal(result.legacy_failed_policy.blocks_current_work, false);
   assert.equal(result.completed, 1);
 });
+
+test('legacyFailedPolicySummary excludes provider result_missing noop failures from current blockers', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          {
+            assignee: 'codex',
+            status: 'failed',
+            id: 'task_provider_noop',
+            result: {
+              kind: 'codex_failed',
+              failure_class: 'result_missing',
+              changed_files: [],
+              tests: null,
+              commit: null,
+              noop: true,
+              diagnostics: {
+                detected_reason: 'No changed files, no tests, no commit, no structured summary',
+              },
+            },
+          },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.failed, 0);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+});
+
+test('legacyFailedPolicySummary still blocks real code failures in mixed provider-noop state', async () => {
+  const providerFailures = Array.from({ length: 50 }, (_, index) => ({
+    assignee: 'codex',
+    status: 'failed',
+    id: `task_provider_${index}`,
+    result: {
+      kind: 'codex_failed',
+      failure_class: 'result_missing',
+      changed_files: [],
+      tests: null,
+      commit: null,
+      noop: true,
+      diagnostics: {
+        detected_reason: 'No changed files, no tests, no commit, no structured summary',
+      },
+    },
+  }));
+
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          ...providerFailures,
+          {
+            assignee: 'codex',
+            status: 'failed',
+            id: 'task_real_code_failure',
+            result: {
+              changed_files: ['backend/src/example.mjs'],
+              verification: { passed: false },
+            },
+          },
+        ],
+      };
+    },
+  };
+
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.failed, 1);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 50);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});

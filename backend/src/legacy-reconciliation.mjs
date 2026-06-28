@@ -38,6 +38,72 @@ function isNoResultFailure(task = {}) {
   return !hasAnyResult && !hasMeaningfulResultId;
 }
 
+function hasNonEmptyArray(value) {
+  return Array.isArray(value) && value.length > 0;
+}
+
+function hasNonEmptyString(value) {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function textIncludesAny(value, patterns = []) {
+  if (!hasNonEmptyString(value)) return false;
+  const lower = value.toLowerCase();
+  return patterns.some((pattern) => lower.includes(pattern));
+}
+
+function hasIntegrationFailureEvidence(result = {}) {
+  const status = result.integration?.status || result.delivery?.status || null;
+  return ["conflict", "check_failed", "push_failed", "pr_failed", "failed", "error"].includes(status);
+}
+
+function hasCodeFailureEvidence(result = {}) {
+  if (hasNonEmptyArray(result.changed_files)) return true;
+  if (hasNonEmptyString(result.tests)) return true;
+  if (result.verification?.passed === false) return true;
+  if (hasIntegrationFailureEvidence(result)) return true;
+  return false;
+}
+
+/**
+ * Terminal Codex/provider executions sometimes fail before producing any
+ * actionable code evidence: no changed files, no tests, no commit, and a
+ * result_missing/no-op/codex_failed diagnostic. These are operational history,
+ * not current code blockers. Keep this narrower than isNoResultFailure so a
+ * plain failed task with an empty result object still remains actionable.
+ */
+export function isHistoricalProviderNoResultFailure(task = {}) {
+  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  const result = task.result || {};
+  if (!result || typeof result !== "object") return false;
+  if (hasCodeFailureEvidence(result)) return false;
+
+  const providerShape =
+    result.kind === "codex_failed" ||
+    result.failure_class === "result_missing" ||
+    result.noop === true;
+  if (!providerShape) return false;
+
+  if (hasNonEmptyString(result.commit) || hasNonEmptyString(result.local_head) || hasNonEmptyString(result.remote_head)) return false;
+
+  const diagnosticText = [
+    result.failure_class,
+    result.summary,
+    result.diagnostics?.detected_reason,
+    result.diagnostics?.result_json_error,
+  ].filter(Boolean).join("\n");
+
+  return textIncludesAny(diagnosticText, [
+    "result_missing",
+    "no changed files",
+    "no tests",
+    "no commit",
+    "no structured summary",
+    "not found or invalid",
+    "no-op",
+  ]);
+}
+
 export function isResolvedLegacyTerminalTask(task = {}) {
   if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
   const result = task.result || {};
@@ -47,6 +113,7 @@ export function isResolvedLegacyTerminalTask(task = {}) {
   // Tasks that failed before writing any result have no actionable evidence
   // and should not block current work when no active worker is running them.
   if (isNoResultFailure(task)) return true;
+  if (isHistoricalProviderNoResultFailure(task)) return true;
 
   return Boolean(
     task.resolved_legacy === true ||
