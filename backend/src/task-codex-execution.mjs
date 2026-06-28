@@ -5,6 +5,42 @@ import { runLocalShell } from "./workspace-service.mjs";
 
 const RESULT_SEPARATOR = "=".repeat(60);
 
+export function isCodexContentfulOutput({ streamName, chunk } = {}) {
+  const text = String(chunk || "");
+  if (!text.trim()) return false;
+  if (streamName === "stdout") return true;
+
+  const lines = text.split(/\r?\n/).map((line) => line.trim()).filter(Boolean);
+  if (!lines.length) return false;
+
+  const bannerPrefixes = [
+    "Reading prompt from stdin",
+    "OpenAI Codex",
+    "workdir:",
+    "model:",
+    "provider:",
+    "approval:",
+    "sandbox:",
+    "reasoning effort:",
+    "reasoning summaries:",
+    "session id:",
+  ];
+
+  for (const line of lines) {
+    if (line === "--------" || line === "user") continue;
+    if (bannerPrefixes.some((prefix) => line.startsWith(prefix))) continue;
+    if (/^# Task:/.test(line)) continue;
+    if (/^##\s+/.test(line)) continue;
+    if (/^- \*\*/.test(line)) continue;
+    if (/^(Goal ID|Conversation ID|Mode|User Request|Goal Prompt|Context Summary):/.test(line)) continue;
+
+    if (/^(assistant|thinking|exec|apply_patch|patch|tool|status|summary)\b/i.test(line)) return true;
+    if (/^(STATUS|SUMMARY|CHANGED_FILES|TESTS|COMMIT|REMOTE_HEAD)=/.test(line)) return true;
+    if (/^(\+|-|diff --git|@@ )/.test(line)) return true;
+  }
+  return false;
+}
+
 export async function executeCodexTaskRun({
   config,
   workspaceRoot,
@@ -31,16 +67,25 @@ export async function executeCodexTaskRun({
   const lastMessagePath = workspaceRoot + "/.gptwork/tmp/codex-lastmsg-" + task.id + ".txt";
   const cmd = "codex exec " + config.codexExecArgs + " --output-last-message " + lastMessagePath + " < " + promptFile;
 
-  // P1.1: Create throttled heartbeat for run
   const throttledHb = runFilePath ? createThrottledHeartbeat(runFilePath, 1000, updateRunHeartbeatFn) : null;
 
-  // P1.1: Set up log file paths for streaming stdout/stderr during execution
   const streamOpts = {};
   if (runId && workspaceRoot && task) {
     streamOpts.streamStdoutPath = getStdoutLogPath(workspaceRoot, task.id, runId);
     streamOpts.streamStderrPath = getStderrLogPath(workspaceRoot, task.id, runId);
   }
   const hasStreamingLogs = Boolean(streamOpts.streamStdoutPath || streamOpts.streamStderrPath);
+
+  const outputMetricFields = (event = {}) => ({
+    stdout_bytes: event.stdout_bytes,
+    stderr_bytes: event.stderr_bytes,
+    first_stdout_at: event.first_stdout_at,
+    first_stderr_at: event.first_stderr_at,
+    first_output_delay_ms: event.first_output_delay_ms,
+    content_first_output_at: event.content_first_output_at,
+    content_first_output_delay_ms: event.content_first_output_delay_ms,
+    last_content_progress_at: event.last_content_progress_at,
+  });
 
   const cwd = executionCwd || workspaceRoot;
   cr = await runLocalShellFn(cmd, cwd, config.codexExecTimeout, 1000000, (pid) => {
@@ -54,31 +99,20 @@ export async function executeCodexTaskRun({
     }
   }, {
     firstOutputTimeoutSeconds: config.codexFirstOutputTimeout || 180,
+    contentFirstOutputTimeoutSeconds: config.codexContentFirstOutputTimeout || 0,
+    noProgressTimeoutSeconds: config.codexNoProgressTimeout || 0,
+    isContentfulOutput: isCodexContentfulOutput,
     onOutput: (event) => {
-      // P1.1: Use throttled heartbeat for output counter updates (at most 1/s)
+      const fields = outputMetricFields(event);
       if (throttledHb) {
-        throttledHb("running_codex", {
-          stdout_bytes: event.stdout_bytes,
-          stderr_bytes: event.stderr_bytes,
-          first_stdout_at: event.first_stdout_at,
-          first_stderr_at: event.first_stderr_at,
-          first_output_delay_ms: event.first_output_delay_ms,
-        });
+        throttledHb("running_codex", fields);
       } else {
-        updateRunHeartbeatFn(runFilePath, "running_codex", {
-          stdout_bytes: event.stdout_bytes,
-          stderr_bytes: event.stderr_bytes,
-          first_stdout_at: event.first_stdout_at,
-          first_stderr_at: event.first_stderr_at,
-          first_output_delay_ms: event.first_output_delay_ms,
-        }).catch(() => {});
+        updateRunHeartbeatFn(runFilePath, "running_codex", fields).catch(() => {});
       }
     },
-    // P1.1: Stream stdout/stderr to run log files during execution
     ...streamOpts,
   });
 
-  // P1.1: Clean up throttled heartbeat
   if (throttledHb) removeThrottledHeartbeat(runFilePath);
 
   if (cr && runId && hasStreamingLogs) {
@@ -110,6 +144,13 @@ export async function executeCodexTaskRun({
       first_stdout_at: cr?.first_stdout_at,
       first_stderr_at: cr?.first_stderr_at,
       first_output_delay_ms: cr?.first_output_delay_ms,
+      content_first_output_at: cr?.content_first_output_at,
+      content_first_output_delay_ms: cr?.content_first_output_delay_ms,
+      last_content_progress_at: cr?.last_content_progress_at,
+      no_content_first_output_timeout: cr?.no_content_first_output_timeout || false,
+      no_content_progress_timeout: cr?.no_content_progress_timeout || false,
+      content_first_output_timeout_seconds: cr?.content_first_output_timeout_seconds,
+      no_progress_timeout_seconds: cr?.no_progress_timeout_seconds,
     });
   }
 

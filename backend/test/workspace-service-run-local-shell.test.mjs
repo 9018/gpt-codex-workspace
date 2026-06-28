@@ -29,3 +29,56 @@ test("runLocalShell streams stdout and stderr to log files", async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("runLocalShell records contentful output metrics when classifier matches", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gptwork-contentful-shell-"));
+  try {
+    const seen = [];
+    const result = await runLocalShell(
+      "node -e \"process.stderr.write('banner\\n'); setTimeout(() => process.stderr.write('assistant started\\n'), 20)\"",
+      dir,
+      5,
+      10000,
+      null,
+      {
+        contentFirstOutputTimeoutSeconds: 2,
+        noProgressTimeoutSeconds: 2,
+        isContentfulOutput: ({ chunk }) => chunk.includes("assistant"),
+        onOutput: (event) => seen.push(event),
+      }
+    );
+
+    assert.equal(result.returncode, 0);
+    assert.equal(result.no_content_first_output_timeout, false);
+    assert.ok(result.content_first_output_at, "content first output timestamp should be set");
+    assert.ok(result.content_first_output_delay_ms >= 0, "content delay should be numeric");
+    assert.ok(result.last_content_progress_at, "last content progress should be set");
+    assert.ok(seen.some((event) => event.content_first_output_at), "onOutput should receive content metrics");
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("runLocalShell can time out when no contentful output appears", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gptwork-content-timeout-shell-"));
+  try {
+    const result = await runLocalShell(
+      "node -e \"process.stderr.write('banner\\n'); setTimeout(() => {}, 2000)\"",
+      dir,
+      5,
+      10000,
+      null,
+      {
+        contentFirstOutputTimeoutSeconds: 1,
+        isContentfulOutput: ({ chunk }) => chunk.includes("assistant"),
+      }
+    );
+
+    assert.equal(result.timed_out, true);
+    assert.equal(result.no_content_first_output_timeout, true);
+    assert.equal(result.no_first_output_timeout, false);
+    assert.equal(result.content_first_output_at, null);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});

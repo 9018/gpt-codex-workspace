@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultTokenContext } from "./auth-context.mjs";
-import { goalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
+import { goalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, renderCodexEntryMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { workspaceUploadBundleBase64, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 
 /**
@@ -18,6 +18,7 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
 
   // Always write goal.md for compatibility
   const files = [
+    { path: workspaceFiles.codex_entry_md, content: renderCodexEntryMarkdown(goal, conversation, memories, task, workspaceFiles) },
     { path: workspaceFiles.goal_md, content: renderGoalMarkdown(goal, conversation, memories, task, workspaceFiles) },
     { path: workspaceFiles.context_json, content: JSON.stringify({ goal, conversation, memories, task, workspace_files: workspaceFiles, codex_instruction: codexInstruction(goal) }, null, 2) },
   ];

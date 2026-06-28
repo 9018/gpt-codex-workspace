@@ -10,7 +10,10 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     const shellFlag = process.platform === "win32" ? "/c" : "-c";
     const maxBuf = Number(maxOutputBytes) || 1048576;
     const firstOutputTimeoutSeconds = Math.max(0, Number(options.firstOutputTimeoutSeconds) || 0);
+    const contentFirstOutputTimeoutSeconds = Math.max(0, Number(options.contentFirstOutputTimeoutSeconds) || 0);
+    const noProgressTimeoutSeconds = Math.max(0, Number(options.noProgressTimeoutSeconds) || 0);
     const onOutput = typeof options.onOutput === "function" ? options.onOutput : null;
+    const isContentfulOutput = typeof options.isContentfulOutput === "function" ? options.isContentfulOutput : null;
 
     const child = spawn(shell, [shellFlag, command], {
       cwd,
@@ -35,6 +38,14 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     let firstOutputDelayMs = null;
     let firstOutputTimedOut = false;
     let firstOutputTimer = null;
+    let contentFirstOutputAt = null;
+    let contentFirstOutputDelayMs = null;
+    let lastContentProgressAt = null;
+    let lastContentProgressMs = null;
+    let contentFirstOutputTimedOut = false;
+    let noContentProgressTimedOut = false;
+    let contentFirstOutputTimer = null;
+    let noProgressTimer = null;
     let settled = false;
     let stdoutLogStream = null;
     let stderrLogStream = null;
@@ -81,27 +92,7 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
       }
     }
 
-    function markOutput(streamName, chunk) {
-      const bytes = Buffer.byteLength(chunk);
-      if (streamName === "stdout") {
-        stdoutBytes += bytes;
-        if (!firstStdoutAt) firstStdoutAt = new Date().toISOString();
-      } else {
-        stderrBytes += bytes;
-        if (!firstStderrAt) firstStderrAt = new Date().toISOString();
-      }
-      if (firstOutputDelayMs === null) {
-        firstOutputDelayMs = Date.now() - started;
-        if (firstOutputTimer) clearTimeout(firstOutputTimer);
-      }
-      if (onOutput) {
-        try {
-          onOutput({ stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs });
-        } catch {}
-      }
-    }
-
-    function killProcessGroup() {
+    function terminateProcessGroup() {
       try {
         if (child.pid) process.kill(process.platform !== "win32" ? -child.pid : child.pid, "SIGTERM");
       } catch {}
@@ -112,26 +103,114 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
       }, 3000);
     }
 
+    function resetNoProgressTimer() {
+      if (!noProgressTimeoutSeconds || !contentFirstOutputAt) return;
+      if (noProgressTimer) clearTimeout(noProgressTimer);
+      noProgressTimer = setTimeout(() => {
+        if (!lastContentProgressMs || Date.now() - lastContentProgressMs >= noProgressTimeoutSeconds * 1000) {
+          timedOut = true;
+          noContentProgressTimedOut = true;
+          terminateProcessGroup();
+        }
+      }, noProgressTimeoutSeconds * 1000);
+    }
+
+    function emitOutputEvent() {
+      if (!onOutput) return;
+      try {
+        onOutput({
+          stdout_bytes: stdoutBytes,
+          stderr_bytes: stderrBytes,
+          first_stdout_at: firstStdoutAt,
+          first_stderr_at: firstStderrAt,
+          first_output_delay_ms: firstOutputDelayMs,
+          content_first_output_at: contentFirstOutputAt,
+          content_first_output_delay_ms: contentFirstOutputDelayMs,
+          last_content_progress_at: lastContentProgressAt,
+        });
+      } catch {}
+    }
+
+    function markOutput(streamName, chunk) {
+      const bytes = Buffer.byteLength(chunk);
+      const now = Date.now();
+      const nowIso = new Date(now).toISOString();
+      if (streamName === "stdout") {
+        stdoutBytes += bytes;
+        if (!firstStdoutAt) firstStdoutAt = nowIso;
+      } else {
+        stderrBytes += bytes;
+        if (!firstStderrAt) firstStderrAt = nowIso;
+      }
+      if (firstOutputDelayMs === null) {
+        firstOutputDelayMs = now - started;
+        if (firstOutputTimer) clearTimeout(firstOutputTimer);
+      }
+
+      let contentful = false;
+      if (isContentfulOutput) {
+        try {
+          contentful = Boolean(isContentfulOutput({
+            streamName,
+            chunk,
+            stdout_bytes: stdoutBytes,
+            stderr_bytes: stderrBytes,
+            elapsed_ms: now - started,
+          }));
+        } catch {
+          contentful = false;
+        }
+      }
+
+      if (contentful) {
+        if (!contentFirstOutputAt) {
+          contentFirstOutputAt = nowIso;
+          contentFirstOutputDelayMs = now - started;
+          if (contentFirstOutputTimer) clearTimeout(contentFirstOutputTimer);
+        }
+        lastContentProgressAt = nowIso;
+        lastContentProgressMs = now;
+        resetNoProgressTimer();
+      }
+      emitOutputEvent();
+    }
+
     function finish(payload) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       if (firstOutputTimer) clearTimeout(firstOutputTimer);
-      const result = { ...payload, stdout_bytes: stdoutBytes, stderr_bytes: stderrBytes, first_stdout_at: firstStdoutAt, first_stderr_at: firstStderrAt, first_output_delay_ms: firstOutputDelayMs, no_first_output_timeout: firstOutputTimedOut, first_output_timeout_seconds: firstOutputTimeoutSeconds || null, started_at: startedAtIso };
+      if (contentFirstOutputTimer) clearTimeout(contentFirstOutputTimer);
+      if (noProgressTimer) clearTimeout(noProgressTimer);
+      const result = {
+        ...payload,
+        stdout_bytes: stdoutBytes,
+        stderr_bytes: stderrBytes,
+        first_stdout_at: firstStdoutAt,
+        first_stderr_at: firstStderrAt,
+        first_output_delay_ms: firstOutputDelayMs,
+        no_first_output_timeout: firstOutputTimedOut,
+        first_output_timeout_seconds: firstOutputTimeoutSeconds || null,
+        content_first_output_at: contentFirstOutputAt,
+        content_first_output_delay_ms: contentFirstOutputDelayMs,
+        last_content_progress_at: lastContentProgressAt,
+        no_content_first_output_timeout: contentFirstOutputTimedOut,
+        no_content_progress_timeout: noContentProgressTimedOut,
+        content_first_output_timeout_seconds: contentFirstOutputTimeoutSeconds || null,
+        no_progress_timeout_seconds: noProgressTimeoutSeconds || null,
+        started_at: startedAtIso,
+      };
       closeLogStreams(() => resolve(result));
     }
 
     child.stdout.on("data", (data) => {
       const chunk = data.toString();
       markOutput("stdout", chunk);
-      // Stream to log file if configured without blocking the event loop per chunk
       writeLogChunk("stdout", chunk);
       if (!stdoutTruncated) {
         stdout += chunk;
         if (Buffer.byteLength(stdout) >= maxBuf) {
           stdoutTruncated = true;
-          // P1.1: Keep draining the stream instead of destroying it,
-          // so the child process doesn't stall on pipe buffer
         }
       }
     });
@@ -139,13 +218,11 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     child.stderr.on("data", (data) => {
       const chunk = data.toString();
       markOutput("stderr", chunk);
-      // Stream to log file if configured without blocking the event loop per chunk
       writeLogChunk("stderr", chunk);
       if (!stderrTruncated) {
         stderr += chunk;
         if (Buffer.byteLength(stderr) >= maxBuf) {
           stderrTruncated = true;
-          // P1.1: Keep draining the stream instead of destroying it
         }
       }
     });
@@ -153,29 +230,24 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     const timeoutMs = timeout * 1000;
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        if (child.pid) {
-          // Kill the entire process group
-          process.kill(-child.pid, "SIGTERM");
-        }
-      } catch {}
-      // After short grace period, SIGKILL the process group
-      setTimeout(() => {
-        try {
-          if (child.pid) {
-            process.kill(-child.pid, "SIGKILL");
-          }
-        } catch {}
-      }, 3000);
+      terminateProcessGroup();
     }, timeoutMs);
 
     firstOutputTimer = firstOutputTimeoutSeconds > 0 ? setTimeout(() => {
       if (stdoutBytes === 0 && stderrBytes === 0) {
         timedOut = true;
         firstOutputTimedOut = true;
-        killProcessGroup();
+        terminateProcessGroup();
       }
     }, firstOutputTimeoutSeconds * 1000) : null;
+
+    contentFirstOutputTimer = contentFirstOutputTimeoutSeconds > 0 ? setTimeout(() => {
+      if (!contentFirstOutputAt) {
+        timedOut = true;
+        contentFirstOutputTimedOut = true;
+        terminateProcessGroup();
+      }
+    }, contentFirstOutputTimeoutSeconds * 1000) : null;
 
     child.on("error", (err) => {
       finish({

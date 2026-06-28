@@ -18,10 +18,36 @@ export function isResolvedLegacyReviewTask(task = {}) {
   return Boolean(result.resolved_by_task_id || result.superseded_by_task_id || result.auto_accepted || result.accepted_at);
 }
 
+/**
+ * Check if a terminal-status task (failed/timed_out/cancelled/blocked) has
+ * no meaningful result content. A no-result failure is one where:
+ * - task.result is null, undefined, or absent
+ * - task.result_id is not set or is "none"/"null" (serialization artifacts)
+ *
+ * These are historical failures that never produced any actionable evidence
+ * and should be treated as legacy/resolved.
+ */
+function isNoResultFailure(task = {}) {
+  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  const result = task.result;
+  // True when result is a real object (empty or not), not null/undefined/missing
+  const hasAnyResult = result !== null && result !== undefined && result !== '';
+  // result_id = "none" means no result was written (Python None serialization artifact)
+  const resultIdValue = task.result_id;
+  const hasMeaningfulResultId = resultIdValue && resultIdValue !== 'none' && resultIdValue !== 'null';
+  return !hasAnyResult && !hasMeaningfulResultId;
+}
+
 export function isResolvedLegacyTerminalTask(task = {}) {
   if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
   const result = task.result || {};
   const reconciliationStatus = result.legacy_reconciliation?.status || task.legacy_reconciliation?.status || null;
+
+  // Historical no-result/no-op failure: failed/timed_out with no result content.
+  // Tasks that failed before writing any result have no actionable evidence
+  // and should not block current work when no active worker is running them.
+  if (isNoResultFailure(task)) return true;
+
   return Boolean(
     task.resolved_legacy === true ||
     result.resolved_legacy === true ||

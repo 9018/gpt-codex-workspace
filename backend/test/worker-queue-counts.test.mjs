@@ -26,7 +26,7 @@ test('collectWorkerQueueCounts counts codex task statuses in one pass shape', as
           { assignee: 'codex', status: 'waiting_for_lock' },
           { assignee: 'codex', status: 'waiting_for_review' },
           { assignee: 'codex', status: 'completed' },
-          { assignee: 'codex', status: 'failed' },
+          { assignee: 'codex', status: 'failed', id: 'task_plain_failed', result: {} },
           { assignee: 'human', status: 'assigned' },
         ]
       };
@@ -162,4 +162,23 @@ test('legacyFailedPolicySummary treats unresolved fresh failed with no supersedi
   assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
   assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 0);
   assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});
+
+
+test('legacyFailedPolicySummary resolves no-result no-op failures as legacy', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_no_result', result: null, result_id: 'none' },
+          { assignee: 'codex', status: 'timed_out', id: 'task_no_result_timed_out', result: null, result_id: 'none' },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 2);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+  assert.equal(result.failed, 0);
 });

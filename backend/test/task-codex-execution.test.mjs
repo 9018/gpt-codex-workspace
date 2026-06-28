@@ -1,7 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { executeCodexTaskRun } from '../src/task-codex-execution.mjs';
+import { executeCodexTaskRun, isCodexContentfulOutput } from '../src/task-codex-execution.mjs';
+
+test('isCodexContentfulOutput ignores Codex banner and prompt echo but accepts activity', () => {
+  assert.equal(isCodexContentfulOutput({ streamName: 'stderr', chunk: 'Reading prompt from stdin...\nOpenAI Codex v0.142.0\nmodel: x\nuser\n# Task: Demo\n' }), false);
+  assert.equal(isCodexContentfulOutput({ streamName: 'stderr', chunk: 'assistant\nI will inspect the code\n' }), true);
+  assert.equal(isCodexContentfulOutput({ streamName: 'stderr', chunk: 'exec sed -n 1,20p file.js\n' }), true);
+  assert.equal(isCodexContentfulOutput({ streamName: 'stdout', chunk: 'STATUS=completed\n' }), true);
+});
 
 test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and returns parsed summary', async () => {
   const calls = [];
@@ -10,6 +17,8 @@ test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and retu
       codexExecArgs: '--sandbox read-only',
       codexExecTimeout: 120,
       codexFirstOutputTimeout: 33,
+      codexContentFirstOutputTimeout: 44,
+      codexNoProgressTimeout: 55,
       defaultWorkspaceRoot: '/tmp/meta',
     },
     workspaceRoot: '/tmp/repo',
@@ -21,8 +30,8 @@ test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and retu
     runLocalShellFn: async (cmd, cwd, timeout, maxBuffer, onPid, options) => {
       calls.push({ type: 'run', cmd, cwd, timeout, maxBuffer, options });
       onPid(1234);
-      options.onOutput({ stdout_bytes: 4, stderr_bytes: 0, first_stdout_at: 'now' });
-      return { stdout: 'STATUS=completed\nSUMMARY=ok', stderr: '', returncode: 0, stdout_bytes: 27, stderr_bytes: 0 };
+      options.onOutput({ stdout_bytes: 4, stderr_bytes: 0, first_stdout_at: 'now', content_first_output_at: 'content-now', content_first_output_delay_ms: 10, last_content_progress_at: 'content-now' });
+      return { stdout: 'STATUS=completed\nSUMMARY=ok', stderr: '', returncode: 0, stdout_bytes: 27, stderr_bytes: 0, content_first_output_at: 'content-now', content_first_output_delay_ms: 10, last_content_progress_at: 'content-now' };
     },
     parseCodexResultFn: async ({ resultJsonPath, stdout }) => {
       calls.push({ type: 'parse', resultJsonPath, stdout });
@@ -42,8 +51,11 @@ test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and retu
   const runCall = calls.find(c => c.type === 'run');
   assert.equal(runCall.options.streamStdoutPath, '/tmp/repo/.gptwork/runs/task_exec/run_1/stdout.log');
   assert.equal(runCall.options.streamStderrPath, '/tmp/repo/.gptwork/runs/task_exec/run_1/stderr.log');
+  assert.equal(runCall.options.contentFirstOutputTimeoutSeconds, 44);
+  assert.equal(runCall.options.noProgressTimeoutSeconds, 55);
+  assert.equal(typeof runCall.options.isContentfulOutput, 'function');
   assert.equal(calls.some(c => c.type === 'logs'), false, 'streamed logs must not be appended again after run completion');
-  assert.ok(calls.some(c => c.type === 'fire' && c.phase === 'parsing_result'));
+  assert.ok(calls.some(c => c.type === 'fire' && c.phase === 'parsing_result' && c.fields.content_first_output_at === 'content-now'));
   assert.ok(calls.some(c => c.type === 'heartbeat' && c.fields.codex_child_pid === 1234));
 });
 

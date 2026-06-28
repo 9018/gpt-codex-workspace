@@ -20,7 +20,8 @@ export function goalWorkspaceFiles(goal) {
     bundle_zip: `${dir}/bundle.zip`,
     attachments_dir: `${dir}/attachments`,
     context_bundle_md: `${dir}/context.bundle.md`,
-    context_retrieval_json: `${dir}/context.retrieval.json`
+    context_retrieval_json: `${dir}/context.retrieval.json`,
+    codex_entry_md: `${dir}/codex.entry.md`
   };
 }
 
@@ -54,6 +55,7 @@ export function internalGoalWorkspaceFiles(goal, payload = {}) {
     transcript_md: files.transcript_md,
     context_bundle_md: files.context_bundle_md,
     context_retrieval_json: files.context_retrieval_json,
+    codex_entry_md: files.codex_entry_md,
     payload_json: files.payload_json,
     payload_base64: files.payload_base64
   };
@@ -110,6 +112,7 @@ export function renderGoalMarkdown(goal, conversation, memories, task, workspace
     `- context: ${workspaceFiles.context_json}`,
     `- transcript: ${workspaceFiles.transcript_md}`,
     `- result: ${workspaceFiles.result_md}`,
+    `- codex entry: ${workspaceFiles.codex_entry_md}`,
   ];
 
   // Add context bundle reference if available
@@ -139,10 +142,78 @@ export function renderGoalMarkdown(goal, conversation, memories, task, workspace
     "",
     "## Execution Contract",
     "",
-    "Read context.json and goal.md before acting. Prefer context.bundle.md over transcript.md for initial context.",
+    `Start with ${workspaceFiles.codex_entry_md}; it is the bounded execution entrypoint.`,
+    `Use ${workspaceFiles.context_json} only for metadata lookup, not as default task context.`,
+    `Use ${workspaceFiles.transcript_md} and payload files only for explicit deep lookup when the entry and bundle are insufficient.`,
     "Execute the goal prompt, update result.md, and append progress with append_goal_message."
   );
 
+  return lines.join("\n");
+}
+
+/**
+ * Render the bounded Codex entrypoint.
+ *
+ * This file is intentionally smaller than goal.md/context.json/payload.json and
+ * is the only goal file Codex should read before its initial plan/tool calls.
+ * Larger files remain available for explicit deep lookup.
+ *
+ * @param {object} goal
+ * @param {object} conversation
+ * @param {Array} memories
+ * @param {object} task
+ * @param {object} workspaceFiles
+ * @returns {string}
+ */
+export function renderCodexEntryMarkdown(goal, conversation, memories, task, workspaceFiles) {
+  const memoryCount = Array.isArray(memories) ? memories.length : 0;
+  const messageCount = Array.isArray(conversation?.messages) ? conversation.messages.length : 0;
+  const lines = [
+    `# Codex Entry for ${goal.id}`,
+    "",
+    "This is the bounded execution entrypoint. Read this first and do not read larger goal/state files unless this entry and the context bundle are insufficient.",
+    "",
+    "## Task",
+    "",
+    `Title: ${goal.title || task?.title || goal.id}`,
+    task ? `Task: ${task.id}` : "Task: none",
+    `Workspace: ${goal.workspace_id || "(unknown)"}`,
+    "",
+    "## User Request",
+    "",
+    goal.user_request || "(none)",
+    "",
+    "## Goal Prompt",
+    "",
+    goal.goal_prompt || "(none)",
+    "",
+    "## Context Summary",
+    "",
+    goal.context_summary || "(none)",
+    "",
+    "## Context Lookup Policy",
+    "",
+    `- Preferred bounded context: ${workspaceFiles.context_bundle_md}`,
+    `- Metadata-only lookup: ${workspaceFiles.context_json}`,
+    `- Deep lookup only when needed: ${workspaceFiles.goal_md}`,
+    `- Deep transcript lookup only when needed: ${workspaceFiles.transcript_md}`,
+    `- Do not read payload files unless debugging payload encoding or missing fields.`,
+    `- Conversation messages available: ${messageCount}; memories available: ${memoryCount}.`,
+    "",
+    "## Result Contract",
+    "",
+    `- Write Markdown result to ${workspaceFiles.result_md}.`,
+    `- Write structured JSON result to ${workspaceFiles.dir}/result.json.`,
+    "- Keep result.json concise: status, summary, changed_files, tests, commit, remote_head, warnings, followups, verification.",
+    "- Also print the legacy STATUS/SUMMARY/CHANGED_FILES/TESTS/COMMIT/REMOTE_HEAD report to stdout at the end.",
+    "",
+    "## Execution Rules",
+    "",
+    "- Make the smallest goal-aligned reversible change.",
+    "- Prefer targeted code search over broad repository exploration.",
+    "- Verify with the narrowest meaningful commands first; run broader checks only when justified.",
+    "- Do not ask ChatGPT for implementation choices; use local analysis and subagents for uncertainty.",
+  ];
   return lines.join("\n");
 }
 
@@ -204,11 +275,12 @@ export function codexInstruction(goal) {
   const files = goalWorkspaceFiles(goal);
   const ap = goal.autonomy_policy || {};
   return [
-    "You are executing a GPTWork encoded/shared goal. A context bundle may be available",
-    `at ${files.context_bundle_md} \u2014 prefer it over the full transcript for initial context.`,
-    `Read ${files.goal_md} and ${files.context_json} before acting.`,
-    `Read ${files.context_bundle_md} first when present; use ${files.transcript_md} only for explicit deep lookup when the bundle is insufficient.`,
-    "Follow goal.md exactly, write result.md, and append progress/results with append_goal_message.",
+    "You are executing a GPTWork encoded/shared goal.",
+    `Read ${files.codex_entry_md} first. It is the bounded execution entrypoint.`,
+    `Prefer ${files.context_bundle_md} for supporting context when present.`,
+    `Use ${files.context_json} only for metadata lookup. Do not read it wholesale before acting.`,
+    `Use ${files.goal_md}, ${files.transcript_md}, and payload files only for explicit deep lookup when the entry and bundle are insufficient.`,
+    "Write result.md and append progress/results with append_goal_message.",
     "",
     "## Execution Requirements",
     "",
