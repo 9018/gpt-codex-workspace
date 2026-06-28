@@ -35,6 +35,7 @@ function createTempGitRepo() {
   execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: dir, encoding: "utf8", stdio: "pipe" });
   execFileSync("git", ["config", "user.name", "Test"], { cwd: dir, encoding: "utf8", stdio: "pipe" });
   execFileSync("git", ["commit", "--allow-empty", "-m", "initial"], { cwd: dir, encoding: "utf8", stdio: "pipe" });
+  execFileSync("git", ["commit", "--allow-empty", "-m", "baseline"], { cwd: dir, encoding: "utf8", stdio: "pipe" });
   return dir;
 }
 
@@ -140,13 +141,15 @@ test("task-acceptance: pure-sync without verification should pass", async () => 
   const tmpDir = createTempGitRepo();
   try {
   const result = await verifyTaskCompletion({
-    task: { id: "test_pure_sync", changed_files: [], mode: "builder" },
+    task: { id: "test_pure_sync", changed_files: [], mode: "noop" },
     goal: {},
     repoPath: tmpDir,
     resultJson: {
       status: "completed",
       summary: "Sync completed with no code changes",
       changed_files: [],
+      noop: true,
+      noop_reason: "No code changes were required.",
     },
     config: { discoverVerificationCommands: false },
   });
