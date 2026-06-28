@@ -7,6 +7,8 @@
  * deep-lookup references.
  */
 
+import { join } from "node:path";
+
 const RESULT_SCHEMA_HINT = `Write result.json with these top-level fields when applicable:
 {
   "status": "completed|failed|timed_out",
@@ -43,9 +45,9 @@ export function buildCodexPrompt({
   const separator = "=".repeat(60);
   const taskId = task?.id || "unknown";
   const _executionRepoPath = executionRepoPath || defaultRepoPath || workspaceRoot;
-  const _goalStateDir = goalStateDir || (workspaceRoot + "/.gptwork/goals/" + (goal ? goal.id : taskId));
-  const _resultJsonPath = resultJsonPath || (_goalStateDir + "/result.json");
-  const _resultMdPath = resultMdPath || (_goalStateDir + "/result.md");
+  const _goalStateDir = goalStateDir || join(workspaceRoot, ".gptwork", "goals", goal ? goal.id : taskId);
+  const _resultJsonPath = resultJsonPath || join(_goalStateDir, "result.json");
+  const _resultMdPath = resultMdPath || join(_goalStateDir, "result.md");
   const _canonicalRepoPath = canonicalRepoPath || defaultRepoPath || "(not configured)";
   const worktreeLine = taskWorktreePath ? `- **Task worktree path**: ${taskWorktreePath}` : '';
 
@@ -53,11 +55,11 @@ export function buildCodexPrompt({
   if (goal) {
     const files = workspaceFiles || {};
     const dir = files.dir || _goalStateDir;
-    const entryRef = files.codex_entry_md || `${dir}/codex.entry.md`;
-    const bundleRef = files.context_bundle_md || `${dir}/context.bundle.md`;
-    const contextRef = files.context_json || `${dir}/context.json`;
-    const goalRef = files.goal_md || `${dir}/goal.md`;
-    const transcriptRef = files.transcript_md || `${dir}/transcript.md`;
+    const entryRef = files.codex_entry_md || join(dir, "codex.entry.md");
+    const bundleRef = files.context_bundle_md || join(dir, "context.bundle.md");
+    const contextRef = files.context_json || join(dir, "context.json");
+    const goalRef = files.goal_md || join(dir, "goal.md");
+    const transcriptRef = files.transcript_md || join(dir, "transcript.md");
 
     goalContextBlock = [
       `Start by reading only this bounded entrypoint:`,

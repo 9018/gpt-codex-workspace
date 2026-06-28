@@ -451,4 +451,96 @@ test('buildCodexPrompt: preserves zvec/ZEVc quota and diagnostics behavior', () 
   assert.equal(fullPrompt.includes('reimplement zvec'), false, 'Must not contain reimplement zvec');
   assert.equal(fullPrompt.includes('Do not reimplement'), false, 'Must not reference internal tool constraints in prompt');
 });
+
+
+// ===========================================================================
+// P1: Path hardening — derived paths use path.join, not string concatenation
+// ===========================================================================
+
+test("buildCodexPrompt uses path.join for derived goalStateDir with trailing workspaceRoot", () => {
+  // workspaceRoot with trailing slash used to produce double-slash via string concat
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: "task_trail", title: "Trailing slash", description: "desc" },
+    goal: { id: "goal_trail" },
+    workspaceFiles: {
+      codex_entry_md: ".gptwork/goals/goal_trail/codex.entry.md",
+      context_bundle_md: ".gptwork/goals/goal_trail/context.bundle.md",
+      context_json: ".gptwork/goals/goal_trail/context.json",
+      goal_md: ".gptwork/goals/goal_trail/goal.md",
+      transcript_md: ".gptwork/goals/goal_trail/transcript.md",
+      result_md: ".gptwork/goals/goal_trail/result.md",
+    },
+    workspaceRoot: "/tmp/ws/", // trailing slash — would break string concat
+    defaultRepoPath: null,
+  });
+  // Must be a clean path, not /tmp/ws//.gptwork/goals/goal_trail/result.json
+  assert.ok(fullPrompt.includes("/tmp/ws/.gptwork/goals/goal_trail/result.json"), "should use clean path, no double slash");
+  assert.equal(fullPrompt.includes("//.gptwork"), false, "must not contain double slash");
+});
+
+test("buildCodexPrompt uses path.join for derived goalStateDir with workspaceRoot ending in //", () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: "task_dslash", title: "Double slash", description: "" },
+    goal: { id: "goal_dslash" },
+    workspaceFiles: {
+      result_md: ".gptwork/goals/goal_dslash/result.md",
+    },
+    workspaceRoot: "/tmp/ws//",
+    defaultRepoPath: null,
+  });
+  assert.equal(fullPrompt.includes("//.gptwork"), false, "must not contain double path separator");
+  assert.ok(fullPrompt.includes("/tmp/ws/.gptwork/goals/goal_dslash/"), "should produce clean paths");
+});
+
+test("codex-prompt-builder.mjs imports join from node:path", async () => {
+  const mod = await import("../src/codex-prompt-builder.mjs");
+  // Verify the module loads without error and exports buildCodexPrompt
+  assert.equal(typeof mod.buildCodexPrompt, "function", "buildCodexPrompt should be exported");
+  // Verify source-level import of join by reading file relative to this test
+  const { readFile } = await import("node:fs/promises");
+  const srcUrl = new URL("../src/codex-prompt-builder.mjs", import.meta.url);
+  const srcText = await readFile(srcUrl, "utf8");
+  assert.ok(srcText.includes('import { join } from "node:path"'), "must import join from node:path");
+  // Verify join is actually referenced in the function body
+  assert.ok(srcText.includes("join(workspaceRoot"), "must use join() for workspaceRoot paths");
+  assert.ok(srcText.includes("join(_goalStateDir"), "must use join() for goalStateDir paths");
+  assert.ok(srcText.includes('join(dir, "codex.entry.md"'), "must use join() for entry refs");
+});
+
+test("buildCodexPrompt: workspaceFiles.dir overrides with path.join consistency", () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: "task_dir_override", title: "Dir override", description: "" },
+    goal: { id: "goal_dir_ovr" },
+    workspaceFiles: {
+      dir: "/custom/state/dir",
+      codex_entry_md: "/custom/state/dir/codex.entry.md",
+      context_bundle_md: "/custom/state/dir/context.bundle.md",
+      context_json: "/custom/state/dir/context.json",
+      goal_md: "/custom/state/dir/goal.md",
+      transcript_md: "/custom/state/dir/transcript.md",
+      result_md: "/custom/state/dir/result.md",
+    },
+    workspaceRoot: "/tmp/ws",
+    defaultRepoPath: null,
+  });
+  assert.ok(fullPrompt.includes("/custom/state/dir"), "should use workspaceFiles.dir");
+  assert.ok(fullPrompt.includes("/custom/state/dir/codex.entry.md"), "should reference custom entry");
+  assert.ok(fullPrompt.includes("/custom/state/dir/goal.md"), "should reference custom goal.md");
+});
+
+test("buildCodexPrompt: passed goalStateDir bypasses all workspaceRoot derivation", () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: "task_gsd", title: "Goal state dir", description: "" },
+    goal: { id: "goal_gsd" },
+    workspaceFiles: {
+      result_md: ".gptwork/goals/goal_gsd/result.md",
+    },
+    workspaceRoot: "/tmp/ws",
+    defaultRepoPath: null,
+    goalStateDir: "/explicit/goal/state",
+  });
+  assert.ok(fullPrompt.includes("/explicit/goal/state"), "should use explicit goalStateDir");
+  assert.equal(fullPrompt.includes("/tmp/ws/.gptwork"), false, "should NOT derive from workspaceRoot");
+});
+
 console.log("codex-prompt-builder.test.mjs loaded");

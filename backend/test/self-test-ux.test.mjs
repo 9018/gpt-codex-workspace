@@ -212,3 +212,27 @@ test("CLI doctor --local shows repo root, workspace root, tool mode, timeout, gi
   assert.ok(out.includes("github"), "should show github status");
   assert.ok(out.includes("bark"), "should show bark status");
 });
+
+
+
+
+// ── 9. check:syntax script includes timeout flag ─────────────────────
+
+test("check:syntax script wraps each find invocation with timeout", () => {
+  const pkg = JSON.parse(readFileSync(join(BACKEND_ROOT, "package.json"), "utf8"));
+  const script = pkg.scripts["check:syntax"];
+  assert.ok(script, "check:syntax script must exist");
+  // Each find invocation must be bounded by an overall timeout
+  const expectedPattern = "timeout 120 find";
+  const occurrences = (script.match(new RegExp(expectedPattern, "g")) || []).length;
+  assert.ok(occurrences >= 2,
+    `check:syntax should wrap each find with timeout 120; found ${occurrences} occurrences in: ${script}`);
+  // Verify the find -exec structure is preserved
+  assert.ok(script.includes("find src"), "must check src directory");
+  assert.ok(script.includes("find test"), "must check test directory");
+  // Verify node --check is still used (no timeout per file)
+  assert.ok(script.includes("node --check"), "must use node --check for syntax checking");
+  // Verify the per-file timeout pattern is NOT used (we use overall command timeout)
+  assert.equal(script.includes("timeout 30 node --check"), false,
+    "should NOT use per-file timeout, uses overall find timeout instead");
+});
