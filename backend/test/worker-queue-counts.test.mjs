@@ -95,3 +95,71 @@ test('collectWorkerQueueCounts excludes resolved legacy failed tasks but keeps a
     blocks_current_work: true,
   });
 });
+
+test('legacyFailedPolicySummary resolves historical failed via completed successor with same root', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_legacy', root_task_id: 'root_abc' },
+          { assignee: 'codex', status: 'completed', id: 'task_successor', root_task_id: 'root_abc', result: { verification: { passed: true }, commit: 'abc123' } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+  assert.equal(result.failed, 0);
+});
+
+test('legacyFailedPolicySummary resolves timed_out with no result via completed successor', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'timed_out', id: 'task_timed_out', root_task_id: 'root_def' },
+          { assignee: 'codex', status: 'completed', id: 'task_p0', root_task_id: 'root_def', result: { verification: { passed: true } } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+});
+
+test('legacyFailedPolicySummary shows active running with unresolved failure as blocking', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_failed_unresolved', result: {} },
+          { assignee: 'codex', status: 'running', id: 'task_running' },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+  assert.equal(result.running, 1);
+});
+
+test('legacyFailedPolicySummary treats unresolved fresh failed with no superseding evidence as blocker', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_fresh_failed', result: {} },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});

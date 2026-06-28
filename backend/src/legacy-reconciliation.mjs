@@ -44,7 +44,7 @@ export function legacyResolutionSummary(task = {}) {
   };
 }
 
-function taskRelationIds(task = {}) {
+export function taskRelationIds(task = {}) {
   const result = task.result || {};
   const repair = result.repair || result.repair_goal || {};
   return new Set([

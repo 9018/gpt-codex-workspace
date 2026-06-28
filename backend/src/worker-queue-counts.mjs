@@ -1,4 +1,4 @@
-import { isResolvedLegacyReviewTask, isResolvedLegacyTerminalTask } from "./legacy-reconciliation.mjs";
+import { isResolvedLegacyReviewTask, isResolvedLegacyTerminalTask, hasCompletionEvidence, taskRelationIds } from "./legacy-reconciliation.mjs";
 
 const EMPTY_QUEUE_COUNTS = {
   assigned: 0,
@@ -43,14 +43,52 @@ function computeOldestAges(tasks = [], now = Date.now()) {
   return ages;
 }
 
+/**
+ * Check if a failed/timed_out task has been implicitly resolved by a later
+ * completed task that carries completion evidence and references the
+ * original task through task-ID relationships (same root, parent, or repair chain).
+ */
+function hasImplicitSuccessor(failedTask, allTasks) {
+  if (!failedTask || !failedTask.id) return false;
+  const failedTaskIds = taskRelationIds(failedTask);
+  if (failedTaskIds.size === 0) return false;
+
+  for (const task of allTasks) {
+    if (task.id === failedTask.id) continue;
+    if (task.assignee !== "codex") continue;
+    if (task.status !== "completed") continue;
+    if (!hasCompletionEvidence(task.result || {})) continue;
+
+    const taskRefs = new Set([task.parent_task_id, task.root_task_id, task.repair_of_task_id].filter(Boolean));
+    for (const ref of taskRefs) {
+      if (failedTaskIds.has(ref)) return true;
+    }
+  }
+  return false;
+}
+
 function legacyFailedPolicySummary(tasks = []) {
   const counts = { ...EMPTY_LEGACY_COUNTS };
+  const unresolvedTasks = [];
+
   for (const task of tasks || []) {
     if (task.assignee !== "codex") continue;
-    if (isResolvedLegacyTerminalTask(task)) counts.resolved_legacy_failed += 1;
-    else if (task.status === "failed" || task.status === "timed_out") counts.unresolved_failed += 1;
+    if (isResolvedLegacyTerminalTask(task)) {
+      counts.resolved_legacy_failed += 1;
+    } else if (task.status === "failed" || task.status === "timed_out") {
+      unresolvedTasks.push(task);
+    }
     if (isResolvedLegacyReviewTask(task)) counts.resolved_legacy_review += 1;
   }
+
+  for (const task of unresolvedTasks) {
+    if (hasImplicitSuccessor(task, tasks)) {
+      counts.resolved_legacy_failed += 1;
+    } else {
+      counts.unresolved_failed += 1;
+    }
+  }
+
   return {
     policy: "resolved_legacy_failed_excluded_from_current_blockers",
     ...counts,
@@ -84,6 +122,7 @@ export async function collectWorkerQueueCounts(store) {
       if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
       if (isResolvedLegacyReviewTask(task)) continue;
       if (isResolvedLegacyTerminalTask(task)) continue;
+      if ((task.status === "failed" || task.status === "timed_out") && hasImplicitSuccessor(task, state.tasks || [])) continue;
       counts[task.status] += 1;
     }
     return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };
