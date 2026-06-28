@@ -46,12 +46,11 @@ function computeOldestAges(tasks = [], now = Date.now()) {
 /**
  * Check if a failed/timed_out task has been implicitly resolved by a later
  * completed task that carries completion evidence and references the
- * original task through task-ID relationships (same root, parent, or repair chain).
+ * original task through task-ID, result, or shared-goal relationships.
  */
 function hasImplicitSuccessor(failedTask, allTasks) {
   if (!failedTask || !failedTask.id) return false;
   const failedTaskIds = taskRelationIds(failedTask);
-  if (failedTaskIds.size === 0) return false;
 
   for (const task of allTasks) {
     if (task.id === failedTask.id) continue;
@@ -59,10 +58,22 @@ function hasImplicitSuccessor(failedTask, allTasks) {
     if (task.status !== "completed") continue;
     if (!hasCompletionEvidence(task.result || {})) continue;
 
-    const taskRefs = new Set([task.parent_task_id, task.root_task_id, task.repair_of_task_id].filter(Boolean));
-    for (const ref of taskRefs) {
-      if (failedTaskIds.has(ref)) return true;
+    // 1) Direct task-ID-based references (successor's parent/root/repair
+    //    matches any of failed task's own IDs, root IDs, etc.)
+    if (failedTaskIds.size > 0) {
+      const taskRefs = new Set([task.parent_task_id, task.root_task_id, task.repair_of_task_id].filter(Boolean));
+      for (const ref of taskRefs) {
+        if (failedTaskIds.has(ref)) return true;
+      }
+
+      // 2) Successor's full task relation set (including result.repair etc.)
+      //    references the failed task's ID
+      if (taskRelationIds(task).has(failedTask.id)) return true;
     }
+
+    // 3) Shared goal_id: both tasks serve the same goal, so a completed task
+    //    with evidence implicitly resolves earlier failures for that goal.
+    if (task.goal_id && task.goal_id === failedTask.goal_id) return true;
   }
   return false;
 }

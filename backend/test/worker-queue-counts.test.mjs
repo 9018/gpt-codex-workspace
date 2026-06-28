@@ -182,3 +182,72 @@ test('legacyFailedPolicySummary resolves no-result no-op failures as legacy', as
   assert.equal(result.legacy_failed_policy.blocks_current_work, false);
   assert.equal(result.failed, 0);
 });
+
+
+test('legacyFailedPolicySummary resolves historical failed via same goal_id successor', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_legacy_goal', goal_id: 'goal_xyz' },
+          { assignee: 'codex', status: 'completed', id: 'task_p0_goal', goal_id: 'goal_xyz', result: { verification: { passed: true } } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+});
+
+test('legacyFailedPolicySummary resolves historical failed via successor result.repair reference', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_old_repair', result: {} },
+          { assignee: 'codex', status: 'completed', id: 'task_repair_successor', result: { repair: { repair_of_task_id: 'task_old_repair' }, verification: { passed: true } } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+});
+
+test('legacyFailedPolicySummary does not resolve historical failed with different goal_id', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'failed', id: 'task_failed_no_rel', goal_id: 'goal_aaa', result: {} },
+          { assignee: 'codex', status: 'completed', id: 'task_completed_diff', goal_id: 'goal_bbb', result: { verification: { passed: true } } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});
+
+test('legacyFailedPolicySummary clean idle completed state does not block', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'completed', id: 'task_done', result: { verification: { passed: true } } },
+        ],
+      };
+    },
+  };
+  const result = await collectWorkerQueueCounts(store);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 0);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
+  assert.equal(result.completed, 1);
+});
