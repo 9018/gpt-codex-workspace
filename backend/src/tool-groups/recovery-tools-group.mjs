@@ -45,6 +45,12 @@ import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
 import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
+import {
+  TASK_STATUSES,
+  isHumanReviewStatus,
+  isTerminalStatus,
+  normalizeTaskStatus,
+} from "../task-status-taxonomy.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -135,7 +141,12 @@ function runtimeHealthProbeCommand() {
 // ---------------------------------------------------------------------------
 
 const ACTIVE_QUEUE_STATUSES = new Set(["waiting", "ready", "running", "blocked"]);
-const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out", "waiting_for_review"]);
+
+function isRecoverySafeTerminalTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized !== TASK_STATUSES.BLOCKED
+    && (isTerminalStatus(normalized) || isHumanReviewStatus(normalized));
+}
 
 // ---------------------------------------------------------------------------
 // Allowlisted recovery commands
@@ -238,7 +249,7 @@ export function createRecoveryToolsGroup({
     if (lock.status === "stale") {
       return { ok: true, reason: "lock marked stale" };
     }
-    if (task && TERMINAL_TASK_STATUSES.has(task.status)) {
+    if (task && isRecoverySafeTerminalTaskStatus(task.status)) {
       return { ok: true, reason: "task " + lock.task_id + " is " + task.status };
     }
     const heartbeatAge = lock.last_heartbeat_at
@@ -419,12 +430,12 @@ export function createRecoveryToolsGroup({
         if (item.status === "blocked" && !item.blocked_reason?.includes("Repo locked")) {
           const dg = item.depends_on_goal_id;
           const dt = item.depends_on_task_id;
-          if (dg) { const g = (state.goals||[]).find(x=>x.id===dg); if (g && TERMINAL_TASK_STATUSES.has(g.status)) { proposed = "waiting"; reason = "dep goal " + dg + " terminal (" + g.status + ")"; } }
-          if (dt) { const t = (state.tasks||[]).find(x=>x.id===dt); if (t && TERMINAL_TASK_STATUSES.has(t.status)) { proposed = "waiting"; reason = "dep task " + dt + " terminal (" + t.status + ")"; } }
+          if (dg) { const g = (state.goals||[]).find(x=>x.id===dg); if (g && isRecoverySafeTerminalTaskStatus(g.status)) { proposed = "waiting"; reason = "dep goal " + dg + " terminal (" + g.status + ")"; } }
+          if (dt) { const t = (state.tasks||[]).find(x=>x.id===dt); if (t && isRecoverySafeTerminalTaskStatus(t.status)) { proposed = "waiting"; reason = "dep task " + dt + " terminal (" + t.status + ")"; } }
         }
         if (item.status === "running" && item.task_id) {
           const t = (state.tasks||[]).find(x=>x.id===item.task_id);
-          if (t && TERMINAL_TASK_STATUSES.has(t.status)) { proposed = t.status === "completed" ? "completed" : "failed"; reason = "task terminal (" + t.status + ")"; }
+          if (t && isRecoverySafeTerminalTaskStatus(t.status)) { proposed = normalizeTaskStatus(t.status) === TASK_STATUSES.COMPLETED ? "completed" : "failed"; reason = "task terminal (" + t.status + ")"; }
         }
 
         if (proposed && before !== proposed) {

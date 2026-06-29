@@ -166,6 +166,12 @@ test("5. queue reconcile dry_run runs without error", async () => {
   }
 });
 
+test("5a. recovery task status safety checks derive from task-status taxonomy", async () => {
+  const source = await readFile(join(BACKEND_ROOT, "src", "tool-groups", "recovery-tools-group.mjs"), "utf8");
+  assert.match(source, /from ["']\.\.\/task-status-taxonomy\.mjs["']/);
+  assert.doesNotMatch(source, /TERMINAL_TASK_STATUSES\s*=\s*new Set\(\[/);
+});
+
 test("6. lock reconcile dry_run detects stale locks", async () => {
   process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
   try {
