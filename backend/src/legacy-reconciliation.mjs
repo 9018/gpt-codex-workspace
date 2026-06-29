@@ -2,17 +2,40 @@ import {
   RESULT_SHAPE_TYPES,
   classifyResultShape,
 } from "./result-shape-classifier.mjs";
+import {
+  TASK_STATUSES,
+  normalizeTaskStatus,
+  isTerminalStatus,
+  isFailedTerminalStatus,
+  isActiveExecutionStatus,
+  isHumanReviewStatus,
+  isRepairStatus,
+} from "./task-status-taxonomy.mjs";
 
-const LEGACY_REVIEW_STATUSES = new Set(["failed", "timed_out", "blocked", "waiting_for_review", "waiting_for_repair"]);
-const COMPLETED_STATUSES = new Set(["completed"]);
-const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "blocked", "cancelled"]);
-const ACTIVE_OR_REVIEW_TASK_STATUSES = new Set(["queued", "assigned", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]);
-const FAILED_LEGACY_STATUSES = new Set(["failed", "timed_out", "cancelled", "blocked"]);
 const HISTORICAL_PROVIDER_EMPTY_RESULT_SHAPES = new Set([
   RESULT_SHAPE_TYPES.PROVIDER_NOOP,
   RESULT_SHAPE_TYPES.PROVIDER_TIMEOUT,
   RESULT_SHAPE_TYPES.PROVIDER_NO_EVIDENCE,
 ]);
+
+function isCompletedStatus(status) {
+  return normalizeTaskStatus(status) === TASK_STATUSES.COMPLETED;
+}
+
+function isLegacyReviewStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized === TASK_STATUSES.FAILED
+    || normalized === TASK_STATUSES.TIMED_OUT
+    || normalized === TASK_STATUSES.BLOCKED
+    || isHumanReviewStatus(normalized)
+    || isRepairStatus(normalized);
+}
+
+function isActiveOrReviewStatus(status) {
+  return isActiveExecutionStatus(status)
+    || isHumanReviewStatus(status)
+    || isRepairStatus(status);
+}
 
 export function hasCompletionEvidence(taskResult = {}) {
   if (taskResult.reviewer_decision?.passed === true) return true;
@@ -23,7 +46,7 @@ export function hasCompletionEvidence(taskResult = {}) {
 }
 
 export function isResolvedLegacyReviewTask(task = {}) {
-  if (task.status !== "waiting_for_review") return false;
+  if (!isHumanReviewStatus(task.status)) return false;
   const result = task.result || {};
   return Boolean(result.resolved_by_task_id || result.superseded_by_task_id || result.auto_accepted || result.accepted_at);
 }
@@ -38,7 +61,7 @@ export function isResolvedLegacyReviewTask(task = {}) {
  * and should be treated as legacy/resolved.
  */
 function isNoResultFailure(task = {}) {
-  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  if (!isFailedTerminalStatus(task.status)) return false;
   const result = task.result;
   // True when result is a real object (empty or not), not null/undefined/missing
   const hasAnyResult = result !== null && result !== undefined && result !== '';
@@ -87,7 +110,7 @@ function workerMetadataOnlyFailure(result = {}) {
  * plain failed task with an empty result object still remains actionable.
  */
 export function isHistoricalProviderNoResultFailure(task = {}) {
-  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  if (!isFailedTerminalStatus(task.status)) return false;
   const result = task.result || {};
   if (!result || typeof result !== "object") return false;
   if (hasCodeFailureEvidence(result)) return false;
@@ -121,7 +144,7 @@ export function isHistoricalProviderNoResultFailure(task = {}) {
 }
 
 export function isResolvedLegacyTerminalTask(task = {}) {
-  if (!FAILED_LEGACY_STATUSES.has(task.status)) return false;
+  if (!isFailedTerminalStatus(task.status)) return false;
   const result = task.result || {};
   const reconciliationStatus = result.legacy_reconciliation?.status || task.legacy_reconciliation?.status || null;
 
@@ -222,10 +245,10 @@ function completionEvidence(successorTask = {}, successorGoal = {}) {
 }
 
 export function findLegacySuccessor({ legacyTask, legacyGoal, tasks = [], goals = [] } = {}) {
-  if (!legacyTask || !LEGACY_REVIEW_STATUSES.has(legacyTask.status)) return null;
+  if (!legacyTask || !isLegacyReviewStatus(legacyTask.status)) return null;
 
   const candidates = tasks
-    .filter((task) => task && task.id !== legacyTask.id && COMPLETED_STATUSES.has(task.status))
+    .filter((task) => task && task.id !== legacyTask.id && isCompletedStatus(task.status))
     .filter((task) => hasCompletionEvidence(task.result || {}))
     .filter((task) => successorExplicitlyReferencesLegacy({ legacyTask, legacyGoal, successorTask: task }))
     .sort((a, b) => taskUpdatedMs(b) - taskUpdatedMs(a));
@@ -295,8 +318,8 @@ export function hasResolvedWorktreeEvidence(task = {}) {
 
 export function retainedWorktreeDecision(task = {}) {
   if (!task || !task.id) return { action: "skip", reason: "missing_task" };
-  if (ACTIVE_OR_REVIEW_TASK_STATUSES.has(task.status)) return { action: "skip", reason: "active_or_review" };
-  if (!TERMINAL_TASK_STATUSES.has(task.status)) return { action: "skip", reason: "non_terminal" };
+  if (isActiveOrReviewStatus(task.status)) return { action: "skip", reason: "active_or_review" };
+  if (!isTerminalStatus(task.status)) return { action: "skip", reason: "non_terminal" };
   if (!hasResolvedWorktreeEvidence(task)) return { action: "skip", reason: "needs_manual_review" };
   return { action: "remove", reason: "resolved_terminal" };
 }
