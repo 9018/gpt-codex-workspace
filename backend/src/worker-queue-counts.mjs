@@ -1,14 +1,15 @@
 import { isResolvedLegacyReviewTask, isResolvedLegacyTerminalTask, hasCompletionEvidence, taskRelationIds } from "./legacy-reconciliation.mjs";
+import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
 const EMPTY_QUEUE_COUNTS = {
-  assigned: 0,
-  queued: 0,
-  running: 0,
-  waiting_for_lock: 0,
-  waiting_for_review: 0,
-  waiting_for_integration: 0,
-  completed: 0,
-  failed: 0,
+  [TASK_STATUSES.ASSIGNED]: 0,
+  [TASK_STATUSES.QUEUED]: 0,
+  [TASK_STATUSES.RUNNING]: 0,
+  [TASK_STATUSES.WAITING_FOR_LOCK]: 0,
+  [TASK_STATUSES.WAITING_FOR_REVIEW]: 0,
+  [TASK_STATUSES.WAITING_FOR_INTEGRATION]: 0,
+  [TASK_STATUSES.COMPLETED]: 0,
+  [TASK_STATUSES.FAILED]: 0,
 };
 
 const EMPTY_LEGACY_COUNTS = {
@@ -17,7 +18,16 @@ const EMPTY_LEGACY_COUNTS = {
   resolved_legacy_review: 0,
 };
 
-const COUNTED_STATUSES = new Set(Object.keys(EMPTY_QUEUE_COUNTS));
+const COUNTED_STATUSES = new Set([
+  TASK_STATUSES.ASSIGNED,
+  TASK_STATUSES.QUEUED,
+  TASK_STATUSES.RUNNING,
+  TASK_STATUSES.WAITING_FOR_LOCK,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_INTEGRATION,
+  TASK_STATUSES.COMPLETED,
+  TASK_STATUSES.FAILED,
+]);
 
 function emptyQueueAges() {
   return Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((status) => [status, 0]));
@@ -55,7 +65,7 @@ function hasImplicitSuccessor(failedTask, allTasks) {
   for (const task of allTasks) {
     if (task.id === failedTask.id) continue;
     if (task.assignee !== "codex") continue;
-    if (task.status !== "completed") continue;
+    if (task.status !== TASK_STATUSES.COMPLETED) continue;
     if (!hasCompletionEvidence(task.result || {})) continue;
 
     // 1) Direct task-ID-based references (successor's parent/root/repair
@@ -86,7 +96,7 @@ function legacyFailedPolicySummary(tasks = []) {
     if (task.assignee !== "codex") continue;
     if (isResolvedLegacyTerminalTask(task)) {
       counts.resolved_legacy_failed += 1;
-    } else if (task.status === "failed" || task.status === "timed_out") {
+    } else if (task.status === TASK_STATUSES.FAILED || task.status === TASK_STATUSES.TIMED_OUT) {
       unresolvedTasks.push(task);
     }
     if (isResolvedLegacyReviewTask(task)) counts.resolved_legacy_review += 1;
@@ -133,7 +143,7 @@ export async function collectWorkerQueueCounts(store) {
       if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
       if (isResolvedLegacyReviewTask(task)) continue;
       if (isResolvedLegacyTerminalTask(task)) continue;
-      if ((task.status === "failed" || task.status === "timed_out") && hasImplicitSuccessor(task, state.tasks || [])) continue;
+      if ((task.status === TASK_STATUSES.FAILED || task.status === TASK_STATUSES.TIMED_OUT) && hasImplicitSuccessor(task, state.tasks || [])) continue;
       counts[task.status] += 1;
     }
     return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };

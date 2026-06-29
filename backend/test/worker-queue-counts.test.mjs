@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
 
 import { collectWorkerQueueCounts } from '../src/worker-queue-counts.mjs';
+
+const WORKER_QUEUE_COUNTS_SOURCE = fileURLToPath(new URL('../src/worker-queue-counts.mjs', import.meta.url));
 
 const ZERO_AGES = {
   assigned: 0,
@@ -13,6 +17,12 @@ const ZERO_AGES = {
   completed: 0,
   failed: 0,
 };
+
+test('worker queue counts derives status taxonomy from task-status-taxonomy module', async () => {
+  const source = await readFile(WORKER_QUEUE_COUNTS_SOURCE, 'utf8');
+  assert.match(source, /from ['"]\.\/task-status-taxonomy\.mjs['"]/);
+  assert.doesNotMatch(source, /COUNTED_STATUSES\s*=\s*new Set\(Object\.keys\(EMPTY_QUEUE_COUNTS\)\)/);
+});
 
 test('collectWorkerQueueCounts counts codex task statuses in one pass shape', async () => {
   const old = new Date(Date.now() - 60_000).toISOString();
