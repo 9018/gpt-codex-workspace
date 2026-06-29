@@ -1,0 +1,119 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+
+import {
+  CURRENT_WORK_DECISION_LABELS,
+  classifyCurrentBlockerTask,
+} from '../src/current-blocker-policy.mjs';
+
+test('exports frozen canonical current-work decision labels', () => {
+  assert.equal(Object.isFrozen(CURRENT_WORK_DECISION_LABELS), true);
+  assert.deepEqual(CURRENT_WORK_DECISION_LABELS, {
+    ACTIVE: 'active',
+    REVIEW: 'review',
+    INTEGRATION: 'integration',
+    COMPLETED: 'completed',
+    PROVIDER_EMPTY: 'provider_empty',
+    CODE_EVIDENCE_FAILURE: 'code_evidence_failure',
+    RESOLVED_BY_OPTIONS: 'resolved_by_options',
+    UNKNOWN_STATUS: 'unknown_status',
+  });
+});
+
+test('classifyCurrentBlockerTask labels active execution statuses', () => {
+  for (const status of ['assigned', 'queued', 'running', 'waiting_for_lock', ' WAITING_FOR_LOCK ']) {
+    assert.deepEqual(classifyCurrentBlockerTask({ status }), {
+      label: CURRENT_WORK_DECISION_LABELS.ACTIVE,
+      status: status.trim?.().toLowerCase?.() ?? status,
+      result_shape: 'no_result',
+      blocks_current_work: true,
+    });
+  }
+});
+
+test('classifyCurrentBlockerTask labels review and integration statuses distinctly', () => {
+  assert.deepEqual(classifyCurrentBlockerTask({ status: 'waiting_for_review' }), {
+    label: CURRENT_WORK_DECISION_LABELS.REVIEW,
+    status: 'waiting_for_review',
+    result_shape: 'no_result',
+    blocks_current_work: true,
+  });
+  assert.deepEqual(classifyCurrentBlockerTask({ status: 'waiting_for_integration' }), {
+    label: CURRENT_WORK_DECISION_LABELS.INTEGRATION,
+    status: 'waiting_for_integration',
+    result_shape: 'no_result',
+    blocks_current_work: true,
+  });
+});
+
+test('classifyCurrentBlockerTask labels completed tasks as non-blocking completed', () => {
+  assert.deepEqual(classifyCurrentBlockerTask({ status: ' completed ', result: { verification: { passed: true } } }), {
+    label: CURRENT_WORK_DECISION_LABELS.COMPLETED,
+    status: 'completed',
+    result_shape: 'completion_evidence',
+    blocks_current_work: false,
+  });
+});
+
+test('classifyCurrentBlockerTask labels explicit resolved-by options before failure evidence', () => {
+  for (const result of [
+    { resolved_by_task_id: 'task_successor', changed_files: ['backend/src/a.mjs'] },
+    { superseded_by_task_id: 'task_successor' },
+    { resolved_legacy: true },
+    { noop: true },
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: 'failed', result });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS);
+    assert.equal(decision.blocks_current_work, false);
+  }
+});
+
+test('classifyCurrentBlockerTask labels provider-empty terminal failures as non-blocking', () => {
+  for (const task of [
+    { status: 'failed', result: null },
+    { status: 'failed', result: { failure_class: 'result_missing' } },
+    { status: 'timed_out', result: { kind: 'codex_timeout' } },
+    { status: 'failed', result: { kind: 'codex_failed' } },
+  ]) {
+    const decision = classifyCurrentBlockerTask(task);
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.PROVIDER_EMPTY);
+    assert.equal(decision.blocks_current_work, false);
+  }
+});
+
+test('classifyCurrentBlockerTask labels terminal code evidence failures as blocking', () => {
+  for (const result of [
+    { changed_files: ['backend/src/dirty.mjs'] },
+    { tests: 'node --test failed' },
+    { commit: 'abc123' },
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: 'failed', result });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.CODE_EVIDENCE_FAILURE);
+    assert.equal(decision.blocks_current_work, true);
+    assert.equal(decision.result_shape, 'code_evidence');
+  }
+});
+
+test('classifyCurrentBlockerTask labels unknown statuses as non-blocking unknown status', () => {
+  for (const task of [{ status: 'needs_triage' }, { status: '' }, {}, null]) {
+    const decision = classifyCurrentBlockerTask(task);
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS);
+    assert.equal(decision.blocks_current_work, false);
+  }
+});
+
+test('classifyCurrentBlockerTask is deterministic and does not mutate input', () => {
+  const task = Object.freeze({
+    status: 'failed',
+    result: Object.freeze({ changed_files: Object.freeze(['backend/src/a.mjs']) }),
+  });
+
+  const first = classifyCurrentBlockerTask(task);
+  const second = classifyCurrentBlockerTask(task);
+
+  assert.deepEqual(first, second);
+  assert.deepEqual(task, {
+    status: 'failed',
+    result: { changed_files: ['backend/src/a.mjs'] },
+  });
+});
