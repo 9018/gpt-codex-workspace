@@ -24,8 +24,28 @@ import {
   autoAcceptTask,
   storeProposal,
 } from "../workflow-state-service.mjs";
+import { TASK_STATUSES } from "../task-status-taxonomy.mjs";
 
 export const WORKFLOW_ADVANCE_HANDLER_VERSION = "workflow_advance.v2.acceptance_first";
+
+function workflowQueueActionableReview(queue = {}) {
+  return queue.actionable_review ?? queue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0;
+}
+
+function workflowQueueCurrentBlockers(queue = {}) {
+  return (queue[TASK_STATUSES.WAITING_FOR_LOCK] ?? 0)
+    + (queue[TASK_STATUSES.WAITING_FOR_INTEGRATION] ?? 0)
+    + workflowQueueActionableReview(queue)
+    + (queue[TASK_STATUSES.FAILED] ?? 0);
+}
+
+function workflowQueueDisplay(queue = {}) {
+  return {
+    ...queue,
+    current_blockers: queue.current_blockers ?? workflowQueueCurrentBlockers(queue),
+    actionable_review: workflowQueueActionableReview(queue),
+  };
+}
 
 function handlerDiagnostics(diagnostics) {
   return {
@@ -121,6 +141,8 @@ export function createWorkflowToolsGroup({
           }
         }
 
+        const queueDisplay = workflowQueueDisplay(diagnostics.queue);
+
         return {
           title: "Workflow Status",
           summary: `Workflow: ${wfId}`,
@@ -146,7 +168,7 @@ export function createWorkflowToolsGroup({
             running: diagnostics.worker.running,
             health: diagnostics.worker.health,
           },
-          queue: diagnostics.queue,
+          queue: queueDisplay,
           status_checks: {
             worker_idle: !diagnostics.worker.running,
             no_active_locks: diagnostics.repo_locks.active === 0,
@@ -179,6 +201,14 @@ export function createWorkflowToolsGroup({
             {
               key: "Active Locks",
               value: String(diagnostics.repo_locks.active),
+            },
+            {
+              key: "Current Blockers",
+              value: String(queueDisplay.current_blockers),
+            },
+            {
+              key: "Actionable Review",
+              value: String(queueDisplay.actionable_review),
             },
           ],
         };

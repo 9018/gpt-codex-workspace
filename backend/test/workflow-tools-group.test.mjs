@@ -634,3 +634,34 @@ test("workflow_status exposes reviewer decision and actionable review count", as
   assert.equal(result.latest_task.reviewer_decision.status, "accepted");
   assert.equal(result.queue.actionable_review, 0);
 });
+
+test("workflow_status labels current blockers from normalized queue semantics", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const taskState = makeTask({ status: "completed" });
+  const resolvedReview = makeTask({ status: "waiting_for_review", result: { resolved_by_task_id: "task_fix" } });
+  const actionableReview = makeTask({ status: "waiting_for_review", result: { summary: "Needs review" } });
+  const unresolvedFailed = makeTask({ status: "failed", result: { changed_files: ["src/file.js"], tests: "npm test failed" } });
+  const store = {
+    load: async () => ({
+      tasks: [
+        taskState,
+        resolvedReview,
+        actionableReview,
+        unresolvedFailed,
+        makeTask({ status: "waiting_for_lock" }),
+        makeTask({ status: "waiting_for_integration" }),
+      ],
+      goals: [],
+      activities: [],
+    }),
+    save: async () => {},
+  };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+
+  assert.equal(result.queue.waiting_for_review, 1);
+  assert.equal(result.queue.actionable_review, 1);
+  assert.equal(result.queue.current_blockers, 4);
+  assert.ok(result.keyValues.some((row) => row.key === "Current Blockers" && row.value === "4"));
+  assert.ok(result.keyValues.some((row) => row.key === "Actionable Review" && row.value === "1"));
+});
