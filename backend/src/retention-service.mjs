@@ -17,6 +17,13 @@ import { readFile, readdir, rm, mkdir, writeFile, appendFile, rename, stat } fro
 import { join } from "node:path";
 import { createAdminAuditLogger } from "./admin-audit-log.mjs";
 import { retainedWorktreeDecision } from "./legacy-reconciliation.mjs";
+import {
+  TASK_STATUSES,
+  isActiveExecutionStatus,
+  isHumanReviewStatus,
+  isTerminalStatus as isTaxonomyTerminalTaskStatus,
+  normalizeTaskStatus,
+} from "./task-status-taxonomy.mjs";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -48,9 +55,6 @@ export function getRetentionConfig() {
 // Status / terminal / active sets
 // ---------------------------------------------------------------------------
 
-const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "cancelled"]);
-const ACTIVE_TASK_STATUSES = new Set(["queued", "assigned", "running", "waiting_for_lock", "waiting_for_review"]);
-
 const TERMINAL_GOAL_STATUSES = new Set(["completed", "failed", "cancelled", "timed_out"]);
 const ACTIVE_GOAL_STATUSES = new Set(["assigned", "open", "queued", "running"]);
 
@@ -65,6 +69,17 @@ const ACTIVE_CHATGPT_STATUSES = new Set(["pending", "processing", "waiting"]);
 
 const TERMINAL_RESTART_MARKER_STATUSES = new Set(["verified", "failed"]);
 const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
+
+function _isTerminalTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized !== TASK_STATUSES.BLOCKED && isTaxonomyTerminalTaskStatus(normalized);
+}
+
+function _isActiveTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized !== TASK_STATUSES.WAITING_FOR_INTEGRATION
+    && (isActiveExecutionStatus(normalized) || isHumanReviewStatus(normalized));
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -180,10 +195,10 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
   // ── 1. tasks ───────────────────────────────────────────────────────
   {
     const tasks = state.tasks || [];
-    const terminal = tasks.filter((t) => TERMINAL_TASK_STATUSES.has(t.status));
-    const active = tasks.filter((t) => ACTIVE_TASK_STATUSES.has(t.status));
+    const terminal = tasks.filter((t) => _isTerminalTaskStatus(t.status));
+    const active = tasks.filter((t) => _isActiveTaskStatus(t.status));
     const other = tasks.filter((t) =>
-      !TERMINAL_TASK_STATUSES.has(t.status) && !ACTIVE_TASK_STATUSES.has(t.status)
+      !_isTerminalTaskStatus(t.status) && !_isActiveTaskStatus(t.status)
     );
     const terminalCount = terminal.length;
     const over = terminalCount > limit ? terminalCount - limit : 0;
@@ -743,7 +758,7 @@ export async function retentionCleanup({
   {
     const tasks = state.tasks || [];
     const terminalTasks = tasks
-      .filter((t) => TERMINAL_TASK_STATUSES.has(t.status))
+      .filter((t) => _isTerminalTaskStatus(t.status))
       .sort((a, b) => _getTs(b, "updated_at") - _getTs(a, "updated_at"));
 
     if (terminalTasks.length > limit) {

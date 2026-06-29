@@ -207,6 +207,37 @@ describe("retention-service", () => {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       }
     });
+
+    it("classifies task statuses through taxonomy normalization", async () => {
+      const state = {
+        tasks: [
+          makeTask("t_terminal", " COMPLETED ", "2026-01-01T00:00:00Z"),
+          makeTask("t_running", " RUNNING ", "2026-01-02T00:00:00Z"),
+          makeTask("t_review", " WAITING_FOR_REVIEW ", "2026-01-03T00:00:00Z"),
+          makeTask("t_unknown", "needs_review", "2026-01-04T00:00:00Z"),
+        ],
+        goals: [],
+        goal_queue: [],
+        conversations: [],
+        memories: [],
+        agent_runs: [],
+        chatgpt_requests: [],
+        activities: [],
+        audit: [],
+      };
+      const { store: st, dir } = await createStore(state);
+
+      try {
+        const report = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+        const tasksFamily = report.families.find((f) => f.name === "tasks");
+
+        assert.equal(tasksFamily.current_count, 4);
+        assert.equal(tasksFamily.terminal_count, 1);
+        assert.equal(tasksFamily.active_count, 2);
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
   });
 
   describe("retentionCleanup — dry-run", () => {
