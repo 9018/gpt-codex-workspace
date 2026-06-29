@@ -266,3 +266,33 @@ test('gptwork_doctor handler returns expected shape keys', async () => {
   assert.equal(typeof result.worker, 'object');
   assert.equal(typeof result.repo_locks, 'object');
 });
+
+test('gptwork_doctor suggested actions use actionable review queue blockers', async () => {
+  const tools = createRuntimeStatusToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    config: fakeConfig,
+    sources: fakeSources,
+    envLoadResult: fakeEnvLoadResult,
+    bark: fakeBark,
+    github: fakeGithub,
+    registry: fakeRegistry,
+    store: fakeStore,
+    workerState: { ...fakeWorkerState, enabled: true, last_tick_finished_at: new Date().toISOString() },
+    PROCESS_STARTED_AT: fakeProcessStartedAt,
+    collectWorkerQueueCounts: async () => ({
+      assigned: 0,
+      queued: 0,
+      running: 0,
+      waiting_for_lock: 0,
+      waiting_for_review: 4,
+      actionable_review: 1,
+      completed: 0,
+      failed: 0,
+    }),
+  });
+
+  const result = await tools.gptwork_doctor.handler({});
+  assert.ok(result.suggested_next_actions.some((action) => action.includes('1 Codex task(s) needing actionable review')));
+  assert.equal(result.suggested_next_actions.some((action) => action.includes('4 Codex task(s) waiting for review')), false);
+});

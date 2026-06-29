@@ -346,8 +346,9 @@ const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspa
                 if (queueCounts.waiting_for_lock > 0) {
                   actions.push(queueCounts.waiting_for_lock + ' Codex task(s) waiting for repo lock — run list_repo_locks to see blocked tasks');
                 }
-                if (queueCounts.waiting_for_review > 0) {
-                  actions.push(queueCounts.waiting_for_review + ' Codex task(s) waiting for review — check and approve or reassign');
+                const actionableReview = queueCounts.actionable_review ?? queueCounts.waiting_for_review ?? 0;
+                if (actionableReview > 0) {
+                  actions.push(actionableReview + ' Codex task(s) needing actionable review — check and approve or reassign');
                 }
               } catch (e) {}
             })();

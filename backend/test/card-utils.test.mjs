@@ -295,8 +295,8 @@ test("runtimeStatusCard shows queue breakdown and oldest ages", () => {
     dirty_paths: [],
     queue: {
       assigned: 2, queued: 1, running: 1, waiting_for_lock: 0,
-      waiting_for_review: 1, completed: 10, failed: 0,
-      oldest_age_ms: { assigned: 60000, queued: 30000, running: 120000, waiting_for_lock: 0, waiting_for_review: 90000, completed: 0, failed: 0 },
+      waiting_for_review: 1, waiting_for_integration: 1, completed: 10, failed: 0,
+      oldest_age_ms: { assigned: 60000, queued: 30000, running: 120000, waiting_for_lock: 0, waiting_for_review: 90000, waiting_for_integration: 45000, waiting_for_repair: 15000, completed: 0, failed: 0 },
     },
     worker: { enabled: true, health: { phase: "idle", reason: "waiting for next tick", last_tick_age_ms: 2000, current_tick_duration_ms: null, next_tick_overdue_ms: 1000 } },
     bark: { enabled: true },
@@ -312,8 +312,40 @@ test("runtimeStatusCard shows queue breakdown and oldest ages", () => {
   assert.ok(card.includes("assigned=60s"), "assigned oldest age");
   assert.ok(card.includes("queued=30s"), "queued oldest age");
   assert.ok(card.includes("running=120s"), "running oldest age");
+  assert.ok(card.includes("waiting_for_integration=45s"), "integration wait oldest age");
+  assert.ok(!card.includes("waiting_for_repair=15s"), "repair wait is not active execution age");
   assert.ok(card.includes("Health: idle"), "health phase");
   assert.ok(card.includes("waiting for next tick"), "health reason");
+});
+
+test("runtimeStatusCard labels current blockers from normalized queue counts", () => {
+  const data = {
+    pid: 101,
+    started_at: "2026-06-21T10:00:00.000Z",
+    running_commit: null,
+    worktree_dirty: false,
+    dirty_paths: [],
+    runtime_env_loaded: true,
+    queue: {
+      assigned: 0,
+      queued: 0,
+      running: 0,
+      waiting_for_lock: 1,
+      waiting_for_review: 3,
+      actionable_review: 1,
+      waiting_for_integration: 2,
+      completed: 5,
+      failed: 0,
+      legacy_failed_policy: { blocks_current_work: false },
+    },
+    worker: { enabled: true, health: { phase: "healthy" } },
+    bark: { enabled: false },
+    github: { api_sync_enabled: false, api_repo_set: false },
+  };
+  const card = runtimeStatusCard(data);
+  assert.match(card, /current blockers:\s*4/);
+  assert.match(card, /actionable review:\s*1/);
+  assert.doesNotMatch(card, /waiting for review:\s*3/);
 });
 
 test("runtimeStatusCard shows worker stalled health warning", () => {

@@ -1,4 +1,5 @@
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
+import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
 const CARD_VERSION = "gptwork-card-v1";
 const CARD_ENABLED_TOOLS = new Set([
@@ -137,17 +138,50 @@ function finalize(card) {
   return card;
 }
 
+const RUNTIME_QUEUE_ROW_KEYS = [
+  TASK_STATUSES.ASSIGNED,
+  TASK_STATUSES.QUEUED,
+  TASK_STATUSES.RUNNING,
+  TASK_STATUSES.WAITING_FOR_LOCK,
+  TASK_STATUSES.WAITING_FOR_INTEGRATION,
+  "current_blockers",
+  "actionable_review",
+  TASK_STATUSES.COMPLETED,
+  TASK_STATUSES.FAILED,
+  TASK_STATUSES.CANCELLED,
+];
+
+function runtimeQueueActionableReview(queue = {}) {
+  return queue.actionable_review ?? queue.waiting_for_review ?? 0;
+}
+
+function runtimeQueueCurrentBlockers(queue = {}) {
+  return (queue.waiting_for_lock ?? 0)
+    + (queue.waiting_for_integration ?? 0)
+    + runtimeQueueActionableReview(queue)
+    + (queue.failed ?? 0);
+}
+
+function runtimeQueueDisplay(queue = {}) {
+  return {
+    ...queue,
+    current_blockers: queue.current_blockers ?? runtimeQueueCurrentBlockers(queue),
+    actionable_review: runtimeQueueActionableReview(queue),
+  };
+}
+
 function queueSection(queue = {}) {
+  const displayQueue = runtimeQueueDisplay(queue);
   return {
     title: "Queue",
     type: "table",
-    rows: tableRowsFromObject(queue, ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "completed", "failed", "cancelled"]),
+    rows: tableRowsFromObject(displayQueue, RUNTIME_QUEUE_ROW_KEYS),
   };
 }
 
 function buildRuntimeStatusCard(tool, data, meta) {
   const card = baseCard(tool, data, { ...meta, title: tool === "worker_status" ? "Worker Status" : "Runtime Status" });
-  const queue = data.queue || data.queues || data.worker?.queue || {};
+  const queue = runtimeQueueDisplay(data.queue || data.queues || data.worker?.queue || {});
   const worker = tool === "worker_status" ? data : (data.worker || {});
   const healthPhase = worker.health?.phase || (worker.running ? "running" : (worker.enabled ? "enabled" : "disabled"));
   const dirty = Boolean(data.worktree_dirty);
@@ -155,7 +189,7 @@ function buildRuntimeStatusCard(tool, data, meta) {
   card.card_type = "runtime_health";
   card.status = dirty ? "warning" : healthPhase;
   card.severity = dirty ? "warning" : severityFromStatus(healthPhase, "info");
-  card.summary = `worker ${worker.enabled ? "enabled" : "disabled"}; queue assigned=${queue.assigned ?? 0}, running=${queue.running ?? 0}, review=${queue.waiting_for_review ?? 0}`;
+  card.summary = `worker ${worker.enabled ? "enabled" : "disabled"}; queue assigned=${queue.assigned ?? 0}, running=${queue.running ?? 0}, current blockers=${queue.current_blockers ?? 0}`;
 
   addKeyValues(card.key_values, [
     { key: "pid", value: data.pid },
@@ -166,7 +200,8 @@ function buildRuntimeStatusCard(tool, data, meta) {
     { key: "worker.health", value: healthPhase },
     { key: "queue.assigned", value: queue.assigned ?? 0 },
     { key: "queue.running", value: queue.running ?? 0 },
-    { key: "queue.waiting_for_review", value: queue.waiting_for_review ?? 0 },
+    { key: "queue.current_blockers", value: queue.current_blockers ?? 0 },
+    { key: "queue.actionable_review", value: queue.actionable_review ?? 0 },
   ]);
 
   if (Object.keys(queue).length > 0) card.sections.push(queueSection(queue));
@@ -181,11 +216,14 @@ function buildRuntimeStatusCard(tool, data, meta) {
   const blockages = [];
   if (worker.running) blockages.push("worker_running");
   if (dirty) blockages.push("dirty_worktree");
-  if (queue.waiting_for_review > 0) blockages.push("waiting_for_review");
+  if ((queue.waiting_for_lock ?? 0) > 0) blockages.push(TASK_STATUSES.WAITING_FOR_LOCK);
+  if ((queue.waiting_for_integration ?? 0) > 0) blockages.push(TASK_STATUSES.WAITING_FOR_INTEGRATION);
+  if ((queue.actionable_review ?? 0) > 0) blockages.push("actionable_review");
+  if ((queue.failed ?? 0) > 0 || queue.legacy_failed_policy?.blocks_current_work) blockages.push(TASK_STATUSES.FAILED);
   if (data.running_commit && data.repo_head && data.running_commit !== data.repo_head) blockages.push("runtime_restart_required");
   if (blockages.length > 0) {
     card.sections.push({
-      title: "Blockages",
+      title: "Current blockers",
       type: "list",
       items: blockages,
     });

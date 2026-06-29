@@ -1,4 +1,48 @@
 import { formatToolCard, formatKeyValue, formatDiagnostics, formatWarnings, formatNextActions, formatStatusChip, truncateOutput, truncateVerboseOutput } from "./card-format-utils.mjs";
+import { ACTIVE_EXECUTION_STATUSES, TASK_STATUSES } from "./task-status-taxonomy.mjs";
+
+const QUEUE_DISPLAY_ROWS = [
+  [TASK_STATUSES.ASSIGNED, "assigned"],
+  [TASK_STATUSES.QUEUED, "queued"],
+  [TASK_STATUSES.RUNNING, "running"],
+  [TASK_STATUSES.WAITING_FOR_LOCK, "waiting for lock"],
+  [TASK_STATUSES.WAITING_FOR_INTEGRATION, "waiting for integration"],
+  ["current_blockers", "current blockers"],
+  ["actionable_review", "actionable review"],
+  [TASK_STATUSES.COMPLETED, "completed"],
+  [TASK_STATUSES.FAILED, "failed"],
+];
+
+function queueCurrentBlockers(q = {}) {
+  const actionableReview = q.actionable_review ?? q.waiting_for_review ?? 0;
+  return (q.waiting_for_lock ?? 0)
+    + (q.waiting_for_integration ?? 0)
+    + actionableReview
+    + (q.failed ?? 0);
+}
+
+function queueDisplayValue(q = {}, key) {
+  if (key === "current_blockers") return q.current_blockers ?? queueCurrentBlockers(q);
+  if (key === "actionable_review") return q.actionable_review ?? q.waiting_for_review ?? 0;
+  return q[key] ?? 0;
+}
+
+function addQueueDisplayRows(lines, q = {}) {
+  lines.push('');
+  lines.push('  Queue:');
+  for (const [key, label] of QUEUE_DISPLAY_ROWS) {
+    lines.push(formatKeyValue(label, queueDisplayValue(q, key)));
+  }
+  if (q.oldest_age_ms) {
+    const activeAges = Object.entries(q.oldest_age_ms)
+      .filter(([st]) => ACTIVE_EXECUTION_STATUSES.has(st))
+      .filter(([, age]) => age > 0)
+      .map(([st, age]) => `${st}=${Math.round(age / 1000)}s`);
+    if (activeAges.length > 0) {
+      lines.push(formatKeyValue('oldest ages', activeAges.join(', ')));
+    }
+  }
+}
 
 export function runtimeStatusCard(data) {
   const lines = [
@@ -13,26 +57,7 @@ export function runtimeStatusCard(data) {
 
   // Queue breakdown (from collectWorkerQueueCounts)
   if (data.queue) {
-    const q = data.queue;
-    lines.push('');
-    lines.push('  Queue:');
-    lines.push(formatKeyValue('assigned', q.assigned ?? 0));
-    lines.push(formatKeyValue('queued', q.queued ?? 0));
-    lines.push(formatKeyValue('running', q.running ?? 0));
-    lines.push(formatKeyValue('waiting for lock', q.waiting_for_lock ?? 0));
-    lines.push(formatKeyValue('waiting for review', q.waiting_for_review ?? 0));
-    lines.push(formatKeyValue('completed', q.completed ?? 0));
-    lines.push(formatKeyValue('failed', q.failed ?? 0));
-    if (q.oldest_age_ms) {
-      const activeStatuses = ['assigned', 'queued', 'running', 'waiting_for_lock', 'waiting_for_review'];
-      const activeAges = Object.entries(q.oldest_age_ms)
-        .filter(([st]) => activeStatuses.includes(st))
-        .filter(([, age]) => age > 0)
-        .map(([st, age]) => `${st}=${Math.round(age / 1000)}s`);
-      if (activeAges.length > 0) {
-        lines.push(formatKeyValue('oldest ages', activeAges.join(', ')));
-      }
-    }
+    addQueueDisplayRows(lines, data.queue);
   }
 
   // Worker health
@@ -101,16 +126,7 @@ export function workerStatusCard(data) {
 
   // Queue counts
   if (data.queue) {
-    const q = data.queue;
-    lines.push('');
-    lines.push('  Queue:');
-    lines.push(formatKeyValue('assigned', q.assigned ?? 0));
-    lines.push(formatKeyValue('queued', q.queued ?? 0));
-    lines.push(formatKeyValue('running', q.running ?? 0));
-    lines.push(formatKeyValue('waiting for lock', q.waiting_for_lock ?? 0));
-    lines.push(formatKeyValue('waiting for review', q.waiting_for_review ?? 0));
-    lines.push(formatKeyValue('completed', q.completed ?? 0));
-    lines.push(formatKeyValue('failed', q.failed ?? 0));
+    addQueueDisplayRows(lines, data.queue);
   } else {
     lines.push(formatKeyValue('queue assigned', data.queue?.assigned ?? data.queues?.assigned ?? 0));
     lines.push(formatKeyValue('queue running', data.queue?.running ?? data.queues?.running ?? 0));

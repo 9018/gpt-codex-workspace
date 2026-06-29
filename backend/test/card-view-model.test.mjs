@@ -32,6 +32,39 @@ test("buildCardViewModel builds runtime_status card with worker and queue summar
   assert.ok(card.diagnostics.some((diagnostic) => diagnostic.message.includes("Dirty worktree")));
 });
 
+test("buildCardViewModel labels runtime current blockers from normalized queue semantics", () => {
+  const card = buildCardViewModel("runtime_status", {
+    pid: 123,
+    started_at: "2026-06-25T00:00:00.000Z",
+    running_commit: "abcdef1234567890",
+    worktree_dirty: false,
+    worker: {
+      enabled: true,
+      running: false,
+      health: { phase: "healthy" },
+    },
+    queue: {
+      assigned: 0,
+      queued: 0,
+      running: 0,
+      waiting_for_lock: 1,
+      waiting_for_review: 4,
+      actionable_review: 2,
+      waiting_for_integration: 1,
+      completed: 5,
+      failed: 0,
+      legacy_failed_policy: { blocks_current_work: true },
+    },
+  });
+
+  assert.match(card.summary, /current blockers=4/);
+  assert.ok(card.key_values.some((row) => row.key === "queue.current_blockers" && row.value === 4));
+  assert.ok(card.key_values.some((row) => row.key === "queue.actionable_review" && row.value === 2));
+  assert.ok(card.sections.some((section) => section.title === "Current blockers" && section.items.includes("waiting_for_lock")));
+  assert.ok(card.sections.some((section) => section.title === "Current blockers" && section.items.includes("actionable_review")));
+  assert.ok(!card.sections.some((section) => section.title === "Current blockers" && section.items.includes("waiting_for_review")));
+});
+
 test("buildCardViewModel builds get_task card with lifecycle progress and P1 summaries", () => {
   const card = buildCardViewModel("get_task", {
     task: {
