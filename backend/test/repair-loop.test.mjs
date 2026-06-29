@@ -6,7 +6,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createRepairGoalFromFindings, shouldAttemptRepair, shouldReuseWorktreeForRepair } from "../src/repair-loop.mjs";
+import { buildRepairPrompt, createRepairGoalFromFindings, scheduleRepairAttempt, shouldAttemptRepair, shouldReuseWorktreeForRepair } from "../src/repair-loop.mjs";
 
 // ===========================================================================
 // Tests for createRepairGoalFromFindings
@@ -160,3 +160,78 @@ test("shouldReuseWorktreeForRepair: returns false when no worktree_path", async 
 });
 
 console.log("repair-loop tests loaded");
+
+test("buildRepairPrompt: result JSON failures are finalizer-only and avoid business code rewrites", () => {
+  const prompt = buildRepairPrompt({
+    task: { id: "task_json", title: "Implement feature", result: { summary: "Code finished" } },
+    goal: { id: "goal_json", goal_prompt: "Implement the feature" },
+    failure: { failure_class: "missing_result_json", reason: "result.json missing", repair_strategy: "repair_result_contract" },
+    verification: { findings: [{ severity: "blocker", code: "result_json_missing", message: "No result.json" }] },
+    logs: "worker could not find result.json",
+  });
+
+  assert.match(prompt, /failure_class: missing_result_json/);
+  assert.match(prompt, /repair finalizer\/result-json output only/i);
+  assert.match(prompt, /Do not rewrite unrelated business code/i);
+  assert.doesNotMatch(prompt, /Refactor the implementation/i);
+});
+
+test("buildRepairPrompt: command failures include command and log context", () => {
+  const prompt = buildRepairPrompt({
+    task: { id: "task_checks", title: "Fix checks", result: { summary: "Initial implementation" } },
+    goal: { id: "goal_checks", goal_prompt: "Make checks pass" },
+    failure: { failure_class: "build_failed", reason: "npm run build failed", repair_strategy: "repair_failed_command" },
+    verification: {
+      commands: [
+        { cmd: "npm run build", exit_code: 1, stdout_tail: "building", stderr_tail: "Module not found" },
+        { cmd: "npm run lint", exit_code: 1, stdout_tail: "", stderr_tail: "semi" },
+      ],
+    },
+    logs: "full worker log tail",
+  });
+
+  assert.match(prompt, /failure_class: build_failed/);
+  assert.match(prompt, /npm run build/);
+  assert.match(prompt, /Module not found/);
+  assert.match(prompt, /npm run lint/);
+  assert.match(prompt, /full worker log tail/);
+});
+
+test("scheduleRepairAttempt: creates attempt increment with failure metadata", async () => {
+  const createdPayloads = [];
+  const store = { state: { tasks: [] } };
+  const task = {
+    id: "task_retry_parent",
+    title: "Retry parent",
+    goal_id: "goal_retry_parent",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    attempt: 0,
+    max_attempts: 2,
+    logs: [],
+  };
+  const goal = { id: "goal_retry_parent", goal_prompt: "Original goal", workspace_id: "hosted-default" };
+  const result = await scheduleRepairAttempt({
+    store,
+    task,
+    goal,
+    failure: { failure_class: "test_failed", repairable: true, reason: "npm test failed", repair_strategy: "repair_failed_command" },
+    verification: { commands: [{ cmd: "npm test", exit_code: 1, stderr_tail: "failed" }] },
+    config: {
+      createGoalFn: async (s, c, payload) => {
+        createdPayloads.push(payload);
+        return { goal: { id: "goal_repair_retry" }, task: { id: "task_repair_retry" } };
+      },
+    },
+  });
+
+  assert.equal(result.scheduled, true);
+  assert.equal(result.attempt, 1);
+  assert.equal(result.repair_of_attempt, 0);
+  assert.equal(createdPayloads.length, 1);
+  assert.equal(createdPayloads[0].attempt, 1);
+  assert.equal(createdPayloads[0].repair_of_attempt, 0);
+  assert.equal(createdPayloads[0].failure_class, "test_failed");
+  assert.match(createdPayloads[0].goal_prompt, /failure_class: test_failed/);
+});

@@ -76,6 +76,9 @@ export function buildGoalTask(goal, conversation, createdBy) {
   for (const key of [
     "root_task_id",
     "parent_task_id",
+    "attempt",
+    "repair_of_attempt",
+    "failure_class",
     "repair_attempt",
     "max_attempts",
     "repair_of_goal_id",

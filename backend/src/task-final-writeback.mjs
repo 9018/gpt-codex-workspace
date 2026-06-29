@@ -10,10 +10,10 @@ import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecyc
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
-import { failureClassRequiresRepair, failureClassIsTerminalNonRepairable } from "./task-retry.mjs";
+import { canRetryTask, classifyTaskFailure } from "./failure-classifier.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
-import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from './repair-loop.mjs';
+import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion, scheduleRepairAttempt } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
 
@@ -89,6 +89,7 @@ export async function finalizeCodexTaskRun({
   runIntegrationQueueFn = runIntegrationQueue,
   shouldAttemptRepairFn = shouldAttemptRepair,
   createRepairGoalFromFindingsFn = createRepairGoalFromFindings,
+  scheduleRepairAttemptFn = scheduleRepairAttempt,
   createGoalFn = createGoal,
   deliveryResultRecovery = null,
 }) {
@@ -234,39 +235,47 @@ export async function finalizeCodexTaskRun({
       await writeFileFn(verificationPath, JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
     }
     if (verification.passed !== true) {
-      const repairDecision = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
-      if (repairDecision.should_repair && failureClassRequiresRepairCompat(verification.failure_class)) {
-        const repairGoal = createRepairGoalFromFindingsFn({
-          task: taskWithRepairContext(task, resolvedRepo),
-          goal,
-          findings: verification.findings || [],
-          repairProposals: [{ title: `Repair ${verification.failure_class || "verification"}`, proposed_action: "Fix verification failure and rerun verifier." }],
-        });
-        taskStatus = "waiting_for_repair";
-        taskResult.repair_goal = repairGoal;
-        taskResult.repair_attempt = repairGoal.repair_attempt;
-        taskResult.reason = `verification_failed: ${repairDecision.reason}`;
+      const failure = classifyTaskFailure({ task, codexResult: taskResult, verification });
+      const retryTask = {
+        ...task,
+        max_attempts: config.maxRepairAttempts || task.max_attempts || task.maxAttempts || 2,
+      };
+      taskResult.failure_class = failure.failure_class;
+      taskResult.failure_reason = failure.reason;
+      taskResult.repair_strategy = failure.repair_strategy;
+      verification.failure_class = failure.failure_class;
+
+      if (canRetryTask(retryTask, failure)) {
         try {
-          const created = await createGoalFn(store, config, applyRepairMetadata({
-            user_request: repairGoal.user_request,
-            goal_prompt: repairGoal.goal_prompt,
-            title: `Repair: ${task.title || task.id} (attempt ${repairGoal.repair_attempt})`,
-            project_id: task.project_id || goal?.project_id || "default",
-            workspace_id: repairGoal.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
-            mode: repairGoal.mode || "builder",
-            assign_to_codex: true,
-            skip_created_notification: false,
-          }, repairGoal));
-          taskResult.repair_goal_id = created.goal?.id || null;
-          taskResult.repair_task_id = created.task?.id || null;
+          const repairResult = await scheduleRepairAttemptFn({
+            store,
+            task: taskWithRepairContext(retryTask, resolvedRepo),
+            goal,
+            failure,
+            verification,
+            config: { ...config, createGoalFn },
+          });
+          taskStatus = "waiting_for_repair";
+          taskResult.repair_goal = repairResult.repair_goal;
+          taskResult.attempt = repairResult.attempt;
+          taskResult.repair_attempt = repairResult.attempt;
+          taskResult.repair_of_attempt = repairResult.repair_of_attempt;
+          taskResult.repair_goal_id = repairResult.repair_goal_id;
+          taskResult.repair_task_id = repairResult.repair_task_id;
+          taskResult.reason = `verification_failed: scheduled repair attempt ${repairResult.attempt}/${retryTask.max_attempts}`;
         } catch (err) {
           taskStatus = "waiting_for_review";
+          taskResult.repair_denied_reason = "Repair attempt creation failed: " + (err?.message || String(err));
+          taskResult.reason = taskResult.repair_denied_reason;
           taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-          taskResult.warnings.push("Repair goal creation failed: " + (err?.message || String(err)));
+          taskResult.warnings.push(taskResult.repair_denied_reason);
         }
       } else {
         taskStatus = "waiting_for_review";
-        taskResult.repair_denied_reason = repairDecision.reason;
+        taskResult.repair_denied_reason = failure.repairable
+          ? `Max attempts reached for ${failure.failure_class}; waiting for review.`
+          : `${failure.failure_class} is not repairable automatically; waiting for review.`;
+        taskResult.reason = taskResult.repair_denied_reason;
       }
       taskResult.kind = taskResult.kind || "verification_failed";
       taskResult.requires_review = true;
@@ -450,6 +459,8 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
     verification: taskResult.verification || null,
     failure_class: taskResult.failure_class || null,
+    attempt: taskResult.attempt ?? null,
+    repair_of_attempt: taskResult.repair_of_attempt ?? null,
     repo_resolution: taskResult.repo_resolution || null,
     worktree_lifecycle: taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null,
     worktree_lifecycle_proof: taskResult.worktree_lifecycle_proof || buildWorktreeLifecycleProof(taskResult),
@@ -576,14 +587,6 @@ function applyVerifiedDeliveryResultRecovery({ taskStatus, taskResult = {}, summ
   };
 }
 
-function failureClassRequiresRepairCompat(failureClass) {
-  // P0: Network and terminal failures are NOT repairable — retrying rate
-  // limiting or gateway errors is counterproductive and may exacerbate
-  // resource exhaustion. Unknown failures may be repairable.
-  if (failureClassIsTerminalNonRepairable(failureClass)) return false;
-  return failureClassRequiresRepair(failureClass) || failureClass === "verification_failed" || failureClass === "unknown";
-}
-
 function buildWorktreeLifecycleProof(taskResult = {}) {
   const lifecycle = taskResult.worktree_lifecycle || taskResult.repo_resolution?.worktree_lifecycle || null;
   if (!lifecycle) return null;
@@ -643,10 +646,10 @@ function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config 
     : taskResult.kind === "codex_timeout"
       ? "[worker] timed out after " + config.codexExecTimeout + "s"
       : "[worker] completed: task processed by Codex CLI" });
-  if (taskResult.failure_class || taskResult.repair_attempt !== undefined) {
+  if (taskResult.failure_class || taskResult.repair_attempt !== undefined || taskResult.repair_of_attempt !== undefined) {
     item.logs.push({
       time: doneAt,
-      message: `[worker] failure_class=${taskResult.failure_class || "none"} attempt=${item.attempt} repair_of_attempt=${taskResult.repair_attempt ?? "none"}`,
+      message: `[worker] failure_class=${taskResult.failure_class || "none"} attempt=${item.attempt} repair_of_attempt=${taskResult.repair_of_attempt ?? "none"}`,
     });
   }
 }

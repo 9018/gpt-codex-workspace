@@ -62,6 +62,133 @@ export function classifyFailure(input = {}) {
   return "unknown";
 }
 
+function textOf(...values) {
+  return values
+    .filter((value) => value !== undefined && value !== null)
+    .map((value) => value instanceof Error ? value.message : typeof value === "string" ? value : JSON.stringify(value))
+    .join("\n")
+    .toLowerCase();
+}
+
+function failedCommands(verification = {}) {
+  return Array.isArray(verification.commands)
+    ? verification.commands.filter((command) => Number(command?.exit_code) !== 0)
+    : [];
+}
+
+function findingText(verification = {}) {
+  return Array.isArray(verification.findings)
+    ? verification.findings.map((finding) => [finding.code, finding.message, finding.source].filter(Boolean).join(" ")).join("\n")
+    : "";
+}
+
+function commandFailureClass(command = {}) {
+  const cmd = String(command.cmd || command.command || "").toLowerCase();
+  const output = textOf(command.stdout_tail, command.stderr_tail, command.stdout, command.stderr);
+  if (cmd === "git diff --check" || cmd.includes("git diff --check")) return "git_diff_check_failed";
+  if (/\b(typecheck|tsc|typescript)\b/.test(cmd) || /\b(typecheck|tsc|typescript)\b/.test(output)) return "typecheck_failed";
+  if (/\blint\b/.test(cmd) || /\blint\b/.test(output)) return "lint_failed";
+  if (/\bbuild\b/.test(cmd) || /\bbuild\b/.test(output)) return "build_failed";
+  if (/\b(test|node --test|pytest|go test|cargo test|mvn test)\b/.test(cmd) || /\b(test failed|tests failed|failing|failed test)\b/.test(output)) return "test_failed";
+  return null;
+}
+
+const TASK_FAILURE_DEFINITIONS = {
+  missing_result_json: { repairable: true, repair_strategy: "repair_result_contract", reason: "result.json is missing or was not written." },
+  invalid_result_json: { repairable: true, repair_strategy: "repair_result_contract", reason: "result.json is invalid or cannot be parsed." },
+  test_failed: { repairable: true, repair_strategy: "repair_failed_command", reason: "Verification test command failed." },
+  build_failed: { repairable: true, repair_strategy: "repair_failed_command", reason: "Verification build command failed." },
+  lint_failed: { repairable: true, repair_strategy: "repair_failed_command", reason: "Verification lint command failed." },
+  typecheck_failed: { repairable: true, repair_strategy: "repair_failed_command", reason: "Verification typecheck command failed." },
+  git_diff_check_failed: { repairable: true, repair_strategy: "repair_formatting", reason: "git diff --check failed." },
+  no_first_output_timeout: { repairable: true, repair_strategy: "repair_finalizer_retry", reason: "Codex produced no first output before timeout." },
+  codex_timeout: { repairable: false, repair_strategy: "manual_review_timeout", reason: "Codex execution timed out." },
+  merge_conflict: { repairable: false, repair_strategy: "conflict_resolver_or_review", reason: "A merge conflict requires conflict resolution or manual review." },
+  unknown: { repairable: false, repair_strategy: "manual_review", reason: "Failure could not be classified." },
+};
+
+function taskFailure(failureClass, overrides = {}) {
+  const base = TASK_FAILURE_DEFINITIONS[failureClass] || TASK_FAILURE_DEFINITIONS.unknown;
+  return {
+    failure_class: failureClass in TASK_FAILURE_DEFINITIONS ? failureClass : "unknown",
+    repairable: base.repairable,
+    reason: overrides.reason || base.reason,
+    repair_strategy: overrides.repair_strategy || base.repair_strategy,
+  };
+}
+
+/**
+ * Classify a task execution or verification failure for repair retry handling.
+ *
+ * @param {object} options
+ * @param {object} [options.task]
+ * @param {object} [options.codexResult]
+ * @param {object} [options.verification]
+ * @param {Error|object|string} [options.error]
+ * @returns {{ failure_class: string, repairable: boolean, reason: string, repair_strategy: string }}
+ */
+export function classifyTaskFailure({ task = {}, codexResult = {}, verification = {}, error = null } = {}) {
+  const findings = findingText(verification);
+  const combined = textOf(
+    findings,
+    error,
+    codexResult.summary,
+    codexResult.kind,
+    codexResult.failure_class,
+    task.failure_class,
+    task.result?.failure_class,
+    task.result?.summary,
+  );
+
+  if (codexResult.failure_class && TASK_FAILURE_DEFINITIONS[codexResult.failure_class]) {
+    return taskFailure(codexResult.failure_class, { reason: codexResult.summary || undefined });
+  }
+  if (verification.failure_class && TASK_FAILURE_DEFINITIONS[verification.failure_class]) {
+    return taskFailure(verification.failure_class);
+  }
+
+  if (/result_json_missing|missing_result_json|result\.json[^\n]*(missing|not found)|no task result data/.test(combined)) {
+    return taskFailure("missing_result_json");
+  }
+  if (/result_json_invalid|invalid_result_json|invalid result\.json|json[^\n]*(parse|invalid|unexpected token)/.test(combined)) {
+    return taskFailure("invalid_result_json");
+  }
+  if (codexResult.no_first_output_timeout === true || /no_first_output_timeout|first[- ]output timeout|no stdout\/stderr before/.test(combined)) {
+    return taskFailure("no_first_output_timeout");
+  }
+  if (codexResult.timed_out === true || codexResult.kind === "codex_timeout" || /codex_timeout|codex timeout|execution timed out/.test(combined)) {
+    return taskFailure("codex_timeout");
+  }
+  if (/merge_conflict|merge conflict|\bconflict\b|^conflict/.test(combined)) {
+    return taskFailure("merge_conflict");
+  }
+
+  const failed = failedCommands(verification);
+  for (const command of failed) {
+    const classified = commandFailureClass(command);
+    if (classified) {
+      return taskFailure(classified, { reason: `${command.cmd || command.command || "verification command"} failed.` });
+    }
+  }
+
+  if (verification.passed === false || /verification_command_failed|verification_failed|test failed|tests failed/.test(combined)) {
+    return taskFailure("test_failed");
+  }
+
+  return taskFailure("unknown");
+}
+
+/**
+ * Return true when a repair attempt is allowed for a classified task failure.
+ * First run is attempt=0; default max_attempts=2 allows one repair attempt.
+ */
+export function canRetryTask(task = {}, failure = {}) {
+  if (failure?.repairable !== true) return false;
+  const attempt = Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0);
+  const maxAttempts = Number.isInteger(task.max_attempts) ? task.max_attempts : Number(task.maxAttempts || 2);
+  return attempt + 1 < maxAttempts;
+}
+
 /**
  * Determine if a failure class should trigger automatic repair.
  *

@@ -6,6 +6,89 @@
  */
 
 import { randomUUID } from 'node:crypto';
+import { createGoal } from './goal-task-goals.mjs';
+
+function tail(value, max = 4000) {
+  return String(value || '').slice(-max);
+}
+
+function failedCommands(verification = {}) {
+  return Array.isArray(verification.commands)
+    ? verification.commands.filter((command) => Number(command?.exit_code) !== 0)
+    : [];
+}
+
+function formatCommand(command = {}) {
+  const lines = [
+    `Command: ${command.cmd || command.command || '(unknown)'}`,
+    `Exit code: ${command.exit_code ?? '(unknown)'}`,
+  ];
+  if (command.stdout_tail || command.stdout) lines.push(`stdout tail:\n${tail(command.stdout_tail ?? command.stdout)}`);
+  if (command.stderr_tail || command.stderr) lines.push(`stderr tail:\n${tail(command.stderr_tail ?? command.stderr)}`);
+  return lines.join('\n');
+}
+
+function repairInstructionsForFailure(failure = {}) {
+  switch (failure.failure_class) {
+    case 'missing_result_json':
+    case 'invalid_result_json':
+      return [
+        'Repair finalizer/result-json output only.',
+        'Do not rewrite unrelated business code.',
+        'Inspect why result.json/result.md was missing or invalid, then write a valid result.json using the requested contract.',
+        'Keep changes focused on result reporting unless a tiny finalizer fix is required to produce valid output.',
+      ];
+    case 'git_diff_check_failed':
+      return ['Fix whitespace/conflict-marker formatting reported by git diff --check, then rerun verification.'];
+    case 'build_failed':
+    case 'lint_failed':
+    case 'typecheck_failed':
+    case 'test_failed':
+      return ['Fix the failing verification command using the smallest goal-aligned change, then rerun the failed command and any related checks.'];
+    case 'no_first_output_timeout':
+      return ['Repair the finalization/reporting path so the task can make first progress and produce result.json safely.'];
+    default:
+      return ['Investigate the classified failure and make the smallest goal-aligned repair.'];
+  }
+}
+
+export function buildRepairPrompt({ task = {}, goal = {}, failure = {}, verification = {}, diff = '', logs = '' } = {}) {
+  const failed = failedCommands(verification);
+  const findings = Array.isArray(verification.findings) ? verification.findings : [];
+  return [
+    `# Repair Task: ${task.title || task.id || 'Codex task'}`,
+    '',
+    `failure_class: ${failure.failure_class || 'unknown'}`,
+    `repair_strategy: ${failure.repair_strategy || 'manual_review'}`,
+    `reason: ${failure.reason || 'No reason recorded.'}`,
+    `attempt: ${(Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0)) + 1}`,
+    `repair_of_attempt: ${Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0)}`,
+    '',
+    '## Original Goal',
+    goal.goal_prompt || goal.user_request || task.description || '(original goal not available)',
+    '',
+    '## Previous Attempt Summary',
+    task.result?.summary || '(no previous result summary available)',
+    '',
+    '## Targeted Repair Instructions',
+    ...repairInstructionsForFailure(failure).map((line) => `- ${line}`),
+    '- Preserve the original scope and constraints.',
+    '- Report the result using the standard result.json contract.',
+    '',
+    '## Failed Commands',
+    ...(failed.length > 0 ? failed.map((command, index) => `${index + 1}. ${formatCommand(command)}`) : ['(no failed commands recorded)']),
+    '',
+    '## Verification Findings',
+    ...(findings.length > 0 ? findings.map((finding, index) => `${index + 1}. [${finding.severity || 'unknown'}] ${finding.code || 'unknown'}: ${finding.message || ''}`) : ['(no findings recorded)']),
+    '',
+    '## Diff Tail',
+    tail(diff) || '(no diff provided)',
+    '',
+    '## Log Tail',
+    tail(logs) || '(no logs provided)',
+    '',
+  ].join('\n');
+}
 
 /**
  * Create a repair goal from acceptance findings.
@@ -19,7 +102,8 @@ import { randomUUID } from 'node:crypto';
  */
 export function createRepairGoalFromFindings({ task, goal, findings, repairProposals } = {}) {
   const rootTaskId = task.root_task_id || task.id;
-  const attempt = (task.repair_attempt || 0) + 1;
+  const previousAttempt = Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0);
+  const attempt = previousAttempt + 1;
   const maxAttempts = task.max_attempts || task.maxAttempts || Number.parseInt(process.env.GPTWORK_MAX_REPAIR_ATTEMPTS || '2', 10);
   const repairOfWorktree = task.repair_of_worktree
     || task.worktree_path
@@ -67,6 +151,9 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     id: `repair_${rootTaskId}_${attempt}`,
     parent_task_id: task.id,
     root_task_id: rootTaskId,
+    attempt,
+    repair_of_attempt: previousAttempt,
+    failure_class: task.failure_class || task.result?.failure_class || findings?.[0]?.code || null,
     repair_attempt: attempt,
     max_attempts: maxAttempts,
     repair_of_goal_id: goal?.id || task.goal_id || null,
@@ -81,6 +168,69 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     mode: task.mode || 'builder',
     workspace_id: task.workspace_id || goal?.workspace_id,
     repo_id: task.repo_id || goal?.repo_id,
+  };
+}
+
+export async function scheduleRepairAttempt({ store, task = {}, goal = {}, failure = {}, verification = {}, config = {}, diff = '', logs = '' } = {}) {
+  const previousAttempt = Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0);
+  const attempt = previousAttempt + 1;
+  const maxAttempts = Number.isInteger(task.max_attempts) ? task.max_attempts : Number(task.maxAttempts || config.maxRepairAttempts || 2);
+  const repairPrompt = buildRepairPrompt({ task, goal, failure, verification, diff, logs });
+  const findings = Array.isArray(verification.findings) && verification.findings.length > 0
+    ? verification.findings
+    : [{ severity: 'blocker', code: failure.failure_class || 'unknown', message: failure.reason || 'Task verification failed', source: 'failure_classifier' }];
+  const repairGoal = createRepairGoalFromFindings({
+    task: {
+      ...task,
+      attempt: previousAttempt,
+      repair_attempt: previousAttempt,
+      failure_class: failure.failure_class || task.failure_class || task.result?.failure_class || null,
+    },
+    goal,
+    findings,
+    repairProposals: [{ title: `Repair ${failure.failure_class || 'task failure'}`, proposed_action: failure.reason || 'Fix classified task failure and rerun verification.' }],
+  });
+
+  repairGoal.goal_prompt = repairPrompt;
+  repairGoal.user_request = `Repair: ${task.title || task.id} (attempt ${attempt})`;
+  repairGoal.attempt = attempt;
+  repairGoal.repair_of_attempt = previousAttempt;
+  repairGoal.failure_class = failure.failure_class || 'unknown';
+  repairGoal.max_attempts = maxAttempts;
+
+  const payload = {
+    user_request: repairGoal.user_request,
+    goal_prompt: repairGoal.goal_prompt,
+    title: `Repair: ${task.title || task.id} (attempt ${attempt})`,
+    project_id: task.project_id || goal.project_id || 'default',
+    workspace_id: repairGoal.workspace_id || task.workspace_id || goal.workspace_id || 'hosted-default',
+    mode: repairGoal.mode || task.mode || 'builder',
+    assign_to_codex: true,
+    skip_created_notification: false,
+    root_task_id: repairGoal.root_task_id,
+    parent_task_id: repairGoal.parent_task_id,
+    repair_attempt: repairGoal.repair_attempt,
+    max_attempts: repairGoal.max_attempts,
+    repair_of_goal_id: repairGoal.repair_of_goal_id,
+    repair_of_task_id: repairGoal.repair_of_task_id,
+    repair_of_worktree: repairGoal.repair_of_worktree,
+    repair_of_branch: repairGoal.repair_of_branch,
+    attempt,
+    repair_of_attempt: previousAttempt,
+    failure_class: repairGoal.failure_class,
+  };
+
+  const createGoalFn = config.createGoalFn || createGoal;
+  const created = await createGoalFn(store, config, payload);
+  return {
+    scheduled: true,
+    attempt,
+    repair_of_attempt: previousAttempt,
+    failure_class: repairGoal.failure_class,
+    repair_goal: repairGoal,
+    repair_goal_id: created?.goal?.id || null,
+    repair_task_id: created?.task?.id || null,
+    created,
   };
 }
 

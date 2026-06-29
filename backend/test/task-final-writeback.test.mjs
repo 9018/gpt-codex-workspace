@@ -740,6 +740,67 @@ test("task-final-writeback: verification failure creates repair goal and records
   assert.equal(savedState.tasks[0].result.repair_goal_id, "goal_repair_created");
   assert.equal(savedState.tasks[0].result.repair_task_id, "task_repair_created");
   assert.equal(savedState.tasks[0].result.repair_goal.parent_task_id, "task_repair_writeback");
+  assert.equal(savedState.tasks[0].result.failure_class, "test_failed");
+  assert.equal(savedState.tasks[0].result.repair_goal.attempt, 1);
+  assert.equal(savedState.tasks[0].result.repair_goal.repair_of_attempt, 0);
+  assert.ok(savedState.tasks[0].logs.some((log) => /failure_class=test_failed attempt=0 repair_of_attempt=0/.test(log.message)));
+});
+
+test("task-final-writeback: repeat verification failure after max attempts waits for review", async () => {
+  let savedState = null;
+  let createGoalCalled = false;
+  const args = makeMinimalArgs("completed");
+  args.goal = { id: "goal_repair_max", workspace_id: "hosted-default", title: "Repair max" };
+  args.task = {
+    id: "task_repair_max",
+    goal_id: args.goal.id,
+    title: "Repair max task",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    attempt: 1,
+    max_attempts: 2,
+    repair_attempt: 1,
+    logs: [],
+  };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ ...args.task, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_repair_max", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = { kind: "codex_executed", summary: "still failing", changed_files: ["src/app.mjs"], warnings: [], followups: [] };
+  args.config.maxRepairAttempts = 2;
+  args.verifyTaskCompletionFn = async () => ({
+    passed: false,
+    status: "waiting_for_review",
+    commands: [{ cmd: "npm test", exit_code: 1, stdout_tail: "", stderr_tail: "failed again" }],
+    changed_files: ["src/app.mjs"],
+    reason_no_tests: null,
+    requires_review: true,
+    findings: [{ severity: "blocker", code: "verification_command_failed", message: "npm test failed", source: "test" }],
+  });
+  args.createGoalFn = async () => {
+    createGoalCalled = true;
+    throw new Error("should not create repair after max attempts");
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_review");
+  assert.equal(savedState.tasks[0].status, "waiting_for_review");
+  assert.equal(savedState.goal_queue[0].status, "waiting_for_review");
+  assert.equal(savedState.tasks[0].result.failure_class, "test_failed");
+  assert.match(savedState.tasks[0].result.repair_denied_reason, /Max attempts reached/);
+  assert.equal(createGoalCalled, false);
+  assert.ok(savedState.tasks[0].logs.some((log) => /failure_class=test_failed attempt=1 repair_of_attempt=none/.test(log.message)));
 });
 
 test("task-final-writeback: failed missing result with verified commit writes fallback result and completes", async () => {
