@@ -45,6 +45,7 @@ import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
 import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
+import { collectCodexTuiRuntimeDiagnostics } from "../codex-tui-runtime-diagnostics.mjs";
 import {
   TASK_STATUSES,
   isHumanReviewStatus,
@@ -276,6 +277,7 @@ export function createRecoveryToolsGroup({
       const gitInfoR = await collectRuntimeGitInfoCached(repoDir);
       const queueCounts = await collectWorkerQueueCounts(store);
       const lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+      const codexTuiGoal = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
       const toolNames = Object.keys(tools).sort();
       let recentAuditCount = 0;
       try { const recent = await auditLogger.readRecent(5); recentAuditCount = recent.length; } catch {}
@@ -309,6 +311,7 @@ export function createRecoveryToolsGroup({
         exposed_recovery_tools: toolNames,
         elapsed_ms: Date.now() - start,
       };
+      if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
       await audit({ tool: "recovery_plane_status", action: "status_check", result: "ok", elapsed_ms: Date.now() - start });
       return result;
     },
@@ -330,6 +333,7 @@ export function createRecoveryToolsGroup({
       const lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
       const gitInfoR = await collectRuntimeGitInfoCached(repoDir);
       const restartMarkersResult = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
+      const codexTuiGoal = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
       const ws = workerState || {};
 
       // Worker
@@ -363,6 +367,18 @@ export function createRecoveryToolsGroup({
       // Worktree
       if (gitInfoR.worktree_dirty) issues.push({ severity: "info", category: "worktree", detail: "Dirty worktree (" + gitInfoR.dirty_paths.length + " files)" });
 
+      if (codexTuiGoal?.finding_count > 0) {
+        for (const finding of codexTuiGoal.findings) {
+          issues.push({
+            severity: finding.severity === "error" ? "high" : finding.severity === "warning" ? "medium" : "info",
+            category: "codex_tui_goal",
+            detail: `${finding.code}: ${finding.message}`,
+            session_id: finding.session_id || null,
+            task_id: finding.task_id || null,
+          });
+        }
+      }
+
       // API state
       const apiState = state.recovery_api_failures;
       if (apiState && apiState.failure_count > 0) {
@@ -387,6 +403,7 @@ export function createRecoveryToolsGroup({
         worker_health: { enabled: ws.enabled, running: ws.running, last_error: ws.last_error },
         queue_counts: queueCounts,
         repo_locks: lockSummary,
+        codex_tui_goal: codexTuiGoal || undefined,
         restart_markers: restartMarkersResult,
         runtime_env_loaded: runtimeEnvLoaded(),
         api_failure_state: apiState ? {

@@ -1,6 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { createRuntimeStatusToolsGroup } from '../src/tool-groups/runtime-status-tools-group.mjs';
+import { createCodexTuiSessionStore } from '../src/codex-tui-session-store.mjs';
+import { track, afterEachHook } from './helpers/temp-cleanup.mjs';
+
+afterEachHook(test);
 
 function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
   if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
@@ -81,6 +89,7 @@ const fakeRegistry = {
 };
 
 const fakeStore = {
+  state: { tasks: [] },
   load: async () => ({ tasks: [] }),
 };
 
@@ -99,6 +108,14 @@ const fakeCollectWorkerQueueCounts = async (store) => ({
   waiting_for_lock: 0, waiting_for_review: 0,
   completed: 0, failed: 0,
 });
+
+async function makeGitWorkspace(prefix = 'gptwork-runtime-tui-') {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), prefix)));
+  execFileSync('git', ['init'], { cwd: workspaceRoot, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: workspaceRoot });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: workspaceRoot });
+  return workspaceRoot;
+}
 
 test('runtime status tool group exposes all four status tool names', () => {
   const tools = createRuntimeStatusToolsGroup({
@@ -207,6 +224,45 @@ test('runtime_status handler returns expected shape keys', async () => {
   assert.equal(typeof result.worker, 'object');
   assert.equal(typeof result.bark, 'object');
   assert.equal(typeof result.github, 'object');
+  assert.equal(result.codex_tui_goal, undefined);
+});
+
+test('runtime_status includes optional explicit codex_tui_goal diagnostics when TUI state is relevant', async () => {
+  const workspaceRoot = await makeGitWorkspace();
+  const sessionStore = createCodexTuiSessionStore({ workspaceRoot });
+  await sessionStore.createSession({
+    sessionId: 'session_1',
+    taskId: 'task_1',
+    goalId: 'goal_1',
+    cwd: workspaceRoot,
+  });
+
+  const tools = createRuntimeStatusToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    config: { ...fakeConfig, defaultWorkspaceRoot: workspaceRoot, codexTuiEnabled: true },
+    sources: fakeSources,
+    envLoadResult: fakeEnvLoadResult,
+    bark: fakeBark,
+    github: fakeGithub,
+    registry: fakeRegistry,
+    store: {
+      state: { tasks: [{ id: 'task_1', metadata: { codex_execution_provider: 'codex_tui_goal' } }] },
+      load: async () => ({ tasks: [{ id: 'task_1', metadata: { codex_execution_provider: 'codex_tui_goal' } }] }),
+    },
+    workerState: fakeWorkerState,
+    PROCESS_STARTED_AT: fakeProcessStartedAt,
+    collectWorkerQueueCounts: fakeCollectWorkerQueueCounts,
+  });
+
+  const result = await tools.runtime_status.handler();
+
+  assert.equal(result.codex_tui_goal.provider, 'codex_tui_goal');
+  assert.equal(result.codex_tui_goal.optional, true);
+  assert.equal(result.codex_tui_goal.activation, 'explicit_only');
+  assert.equal(result.codex_tui_goal.default_provider, 'codex_exec');
+  assert.equal(result.codex_tui_goal.session_store.session_count, 1);
+  assert.equal(result.codex_tui_goal.completion.no_result_count, 1);
 });
 
 test('notification_status handler returns expected shape', async () => {

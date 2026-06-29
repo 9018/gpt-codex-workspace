@@ -5,6 +5,7 @@ import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
 import { scanPendingRestartMarkersSync, scanPendingRestartMarkers, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
+import { collectCodexTuiRuntimeDiagnostics } from "../codex-tui-runtime-diagnostics.mjs";
 
 /**
  * Scoped MCP tool group: runtime/status diagnostic tools.
@@ -87,10 +88,11 @@ export function createRuntimeStatusToolsGroup({
 
         // Auto-verify pending restart markers where expected_commit matches running_commit
 try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.defaultRepoPath); } catch {}
-const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
+        const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
+        const codexTuiGoal = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
 
         const queueCounts = await collectWorkerQueueCounts(store);
-        return {
+        const result = {
           elapsed_ms: Date.now() - startTime,
           queue: queueCounts,
           pid: process.pid,
@@ -181,6 +183,8 @@ const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspa
           worker: workerStatusExtendedSnapshot(workerState),
           queue: await collectWorkerQueueCounts(store),
         };
+        if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
+        return result;
       },
     }),
 
@@ -224,12 +228,13 @@ const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspa
           } catch (e) {}
         }
         const gitInfo = await collectRuntimeGitInfoCached(repoDir);
+        const codexTuiGoal = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
         const worktreeDirty = gitInfo.worktree_dirty;
         const dirtyPaths = gitInfo.dirty_paths;
         const exposePlaceholder = process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS === 'true';
         const _lockSummary = await getCachedRepoLockSummary();
         const queueCounts = await collectWorkerQueueCounts(store);
-        return {
+        const result = {
           pid: process.pid,
           started_at: PROCESS_STARTED_AT.toISOString(),
           running_commit: gitInfo.running_commit,
@@ -371,6 +376,8 @@ const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspa
           },
           repo_locks: _lockSummary,
         };
+        if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
+        return result;
       },
     }),
   };
