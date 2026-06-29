@@ -1,7 +1,13 @@
 import { applyLegacyResolution, findLegacySuccessor, hasCompletionEvidence as hasLegacyCompletionEvidence } from "./legacy-reconciliation.mjs";
+import {
+  TASK_STATUSES,
+  isHumanReviewStatus,
+  isNonTerminalWaitStatus,
+  isTerminalStatus,
+  normalizeTaskStatus,
+} from "./task-status-taxonomy.mjs";
 
 const TERMINAL_GOAL_STATUSES = new Set(["completed", "failed", "cancelled", "blocked"]);
-const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "blocked", "cancelled"]);
 const SYNC_LIKE_PROFILES = new Set([
   "sync_only",
   "github_sync_only",
@@ -15,17 +21,23 @@ export function determineGoalStatus(goal, task, taskResult = {}) {
   if (!goal || !task) return null;
   if (TERMINAL_GOAL_STATUSES.has(goal.status)) return null;
 
-  if (task.status === "completed") {
+  const taskStatus = normalizeTaskStatus(task.status);
+
+  if (taskStatus === TASK_STATUSES.COMPLETED) {
     return completedGoalStatus(task, taskResult);
   }
 
-  if (task.status === "failed" || task.status === "timed_out" || task.status === "blocked") {
+  if (
+    taskStatus === TASK_STATUSES.FAILED
+    || taskStatus === TASK_STATUSES.TIMED_OUT
+    || taskStatus === TASK_STATUSES.BLOCKED
+  ) {
     return failedGoalStatus(task, taskResult);
   }
 
-  if (task.status === "waiting_for_repair") return "waiting_for_repair";
-  if (task.status === "waiting_for_integration") return "waiting_for_integration";
-  if (task.status === "waiting_for_review") {
+  if (taskStatus === TASK_STATUSES.WAITING_FOR_REPAIR) return "waiting_for_repair";
+  if (taskStatus === TASK_STATUSES.WAITING_FOR_INTEGRATION) return "waiting_for_integration";
+  if (isHumanReviewStatus(taskStatus)) {
     const blockers = genuineBlockers(taskResult);
     if (taskResult?.convergence?.nextStatus === "completed" && blockers.length === 0 && hasCompletionEvidence(taskResult)) {
       return "completed";
@@ -55,13 +67,14 @@ function completedGoalStatus(task, taskResult) {
 }
 
 function failedGoalStatus(task, taskResult) {
+  const taskStatus = normalizeTaskStatus(task.status);
   const repairAttempt = Number(task.repair_attempt ?? taskResult.repair_attempt ?? 0);
   const maxAttempts = Number(task.max_attempts ?? taskResult.repair_plan?.maxAttempts ?? 2);
-  const exhausted = task.status === "blocked"
+  const exhausted = taskStatus === TASK_STATUSES.BLOCKED
     || taskResult.repair_plan?.exhausted === true
     || taskResult.convergence?.closureReason === "repair_exhausted"
     || repairAttempt >= maxAttempts;
-  if (exhausted) return task.status === "blocked" ? "blocked" : "failed";
+  if (exhausted) return taskStatus === TASK_STATUSES.BLOCKED ? "blocked" : "failed";
   if (taskResult.repairable === false || taskResult.failure_class === "result_missing") return "failed";
   return "waiting_for_repair";
 }
@@ -153,7 +166,7 @@ export async function convergeStaleGoalStatuses(store) {
       }
       continue;
     }
-    if (!TERMINAL_TASK_STATUSES.has(linkedTask.status) && !String(linkedTask.status || "").startsWith("waiting_for_")) continue;
+    if (!isTerminalStatus(linkedTask.status) && !isNonTerminalWaitStatus(linkedTask.status)) continue;
 
     const nextStatus = determineGoalStatus(goal, linkedTask, linkedTask.result || {});
     if (!nextStatus || nextStatus === goal.status) continue;
