@@ -1,18 +1,20 @@
 import { forceReleaseRepoLock } from "../repo-lock.mjs";
 import { listRepoLocks } from "../repo-lock-diagnostics.mjs";
 import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
+import {
+  TASK_STATUSES,
+  isHumanReviewStatus,
+  normalizeTaskStatus,
+} from "../task-status-taxonomy.mjs";
 
-/**
- * Terminal task statuses whose locks can be safely cleared.
- * These indicate the task has finished and no longer needs the lock.
- */
-const TERMINAL_TASK_STATUSES = new Set([
-  "completed",
-  "failed",
-  "cancelled",
-  "timed_out",
-  "waiting_for_review",
-]);
+function isClearableTaskStatus(status) {
+  const normalizedStatus = normalizeTaskStatus(status);
+  return normalizedStatus === TASK_STATUSES.COMPLETED ||
+    normalizedStatus === TASK_STATUSES.FAILED ||
+    normalizedStatus === TASK_STATUSES.CANCELLED ||
+    normalizedStatus === TASK_STATUSES.TIMED_OUT ||
+    isHumanReviewStatus(normalizedStatus);
+}
 
 export function createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary, store }) {
   async function repoLockStatusHandler() {
@@ -185,7 +187,7 @@ async function _checkClearGuard(lock, store, workspaceRoot) {
     const state = await store.load();
     const task = (state.tasks || []).find((t) => t.id === lock.task_id);
     if (task) {
-      if (TERMINAL_TASK_STATUSES.has(task.status)) {
+      if (isClearableTaskStatus(task.status)) {
         return { ok: true, reason: `task ${lock.task_id} is in terminal status "${task.status}"` };
       }
       // Task is not terminal — check heartbeat staleness

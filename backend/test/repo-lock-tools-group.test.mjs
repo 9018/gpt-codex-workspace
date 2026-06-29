@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createRepoLockToolsGroup } from '../src/tool-groups/repo-lock-tools-group.mjs';
 
 function fakeTool(description, inputSchema, handler) {
+  if (typeof description === 'object' && description !== null) return description;
   return { description, inputSchema, handler };
 }
 
@@ -41,4 +42,32 @@ test('repo lock tool group exposes stable public aliases and response shape', as
     ['list', '/tmp/gptwork'],
     ['summary', '/tmp/gptwork'],
   ]);
+});
+
+test('clear_repo_lock clears human-review task status using taxonomy normalization', async () => {
+  const lock = {
+    safe_repo_id: 'repo_1',
+    task_id: 'task_review',
+    status: 'active',
+    last_heartbeat_at: new Date().toISOString(),
+  };
+  const tools = createRepoLockToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    config: { defaultWorkspaceRoot: '/tmp/gptwork' },
+    listRepoLocks: async () => [lock],
+    getRepoLockSummary: async () => ({ active_repo_locks: 1, stale_repo_locks: 0 }),
+    store: {
+      load: async () => ({
+        tasks: [{ id: 'task_review', status: '  WAITING_FOR_REVIEW  ' }],
+      }),
+    },
+  });
+
+  const result = await tools.clear_repo_lock.handler({ task_id: 'task_review' });
+
+  assert.equal(result.ok, true);
+  assert.equal(result.locks_cleared, 1);
+  assert.equal(result.locks_skipped, 0);
+  assert.equal(result.details[0].cleared, true);
 });
