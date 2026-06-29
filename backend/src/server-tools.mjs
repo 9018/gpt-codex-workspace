@@ -37,6 +37,7 @@ import { createRecoveryToolsGroup } from "./tool-groups/recovery-tools-group.mjs
 import { createRetentionToolsGroup } from "./tool-groups/retention-tools-group.mjs";
 import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-service.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
+import { createCodexTuiToolsGroup } from "./tool-groups/codex-tui-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -121,6 +122,12 @@ export const TOOL_MODE_ALLOWLISTS = {
     "handoff_to_agent",
     "read_handoff",
     "show_changes",
+    "codex_tui_start_goal",
+    "codex_tui_status",
+    "codex_tui_read",
+    "codex_tui_send",
+    "codex_tui_stop",
+    "codex_tui_collect",
     "read_events",
     "tmp_status",
     "cleanup_tmp",
@@ -154,6 +161,12 @@ export const TOOL_MODE_ALLOWLISTS = {
     "list_goal_queue",
     "get_goal_queue",
     "clear_repo_lock",
+    "codex_tui_start_goal",
+    "codex_tui_status",
+    "codex_tui_read",
+    "codex_tui_send",
+    "codex_tui_stop",
+    "codex_tui_collect",
     "tmp_status",
     "cleanup_tmp",
     "goal_storage_status",
@@ -205,6 +218,12 @@ export const TOOL_MODE_ALLOWLISTS = {
     "import_task_handoffs",
     "sync_from_github",
     "sync_to_github",
+    "codex_tui_start_goal",
+    "codex_tui_status",
+    "codex_tui_read",
+    "codex_tui_send",
+    "codex_tui_stop",
+    "codex_tui_collect",
     "read_events",
     "tmp_status",
     "cleanup_tmp",
@@ -253,6 +272,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
       notifyCreatedTaskIfNeeded,
       runAssignedCodexTasks: (store, config, github, args, context) => runAssignedCodexTasks(store, config, github, args, context, { processGeneralTask }),
     }),
+    ...createCodexTuiToolsGroup({ tool, schema, config, store, registry }),
     ...createSessionInventoryToolsGroup({ tool, schema, config, store, github, createTask }),
     ...createTaskCompletionToolsGroup({ tool, schema, config, store, github, eventLogger, hookBus }),
     ...createRestartToolsGroup({ tool, schema, config, store }),

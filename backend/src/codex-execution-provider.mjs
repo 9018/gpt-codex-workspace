@@ -11,5 +11,10 @@ export function normalizeCodexExecutionProvider(value) {
 
 export function taskUsesCodexTuiGoal(task) {
   const provider = task?.metadata?.codex_execution_provider;
-  return normalizeCodexExecutionProvider(provider) === CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+  return String(provider || "").trim() === CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+}
+
+export function isCodexTuiEnabled(config = {}, env = process.env) {
+  const explicit = config.codexTuiEnabled ?? config.codex_tui_enabled ?? env.GPTWORK_CODEX_TUI_ENABLED;
+  return String(explicit || "").trim().toLowerCase() === "true";
 }

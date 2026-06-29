@@ -20,6 +20,8 @@ import { determineHealingAction } from './self-healing-policy.mjs';
 import { classifyFailure, failureClassIsTerminalNonRepairable } from './failure-classifier.mjs';
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergence.mjs";
+import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
+import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -231,6 +233,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const createGoalFn = deps.createGoalFn || createGoal;
   const determineHealingActionFn = deps.determineHealingActionFn || determineHealingAction;
   const convergeTaskAfterRunFn = deps.convergeTaskAfterRunFn || convergeTaskAfterRun;
+  const startCodexTuiGoalSessionFn = deps.startCodexTuiGoalSessionFn || startCodexTuiGoalSession;
   const runCommandFn = deps.runCommandFn;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
@@ -267,13 +270,6 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     return { task_id: task.id, status: "waiting_for_review", skipped: true, transitioned: true, progressed: true, reason: `unsupported workspace type: ${workspace.type}` };
   }
 
-  if (goal) {
-    await appendGoalMessageFn(store, config, {
-      goal_id: goal.id,
-      role: "codex",
-      content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
-    }, context);
-  }
   // No pre-materialization lock — worktree tasks use independent worktree paths
   // for true concurrent execution on the same canonical repo.
   let repoLockPath = null;
@@ -282,6 +278,69 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const enableWorktrees = config.enableTaskWorktrees !== false && taskMode === "builder";
   let resolvedRepo = resolvedRepoPlan;
   let executionCwd = resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || workspace.root;
+
+  if (taskUsesCodexTuiGoal(task)) {
+    if (!isCodexTuiEnabled(config)) {
+      const disabledResult = {
+        kind: "codex_tui_disabled",
+        provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+        status: "provider_unavailable",
+        task_id: task.id,
+        goal_id: goal?.id || null,
+        commit: "none",
+        changed_files: [],
+        tests: null,
+        followup: "Set GPTWORK_CODEX_TUI_ENABLED=true to allow explicit codex_tui_goal tasks to start TUI sessions.",
+      };
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = "waiting_for_review";
+        item.result = disabledResult;
+        item.logs.push({ time: new Date().toISOString(), message: "[worker] codex_tui_goal disabled by configuration" });
+      });
+      return disabledResult;
+    }
+
+    const session = await startCodexTuiGoalSessionFn({
+      task,
+      goal,
+      cwd: executionCwd,
+      repoLockId: null,
+    });
+    const startedResult = {
+      kind: "codex_tui_session_started",
+      provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+      status: "waiting_for_review",
+      task_id: task.id,
+      goal_id: goal.id,
+      session_id: session.id,
+      cwd: session.cwd || executionCwd,
+      commit: "none",
+      changed_files: [],
+      tests: null,
+      followup: "Use codex_tui_status/read/send/stop to drive the session, then codex_tui_collect to gather durable completion evidence.",
+    };
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "waiting_for_review";
+      item.result = startedResult;
+      item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal session started: ${session.id}` });
+    });
+    if (goal) {
+      await appendGoalMessageFn(store, config, {
+        goal_id: goal.id,
+        role: "codex",
+        content: `[worker] Codex TUI goal session started for task ${task.id}: ${session.id}`,
+      }, context);
+    }
+    return startedResult;
+  }
+
+  if (goal) {
+    await appendGoalMessageFn(store, config, {
+      goal_id: goal.id,
+      role: "codex",
+      content: `[worker] Starting Codex execution for task ${task.id}. Reading ${workspaceFiles.goal_md}.`
+    }, context);
+  }
 
   if (enableWorktrees) {
     await updateTaskFn(store, task.id, (item) => {
