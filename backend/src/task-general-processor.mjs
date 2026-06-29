@@ -1,4 +1,4 @@
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import { selectWorkspace } from "./auth-context.mjs";
 import { goalWorkspaceFiles } from "./goal-files.mjs";
@@ -109,6 +109,15 @@ function commandListFromConfig(config = {}) {
   if (Array.isArray(config.deliveryResultRecoveryCommands)) return config.deliveryResultRecoveryCommands;
   if (Array.isArray(config.resultRecoveryVerificationCommands)) return config.resultRecoveryVerificationCommands;
   return [];
+}
+
+async function isDirectory(path) {
+  if (!path) return false;
+  try {
+    return (await stat(path)).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 async function buildDeliveryResultRecoveryEvidence({ config, taskResult, resolvedRepo, cr, runCommandFn }) {
@@ -291,6 +300,23 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       await updateTaskFn(store, task.id, (item) => {
         item.status = "failed";
         item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
+        item.logs.push({ time: new Date().toISOString(), message: failMsg });
+      });
+      return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
+    }
+
+    if (resolvedRepo.worktree_lifecycle?.ok === true && !(await isDirectory(resolvedRepo.task_worktree_path))) {
+      const failMsg = `[worker] expected task worktree is unavailable: ${resolvedRepo.task_worktree_path || "missing task_worktree_path"}`;
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = "failed";
+        item.result = {
+          kind: "worktree_error",
+          summary: failMsg,
+          completed_at: new Date().toISOString(),
+          task_worktree_path: resolvedRepo.task_worktree_path || null,
+          canonical_repo_path: resolvedRepo.canonical_repo_path || null,
+          worktree_lifecycle: resolvedRepo.worktree_lifecycle || null,
+        };
         item.logs.push({ time: new Date().toISOString(), message: failMsg });
       });
       return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };

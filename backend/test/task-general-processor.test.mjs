@@ -6,7 +6,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { StateStore } from "../src/state-store.mjs";
@@ -220,6 +220,7 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
     let finalizedResolvedRepo = null;
     let resolvedCalled = false;
     let acquiredLockPath = null;
+    mkdirSync(taskWorktreePath, { recursive: true });
 
     const result = await processGeneralTaskWithDeps(store, {
       defaultRepoPath: join(tmpDir, "canonical"),
@@ -316,6 +317,66 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
     assert.equal(finalizedTaskResult.execution_cwd, taskWorktreePath);
     assert.equal(finalizedTaskResult.execution_cwd_proof.used_task_worktree_path, true);
     assert.equal(finalizedTaskResult.execution_cwd_proof.canonical_repo_path, join(tmpDir, "canonical"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps fails clearly when materialized builder worktree is unavailable", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-missing-worktree-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_missing_worktree", "goal_missing_worktree");
+    await store.load();
+    const plan = makeRepoPlan("task_missing_worktree", tmpDir, "github.com/acme/repo");
+    rmSync(plan.task_worktree_path, { recursive: true, force: true });
+    let lockAttempted = false;
+    let prepareAttempted = false;
+    let executeAttempted = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: plan.canonical_repo_path,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => plan,
+      materializeTaskWorktreeFn: async () => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: {
+          mode: "git_worktree",
+          ok: true,
+          worktree_path: plan.task_worktree_path,
+          branch_name: "gptwork/task/task_missing_worktree",
+        },
+      }),
+      acquireRepoLockFn: async () => {
+        lockAttempted = true;
+        return { acquired: true };
+      },
+      prepareCodexTaskRunFn: async () => {
+        prepareAttempted = true;
+        return { promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null };
+      },
+      executeCodexTaskRunFn: async () => {
+        executeAttempted = true;
+        return {};
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.kind, "worktree_error");
+    assert.match(result.reason, /expected task worktree is unavailable/);
+    assert.match(result.reason, new RegExp(plan.task_worktree_path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")));
+    assert.equal(lockAttempted, false, "worker must not lock an unavailable worktree path");
+    assert.equal(prepareAttempted, false, "worker must not prepare a prompt for an unavailable worktree path");
+    assert.equal(executeAttempted, false, "worker must not execute Codex outside the expected worktree");
+
+    const updatedTask = await store.findTaskById(task.id);
+    assert.equal(updatedTask.status, "failed");
+    assert.equal(updatedTask.result.kind, "worktree_error");
+    assert.match(updatedTask.result.summary, /expected task worktree is unavailable/);
+    assert.ok(updatedTask.logs.some((log) => log.message.includes("expected task worktree is unavailable")));
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -1104,6 +1165,7 @@ console.log("task-general-processor PR0 integration tests loaded");
  */
 function makeRepoPlan(taskId, tmpDir, repoId) {
   const worktreePath = join(tmpDir, ".gptwork", "worktrees", repoId.replace(/\//g, "-"), taskId);
+  mkdirSync(worktreePath, { recursive: true });
   return {
     repo_id: repoId,
     canonical_repo_path: join(tmpDir, "canonical", repoId.replace(/\//g, "-")),
