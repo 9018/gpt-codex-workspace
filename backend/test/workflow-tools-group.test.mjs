@@ -18,6 +18,7 @@ import {
   findExistingResult,
   generateProposal,
   loadWorkflowState,
+  autoAcceptTask,
   storeManualResult,
   storeProposal,
 } from "../src/workflow-state-service.mjs";
@@ -360,6 +361,14 @@ test("proposal: waiting_for_review + valid result → auto_accepted", () => {
   assert.equal(p.auto_accepted, true);
 });
 
+test("proposal: normalized waiting_for_review status + valid result → auto_accepted", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: " WAITING_FOR_REVIEW ", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "auto_accepted");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_accepted, true);
+});
+
 test("proposal: waiting_for_review + valid result + remote_head null → auto_accepted", () => {
   const p = generateProposal({ diagnostics: makeDiagnostics({ runtime: { running_commit: "abc123", repo_head: "abc123", remote_head: null } }), task: makeTask({ status: "waiting_for_review", result: { status: "completed", kind: "codex_executed", summary: "Done", commit: "abc123", tests: "npm test: passed 15/15", changed_files: ["src/file.js"] } }), manualVerdict: "passed", manualNote: "" });
   assert.equal(p.next_action, "auto_accepted");
@@ -536,6 +545,36 @@ test("workflow_advance apply: waiting_for_review + accepted reviewer decision au
   assert.equal(result.needs_gptchat_decision, false);
   assert.equal(result.auto_accepted, true);
   assert.equal(result.proposal.next_action, "auto_accepted");
+  assert.equal(taskState.status, "completed");
+  assert.equal(taskState.result.auto_accepted, true);
+});
+
+test("autoAcceptTask accepts normalized waiting_for_review status", async () => {
+  const taskState = makeTask({
+    status: " WAITING_FOR_REVIEW ",
+    goal_id: "goal_accept_normalized",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      remote_head: null,
+      tests: "npm test: passed 15/15",
+      changed_files: ["src/file.js"],
+      reviewer_decision: { status: "accepted", passed: true },
+      acceptance_findings: [],
+    },
+  });
+  const goal = { id: "goal_accept_normalized", task_id: taskState.id, status: "assigned" };
+  const state = { tasks: [taskState], goals: [goal], activities: [] };
+  const store = {
+    load: async () => state,
+    save: async () => {},
+  };
+
+  const result = await autoAcceptTask({ store, config: { defaultWorkspaceRoot: uniqueRoot() }, task: taskState, diagnostics: makeDiagnostics() });
+
+  assert.equal(result.auto_accepted, true);
   assert.equal(taskState.status, "completed");
   assert.equal(taskState.result.auto_accepted, true);
 });

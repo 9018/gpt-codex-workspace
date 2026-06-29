@@ -13,6 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { validateResultContract } from "./task-result-status.mjs";
 import { evaluateAcceptance } from "./acceptance-policy.mjs";
+import { isHumanReviewStatus } from "./task-status-taxonomy.mjs";
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
@@ -319,7 +320,7 @@ export function generateProposal({
   // Review-state tasks must consume acceptance metadata before global runtime
   // safety gates. Auto-accepting a valid review task only updates task/goal
   // state; creating new repair work is gated later by workflow_advance.
-  if (task?.status === "waiting_for_review") {
+  if (isHumanReviewStatus(task?.status)) {
     const result = task.result;
 
     if (!result) {
@@ -563,7 +564,7 @@ export function storeCreatedTaskId(workflowState, taskId) {
  */
 export async function autoAcceptTask({ store, config, task, diagnostics }) {
   if (!task) return { auto_accepted: false, error: "No task provided" };
-  if (task.status !== "waiting_for_review") {
+  if (!isHumanReviewStatus(task.status)) {
     return { auto_accepted: false, error: `Task status is "${task.status}", not "waiting_for_review"` };
   }
   if (!diagnostics) return { auto_accepted: false, error: "No diagnostics provided" };
