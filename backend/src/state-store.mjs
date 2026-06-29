@@ -1,6 +1,25 @@
 import { copyFile, mkdir, readFile, writeFile, rename } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
+import {
+  ACTIVE_EXECUTION_STATUSES,
+  HUMAN_REVIEW_STATUSES,
+  REPAIR_STATUSES,
+  TASK_STATUSES,
+} from "./task-status-taxonomy.mjs";
+
+const CODEX_QUEUE_ACTIVE_STATUSES = Object.freeze([
+  ...Object.values(TASK_STATUSES).filter((status) =>
+    ACTIVE_EXECUTION_STATUSES.has(status) ||
+    HUMAN_REVIEW_STATUSES.has(status) ||
+    REPAIR_STATUSES.has(status)
+  ),
+]);
+
+const CODEX_QUEUE_TERMINAL_STATUSES = Object.freeze([
+  TASK_STATUSES.COMPLETED,
+  TASK_STATUSES.FAILED,
+]);
 
 // ---------------------------------------------------------------------------
 // StateStore with in-memory indexes for O(1) lookups
@@ -47,8 +66,8 @@ export class StateStore {
     this._idxMemoriesByGoalId = new Map();
 
     // Split codex task indexes: active (pending work) vs terminal (done/failed)
-    const codexActiveStatuses = new Set(["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]);
-    const codexTerminalStatuses = new Set(["completed", "failed"]);
+    const codexActiveStatuses = new Set(CODEX_QUEUE_ACTIVE_STATUSES);
+    const codexTerminalStatuses = new Set(CODEX_QUEUE_TERMINAL_STATUSES);
 
     this._idxCodexActiveTasksByStatus = new Map();
     this._idxCodexTerminalTasksByStatus = new Map();
@@ -149,15 +168,13 @@ export class StateStore {
     const counts = {};
     const allTasks = [];
     // Active statuses only for the task list (terminal tasks don't need processing)
-    const activeStatuses = ["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"];
-    for (const st of activeStatuses) {
+    for (const st of CODEX_QUEUE_ACTIVE_STATUSES) {
       const tasks = this.getCodexTasksByStatus(st);
       counts[st] = tasks.length;
       if (tasks.length) allTasks.push(...tasks);
     }
     // Include terminal counts for queue monitoring (compatible with worker-queue-counts)
-    const terminalStatuses = ["completed", "failed"];
-    for (const st of terminalStatuses) {
+    for (const st of CODEX_QUEUE_TERMINAL_STATUSES) {
       counts[st] = this.getCodexTasksByStatus(st).length;
     }
     return { tasks: allTasks, counts };

@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, rmSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
+import { fileURLToPath } from 'node:url';
 import { StateStore } from '../src/state-store.mjs';
+import { collectWorkerQueueCounts } from '../src/worker-queue-counts.mjs';
+
+const STATE_STORE_SOURCE = fileURLToPath(new URL('../src/state-store.mjs', import.meta.url));
 
 function makeStore(tmpDir) {
   return new StateStore({
@@ -28,6 +33,13 @@ function populateFixtures(state) {
   );
   return state;
 }
+
+test('StateStore: derives codex queue status buckets from task-status-taxonomy module', async () => {
+  const source = await readFile(STATE_STORE_SOURCE, 'utf8');
+  assert.match(source, /from ['"]\.\/task-status-taxonomy\.mjs['"]/);
+  assert.doesNotMatch(source, /\["assigned", "queued", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"\]/);
+  assert.doesNotMatch(source, /\["completed", "failed"\]/);
+});
 
 test('StateStore: indexes split active and terminal tasks', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'ss-smoke-'));
@@ -111,6 +123,7 @@ test('StateStore: getCodexTaskQueue excludes terminal tasks from task list but i
 
     const q = store.getCodexTaskQueue();
     const taskIds = q.tasks.map(t => t.id);
+    assert.deepEqual(taskIds, ['t1', 't2', 't3', 't4', 't5', 't6', 't7']);
     assert(taskIds.includes('t6'));
     assert(taskIds.includes('t7'));
     assert(!taskIds.includes('t8'));
@@ -120,6 +133,22 @@ test('StateStore: getCodexTaskQueue excludes terminal tasks from task list but i
     assert.equal(q.counts.waiting_for_integration, 1);
     assert.equal(q.counts.completed, 1);
     assert.equal(q.counts.failed, 1);
+
+    const now = new Date().toISOString();
+    store.state.tasks.push(
+      { id: 't11', assignee: 'codex', status: 'waiting_for_review', result: { resolved_by_task_id: 't8' }, project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+      { id: 't12', assignee: 'codex', status: 'failed', result: { resolved_legacy: true }, project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+      { id: 't13', assignee: 'codex', status: 'failed', result: { changed_files: ['backend/src/example.mjs'] }, project_id: 'default', workspace_id: 'hosted-default', mode: 'builder', logs: [], created_at: now, updated_at: now },
+    );
+    store._buildIndexes();
+
+    const counts = await collectWorkerQueueCounts(store);
+    assert.equal(counts.waiting_for_review, 1, 'resolved legacy review must not become an actionable current blocker');
+    assert.equal(counts.actionable_review, 1, 'only unresolved review records are actionable');
+    assert.equal(counts.failed, 1, 'resolved legacy failed records must not become current failed blockers');
+    assert.equal(counts.legacy_failed_policy.resolved_legacy_review, 1);
+    assert.equal(counts.legacy_failed_policy.resolved_legacy_failed, 2);
+    assert.equal(counts.legacy_failed_policy.unresolved_failed, 1);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }
