@@ -1,0 +1,120 @@
+[
+  {
+    "name": "empty provider result is non-blocking provider_empty",
+    "task": { "status": "failed", "result": null },
+    "expected": {
+      "label": "provider_empty",
+      "status": "failed",
+      "result_shape": "no_result",
+      "blocks_current_work": false
+    }
+  },
+  {
+    "name": "timeout result is non-blocking provider_empty",
+    "task": { "status": "timed_out", "result": { "kind": "codex_timeout" } },
+    "expected": {
+      "label": "provider_empty",
+      "status": "timed_out",
+      "result_shape": "provider_timeout",
+      "blocks_current_work": false
+    }
+  },
+  {
+    "name": "no-evidence codex failure is non-blocking provider_empty",
+    "task": { "status": "failed", "result": { "kind": "codex_failed" } },
+    "expected": {
+      "label": "provider_empty",
+      "status": "failed",
+      "result_shape": "provider_no_evidence",
+      "blocks_current_work": false
+    }
+  },
+  {
+    "name": "metadata-only terminal record is non-blocking unknown_status",
+    "task": {
+      "status": "failed",
+      "result": {
+        "diagnostics": { "detected_reason": "worker metadata only" },
+        "warnings": ["no changed files"]
+      }
+    },
+    "expected": {
+      "label": "unknown_status",
+      "status": "failed",
+      "result_shape": "unknown",
+      "blocks_current_work": false
+    }
+  },
+  {
+    "name": "code evidence failure blocks current work",
+    "task": {
+      "status": "failed",
+      "result": { "changed_files": ["backend/src/app.mjs"] }
+    },
+    "expected": {
+      "label": "code_evidence_failure",
+      "status": "failed",
+      "result_shape": "code_evidence",
+      "blocks_current_work": true
+    }
+  },
+  {
+    "name": "completion evidence completed record is non-blocking completed",
+    "task": {
+      "status": "completed",
+      "result": { "verification": { "passed": true }, "changed_files": ["backend/src/app.mjs"] }
+    },
+    "expected": {
+      "label": "completed",
+      "status": "completed",
+      "result_shape": "completion_evidence",
+      "blocks_current_work": false
+    }
+  },
+  {
+    "name": "active running status blocks current work",
+    "task": { "status": "running", "result": null },
+    "expected": {
+      "label": "active",
+      "status": "running",
+      "result_shape": "no_result",
+      "blocks_current_work": true
+    }
+  },
+  {
+    "name": "review status blocks as review",
+    "task": { "status": "waiting_for_review", "result": null },
+    "expected": {
+      "label": "review",
+      "status": "waiting_for_review",
+      "result_shape": "no_result",
+      "blocks_current_work": true
+    }
+  },
+  {
+    "name": "integration status blocks as integration",
+    "task": { "status": "waiting_for_integration", "result": null },
+    "expected": {
+      "label": "integration",
+      "status": "waiting_for_integration",
+      "result_shape": "no_result",
+      "blocks_current_work": true
+    }
+  },
+  {
+    "name": "explicit successor options make code evidence non-blocking",
+    "task": {
+      "status": "failed",
+      "result": {
+        "changed_files": ["backend/src/app.mjs"],
+        "resolved_by_task_id": "task_successor"
+      }
+    },
+    "expected": {
+      "label": "resolved_by_options",
+      "status": "failed",
+      "result_shape": "code_evidence",
+      "blocks_current_work": false
+    }
+  }
+]
