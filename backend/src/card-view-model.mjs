@@ -1,5 +1,12 @@
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
-import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
+import {
+  ACTIVE_EXECUTION_STATUSES,
+  TASK_STATUSES,
+  isHumanReviewStatus,
+  isRepairStatus,
+  isReviewOrRepairStatus,
+  normalizeTaskStatus,
+} from "./task-status-taxonomy.mjs";
 
 const CARD_VERSION = "gptwork-card-v1";
 const CARD_ENABLED_TOOLS = new Set([
@@ -19,14 +26,20 @@ const CARD_ENABLED_TOOLS = new Set([
 
 const TASK_STAGES = [
   ["created", "Created"],
-  ["assigned", "Assigned"],
+  [TASK_STATUSES.ASSIGNED, "Assigned"],
   ["materializing_worktree", "Worktree"],
-  ["running", "Running"],
-  ["waiting_for_integration", "Integration"],
-  ["waiting_for_repair", "Repair"],
-  ["waiting_for_review", "Review"],
-  ["completed", "Completed"],
+  [TASK_STATUSES.RUNNING, "Running"],
+  [TASK_STATUSES.WAITING_FOR_INTEGRATION, "Integration"],
+  [TASK_STATUSES.WAITING_FOR_REPAIR, "Repair"],
+  [TASK_STATUSES.WAITING_FOR_REVIEW, "Review"],
+  [TASK_STATUSES.COMPLETED, "Completed"],
 ];
+
+const DISPLAY_WARNING_STATUSES = new Set([
+  ...ACTIVE_EXECUTION_STATUSES,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
+]);
 
 const ACCEPTANCE_CHECKS = [
   "result_json_valid",
@@ -78,9 +91,20 @@ function countsText(counts) {
 function severityFromStatus(status, fallback = "info") {
   const s = str(status).toLowerCase();
   if (["ok", "pass", "passed", "completed", "success", "healthy", "enabled", "clean", "true", "created"].includes(s)) return "ok";
-  if (["warn", "warning", "waiting", "waiting_for_review", "waiting_for_repair", "waiting_for_integration", "running", "queued", "assigned", "pending", "needs_repair"].includes(s)) return "warning";
+  if (["warn", "warning", "waiting", "pending", "needs_repair"].includes(s) || DISPLAY_WARNING_STATUSES.has(s) || isReviewOrRepairStatus(s)) return "warning";
   if (["fail", "failed", "error", "crashed", "stalled", "overdue", "dirty", "blocked", "false", "push_failed", "pr_failed", "conflict", "check_failed"].includes(s)) return "error";
   return fallback;
+}
+
+function isFailedStatus(status) {
+  return normalizeTaskStatus(status) === TASK_STATUSES.FAILED;
+}
+
+function isGoalQueueRiskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized === TASK_STATUSES.BLOCKED
+    || normalized === TASK_STATUSES.FAILED
+    || normalized === TASK_STATUSES.CANCELLED;
 }
 
 function normalizeDiagnostic(item, defaultSeverity = "warning") {
@@ -237,9 +261,9 @@ function buildListTasksCard(tool, data, meta) {
   const card = baseCard(tool, data, { ...meta, title: "Task Queue" });
   const statusCounts = countBy(tasks, (task) => task.status || "unknown");
   const assigneeCounts = countBy(tasks, (task) => task.assignee || "unassigned");
-  const actionableReviewTasks = tasks.filter((task) => task.status === "waiting_for_review" && !isResolvedLegacyReviewTask(task));
+  const actionableReviewTasks = tasks.filter((task) => isHumanReviewStatus(task.status) && !isResolvedLegacyReviewTask(task));
   const resolvedReviewTasks = tasks.filter((task) => isResolvedLegacyReviewTask(task));
-  const hasRisk = tasks.some((task) => ["failed", "waiting_for_repair"].includes(task.status)) || actionableReviewTasks.length > 0;
+  const hasRisk = tasks.some((task) => isFailedStatus(task.status) || isRepairStatus(task.status)) || actionableReviewTasks.length > 0;
 
   card.card_type = "queue";
   card.status = hasRisk ? "warning" : "ok";
@@ -265,7 +289,7 @@ function buildListTasksCard(tool, data, meta) {
   });
 
   // Waiting for review breakdown
-  const wfrTasks = tasks.filter((t) => t.status === "waiting_for_review");
+  const wfrTasks = tasks.filter((t) => isHumanReviewStatus(t.status));
   if (wfrTasks.length > 0) {
     card.sections.push({
       title: "Waiting for review",
@@ -489,7 +513,7 @@ function buildTaskCard(tool, data, meta) {
   addRepairSection(card, task, result);
   addIntegrationSection(card, task, result);
   for (const warning of Array.isArray(result.warnings) ? result.warnings : []) card.diagnostics.push(normalizeDiagnostic(warning, "warning"));
-  if (task.status === "waiting_for_review") card.diagnostics.push({ severity: "warning", message: "Task needs review before completing", code: "waiting_for_review" });
+  if (isHumanReviewStatus(task.status)) card.diagnostics.push({ severity: "warning", message: "Task needs review before completing", code: TASK_STATUSES.WAITING_FOR_REVIEW });
   card.actions.push({ label: "View task", tool: "get_task", args: { task_id: task.id }, kind: "secondary" });
   if (task.goal_id) card.actions.push({ label: "View goal context", tool: "get_goal_context", args: { goal_id: task.goal_id }, kind: "secondary" });
   return finalize(card);
@@ -552,7 +576,7 @@ function buildGoalQueueCard(tool, data, meta) {
   const items = Array.isArray(data.items) ? data.items : (data.item ? [data.item] : []);
   const card = baseCard(tool, data, { ...meta, title: "Goal Queue" });
   const statusCounts = countBy(items, (item) => item.status || "unknown");
-  const hasRisk = items.some((item) => ["blocked", "failed", "cancelled"].includes(item.status));
+  const hasRisk = items.some((item) => isGoalQueueRiskStatus(item.status));
   card.card_type = "queue";
   card.status = hasRisk ? "warning" : "ok";
   card.severity = hasRisk ? "warning" : "ok";
@@ -580,7 +604,7 @@ function buildRunAssignedCard(tool, data, meta) {
   const card = baseCard(tool, data, { ...meta, title: "Codex Task Run" });
   const results = Array.isArray(data.results) ? data.results : [];
   card.card_type = "queue";
-  card.status = data.status || (results.some((item) => item.status === "failed") ? "warning" : "ok");
+  card.status = data.status || (results.some((item) => isFailedStatus(item.status)) ? "warning" : "ok");
   card.severity = severityFromStatus(card.status, "info");
   card.summary = data.summary || `${results.length} assigned task result(s)`;
   addKeyValues(card.key_values, [

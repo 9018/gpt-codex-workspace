@@ -7,6 +7,15 @@
  * IO, or public schema logic should be placed here.
  */
 
+import { TASK_STATUSES, normalizeTaskStatus } from "./task-status-taxonomy.mjs";
+
+const TASK_STATUS_TERMINAL_FOR_SESSION_INVENTORY = new Set([
+  TASK_STATUSES.COMPLETED,
+  TASK_STATUSES.FAILED,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.CANCELLED,
+]);
+
 /**
  * Check whether a task has reached a terminal status.
  *
@@ -14,7 +23,7 @@
  * @returns {boolean}
  */
 export function isTaskTerminal(task) {
-  return ["completed", "failed", "waiting_for_review", "cancelled"].includes(task?.status);
+  return TASK_STATUS_TERMINAL_FOR_SESSION_INVENTORY.has(normalizeTaskStatus(task?.status));
 }
 
 /**
@@ -25,7 +34,7 @@ export function isTaskTerminal(task) {
  */
 export function isCodexSessionInventoryTask(task) {
   return task?.assignee === "codex"
-    && task?.status === "assigned"
+    && normalizeTaskStatus(task?.status) === TASK_STATUSES.ASSIGNED
     && task?.mode === "readonly"
     && isCodexSessionInventoryTaskKind(task);
 }

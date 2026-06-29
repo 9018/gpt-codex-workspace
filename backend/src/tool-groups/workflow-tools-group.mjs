@@ -24,7 +24,7 @@ import {
   autoAcceptTask,
   storeProposal,
 } from "../workflow-state-service.mjs";
-import { TASK_STATUSES } from "../task-status-taxonomy.mjs";
+import { TASK_STATUSES, isHumanReviewStatus } from "../task-status-taxonomy.mjs";
 
 export const WORKFLOW_ADVANCE_HANDLER_VERSION = "workflow_advance.v2.acceptance_first";
 
@@ -124,7 +124,7 @@ export function createWorkflowToolsGroup({
         }
 
         // Auto-accept check: if a waiting_for_review task qualifies, trigger auto-accept
-        if (task && task.status === "waiting_for_review") {
+        if (task && isHumanReviewStatus(task.status)) {
           const autoAccepted = await autoAcceptTask({ store, config, task, diagnostics });
           if (autoAccepted.auto_accepted) {
             // Re-resolve task to get updated status
@@ -454,7 +454,7 @@ export function createWorkflowToolsGroup({
           diagnostics.repo_locks.active === 0 &&
           !diagnostics.worktree.dirty;
 
-        if (!isSafe && resolvedMode === "apply" && task?.status !== "waiting_for_review") {
+        if (!isSafe && resolvedMode === "apply" && !isHumanReviewStatus(task?.status)) {
           const reasons = [];
           if (diagnostics.worker.running)
             reasons.push("worker is running");
@@ -517,7 +517,7 @@ export function createWorkflowToolsGroup({
           fingerprint
         );
         const existingIsStaleWaitingReviewShortCircuit =
-          task?.status === "waiting_for_review" &&
+          isHumanReviewStatus(task?.status) &&
           existingProposal?.next_action === "needs_gptchat_decision" &&
           !existingProposal?.acceptance;
         if (existingProposal && !existingIsStaleWaitingReviewShortCircuit) {
@@ -607,7 +607,7 @@ export function createWorkflowToolsGroup({
         // In apply mode, create the task if safe and unambiguous
         let createdTaskId = null;
         // Auto-accept in apply mode
-        if (resolvedMode === "apply" && proposal.next_action === "auto_accepted" && task?.status === "waiting_for_review") {
+        if (resolvedMode === "apply" && proposal.next_action === "auto_accepted" && isHumanReviewStatus(task?.status)) {
           autoAcceptResult = await autoAcceptTask({ store, config, task, diagnostics });
         }
         if (

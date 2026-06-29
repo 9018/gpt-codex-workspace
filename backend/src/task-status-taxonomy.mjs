@@ -66,6 +66,10 @@ export function isTerminalStatus(status) {
   return TERMINAL_STATUSES.has(normalizeTaskStatus(status));
 }
 
+export function isCompletedStatus(status) {
+  return normalizeTaskStatus(status) === TASK_STATUSES.COMPLETED;
+}
+
 export function isFailedTerminalStatus(status) {
   return FAILED_TERMINAL_STATUSES.has(normalizeTaskStatus(status));
 }
@@ -80,6 +84,10 @@ export function isHumanReviewStatus(status) {
 
 export function isRepairStatus(status) {
   return REPAIR_STATUSES.has(normalizeTaskStatus(status));
+}
+
+export function isReviewOrRepairStatus(status) {
+  return isHumanReviewStatus(status) || isRepairStatus(status);
 }
 
 export function isNonTerminalWaitStatus(status) {

@@ -10,10 +10,12 @@ import {
   TASK_STATUSES,
   TERMINAL_STATUSES,
   isActiveExecutionStatus,
+  isCompletedStatus,
   isFailedTerminalStatus,
   isHumanReviewStatus,
   isKnownTaskStatus,
   isNonTerminalWaitStatus,
+  isReviewOrRepairStatus,
   isRepairStatus,
   isTerminalStatus,
   normalizeTaskStatus,
@@ -74,6 +76,19 @@ test('review, repair, and wait statuses classify correctly', () => {
   assert.equal(isRepairStatus('waiting_for_repair'), true);
   assert.equal(isNonTerminalWaitStatus('waiting_for_integration'), true);
   assert.equal(isNonTerminalWaitStatus('running'), false);
+});
+
+test('completed status classifies distinctly from terminal failures', () => {
+  assert.equal(isCompletedStatus(' COMPLETED '), true);
+  assert.equal(isCompletedStatus('failed'), false);
+  assert.equal(isCompletedStatus('waiting_for_review'), false);
+});
+
+test('review or repair statuses classify operator-attention states', () => {
+  assert.equal(isReviewOrRepairStatus('waiting_for_review'), true);
+  assert.equal(isReviewOrRepairStatus('WAITING_FOR_REPAIR'), true);
+  assert.equal(isReviewOrRepairStatus('waiting_for_integration'), false);
+  assert.equal(isReviewOrRepairStatus('failed'), false);
 });
 
 test('terminal and failed-terminal statuses classify correctly', () => {

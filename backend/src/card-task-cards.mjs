@@ -1,4 +1,27 @@
 import { formatToolCard, formatKeyValue, formatDiagnostics, formatWarnings, formatNextActions, formatStatusChip, truncateOutput, truncateVerboseOutput } from "./card-format-utils.mjs";
+import {
+  ACTIVE_EXECUTION_STATUSES,
+  TASK_STATUSES,
+  isHumanReviewStatus,
+  normalizeTaskStatus,
+} from "./task-status-taxonomy.mjs";
+
+const EXECUTION_SNAPSHOT_STATUSES = new Set([
+  ...ACTIVE_EXECUTION_STATUSES,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+]);
+
+function formatExecutionSnapshotStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  if (normalized === TASK_STATUSES.RUNNING) return 'still running';
+  if (normalized === TASK_STATUSES.WAITING_FOR_LOCK) return 'waiting_for_lock (blocked by another task)';
+  if (isHumanReviewStatus(status)) return 'waiting_for_review (needs manual review)';
+  return status;
+}
+
+function isExecutionSnapshotStatus(status) {
+  return EXECUTION_SNAPSHOT_STATUSES.has(normalizeTaskStatus(status));
+}
 
 export function getTaskCard(data) {
   const task = data.task;
@@ -117,7 +140,7 @@ export function getTaskCard(data) {
       warnings.push(typeof w === 'string' ? w : (w.message || w.code || String(w)));
     }
   }
-  if (task.status === 'waiting_for_review') {
+  if (isHumanReviewStatus(task.status)) {
     warnings.push('Task needs review before completing');
     if (task.waiting_for_review_reason) {
       warnings.push('Reason: ' + task.waiting_for_review_reason);
@@ -174,9 +197,8 @@ export function createEncodedGoalCard(data) {
     const execTask = data.execution.task || data.task;
     if (execTask) {
       if (execTask.status) lines.push(formatKeyValue('task status', execTask.status));
-      const nonTerminalStatuses = ['assigned', 'queued', 'running', 'waiting_for_lock', 'waiting_for_review'];
-      if (nonTerminalStatuses.includes(execTask.status)) {
-        lines.push(formatKeyValue('currently', execTask.status === 'running' ? 'still running' : execTask.status === 'waiting_for_lock' ? 'waiting_for_lock (blocked by another task)' : execTask.status === 'waiting_for_review' ? 'waiting_for_review (needs manual review)' : execTask.status));
+      if (isExecutionSnapshotStatus(execTask.status)) {
+        lines.push(formatKeyValue('currently', formatExecutionSnapshotStatus(execTask.status)));
       }
       // Log metadata: bytes, heartbeat age from execution snapshot
       if (data.execution.log_bytes !== undefined) {

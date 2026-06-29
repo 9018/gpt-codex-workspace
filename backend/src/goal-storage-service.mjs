@@ -14,6 +14,7 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -37,11 +38,19 @@ const TOP_N = 10;
 const GPTWORK_TMP_PREFIXES = [".gptwork-task-", "gptwork-"];
 
 const TERMINAL_GOAL_STATUSES = new Set([
-  "completed", "failed", "cancelled", "timed_out", "waiting_for_review",
+  TASK_STATUSES.COMPLETED,
+  TASK_STATUSES.FAILED,
+  TASK_STATUSES.CANCELLED,
+  TASK_STATUSES.TIMED_OUT,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
 ]);
 
 const ACTIVE_GOAL_STATUSES = new Set([
-  "assigned", "running", "queued", "loading", "preparing",
+  TASK_STATUSES.ASSIGNED,
+  TASK_STATUSES.RUNNING,
+  TASK_STATUSES.QUEUED,
+  "loading",
+  "preparing",
 ]);
 
 // ---------------------------------------------------------------------------

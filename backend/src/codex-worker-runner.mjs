@@ -14,6 +14,11 @@ import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompleti
 import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { sweepStaleTaskStates, applySweepActions } from "./stale-state-sweeper.mjs";
+import { ACTIVE_EXECUTION_STATUSES, TASK_STATUSES, isCompletedStatus } from "./task-status-taxonomy.mjs";
+
+const CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES = [
+  ...ACTIVE_EXECUTION_STATUSES,
+].filter((status) => status !== TASK_STATUSES.RUNNING);
 
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
@@ -68,8 +73,8 @@ function normalizeWorkerResult(task, result, extra = {}) {
       extra.progressed ||
       extra.transitioned ||
       item.transitioned ||
-      item.status === "completed" ||
-      item.status === "failed"
+      isCompletedStatus(item.status) ||
+      item.status === TASK_STATUSES.FAILED
     ),
   };
 }
@@ -264,7 +269,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   // starve queued or waiting_for_lock tasks.
   // Added waiting_for_integration — P0 fix: prevent stuck integration tasks.
   let candidates = store.getCodexActiveQueueCandidates(
-    ["assigned", "queued", "waiting_for_lock", "waiting_for_integration"],
+    CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES,
     maxTasks
   ).filter((task) =>
     canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
@@ -286,7 +291,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     };
     if (queueAutostart.started) {
       candidates = store.getCodexActiveQueueCandidates(
-        ["assigned", "queued", "waiting_for_lock", "waiting_for_integration"],
+        CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES,
         maxTasks
       ).filter((task) =>
         canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
@@ -298,8 +303,8 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     runSingleCodexTask(store, config, github, task, context, processGeneralTask)
   );
 
-  const completed = results.filter((item) => item.status === "completed").length;
-  const failed = results.filter((item) => item.failed || item.status === "failed").length;
+  const completed = results.filter((item) => isCompletedStatus(item.status)).length;
+  const failed = results.filter((item) => item.failed || item.status === TASK_STATUSES.FAILED).length;
   const skipped = results.filter((item) => item.skipped).length;
   const transitioned = results.filter((item) => item.transitioned).length;
   const progressed = results.filter((item) => item.progressed).length;

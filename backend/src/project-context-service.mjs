@@ -3,6 +3,7 @@ import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
+import { TASK_STATUSES, isHumanReviewStatus } from "./task-status-taxonomy.mjs";
 
 const TEXT_LIMIT = 8000;
 
@@ -76,11 +77,11 @@ export async function collectProjectContext({ config, store, workerState, regist
   const tasks = state.tasks || [];
   const resolvedLegacyReview = tasks.filter((task) => isResolvedLegacyReviewTask(task));
   const currentBlockers = {
-    running: queue.running || 0,
-    waiting_for_lock: queue.waiting_for_lock || 0,
-    waiting_for_review: queue.waiting_for_review || 0,
-    actionable_review: queue.actionable_review ?? queue.waiting_for_review ?? 0,
-    failed: queue.failed || 0,
+    running: queue[TASK_STATUSES.RUNNING] || 0,
+    waiting_for_lock: queue[TASK_STATUSES.WAITING_FOR_LOCK] || 0,
+    waiting_for_review: queue[TASK_STATUSES.WAITING_FOR_REVIEW] || 0,
+    actionable_review: queue.actionable_review ?? queue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0,
+    failed: queue[TASK_STATUSES.FAILED] || 0,
   };
   const packageScripts = scriptsFromPackage(repoRoot);
   const backendScripts = scriptsFromPackage(join(repoRoot, "backend"));
@@ -122,7 +123,7 @@ export async function collectProjectContext({ config, store, workerState, regist
     },
     current_blockers: currentBlockers,
     raw_history: {
-      waiting_for_review_total: tasks.filter((task) => task.status === "waiting_for_review").length,
+      waiting_for_review_total: tasks.filter((task) => isHumanReviewStatus(task.status)).length,
       resolved_legacy_review: resolvedLegacyReview.length,
       resolved_legacy_review_tasks: resolvedLegacyReview.slice(0, 20).map((task) => ({
         id: task.id,

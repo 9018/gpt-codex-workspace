@@ -18,6 +18,12 @@
 
 import { classifyFailureStructured } from "./failure-classifier.mjs";
 import { isRetryBudgetExhausted, getRetryExhaustedStatus } from "./task-retry.mjs";
+import {
+  TASK_STATUSES,
+  isCompletedStatus,
+  isHumanReviewStatus,
+  isRepairStatus,
+} from "./task-status-taxonomy.mjs";
 
 // ---------------------------------------------------------------------------
 // Sweep result schema
@@ -55,16 +61,18 @@ export function sweepStaleTaskStates({ tasks = [], repoState = {}, now, staleThr
     const updatedAt = task.updated_at ? new Date(task.updated_at).getTime() : 0;
     const staleFor = currentTime - updatedAt;
 
+    if (isHumanReviewStatus(task.status)) {
+      actions.push(...sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs));
+      continue;
+    }
+
+    if (isRepairStatus(task.status)) {
+      actions.push(...sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThresholdMs));
+      continue;
+    }
+
     switch (task.status) {
-      case "waiting_for_review":
-        actions.push(...sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs));
-        break;
-
-      case "waiting_for_repair":
-        actions.push(...sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThresholdMs));
-        break;
-
-      case "waiting_for_integration":
+      case TASK_STATUSES.WAITING_FOR_INTEGRATION:
         actions.push(...sweepWaitingForIntegration(task, repoState, currentTime, staleFor, staleThresholdMs));
         break;
 
@@ -108,10 +116,10 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
   if (verificationPassed && blockerFindings.length === 0) {
     actions.push({
       taskId: task.id,
-      currentStatus: "waiting_for_review",
-      recommendedStatus: "completed",
+      currentStatus: TASK_STATUSES.WAITING_FOR_REVIEW,
+      recommendedStatus: TASK_STATUSES.COMPLETED,
       reason: `Auto-sweep: acceptance passed + verification passed + no blockers for profile=${profile}`,
-      actions: [{ type: "update_task_status", payload: { status: "completed" } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
     });
     return actions;
   }
@@ -124,10 +132,10 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
     if (allAllowedForProfile) {
       actions.push({
         taskId: task.id,
-        currentStatus: "waiting_for_review",
-        recommendedStatus: "completed",
+        currentStatus: TASK_STATUSES.WAITING_FOR_REVIEW,
+        recommendedStatus: TASK_STATUSES.COMPLETED,
         reason: `Auto-sweep: profile=${profile} allows non-blocker findings: ${blockerFindings.map(f => f.code).join(", ")}`,
-        actions: [{ type: "update_task_status", payload: { status: "completed" } }],
+        actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
       });
       return actions;
     }
@@ -137,10 +145,10 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
   if (staleFor > staleThresholdMs * 3 && blockerFindings.length === 0) {
     actions.push({
       taskId: task.id,
-      currentStatus: "waiting_for_review",
-      recommendedStatus: "completed",
+      currentStatus: TASK_STATUSES.WAITING_FOR_REVIEW,
+      recommendedStatus: TASK_STATUSES.COMPLETED,
       reason: `Auto-sweep: stale waiting_for_review (${Math.round(staleFor / 1000)}s) with no blockers — force completing.`,
-      actions: [{ type: "update_task_status", payload: { status: "completed" } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
     });
   }
 
@@ -163,13 +171,13 @@ function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThreshol
     const parentTask = tasks.find(t => t.id === parentTaskId);
 
     // Rule 1: parent already completed
-    if (parentTask && parentTask.status === "completed") {
+    if (parentTask && isCompletedStatus(parentTask.status)) {
       actions.push({
         taskId: task.id,
-        currentStatus: "waiting_for_repair",
-        recommendedStatus: "completed",
+        currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
+        recommendedStatus: TASK_STATUSES.COMPLETED,
         reason: `Auto-sweep: parent task ${parentTaskId} already completed`,
-        actions: [{ type: "update_task_status", payload: { status: "completed" } }],
+        actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
       });
       return actions;
     }
@@ -181,10 +189,10 @@ function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThreshol
       if (currentAttempt >= maxAttempts) {
         actions.push({
           taskId: task.id,
-          currentStatus: "waiting_for_repair",
-          recommendedStatus: "failed",
+          currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
+          recommendedStatus: TASK_STATUSES.FAILED,
           reason: `Auto-sweep: repair attempt ${currentAttempt} exceeded max ${maxAttempts}`,
-          actions: [{ type: "update_task_status", payload: { status: "failed" } }],
+          actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.FAILED } }],
         });
         return actions;
       }
@@ -195,10 +203,10 @@ function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThreshol
   if (staleFor > staleThresholdMs * 3) {
     actions.push({
       taskId: task.id,
-      currentStatus: "waiting_for_repair",
-      recommendedStatus: "failed",
+      currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
+      recommendedStatus: TASK_STATUSES.FAILED,
       reason: `Auto-sweep: stale waiting_for_repair (${Math.round(staleFor / 1000)}s) with no parent resolution`,
-      actions: [{ type: "update_task_status", payload: { status: "failed" } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.FAILED } }],
     });
   }
 
@@ -222,10 +230,10 @@ function sweepWaitingForIntegration(task, repoState, currentTime, staleFor, stal
   if (remoteHead && localHead && remoteHead === localHead) {
     actions.push({
       taskId: task.id,
-      currentStatus: "waiting_for_integration",
-      recommendedStatus: "completed",
+      currentStatus: TASK_STATUSES.WAITING_FOR_INTEGRATION,
+      recommendedStatus: TASK_STATUSES.COMPLETED,
       reason: "Auto-sweep: local/remote heads aligned",
-      actions: [{ type: "update_task_status", payload: { status: "completed" } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
     });
     return actions;
   }
@@ -234,10 +242,10 @@ function sweepWaitingForIntegration(task, repoState, currentTime, staleFor, stal
   if (staleFor > staleThresholdMs * 2) {
     actions.push({
       taskId: task.id,
-      currentStatus: "waiting_for_integration",
-      recommendedStatus: "queued",
+      currentStatus: TASK_STATUSES.WAITING_FOR_INTEGRATION,
+      recommendedStatus: TASK_STATUSES.QUEUED,
       reason: `Auto-sweep: stale waiting_for_integration (${Math.round(staleFor / 1000)}s) — re-queuing for integration`,
-      actions: [{ type: "update_task_status", payload: { status: "queued" } }, { type: "schedule_integration", payload: { taskId: task.id } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.QUEUED } }, { type: "schedule_integration", payload: { taskId: task.id } }],
     });
   }
 
@@ -277,9 +285,9 @@ function sweepRetryWait(task, currentTime, staleFor) {
     actions.push({
       taskId: task.id,
       currentStatus: "retry_wait",
-      recommendedStatus: "queued",
+      recommendedStatus: TASK_STATUSES.QUEUED,
       reason: `Auto-sweep: retry due after backoff (attempt ${attempt + 1})`,
-      actions: [{ type: "update_task_status", payload: { status: "queued", retry_attempt: attempt + 1 } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.QUEUED, retry_attempt: attempt + 1 } }],
     });
   }
 
@@ -305,9 +313,9 @@ function sweepQuotaWait(task, currentTime, staleFor) {
     actions.push({
       taskId: task.id,
       currentStatus: "quota_wait",
-      recommendedStatus: "blocked",
+      recommendedStatus: TASK_STATUSES.BLOCKED,
       reason: `Auto-sweep: quota retry budget exhausted: ${budget.reason}`,
-      actions: [{ type: "update_task_status", payload: { status: "blocked" } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.BLOCKED } }],
     });
     return actions;
   }
@@ -317,9 +325,9 @@ function sweepQuotaWait(task, currentTime, staleFor) {
     actions.push({
       taskId: task.id,
       currentStatus: "quota_wait",
-      recommendedStatus: "queued",
+      recommendedStatus: TASK_STATUSES.QUEUED,
       reason: `Auto-sweep: quota wait elapsed (attempt ${attempt + 1})`,
-      actions: [{ type: "update_task_status", payload: { status: "queued", retry_attempt: attempt + 1 } }],
+      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.QUEUED, retry_attempt: attempt + 1 } }],
     });
   }
 
