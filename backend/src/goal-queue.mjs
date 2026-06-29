@@ -16,6 +16,7 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
 
 // ---------------------------------------------------------------------------
@@ -32,6 +33,16 @@ export const QUEUE_STATUS_CANCELLED = "cancelled";
 
 /** Ordered set of statuses that are eligible for start-next. */
 const ELIGIBLE_STATUSES = new Set([QUEUE_STATUS_WAITING, QUEUE_STATUS_READY]);
+
+const ACTIVE_TASK_STATUSES_FOR_QUEUE = new Set([
+  TASK_STATUSES.ASSIGNED,
+  TASK_STATUSES.QUEUED,
+  TASK_STATUSES.RUNNING,
+  TASK_STATUSES.WAITING_FOR_LOCK,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
+  TASK_STATUSES.WAITING_FOR_INTEGRATION,
+]);
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -151,10 +162,6 @@ export async function enqueueGoal(store, goalId, opts = {}) {
   // P0 fix: Check if goal already has an active task — if so, refuse to enqueue
   // to prevent duplicate task creation when create_goal(assign_to_codex=true)
   // already created a task for this goal.
-  const ACTIVE_TASK_STATUSES_FOR_QUEUE = new Set([
-    "assigned", "queued", "running", "waiting_for_lock",
-    "waiting_for_review", "waiting_for_repair", "waiting_for_integration",
-  ]);
   const existingActiveTask = Array.isArray(state.tasks)
     ? state.tasks.find((t) => t.goal_id === goalId && ACTIVE_TASK_STATUSES_FOR_QUEUE.has(t.status))
     : null;

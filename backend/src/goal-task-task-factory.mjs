@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 
 // ---------------------------------------------------------------------------
@@ -6,8 +7,13 @@ import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 // "in progress" and prevents duplicate task creation for the same goal.
 // ---------------------------------------------------------------------------
 const ACTIVE_TASK_STATUSES = new Set([
-  "assigned", "queued", "running", "waiting_for_lock",
-  "waiting_for_review", "waiting_for_repair", "waiting_for_integration",
+  TASK_STATUSES.ASSIGNED,
+  TASK_STATUSES.QUEUED,
+  TASK_STATUSES.RUNNING,
+  TASK_STATUSES.WAITING_FOR_LOCK,
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
+  TASK_STATUSES.WAITING_FOR_INTEGRATION,
 ]);
 
 export function defaultTaskExecutionFields(mode = "builder") {
