@@ -1,4 +1,5 @@
 import { isResolvedLegacyReviewTask, isResolvedLegacyTerminalTask, hasCompletionEvidence, taskRelationIds } from "./legacy-reconciliation.mjs";
+import { classifyCurrentBlockerTask } from "./current-blocker-policy.mjs";
 import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
 const EMPTY_QUEUE_COUNTS = {
@@ -88,26 +89,52 @@ function hasImplicitSuccessor(failedTask, allTasks) {
   return false;
 }
 
+function currentWorkDecision(task, tasks = []) {
+  const decision = classifyCurrentBlockerTask(task);
+  if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return decision;
+  if (hasImplicitSuccessor(task, tasks)) return { ...decision, blocks_current_work: false };
+  return decision;
+}
+
+function isFailedCurrentWorkTask(task, tasks = []) {
+  if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return false;
+  if (isResolvedLegacyTerminalTask(task)) return false;
+  return currentWorkDecision(task, tasks).blocks_current_work;
+}
+
+function isResolvedLegacyFailedTask(task, tasks = []) {
+  if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return false;
+  return !isFailedCurrentWorkTask(task, tasks);
+}
+
+function computePolicyQueueCounts(tasks = []) {
+  const counts = { ...EMPTY_QUEUE_COUNTS };
+  for (const task of tasks || []) {
+    if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
+    if (task.status === TASK_STATUSES.COMPLETED) {
+      counts[task.status] += 1;
+      continue;
+    }
+    if (task.status === TASK_STATUSES.FAILED) {
+      if (isFailedCurrentWorkTask(task, tasks)) counts.failed += 1;
+      continue;
+    }
+    if (currentWorkDecision(task, tasks).blocks_current_work) counts[task.status] += 1;
+  }
+  return counts;
+}
+
 function legacyFailedPolicySummary(tasks = []) {
   const counts = { ...EMPTY_LEGACY_COUNTS };
-  const unresolvedTasks = [];
 
   for (const task of tasks || []) {
     if (task.assignee !== "codex") continue;
-    if (isResolvedLegacyTerminalTask(task)) {
+    if (isResolvedLegacyFailedTask(task, tasks)) {
       counts.resolved_legacy_failed += 1;
-    } else if (task.status === TASK_STATUSES.FAILED || task.status === TASK_STATUSES.TIMED_OUT) {
-      unresolvedTasks.push(task);
-    }
-    if (isResolvedLegacyReviewTask(task)) counts.resolved_legacy_review += 1;
-  }
-
-  for (const task of unresolvedTasks) {
-    if (hasImplicitSuccessor(task, tasks)) {
-      counts.resolved_legacy_failed += 1;
-    } else {
+    } else if (isFailedCurrentWorkTask(task, tasks)) {
       counts.unresolved_failed += 1;
     }
+    if (isResolvedLegacyReviewTask(task)) counts.resolved_legacy_review += 1;
   }
 
   return {
@@ -123,29 +150,20 @@ export async function collectWorkerQueueCounts(store) {
     const counts = { ...EMPTY_QUEUE_COUNTS };
     const oldest_age_ms = computeOldestAges(state.tasks || []);
     const legacy_failed_policy = legacyFailedPolicySummary(state.tasks || []);
+    const policyCounts = computePolicyQueueCounts(state.tasks || []);
     // Prefer indexed lookup when available (O(1) per status)
     if (typeof store.getCodexTaskQueue === "function") {
       const q = store.getCodexTaskQueue();
       for (const st of Object.keys(EMPTY_QUEUE_COUNTS)) {
-        if (q.counts[st] !== undefined) {
+        if (q?.counts?.[st] !== undefined) {
           counts[st] = q.counts[st];
         }
       }
-      let resolvedCount = 0;
-      for (const task of state.tasks || []) {
-        if (task.assignee === "codex" && isResolvedLegacyReviewTask(task)) resolvedCount++;
-      }
-      counts.waiting_for_review = Math.max(0, counts.waiting_for_review - resolvedCount);
-      counts.failed = Math.max(0, counts.failed - legacy_failed_policy.resolved_legacy_failed);
+      counts.waiting_for_review = policyCounts.waiting_for_review;
+      counts.failed = policyCounts.failed;
       return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };
     }
-    for (const task of state.tasks || []) {
-      if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
-      if (isResolvedLegacyReviewTask(task)) continue;
-      if (isResolvedLegacyTerminalTask(task)) continue;
-      if ((task.status === TASK_STATUSES.FAILED || task.status === TASK_STATUSES.TIMED_OUT) && hasImplicitSuccessor(task, state.tasks || [])) continue;
-      counts[task.status] += 1;
-    }
+    Object.assign(counts, policyCounts);
     return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };
   } catch {
     return { ...EMPTY_QUEUE_COUNTS, actionable_review: 0, legacy_failed_policy: { ...EMPTY_LEGACY_COUNTS, policy: "resolved_legacy_failed_excluded_from_current_blockers", blocks_current_work: false }, oldest_age_ms: emptyQueueAges() };

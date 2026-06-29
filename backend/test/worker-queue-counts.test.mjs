@@ -24,6 +24,12 @@ test('worker queue counts derives status taxonomy from task-status-taxonomy modu
   assert.doesNotMatch(source, /COUNTED_STATUSES\s*=\s*new Set\(Object\.keys\(EMPTY_QUEUE_COUNTS\)\)/);
 });
 
+test('worker queue counts delegates current-work decisions to current-blocker-policy', async () => {
+  const source = await readFile(WORKER_QUEUE_COUNTS_SOURCE, 'utf8');
+  assert.match(source, /classifyCurrentBlockerTask/);
+  assert.match(source, /from ['"]\.\/current-blocker-policy\.mjs['"]/);
+});
+
 test('collectWorkerQueueCounts counts codex task statuses in one pass shape', async () => {
   const old = new Date(Date.now() - 60_000).toISOString();
   const store = {
@@ -36,7 +42,7 @@ test('collectWorkerQueueCounts counts codex task statuses in one pass shape', as
           { assignee: 'codex', status: 'waiting_for_lock' },
           { assignee: 'codex', status: 'waiting_for_review' },
           { assignee: 'codex', status: 'completed' },
-          { assignee: 'codex', status: 'failed', id: 'task_plain_failed', result: {} },
+          { assignee: 'codex', status: 'failed', id: 'task_code_failed', result: { changed_files: ['backend/src/example.mjs'] } },
           { assignee: 'human', status: 'assigned' },
         ]
       };
@@ -77,7 +83,7 @@ test('collectWorkerQueueCounts returns zero counts when load fails', async () =>
   });
 });
 
-test('collectWorkerQueueCounts excludes resolved legacy failed tasks but keeps active failed visible', async () => {
+test('collectWorkerQueueCounts excludes resolved legacy failed tasks but keeps policy-active failed visible', async () => {
   const store = {
     async load() {
       return {
@@ -85,7 +91,7 @@ test('collectWorkerQueueCounts excludes resolved legacy failed tasks but keeps a
           { assignee: 'codex', status: 'failed', id: 'task_old_resolved', result: { resolved_legacy: true } },
           { assignee: 'codex', status: 'failed', id: 'task_old_superseded', result: { superseded_by_task_id: 'task_successor' } },
           { assignee: 'codex', status: 'waiting_for_review', id: 'task_review_resolved', result: { resolved_by_task_id: 'task_successor' } },
-          { assignee: 'codex', status: 'failed', id: 'task_real_failed', result: {} },
+          { assignee: 'codex', status: 'failed', id: 'task_real_failed', result: { changed_files: ['backend/src/example.mjs'] } },
           { assignee: 'codex', status: 'running', id: 'task_running' },
         ],
       };
@@ -141,12 +147,12 @@ test('legacyFailedPolicySummary resolves timed_out with no result via completed 
   assert.equal(result.legacy_failed_policy.blocks_current_work, false);
 });
 
-test('legacyFailedPolicySummary shows active running with unresolved failure as blocking', async () => {
+test('legacyFailedPolicySummary shows active running with code-evidence failure as blocking', async () => {
   const store = {
     async load() {
       return {
         tasks: [
-          { assignee: 'codex', status: 'failed', id: 'task_failed_unresolved', result: {} },
+          { assignee: 'codex', status: 'failed', id: 'task_failed_unresolved', result: { tests: 'node --test failed' } },
           { assignee: 'codex', status: 'running', id: 'task_running' },
         ],
       };
@@ -158,7 +164,7 @@ test('legacyFailedPolicySummary shows active running with unresolved failure as 
   assert.equal(result.running, 1);
 });
 
-test('legacyFailedPolicySummary treats unresolved fresh failed with no superseding evidence as blocker', async () => {
+test('legacyFailedPolicySummary follows policy for fresh failed task without current-work evidence', async () => {
   const store = {
     async load() {
       return {
@@ -169,9 +175,10 @@ test('legacyFailedPolicySummary treats unresolved fresh failed with no supersedi
     },
   };
   const result = await collectWorkerQueueCounts(store);
-  assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
-  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 0);
-  assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+  assert.equal(result.failed, 0);
+  assert.equal(result.legacy_failed_policy.unresolved_failed, 0);
+  assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
+  assert.equal(result.legacy_failed_policy.blocks_current_work, false);
 });
 
 
@@ -233,7 +240,7 @@ test('legacyFailedPolicySummary does not resolve historical failed with differen
     async load() {
       return {
         tasks: [
-          { assignee: 'codex', status: 'failed', id: 'task_failed_no_rel', goal_id: 'goal_aaa', result: {} },
+          { assignee: 'codex', status: 'failed', id: 'task_failed_no_rel', goal_id: 'goal_aaa', result: { changed_files: ['backend/src/no-rel.mjs'] } },
           { assignee: 'codex', status: 'completed', id: 'task_completed_diff', goal_id: 'goal_bbb', result: { verification: { passed: true } } },
         ],
       };
