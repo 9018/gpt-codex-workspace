@@ -1,1 +1,215 @@
-export { verifyTaskCompletion } from "./task-acceptance.mjs";
+import { constants } from 'node:fs';
+import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { exec } from 'node:child_process';
+import { promisify } from 'node:util';
+import { dirname, join } from 'node:path';
+
+const execAsync = promisify(exec);
+const RESULT_STATUSES = new Set(['completed', 'failed', 'timed_out', 'waiting_for_review']);
+const NO_PROJECT_CHECKS_REASON = 'No project verification commands were available.';
+
+function tail(value, max = 4000) {
+  return String(value || '').slice(-max);
+}
+
+async function exists(path) {
+  try {
+    await access(path, constants.F_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function readJsonFile(path) {
+  return JSON.parse(await readFile(path, 'utf8'));
+}
+
+async function defaultRunCommand(command, { cwd, timeout = 120_000 } = {}) {
+  try {
+    const result = await execAsync(command, {
+      cwd,
+      timeout,
+      encoding: 'utf8',
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    return { cmd: command, exit_code: 0, stdout_tail: tail(result.stdout), stderr_tail: tail(result.stderr) };
+  } catch (err) {
+    return {
+      cmd: command,
+      exit_code: typeof err?.code === 'number' ? err.code : 1,
+      stdout_tail: tail(err?.stdout),
+      stderr_tail: tail(err?.stderr || err?.message),
+    };
+  }
+}
+
+function normalizeCommandResult(command, result) {
+  return {
+    cmd: result?.cmd || command,
+    exit_code: typeof result?.exit_code === 'number' ? result.exit_code : 1,
+    stdout_tail: tail(result?.stdout_tail ?? result?.stdout),
+    stderr_tail: tail(result?.stderr_tail ?? result?.stderr),
+  };
+}
+
+async function runCommand(command, { cwd, timeout, config } = {}) {
+  const runner = typeof config?.runCommand === 'function' ? config.runCommand : defaultRunCommand;
+  try {
+    return normalizeCommandResult(command, await runner(command, { cwd, timeout }));
+  } catch (err) {
+    return {
+      cmd: command,
+      exit_code: 1,
+      stdout_tail: '',
+      stderr_tail: tail(err?.message || String(err)),
+    };
+  }
+}
+
+async function parseResultJson(resultJson, resultJsonPath) {
+  if (resultJson !== undefined && resultJson !== null) {
+    if (typeof resultJson === 'string') {
+      try {
+        return { result: JSON.parse(resultJson), findings: [] };
+      } catch (err) {
+        return { result: null, findings: [finding('result_json_invalid', err?.message || 'Invalid result JSON')] };
+      }
+    }
+    if (typeof resultJson === 'object' && !Array.isArray(resultJson)) return { result: resultJson, findings: [] };
+    return { result: null, findings: [finding('result_json_invalid', 'Result JSON must be an object or JSON string')] };
+  }
+
+  if (!resultJsonPath) {
+    return { result: null, findings: [finding('result_json_missing', 'No task result data or resultJsonPath was provided')] };
+  }
+
+  try {
+    return { result: await readJsonFile(resultJsonPath), findings: [] };
+  } catch (err) {
+    const code = err?.code === 'ENOENT' ? 'result_json_missing' : 'result_json_invalid';
+    return { result: null, findings: [finding(code, err?.message || 'Unable to read result JSON')] };
+  }
+}
+
+function finding(code, message, severity = 'blocker') {
+  return { severity, code, message, source: 'task_verifier' };
+}
+
+function changedFilesFrom({ result, task, workspaceFiles }) {
+  if (Array.isArray(result?.changed_files)) return result.changed_files;
+  if (Array.isArray(result?.changedFiles)) return result.changedFiles;
+  if (Array.isArray(task?.changed_files)) return task.changed_files;
+  if (Array.isArray(workspaceFiles)) return workspaceFiles;
+  return [];
+}
+
+function validateResult(result) {
+  const findings = [];
+  if (!result || typeof result !== 'object' || Array.isArray(result)) {
+    return [finding('result_json_invalid', 'Task result must be a JSON object')];
+  }
+  if (!RESULT_STATUSES.has(result.status)) {
+    findings.push(finding('unsupported_result_status', `Unsupported result status: ${result.status || 'missing'}`));
+  }
+  if (result.status === 'completed' && !String(result.summary || '').trim()) {
+    findings.push(finding('summary_missing', 'Completed result must include a summary'));
+  }
+  if (result.status === 'completed' && result.verification?.passed !== true) {
+    findings.push(finding('verification_not_passed', 'Completed result must include verification.passed === true'));
+  }
+  return findings;
+}
+
+async function discoverProjectChecks(repoPath, config = {}) {
+  if (Array.isArray(config.verificationCommands)) return config.verificationCommands.filter(Boolean);
+  if (Array.isArray(config.projectCheckCommands)) return config.projectCheckCommands.filter(Boolean);
+  if (!repoPath) return [];
+
+  const commands = [];
+  const packageJsonPath = join(repoPath, 'package.json');
+  if (await exists(packageJsonPath)) {
+    try {
+      const pkg = await readJsonFile(packageJsonPath);
+      const scripts = pkg?.scripts || {};
+      for (const script of ['check', 'test', 'build', 'typecheck', 'lint']) {
+        if (scripts[script]) commands.push(`npm run ${script}`);
+      }
+    } catch {}
+  }
+  if (await exists(join(repoPath, 'pyproject.toml')) || await exists(join(repoPath, 'pytest.ini'))) commands.push('python -m pytest');
+  if (await exists(join(repoPath, 'go.mod'))) commands.push('go test ./...');
+  if (await exists(join(repoPath, 'Cargo.toml'))) commands.push('cargo test');
+  if (await exists(join(repoPath, 'pom.xml'))) commands.push('mvn test');
+  return [...new Set(commands)];
+}
+
+async function persistVerification(resultJsonPath, verification, logger) {
+  if (!resultJsonPath) return;
+  const verificationPath = join(dirname(resultJsonPath), 'verification.json');
+  try {
+    await mkdir(dirname(verificationPath), { recursive: true });
+    await writeFile(verificationPath, `${JSON.stringify(verification, null, 2)}\n`, 'utf8');
+  } catch (err) {
+    logger?.warn?.('Unable to write verification.json', err);
+  }
+}
+
+export async function verifyTaskCompletion({
+  task = {},
+  goal = {},
+  repoPath,
+  resultJson,
+  resultJsonPath,
+  workspaceFiles = [],
+  config = {},
+  stateStore = null,
+  logger = null,
+} = {}) {
+  const timestamp = typeof config.now === 'function' ? config.now() : new Date().toISOString();
+  const commands = [];
+  const skipped_checks = [];
+  const parsed = await parseResultJson(resultJson, resultJsonPath);
+  const result = parsed.result;
+  const findings = [...parsed.findings, ...validateResult(result)];
+
+  if (repoPath) {
+    commands.push(await runCommand('git diff --check', { cwd: repoPath, timeout: 30_000, config }));
+  } else {
+    skipped_checks.push({ cmd: 'git diff --check', reason: 'repoPath was not provided' });
+  }
+
+  const projectCommands = parsed.findings.some((entry) => entry.code === 'result_json_invalid')
+    ? []
+    : await discoverProjectChecks(repoPath, config);
+  if (projectCommands.length === 0) {
+    skipped_checks.push({ kind: 'project_checks', reason: NO_PROJECT_CHECKS_REASON });
+  }
+  for (const command of projectCommands) {
+    commands.push(await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, config }));
+  }
+
+  if (commands.some((command) => command.exit_code !== 0)) {
+    findings.push(finding('verification_command_failed', 'One or more verification commands failed'));
+  }
+
+  const changed_files = changedFilesFrom({ result, task, workspaceFiles });
+  const reason_no_tests = projectCommands.length === 0 ? NO_PROJECT_CHECKS_REASON : null;
+  const passed = findings.length === 0 && commands.every((command) => command.exit_code === 0);
+  const verification = {
+    passed,
+    status: passed ? 'completed' : 'waiting_for_review',
+    commands,
+    skipped_checks,
+    changed_files,
+    reason_no_tests,
+    timestamp,
+    task_id: task?.id || null,
+    goal_id: goal?.id || null,
+    findings,
+  };
+
+  await persistVerification(resultJsonPath, verification, logger);
+  if (stateStore && typeof stateStore.save === 'function') await stateStore.save();
+  return verification;
+}

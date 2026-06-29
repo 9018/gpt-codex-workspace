@@ -31,7 +31,7 @@ test("delivery spec file-level API modules exist and expose required functions",
   assert.equal(typeof worktree.checkWorktreeDirty, "function");
   assert.equal(typeof worktree.checkMergeability, "function");
   assert.equal(typeof acceptance.verifyTaskCompletion, "function");
-  assert.equal(verifier.verifyTaskCompletion, acceptance.verifyTaskCompletion);
+  assert.equal(typeof verifier.verifyTaskCompletion, "function");
   assert.equal(typeof retry.shouldAttemptRepair, "function");
   assert.equal(typeof retry.createRepairGoalFromFindings, "function");
   assert.equal(typeof classifier.classifyFailure, "function");
