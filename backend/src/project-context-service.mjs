@@ -75,12 +75,11 @@ export async function collectProjectContext({ config, store, workerState, regist
   const queue = await collectWorkerQueueCounts(store);
   const tasks = state.tasks || [];
   const resolvedLegacyReview = tasks.filter((task) => isResolvedLegacyReviewTask(task));
-  const actionableReview = tasks.filter((task) => task.assignee === "codex" && task.status === "waiting_for_review" && !isResolvedLegacyReviewTask(task));
   const currentBlockers = {
     running: queue.running || 0,
     waiting_for_lock: queue.waiting_for_lock || 0,
-    waiting_for_review: actionableReview.length,
-    actionable_review: queue.actionable_review ?? actionableReview.length,
+    waiting_for_review: queue.waiting_for_review || 0,
+    actionable_review: queue.actionable_review ?? queue.waiting_for_review ?? 0,
     failed: queue.failed || 0,
   };
   const packageScripts = scriptsFromPackage(repoRoot);

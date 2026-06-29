@@ -90,6 +90,60 @@ test("open_project_context reports current blockers separately from raw legacy h
   assert.equal(legacyTask.legacy_resolution.resolved_by_task_id, "task_successor_zvec");
 });
 
+test("open_project_context uses queue-derived actionable review counts", async () => {
+  const server = await makeServer();
+  const store = server.getStoreForTests();
+  store.state.tasks = [
+    {
+      id: "task_legacy_review_indexed",
+      title: "Legacy review already handled",
+      status: "waiting_for_review",
+      assignee: "codex",
+      updated_at: "2026-01-01T00:00:00Z",
+      result: { resolved_by_task_id: "task_successor_indexed" },
+    },
+    {
+      id: "task_active_review_indexed",
+      title: "Active review still pending",
+      status: "waiting_for_review",
+      assignee: "codex",
+      updated_at: "2026-01-02T00:00:00Z",
+      result: {},
+    },
+    {
+      id: "task_successor_indexed",
+      title: "Completed successor",
+      status: "completed",
+      assignee: "codex",
+      updated_at: "2026-01-03T00:00:00Z",
+      result: { verification: { passed: true } },
+    },
+  ];
+  const originalGetCodexTaskQueue = store.getCodexTaskQueue.bind(store);
+  store.getCodexTaskQueue = () => ({
+    ...originalGetCodexTaskQueue(),
+    counts: {
+      ...originalGetCodexTaskQueue().counts,
+      waiting_for_review: 1,
+    },
+  });
+  await store.save();
+
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 11,
+    method: "tools/call",
+    params: { name: "open_project_context", arguments: {} },
+  }, { authorization: "Bearer test-token" });
+
+  const context = response.result.structuredContent;
+  assert.equal(context.worker.queue.actionable_review, 0);
+  assert.equal(context.current_blockers.actionable_review, 0);
+  assert.equal(context.current_blockers.waiting_for_review, 0);
+  assert.equal(context.raw_history.waiting_for_review_total, 2);
+  assert.equal(context.raw_history.resolved_legacy_review, 1);
+});
+
 test("gptwork CLI settings show/set edits runtime env file", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-cli-settings-"));
   track(root);
