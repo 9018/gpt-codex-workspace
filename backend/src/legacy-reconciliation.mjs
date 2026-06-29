@@ -1,8 +1,18 @@
+import {
+  RESULT_SHAPE_TYPES,
+  classifyResultShape,
+} from "./result-shape-classifier.mjs";
+
 const LEGACY_REVIEW_STATUSES = new Set(["failed", "timed_out", "blocked", "waiting_for_review", "waiting_for_repair"]);
 const COMPLETED_STATUSES = new Set(["completed"]);
 const TERMINAL_TASK_STATUSES = new Set(["completed", "failed", "timed_out", "blocked", "cancelled"]);
 const ACTIVE_OR_REVIEW_TASK_STATUSES = new Set(["queued", "assigned", "running", "waiting_for_lock", "waiting_for_review", "waiting_for_repair", "waiting_for_integration"]);
 const FAILED_LEGACY_STATUSES = new Set(["failed", "timed_out", "cancelled", "blocked"]);
+const HISTORICAL_PROVIDER_EMPTY_RESULT_SHAPES = new Set([
+  RESULT_SHAPE_TYPES.PROVIDER_NOOP,
+  RESULT_SHAPE_TYPES.PROVIDER_TIMEOUT,
+  RESULT_SHAPE_TYPES.PROVIDER_NO_EVIDENCE,
+]);
 
 export function hasCompletionEvidence(taskResult = {}) {
   if (taskResult.reviewer_decision?.passed === true) return true;
@@ -82,13 +92,8 @@ export function isHistoricalProviderNoResultFailure(task = {}) {
   if (!result || typeof result !== "object") return false;
   if (hasCodeFailureEvidence(result)) return false;
 
-  const providerShape =
-    result.kind === "codex_failed" ||
-    result.kind === "codex_timeout" ||
-    result.failure_class === "result_missing" ||
-    result.failure_class === "codex_timeout" ||
-    result.noop === true ||
-    workerMetadataOnlyFailure(result);
+  const providerShape = HISTORICAL_PROVIDER_EMPTY_RESULT_SHAPES.has(classifyResultShape(result))
+    || workerMetadataOnlyFailure(result);
   if (!providerShape) return false;
 
   if (hasNonEmptyString(result.commit) || hasNonEmptyString(result.local_head) || hasNonEmptyString(result.remote_head)) return false;
