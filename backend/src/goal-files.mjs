@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 /**
  * Build the workspace file paths for a given goal.
  * @param {object} goal
- * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string, context_bundle_md: string, context_retrieval_json: string }}
+ * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string, context_bundle_md: string, context_retrieval_json: string, acceptance_contract_json: string }}
  */
 export function goalWorkspaceFiles(goal) {
   const dir = `.gptwork/goals/${goal.id}`;
@@ -21,6 +21,7 @@ export function goalWorkspaceFiles(goal) {
     attachments_dir: `${dir}/attachments`,
     context_bundle_md: `${dir}/context.bundle.md`,
     context_retrieval_json: `${dir}/context.retrieval.json`,
+    acceptance_contract_json: `${dir}/acceptance.contract.json`,
     codex_entry_md: `${dir}/codex.entry.md`
   };
 }
@@ -36,7 +37,8 @@ export function publicGoalWorkspaceFiles(goal, payload = {}) {
   const visible = {
     dir: files.dir,
     goal_md: files.goal_md,
-    result_md: files.result_md
+    result_md: files.result_md,
+    acceptance_contract_json: files.acceptance_contract_json
   };
   if (hasGoalBundles(payload)) visible.attachments_dir = files.attachments_dir;
   return visible;
@@ -55,6 +57,7 @@ export function internalGoalWorkspaceFiles(goal, payload = {}) {
     transcript_md: files.transcript_md,
     context_bundle_md: files.context_bundle_md,
     context_retrieval_json: files.context_retrieval_json,
+    acceptance_contract_json: files.acceptance_contract_json,
     codex_entry_md: files.codex_entry_md,
     payload_json: files.payload_json,
     payload_base64: files.payload_base64
@@ -112,6 +115,7 @@ export function renderGoalMarkdown(goal, conversation, memories, task, workspace
     `- context: ${workspaceFiles.context_json}`,
     `- transcript: ${workspaceFiles.transcript_md}`,
     `- result: ${workspaceFiles.result_md}`,
+    `- acceptance contract: ${workspaceFiles.acceptance_contract_json}`,
     `- codex entry: ${workspaceFiles.codex_entry_md}`,
   ];
 
@@ -202,6 +206,11 @@ export function renderCodexEntryMarkdown(goal, conversation, memories, task, wor
     "",
     "## Result Contract",
     "",
+    `- You must satisfy acceptance.contract.json at ${workspaceFiles.acceptance_contract_json}.`,
+    "- Acceptance means the task produced a valid, verified, traceable increment.",
+    "- It does not mean the implementation is final or product-perfect.",
+    "- Only blocking_requirements block closure.",
+    "- Non-blocking quality concerns must be reported as followup_findings, not used to block completion.",
     `- Write Markdown result to ${workspaceFiles.result_md}.`,
     `- Write structured JSON result to ${workspaceFiles.dir}/result.json.`,
     "- Keep result.json concise: status, summary, changed_files, tests, commit, remote_head, warnings, followups, verification.",
@@ -277,6 +286,9 @@ export function codexInstruction(goal) {
   return [
     "You are executing a GPTWork encoded/shared goal.",
     `Read ${files.codex_entry_md} first. It is the bounded execution entrypoint.`,
+    `You must satisfy acceptance.contract.json at ${files.acceptance_contract_json}.`,
+    "Acceptance means the task produced a valid, verified, traceable increment.",
+    "Only blocking_requirements block closure; non-blocking quality concerns are followup_findings.",
     `Prefer ${files.context_bundle_md} for supporting context when present.`,
     `Use ${files.context_json} only for metadata lookup. Do not read it wholesale before acting.`,
     `Use ${files.goal_md}, ${files.transcript_md}, and payload files only for explicit deep lookup when the entry and bundle are insufficient.`,

@@ -7,6 +7,7 @@ import { buildGoalTask, normalizeCreatedTaskMode } from "./goal-task-task-factor
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
+import { buildAcceptanceContract } from "./acceptance-contract-builder.mjs";
 
 const REPAIR_METADATA_KEYS = [
   "root_task_id",
@@ -37,6 +38,7 @@ export async function createGoal(store, config, args, context = defaultTokenCont
   const conversationId = `conv_${randomUUID()}`;
   const assignToCodex = args.assign_to_codex !== false;
   const mode = normalizeCreatedTaskMode({ title: args.title || titleFromGoal(args), description: args.goal_prompt, mode: args.mode || "builder" });
+  const acceptanceContract = buildAcceptanceContract({ ...args, mode });
   const messages = normalizeGoalMessages(args.messages, now, context.user_id);
   const memories = normalizeGoalMemories(args.memories, goalId, conversationId, now, context.user_id);
   const goal = {
@@ -54,6 +56,7 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     assignee: assignToCodex ? "codex" : "",
     status: assignToCodex ? "assigned" : "open",
     mode,
+    acceptance_contract: acceptanceContract,
     created_at: now,
     updated_at: now
   };

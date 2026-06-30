@@ -23,6 +23,10 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
     { path: workspaceFiles.context_json, content: JSON.stringify({ goal, conversation, memories, task, workspace_files: workspaceFiles, codex_instruction: codexInstruction(goal) }, null, 2) },
   ];
 
+  if (goal.acceptance_contract) {
+    files.push({ path: workspaceFiles.acceptance_contract_json, content: JSON.stringify(goal.acceptance_contract, null, 2) });
+  }
+
   // Skip payload files during append-only operations (P0.2)
   if (!skipPayload) {
     const payload = extras.payload || {
@@ -34,6 +38,7 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
       messages: conversation?.messages || [],
       autonomy_policy: goal.autonomy_policy,
       subagent_policy: goal.subagent_policy,
+      acceptance_contract: goal.acceptance_contract,
       memories
     };
     const payloadJson = JSON.stringify(payload, null, 2);

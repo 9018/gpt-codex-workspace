@@ -41,6 +41,7 @@ test('goal tool group exposes stable public tool names and schemas', () => {
   assert.equal(tools.create_goal.inputSchema.properties.assign_to_codex, 'boolean');
   assert.equal(tools.create_goal.inputSchema.properties.messages, 'array');
   assert.equal(tools.create_goal.inputSchema.properties.memories, 'array');
+  assert.equal(tools.create_goal.inputSchema.properties.acceptance_contract, 'object');
   assert.equal(tools.create_goal.inputSchema.properties.payload, 'object');
 
   // create_encoded_goal: required params
