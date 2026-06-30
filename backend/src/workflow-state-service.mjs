@@ -13,7 +13,7 @@ import { createHash, randomUUID } from "node:crypto";
 
 import { validateResultContract } from "./task-result-status.mjs";
 import { evaluateAcceptance } from "./acceptance-policy.mjs";
-import { isHumanReviewStatus } from "./task-status-taxonomy.mjs";
+import { TASK_STATUSES, isHumanReviewStatus, normalizeTaskStatus } from "./task-status-taxonomy.mjs";
 // ---------------------------------------------------------------------------
 // Path helpers
 // ---------------------------------------------------------------------------
@@ -203,6 +203,7 @@ export async function collectWorkflowDiagnostics({
 // ---------------------------------------------------------------------------
 
 const BLOCKING_ACCEPTANCE_STATUSES = new Set(["needs_fix", "rejected", "failed", "blocked"]);
+const AUTO_FINALIZE_CONVERGENCE_ACTION = "auto_finalize_convergence";
 
 function normalizeDecisionStatus(decision) {
   if (!decision || typeof decision !== "object") return null;
@@ -302,6 +303,84 @@ function buildAcceptanceRepairTask({ task, acceptance, manualNote }) {
     source_task_id: task.id,
     source_goal_id: task.goal_id || null,
     repair_proposal: repairProposal,
+  };
+}
+
+function explicitVerificationPassed(result = {}) {
+  return result?.verification?.passed === true || result?.final_verification?.passed === true;
+}
+
+function explicitVerificationFailed(result = {}) {
+  return result?.verification?.passed === false || result?.final_verification?.passed === false;
+}
+
+function completedPassedFinalizationProposal({ task, diagnostics }) {
+  const result = task?.result;
+  if (!result) {
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task?.id || "unknown"}" is completed but has no result. GPTChat should review.`,
+      needs_gptchat_decision: true,
+    };
+  }
+
+  const resultWithRuntimeFindings = withRuntimeDirtyFinding(result, diagnostics);
+  const validation = validateResultContract(resultWithRuntimeFindings, { skipWorktreeCheck: true });
+  const acceptance = normalizeAcceptanceForResult(resultWithRuntimeFindings);
+
+  if (explicitVerificationFailed(resultWithRuntimeFindings)) {
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" completed but verification failed. Keep acceptance checks in place and review or repair before finalization.`,
+      needs_gptchat_decision: true,
+      acceptance,
+    };
+  }
+
+  if (!explicitVerificationPassed(resultWithRuntimeFindings)) {
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" completed without explicit passed verification evidence. GPTChat should review before finalization.`,
+      needs_gptchat_decision: true,
+      acceptance,
+      diagnosis_codes: ["verification_not_passed"],
+    };
+  }
+
+  if (!validation.valid) {
+    const issues = validation.warnings.length > 0
+      ? validation.warnings.join("; ")
+      : validation.diagnosis_codes.join(", ");
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" completed but result contract still has issues: ${issues}. GPTChat should review before finalization.`,
+      needs_gptchat_decision: true,
+      acceptance,
+      diagnosis_codes: validation.diagnosis_codes,
+    };
+  }
+
+  if (!acceptance.passed) {
+    return {
+      next_action: "needs_gptchat_decision",
+      proposed_next_task: null,
+      recommendation: `Task "${task.title}" completed with blocker/major acceptance findings. Keep manual review or repair before finalization.`,
+      needs_gptchat_decision: true,
+      acceptance,
+    };
+  }
+
+  return {
+    next_action: AUTO_FINALIZE_CONVERGENCE_ACTION,
+    proposed_next_task: null,
+    recommendation: `Task "${task.title}" passed verification and only finalization/convergence remains. Rerun acceptance and finalize automatically.`,
+    needs_gptchat_decision: false,
+    auto_finalizing: true,
+    acceptance,
   };
 }
 
@@ -457,22 +536,11 @@ export function generateProposal({
     };
   }
 
-  // P1: Task completed, passed → advance to next planned goal
-  // GitHub sync is NOT a delivery blocker; remote_head null or commit mismatch
-  // does not block local delivery. Return observation for GPTChat context.
+  // P0: Task completed, passed verification, and no blocker/major findings →
+  // automatic finalization/convergence. Acceptance is rerun above before this
+  // route is allowed; failed verification and mixed blockers stay manual.
   if (task.status === "completed" && manualVerdict === "passed") {
-    const commitMatch = diagnostics.runtime.running_commit === task.result?.commit;
-    return {
-      next_action: "needs_gptchat_decision",
-      proposed_next_task: null,
-      recommendation: commitMatch
-        ? `Task "${task.title}" completed and passed. No next planned goal configured; GPTChat should determine the next task.`
-        : `Task "${task.title}" completed and passed. Note: running_commit (${diagnostics.runtime.running_commit}) differs from task result commit (${task.result?.commit}). This is not a blocker — GPTChat should determine the next task.`,
-      needs_gptchat_decision: true,
-      observations: commitMatch
-        ? []
-        : [{ type: "commit_mismatch", detail: "running_commit differs from task result commit; GitHub sync not required for delivery" }],
-    };
+    return completedPassedFinalizationProposal({ task, diagnostics });
   }
 
   // Catch-all: task is in progress or other status
@@ -482,6 +550,61 @@ export function generateProposal({
     recommendation: `Task "${task.id}" status is "${task.status}". GPTChat should determine the appropriate next action.`,
     needs_gptchat_decision: true,
   };
+}
+
+function nextQueuedCodexTask(tasks = [], completedTaskId = null) {
+  return (tasks || [])
+    .filter((task) => task?.id !== completedTaskId)
+    .filter((task) => task.assignee === "codex" || !task.assignee)
+    .filter((task) => normalizeTaskStatus(task.status) === TASK_STATUSES.QUEUED)
+    .sort((a, b) => {
+      const aTime = Date.parse(a.created_at || a.updated_at || "") || 0;
+      const bTime = Date.parse(b.created_at || b.updated_at || "") || 0;
+      return aTime - bTime;
+    })[0] || null;
+}
+
+export async function autoFinalizeConvergenceAndAdvanceQueue({ store, task, proposal } = {}) {
+  if (!task) return { auto_finalized: false, advanced_task_id: null, error: "No task provided" };
+  if (proposal?.next_action !== AUTO_FINALIZE_CONVERGENCE_ACTION) {
+    return { auto_finalized: false, advanced_task_id: null, error: "Proposal is not auto finalization convergence" };
+  }
+
+  const state = await store.load();
+  state.activities ||= [];
+  const storedTask = (state.tasks || []).find((item) => item.id === task.id);
+  if (!storedTask) return { auto_finalized: false, advanced_task_id: null, error: `Task not found: ${task.id}` };
+
+  const now = new Date().toISOString();
+  storedTask.result = storedTask.result || {};
+  storedTask.result.convergence = {
+    ...(storedTask.result.convergence || {}),
+    status: "finalizing",
+    next_action: AUTO_FINALIZE_CONVERGENCE_ACTION,
+    finalized_at: now,
+  };
+  storedTask.result.auto_finalized = true;
+  storedTask.result.final_acceptance = proposal.acceptance || null;
+  storedTask.logs = [...(storedTask.logs || []), {
+    time: now,
+    message: "[workflow] auto finalization convergence: acceptance rerun passed; queue may advance",
+  }];
+  storedTask.updated_at = now;
+  state.activities.push({ time: now, type: "task.auto_finalized", task_id: storedTask.id, status: storedTask.status });
+
+  const nextTask = nextQueuedCodexTask(state.tasks, storedTask.id);
+  if (nextTask) {
+    nextTask.status = TASK_STATUSES.ASSIGNED;
+    nextTask.logs = [...(nextTask.logs || []), {
+      time: now,
+      message: `[workflow] assigned after auto finalization convergence of ${storedTask.id}`,
+    }];
+    nextTask.updated_at = now;
+    state.activities.push({ time: now, type: "task.assigned", task_id: nextTask.id, status: nextTask.status, reason: "auto_finalization_convergence" });
+  }
+
+  await store.save(state);
+  return { auto_finalized: true, advanced_task_id: nextTask?.id || null };
 }
 
 // ---------------------------------------------------------------------------

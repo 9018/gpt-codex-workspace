@@ -22,6 +22,7 @@ import {
   storeCreatedTaskId,
   storeManualResult,
   autoAcceptTask,
+  autoFinalizeConvergenceAndAdvanceQueue,
   storeProposal,
 } from "../workflow-state-service.mjs";
 import { TASK_STATUSES, isHumanReviewStatus } from "../task-status-taxonomy.mjs";
@@ -613,11 +614,15 @@ export function createWorkflowToolsGroup({
         }
 
         let autoAcceptResult = null;
+        let autoFinalizeResult = null;
         // In apply mode, create the task if safe and unambiguous
         let createdTaskId = null;
         // Auto-accept in apply mode
         if (resolvedMode === "apply" && proposal.next_action === "auto_accepted" && isHumanReviewStatus(task?.status)) {
           autoAcceptResult = await autoAcceptTask({ store, config, task, diagnostics });
+        }
+        if (resolvedMode === "apply" && proposal.next_action === "auto_finalize_convergence") {
+          autoFinalizeResult = await autoFinalizeConvergenceAndAdvanceQueue({ store, task, proposal });
         }
         if (
           resolvedMode === "apply" &&
@@ -739,6 +744,60 @@ export function createWorkflowToolsGroup({
               { key: "Task", value: `${task?.id} (completed)` },
               { key: "Next Action", value: "auto_accepted" },
               { key: "Auto-accepted", value: "true" },
+              { key: "Fingerprint", value: fingerprint },
+              { key: "Mode", value: resolvedMode },
+            ],
+          };
+        }
+
+        if (autoFinalizeResult?.auto_finalized) {
+          return {
+            title: "Workflow Advance — Finalizing convergence",
+            ...handlerDiagnostics(diagnostics),
+            summary: `Task "${task?.title}" passed verification. Acceptance rerun passed; finalization/convergence completed automatically${autoFinalizeResult.advanced_task_id ? ` and advanced ${autoFinalizeResult.advanced_task_id}` : ""}.`,
+            workflow_id: wfId,
+            needs_gptchat_decision: false,
+            auto_finalized: true,
+            advanced_task_id: autoFinalizeResult.advanced_task_id,
+            proposal: {
+              ...proposalRecord,
+              created_task_id: createdTaskId,
+            },
+            task: {
+              ...diagnostics.latest_task,
+              result: {
+                ...(diagnostics.latest_task?.result || {}),
+                auto_finalized: true,
+                convergence: {
+                  ...((diagnostics.latest_task?.result || {}).convergence || {}),
+                  status: "finalizing",
+                  next_action: "auto_finalize_convergence",
+                },
+              },
+            },
+            runtime: diagnostics.runtime,
+            worktree: diagnostics.worktree,
+            repo_locks: diagnostics.repo_locks,
+            worker: {
+              enabled: diagnostics.worker.enabled,
+              running: diagnostics.worker.running,
+            },
+            fingerprint,
+            created_task_id: createdTaskId,
+            mode: resolvedMode,
+            status_checks: {
+              worker_idle: !diagnostics.worker.running,
+              no_active_locks: diagnostics.repo_locks.active === 0,
+              worktree_clean: !diagnostics.worktree.dirty,
+              safe_to_advance: isSafe,
+            },
+            next_steps: autoFinalizeResult.advanced_task_id ? [`Advanced queued task: ${autoFinalizeResult.advanced_task_id}`] : [],
+            keyValues: [
+              { key: "Workflow", value: wfId },
+              { key: "Task", value: `${task?.id} (finalizing)` },
+              { key: "Next Action", value: "auto_finalize_convergence" },
+              { key: "Auto-finalized", value: "true" },
+              ...(autoFinalizeResult.advanced_task_id ? [{ key: "Advanced Task", value: autoFinalizeResult.advanced_task_id }] : []),
               { key: "Fingerprint", value: fingerprint },
               { key: "Mode", value: resolvedMode },
             ],

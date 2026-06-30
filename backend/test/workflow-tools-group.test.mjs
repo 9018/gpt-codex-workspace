@@ -84,6 +84,23 @@ function makeTask(overrides = {}) {
   };
 }
 
+function makeVerifiedCompletedTask(overrides = {}) {
+  return makeTask({
+    status: "completed",
+    result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Done",
+      commit: "abc123",
+      tests: "npm test passed",
+      changed_files: ["src/file.js"],
+      completed_at: "2026-01-01T01:00:00Z",
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+    },
+    ...overrides,
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Fingerprint idempotency
 // ---------------------------------------------------------------------------
@@ -121,11 +138,63 @@ test("fingerprint: starts with wf_ prefix", () => {
 // generateProposal — decision rules
 // ---------------------------------------------------------------------------
 
-test("proposal: completed + passed + no next goal → needs_gptchat_decision", () => {
-  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeTask({ status: "completed" }), manualVerdict: "passed", manualNote: "" });
+test("proposal: completed + passed + no next goal → auto finalization convergence", () => {
+  const p = generateProposal({ diagnostics: makeDiagnostics(), task: makeVerifiedCompletedTask(), manualVerdict: "passed", manualNote: "" });
+  assert.equal(p.next_action, "auto_finalize_convergence");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_finalizing, true);
+  assert.match(p.recommendation, /finalization\/convergence/i);
+});
+
+test("proposal: completed + failed verification keeps manual decision", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test failed",
+        changed_files: ["src/file.js"],
+        verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
   assert.equal(p.next_action, "needs_gptchat_decision");
   assert.equal(p.needs_gptchat_decision, true);
   assert.equal(p.proposed_next_task, null);
+  assert.match(p.recommendation, /verification/i);
+});
+
+test("proposal: completed + passed verification with mixed blockers keeps manual decision", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+        acceptance_findings: [
+          { severity: "minor", code: "docs_later", message: "Document later" },
+          { severity: "blocker", code: "runtime_mismatch", message: "Runtime still mismatched" },
+        ],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "needs_gptchat_decision");
+  assert.equal(p.needs_gptchat_decision, true);
+  assert.equal(p.proposed_next_task, null);
+  assert.match(p.recommendation, /blocker/i);
 });
 
 test("proposal: completed + failed → create_fix_task", () => {
@@ -292,16 +361,34 @@ test("workflow_advance propose: completed + partial → converge proposal", asyn
   assert.equal(result.created_task_id, null);
 });
 
-test("workflow_advance propose: completed + passed → needs_gptchat_decision", async () => {
+test("workflow_advance propose: completed + passed → automatic finalization proposal", async () => {
   const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
-  const taskState = makeTask();
+  const taskState = makeVerifiedCompletedTask();
   const store = { load: async () => ({ tasks: [taskState] }), save: async () => {} };
   const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
   const result = await tools.workflow_advance.handler({ task_id: taskState.id, manual_verdict: "passed", manual_note: "All good", mode: "propose" });
-  assert.equal(result.proposal.next_action, "needs_gptchat_decision");
-  assert.equal(result.proposal.needs_gptchat_decision, true);
+  assert.equal(result.proposal.next_action, "auto_finalize_convergence");
+  assert.equal(result.proposal.needs_gptchat_decision, false);
   assert.equal(result.proposal.proposed_next_task, null);
   assert.equal(result.created_task_id, null);
+});
+
+test("workflow_advance apply: completed + passed finalization advances next queued task", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const completedTask = makeVerifiedCompletedTask({ id: "task_completed_finalizing" });
+  const nextTask = makeTask({ id: "task_next_queued", status: "queued", result: null, created_at: "2026-01-01T02:00:00Z" });
+  const state = { tasks: [completedTask, nextTask], goals: [], activities: [] };
+  const store = { load: async () => state, save: async () => {} };
+  const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
+
+  const result = await tools.workflow_advance.handler({ task_id: completedTask.id, manual_verdict: "passed", manual_note: "All good", mode: "apply" });
+
+  assert.equal(result.proposal.next_action, "auto_finalize_convergence");
+  assert.equal(result.needs_gptchat_decision, false);
+  assert.equal(result.auto_finalized, true);
+  assert.equal(result.advanced_task_id, nextTask.id);
+  assert.equal(nextTask.status, "assigned");
+  assert.ok(nextTask.logs.some((log) => log.message.includes("auto finalization")));
 });
 
 // ---------------------------------------------------------------------------

@@ -501,6 +501,15 @@ function buildTaskCard(tool, data, meta) {
     card.key_values.push({ key: "residual_count", value: acceptance.residual_count });
   }
 
+  const convergence = result.convergence || {};
+  if (convergence.status || convergence.next_action || result.auto_finalized === true) {
+    const convergenceStatus = convergence.status || (result.auto_finalized === true ? "finalizing" : convergence.next_action);
+    card.key_values.push({ key: "convergence", value: convergenceStatus });
+    if (convergenceStatus === "finalizing" || convergence.next_action === "auto_finalize_convergence") {
+      card.diagnostics.push({ severity: "info", message: "Task is finalizing through automatic convergence.", code: "finalizing_convergence" });
+    }
+  }
+
   if (Array.isArray(task.logs) && task.logs.length > 0) {
     card.sections.push({
       title: "Timeline",
