@@ -1,53 +1,39 @@
 [English](README.md) | 中文说明
 
-# GPT-Codex Workspace
+# GPT-Codex Workspace 中文文档
 
-## 新功能：目标队列执行
-队列工具已修复并暴露在 standard/codex/full 模式。
-卡片 v2（`text/html;profile=mcp-app`）已修复，确保 ChatGPT 侧正确显示。
+GPTWork 是一个后端 MCP 服务，用来协调 ChatGPT、Codex 和本地/远端代码工作空间。ChatGPT 负责理解用户请求、创建目标和查看结果；Codex 在隔离的 worktree 中执行修改、验证、提交并写回结构化结果；GPTWork 负责目标、任务、上下文、队列、证据、review 和安全边界。
 
-参见 `docs/goal-queue.md` 了解真实的目标执行队列能力。
+本文是当前中文主文档。英文 [README.md](README.md) 只保留简洁入口，细节以本文和 `docs/` 为准。
 
-Open Goal 不会被自动执行。只有放入执行队列（Queue）的 Goal 才会被顺序处理。
-依赖管理、仓库并发锁和工作目录检查确保安全执行。
+## 这是什么
 
+GPTWork 解决的是“ChatGPT 发起，Codex 执行，结果可验收”的协作问题：
 
+- ChatGPT 通过 MCP 工具创建 `goal`，把用户意图、上下文摘要和执行约束写入 `.gptwork/goals/<goal_id>/`。
+- GPTWork 后端保存 goal/task 状态，构建小包化上下文，管理队列、repo 锁、worktree、验收契约和运行诊断。
+- Codex 从有界入口 `codex.entry.md` 开始读取，优先使用 `context.bundle.md`，在指定 worktree 内修改代码并写回 `result.json` / `result.md`。
+- 自动验收逻辑用命令证据、结果证据、状态断言和收口决策判断任务能否关闭。
 
-**GPTWork** —— ChatGPT 与 Codex 双向协作的后端 MCP 服务。
+GPTWork 不是部署平台，也不是 secrets 管理系统。它只协调执行和证据流；真实密钥必须放在运行环境或本地忽略文件中，不能写入文档、提交或 goal payload。
 
-通过这套系统，你可以用自然语言在 ChatGPT 中描述需求，由 Codex 在工作空间中执行代码修改、运行测试、提交结果，整个过程通过 MCP（Model Context Protocol）衔接。
+## 当前能力
 
----
+当前 main 已落地的核心能力包括：
 
-## 项目简介
-
-GPTWork 是一个轻量级后端 MCP 服务，充当 **ChatGPT** 与 **Codex** 之间的协调层。三者协作关系如下：
-
-- **ChatGPT** 接收用户自然语言请求，通过 `create_encoded_goal` 创建编码目标，写入可读的 goal 文件，再通过 MCP 协议传递给后端。
-- **GPTWork 后端**（MCP Server）存储目标、任务、对话记录，管理工作空间与工具注册表，并控制工具的暴露范围（tool mode）。
-- **Codex** 发现已分配的目标，读取 goal 文件上下文，在工作空间中执行代码修改、测试、验证，最终写回结果。
-
-此外，**GitHub Issues** 可作为备选通信通道——当 ChatGPT 无法直连 MCP 端点时（比如没有公网 HTTPS），可以通过 GitHub Issue 进行任务下发与结果同步。
-
----
-
-## 当前状态
-
-- P0 / P1 / P2 全部完成。
-- E2E 产品验收 **PASS**（38 项自动化测试全部通过）。
-- 详情见 [docs/e2e-acceptance.md](docs/e2e-acceptance.md)。
-- 默认 Codex 执行超时时间：**3600 秒**（可通过 `GPTWORK_CODEX_EXEC_TIMEOUT` 调整）。
-
----
+- MCP 工具模式：`minimal`、`standard`、`operator`、`codex`、`full`，用于控制 ChatGPT/Codex/运维侧能看到的工具面。
+- 目标与任务：`create_encoded_goal`、`create_goal`、`create_task`、`assign_task_to_codex`、队列工具和兼容入口仍可用。
+- 有界上下文：新 goal 会写 `codex.entry.md`，存在检索结果时写 `context.bundle.md` 和 `context.retrieval.json`。
+- 小包化 review/context：`get_task_acceptance_bundle` 和 `get_task_review_packet` 返回最小证据包，不返回完整 transcript、memory、大段 diff 或完整 context bundle。
+- 自动验收模型：acceptance contract、operation-specific evidence、contract-aware verifier、state assertions、deterministic closure 已拆成独立模块。
+- Zvec context-index：可选使用 `@zvec/zvec` 做可重建上下文索引；不可用时可回退本地 JSON store。
+- GitHub Issues fallback：没有可被 ChatGPT 访问的 HTTPS MCP 入口时，可用 GitHub Issues 作为任务下发和结果同步通道。
+- 运维诊断：`open_project_context`、`project_context_status` / `context_status`、`runtime_status`、`worker_status`、`gptwork_doctor`、safe restart、retention/recovery 工具。
+- 集成收口：支持按任务 worktree 执行，成功后通过 ff-only 路径进入 canonical main；push branch 或 open PR 不等于 merged。
 
 ## 快速开始
 
-### 环境要求
-
-- Node.js >= 22
-- npm
-
-### 安装与启动
+要求：Node.js 22+ 和 npm。
 
 ```bash
 cd backend
@@ -58,194 +44,234 @@ gptwork settings set GPTWORK_TOOL_MODE standard
 gptwork start
 ```
 
-在另一个终端验证：
+另开终端做本地检查：
 
 ```bash
+cd backend
 gptwork doctor --local
 gptwork status --local
-curl http://127.0.0.1:8787/health
 gptwork connect --local
 gptwork self-test --local
-详细的安装与连接指南请参考 [docs/setup-connect.md](docs/setup-connect.md)。
-
+curl http://127.0.0.1:8787/health
 ```
 
-### ChatGPT MCP 接入
-
-ChatGPT 端添加 MCP 连接，填入示例地址（不要使用真实 token）：
-
-```
-Connector URL: https://mcp.example.com/mcp/your-dev-token
-Auth: none
-```
-
-路径中的后缀会被后端提取为鉴权 token。具体连接地址以实际部署为准。
-
-也可以在无公网 HTTPS 的情况下使用 **GitHub Issues** 模式进行协调（见下方说明）。
-
-### 配置文件
-
-环境变量通过 `.gptwork/runtime.env` 配置，该文件已被 `.gitignore` 排除，不会提交到仓库。
-
-```bash
-# 示例（不要写入真实 secret）
-GPTWORK_HOST=0.0.0.0
-GPTWORK_PORT=8787
-GPTWORK_TOOL_MODE=standard
-```
-
----
-
-## CLI 命令
-
-所有命令在 `backend/` 目录下通过 `gptwork` 执行：
-
-| 命令 | 说明 |
-|------|------|
-| `gptwork setup` | 初始化工作空间与状态文件 |
-| `gptwork start` | 启动 MCP 服务 |
-| `gptwork status --local` | 查看服务状态与队列信息 |
-| `gptwork doctor --local` | 运行诊断，检查环境配置 |
-| `gptwork connect --local` | 查看本地 MCP URL 与连接选项 |
-| `gptwork self-test --local` | 运行系统自检 (PASS/WARN/FAIL) |
-| `gptwork settings show` | 查看当前配置 |
-| `gptwork logs` | 查看服务日志 |
-| `gptwork watch-handoff --dry-run` | 模拟监听 handoff 目录 |
-| `gptwork watch-handoff --once` | 单次监听 handoff 目录后退出 |
-
----
-
-## MCP 工具能力概览
-
-GPTWork 提供以下类别的 MCP 工具：
-
-| 类别 | 包含工具 |
-|------|----------|
-| **Goal / Task** | `create_encoded_goal`、`create_goal`、`list_goals`、`get_goal_context`、`append_goal_message`、`create_task`、`list_tasks`、`get_task`、`assign_task_to_codex`、`complete_task` |
-| **Agent / Pipeline / Handoff** | `run_agent_pipeline`、`handoff_to_agent`、`read_handoff` |
-| **事件日志 / 最近活动** | `read_events` |
-| **工作空间文件读写** | `list_dir`、`read_text_file`、`write_text_file`、`search_files`、上传下载等 |
-| **Git 远程检查** | `git_remote_status`、`git_remote_diff`、`show_changes` |
-| **GitHub / Bark 同步与通知** | `sync_to_github`、`sync_from_github`、`sync_github_comments`、`github_status`、`notification_status` |
-| **Widget 卡片** | 通过 MCP `resources/list` 和 `resources/read` 提供 GPTWork Compact Card（HTML 格式） |
-
-具体可见英文 README 中的完整工具列表。
-
----
-
-## Tool Mode 说明
-
-GPTWork 通过 `GPTWORK_TOOL_MODE` 控制工具暴露范围，共 5 种模式：
-
-| 模式 | 说明 |
-|------|------|
-| **minimal** | 最小安全集合：仅暴露健康检查、状态查询、基本信息读取。适合只读场景。 |
-| **standard** | 默认模式：暴露 goal/task/agent/handoff 工具，适合日常 ChatGPT 使用。不含 `shell_exec`。 |
-| **operator** | 诊断模式：暴露所有诊断工具，不含 agent/handoff。适合运维排查。 |
-| **codex** | 执行模式：包含 `shell_exec`、`write_text_file`、事件读取、handoff 等执行工具。Codex 自身使用。 |
-| **full** | 完全模式：全部工具开放，包括 `schedule_service_restart`。仅用于调试或紧急操作。 |
-
-**安全边界**：ChatGPT 前端使用 `minimal` 或 `standard`，不会暴露 `shell_exec` 等高风险工具。即使用户通过 ChatGPT 直接调用受限工具，也会被工具注册表拒绝（返回 `-32601 Unknown tool`）。
-
----
-
-## E2E 验收
-
-完整的 E2E 验收报告见 [docs/e2e-acceptance.md](docs/e2e-acceptance.md)。
-
-在本地运行验收测试：
+常用发布前检查：
 
 ```bash
 cd backend
+npm run check:syntax
+npm run check:imports
+node scripts/release-delivery-check.mjs --fast
+```
+
+`health` 返回 200 只表示服务进程响应了请求，不表示当前运行的是期望 commit。确认部署是否生效时还要看 `runtime_status.running_commit`、重启 marker、进程启动时间和预期 commit。
+
+## ChatGPT / Codex 连接
+
+### ChatGPT
+
+ChatGPT 侧优先使用标准 MCP 工具面。新会话建议先调用：
+
+```text
+open_project_context
+```
+
+它返回当前 repo、worker、queue、脚本、近期任务/目标、有界文件树和推荐下一步工具。需要执行代码修改、部署或多步骤维护时，再创建 encoded goal：
+
+```text
+create_encoded_goal(preview_text, payload_base64, assign_to_codex=true, wait_ms=90000)
+```
+
+连接 URL 通常形如：
+
+```text
+https://<public-host>/mcp/<token>
+```
+
+路径后缀会被后端当作 bearer token。文档中只使用占位符，不记录真实 token。
+
+### Codex
+
+Codex 通过插件或本地 MCP 连接后端。Codex 任务提示会要求先读：
+
+```text
+.gptwork/goals/<goal_id>/codex.entry.md
+```
+
+默认上下文读取顺序是：
+
+1. `codex.entry.md`：本次任务的有界执行入口，必须先读。
+2. `context.bundle.md`：存在时优先作为支持上下文。
+3. `context.json`：只做元数据查找，不鼓励全文读取。
+4. `goal.md` / `transcript.md`：只有入口和 bundle 不足时才深读。
+5. payload 文件：仅在调试编码或字段缺失时读取。
+
+## 典型工作流
+
+```text
+用户提出需求
+  -> ChatGPT 调用 open_project_context
+  -> ChatGPT 创建 create_encoded_goal
+  -> GPTWork 写入 goal 文件、验收契约和上下文 bundle
+  -> 任务入队或分配给 Codex
+  -> Codex 在独立 worktree 内执行修改、测试、提交
+  -> Codex 写 result.json / result.md 和 legacy stdout report
+  -> GPTWork 归一化 verification/evidence/integration
+  -> contract verifier 与 closure decider 判断是否可关闭
+  -> 需要人工判断时进入 review，而不是直接视为失败
+```
+
+对大任务应拆分成小 goal。review 和上下文读取也应优先使用小包化接口，避免读取完整 goal context、完整 transcript 或大段 diff。
+
+## 自动验收模型
+
+GPTWork 把几个容易混淆的概念分开处理：
+
+| 概念 | 含义 |
+|---|---|
+| verification | 命令或检查是否通过，例如 syntax/import/test/release check。 |
+| acceptance | 用户目标是否满足，由验收契约、结果证据、状态断言和阻塞项共同判断。 |
+| integration | 修改是否进入 canonical main 或被明确标记为不需要集成。 |
+| deployment | 运行环境是否已经使用目标 commit 或目标配置。 |
+| closure | 当前任务是否可以关闭。 |
+| review | 需要人工判断或补充证据，不等于失败。 |
+
+重要边界：
+
+- `branch_pushed` 不等于 `merged`。
+- `pr_opened` 不等于 `merged`。
+- `merged` 不等于 `deployed`。
+- `health 200` 不等于正在运行 expected commit。
+- `quality_notes` 和 `non_blocking_followups` 不阻塞当前任务关闭。
+- 缺少 `result.json`、verification 或必要 integration evidence 时会形成 `missing_evidence`。
+
+核心模块：
+
+- `backend/src/acceptance/`：契约生成、契约 schema、语义检查、contract-aware verifier。
+- `backend/src/evidence/`：不同操作类型的证据归一化和 profile。
+- `backend/src/assertions/`：状态断言运行器。
+- `backend/src/closure/`：确定性收口决策和 follow-up 规划。
+- `backend/src/review/`：acceptance bundle 与 review packet。
+- `backend/src/integration-queue.mjs`、`backend/src/auto-integration-completion.mjs`：集成状态和 ff-only 自动完成。
+
+## 小包化 review/context
+
+人工 review 或 ChatGPT 复核任务时，优先调用：
+
+```text
+get_task_review_packet(task_id)
+get_task_acceptance_bundle(task_id)
+```
+
+这些接口返回 contract 摘要、result summary、verification、contract_verification、closure_decision、changed_files、blockers/followups、missing_evidence 和 recommended_next_action。它们不会返回完整 transcript、durable memories、完整 context bundle 或大段 diff。
+
+`open_project_context` 用于会话开场的项目快照。`project_context_status` / `context_status` 用于上下文健康诊断。只有在这些小包信息不足以判断时，才读取更大的 goal 文件。
+
+## Zvec context-index
+
+Zvec 是可重建的上下文索引，不是事实源。事实源仍是 goal/task/result/conversation 状态文件、Git 提交和运行时诊断。
+
+配置入口：
+
+```bash
+GPTWORK_CONTEXT_VECTOR_STORE=auto
+GPTWORK_CONTEXT_VECTOR_STORE=zvec
+GPTWORK_CONTEXT_VECTOR_STORE=local
+```
+
+`auto` 会在 `@zvec/zvec` 可用时使用 Zvec collection store，否则回退本地 JSON store。`zvec` 会强制使用 Zvec，不可用时报告明确失败。`context.retrieval.json` 记录检索模式、store 能力、embedding provider、top-K、预算和入选 chunk 原因。
+
+## GitHub Issues fallback
+
+当 ChatGPT 无法访问公网 HTTPS MCP 入口时，可使用 GitHub Issues 作为 fallback：
+
+1. ChatGPT 或用户创建带约定标签的 Issue。
+2. GPTWork 使用 `sync_from_github` 导入任务。
+3. Codex 执行任务并写回结果。
+4. GPTWork 用 `sync_to_github` 和 `sync_github_comments` 同步状态、结果和评论。
+
+GitHub token 只应通过运行环境或 workflow secret 注入。文档、Issue 正文和 goal payload 不应包含真实 token。
+
+## 运维诊断
+
+常用路径：
+
+- 项目开场：`open_project_context`。
+- 上下文诊断：`project_context_status` 或 `context_status`。
+- 服务诊断：`runtime_status`、`worker_status`、`gptwork_doctor`、`gptwork_self_test`。
+- recovery plane：`recovery_stale_queue_unblock`、repo lock 工具、retention 工具和 tmp/goal cleanup 工具。
+- 安全重启：任务内不要直接杀进程或 inline restart；先写结果和 commit，再调用 `schedule_service_restart(task_id, expected_commit, expected_remote_head?)`。
+- 发布检查：`node scripts/release-delivery-check.mjs --fast`。
+- repo clean：提交后用 `git status --short` 确认可交付 worktree 干净。
+
+## 安全边界
+
+- 默认 ChatGPT 使用 `standard`，不暴露 `shell_exec`。
+- `full` 仅用于操作员调试或紧急处理。
+- 路径 token、API token、GitHub token、Bark key 等 secrets 不能写入 README、docs、goal payload、result 或 Issue。
+- `.gptwork/runtime.env` 是服务级配置；`.gptwork/project.env` 是项目上下文配置。两者都不应提交真实 secret。
+- 文件工具必须限制在选定 workspace root 内。
+- 任务执行只在指定 execution repo/worktree 内改文件；canonical repo 集成由 ff-only 或明确集成流程完成。
+
+## 常用命令
+
+```bash
+cd backend
+npm install
+npm run check:syntax
+npm run check:imports
+node scripts/release-delivery-check.mjs --fast
 npm run test:e2e-acceptance
+node bin/gptwork.mjs doctor --local
+node bin/gptwork.mjs status --local
+node bin/gptwork.mjs connect --local
+node bin/gptwork.mjs self-test --local
 ```
 
----
-
-## 常用验证命令
+队列相关：
 
 ```bash
 cd backend
-npm run check:syntax       # 语法检查
-npm run check:imports      # 模块导入检查
-npm test                   # 运行所有单元测试
-node bin/gptwork.mjs doctor --local   # 运行环境诊断
+node bin/gptwork.mjs queue list
+node bin/gptwork.mjs queue start-next --dry-run
 ```
 
----
+## 目录结构
 
-## GitHub / Bark 配置说明
-
-### GitHub Issues 同步
-
-通过环境变量启用，用于无公网 HTTPS 时的任务协调：
-
-```bash
-# .gptwork/runtime.env
-GPTWORK_GITHUB_ENABLED=true
-GPTWORK_GITHUB_REPO=your-org/your-repo
-# GPTWORK_GITHUB_TOKEN=ghp_xxx   请替换为真实 token
+```text
+backend/
+  bin/gptwork.mjs                 CLI 入口
+  scripts/                        语法、导入和交付检查脚本
+  src/acceptance/                 验收契约、语义和 verifier
+  src/assertions/                 状态断言
+  src/closure/                    收口决策与 follow-up 规划
+  src/context-index/              context bundle、retrieval、Zvec/local store
+  src/evidence/                   操作证据归一化
+  src/review/                     acceptance bundle、review packet
+  src/tool-groups/                MCP 工具分组
+  src/task-*.mjs                  任务生命周期、执行、结果写回
+  src/codex-*.mjs                 Codex prompt、worker、run metadata、finalizer helpers
+docs/
+  architecture.md                 架构和模块边界
+  current-status.md               当前已落地能力
+  operations.md                   运维 runbook
+  delivery/                       交付、上下文、worktree 和验收契约文档
 ```
 
-未配置时，GitHub 相关工具会返回 graceful 的禁用状态，不会报错。
+## 文档索引
 
-### Bark 通知
-
-Bark 是 iOS 推送通知工具，可选配置：
-
-```bash
-GPTWORK_BARK_ENABLED=true
-GPTWORK_BARK_KEY=your-bark-key
-GPTWORK_BARK_URL=https://api.example.com/push
-```
-
-不配置 Bark 时，通知工具会清晰提示状态已禁用，不会报错中断。
-
-**注意**：所有 token、key 均通过环境变量配置，`.gptwork/runtime.env` 已在 `.gitignore` 中。任何情况下都不要将 secret 提交到 Git 仓库。
-
----
-
-## 故障排查
-
-### MCP 不显示工具
-- 检查服务是否启动：`curl http://127.0.0.1:8787/health`
-- 检查 ChatGPT 连接地址是否正确，`/mcp/<token>` 路径中的 token 是否与服务端配置匹配
-
-### Tool mode 下工具缺失
-- 运行 `gptwork doctor --local` 查看当前 `tool mode`
-- 如需更全的工具，设置为 `gptwork settings set GPTWORK_TOOL_MODE full`
-- 但请注意 `full` 模式会暴露 `shell_exec`，仅限调试使用
-
-### Codex 任务超时
-- 默认超时 3600 秒。可在 `runtime.env` 中增加：
-  ```bash
-  GPTWORK_CODEX_EXEC_TIMEOUT=7200
-  ```
-- 大任务可考虑拆分为多个 goal，减少单次执行时间
-
-### GitHub sync 未启用
-- 运行 `gptwork doctor --local` 查看 `github:` 状态
-- 确认 `GPTWORK_GITHUB_ENABLED=true` 和 `GPTWORK_GITHUB_REPO`、`GPTWORK_GITHUB_TOKEN` 已正确配置
-- 未配置时工具返回 graceful 禁用状态，不影响核心功能
-
-### Bark 未通知
-- 运行 `notification_status` 工具查看 Bark 配置和连接状态
-- 检查 `GPTWORK_BARK_ENABLED`、`GPTWORK_BARK_KEY`、`GPTWORK_BARK_URL`
-- 可通过 `gptwork doctor --local` 查看诊断信息
-
----
-
-## 相关文档
-
-| 文档 | 说明 |
-|------|------|
-| [docs/current-status.md](docs/current-status.md) | 当前运行状态与环境信息 |
-| [docs/e2e-acceptance.md](docs/e2e-acceptance.md) | E2E 产品验收报告 |
-| [docs/refactor/gptwork-server-map.md](docs/refactor/gptwork-server-map.md) | 服务模块职责映射 |
-| [docs/architecture.md](docs/architecture.md) | 系统架构设计 |
-| [docs/chatgpt-prompting-guide.md](docs/chatgpt-prompting-guide.md) | ChatGPT 编码目标使用指南 |
-
----
+| 文档 | 内容 |
+|---|---|
+| [README.md](README.md) | 英文简洁入口。 |
+| [docs/current-status.md](docs/current-status.md) | 当前 main 已落地能力和术语边界。 |
+| [docs/architecture.md](docs/architecture.md) | 模块职责和数据流。 |
+| [docs/operations.md](docs/operations.md) | 诊断、recovery、安全重启和交付检查。 |
+| [docs/delivery/context-and-worktree-contract.md](docs/delivery/context-and-worktree-contract.md) | `codex.entry`、`context.bundle`、review packet、worktree 和 ff-only integration 语义。 |
+| [docs/delivery/acceptance-and-repair-contract.md](docs/delivery/acceptance-and-repair-contract.md) | 验收与修复契约。 |
+| [docs/setup-connect.md](docs/setup-connect.md) | 安装与连接指南。 |
+| [docs/goal-queue.md](docs/goal-queue.md) | goal queue 语义。 |
+| [docs/github-fallback.md](docs/github-fallback.md) | GitHub Issues fallback。 |
+| [docs/chatgpt-prompting-guide.md](docs/chatgpt-prompting-guide.md) | ChatGPT 侧使用建议。 |
 
 ## License
 

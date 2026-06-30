@@ -1,774 +1,155 @@
 # GPTWork Current Status
 
-## 2026-06-25 Delivery Refactor Goal Bundle
+Last reviewed for current main: 2026-07-01.
 
-**Implemented**: the `gptwork_refactor_goals_detailed` delivery goals now have code-backed verification for per-task worktrees, task execution metadata, queue concurrency, worktree cwd execution, independent acceptance verification, retry/repair state, finalizer queue sync, context retrieval sources, agent run summaries, and user-facing delivery CLI commands.
+This document describes code-backed capabilities that are present in the repository. It does not assert that a particular production process has been restarted onto the latest commit; use `runtime_status.running_commit` for that check.
 
-User-facing commands:
+## Summary
 
-```bash
-cd backend
-node bin/gptwork.mjs verify-delivery
-node bin/gptwork.mjs demo-multi-task --dry-run
-```
+GPTWork currently supports the full goal-to-task delivery loop: bounded goal files, compact context retrieval, isolated Codex execution, verification evidence, contract-aware acceptance, deterministic closure, compact review packets, and ff-only integration completion when the task result provides enough evidence.
 
-`demo-multi-task` reports worktree, branch, task, goal, result, and verification paths. Automatic completion is limited to tasks with `verification.passed === true`; failed verification or repair-budget exhaustion remains visible as `waiting_for_review` / `waiting_for_repair`.
+The project now treats delivery state as several separate facts:
 
-## 2026-06-22 Queue Tool Exposure + Card v2 Display Fix
-
-**Fixed**: Queue MCP tools were imported but never registered in `createTools()` — tools/list didn't include them. v2 card `mimeType` was `text/html` instead of `text/html;profile=mcp-app`, preventing ChatGPT Apps SDK from recognizing it as a card.
-
-### What Changed
-
-- **server-tools.mjs**: Added `...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue })` to `createTools()` — queue tools now registered.
-- **mcp-tooling.mjs**: Changed v2 card `mimeType` from `text/html` to `text/html;profile=mcp-app` in both `resourceList()` and `readResource()`. Added Apps SDK `_meta` to resource content response.
-- **test/public-tool-names.test.mjs**: Added 6 queue tools to expected snapshot list.
-- **test/apps-sdk-card-smoke.test.mjs**: New verification test covering all SDK card requirements and tool mode exposure.
-- **test/productization-p2.test.mjs**: Updated to expect `text/html;profile=mcp-app` mime type and `section` class.
-- **test/e2e-product-acceptance.test.mjs**: Area 7d count now includes queue tools.
-
-### Verification Results
-
-- `npm test` — PASS (all unit tests)
-- `npm run test:e2e-acceptance` — PASS (all 38+ acceptance tests)
-- `npm run check:syntax` — PASS
-- `npm run check:imports` — PASS
-- Apps SDK card smoke test — PASS (9 tests)
-- CLI queue commands work:
-  - `gptwork queue list` — displays empty queue
-  - `gptwork queue start-next --dry-run` — shows no eligible items
-
-### Exposure Rules After Fix
-
-| Tool | minimal | standard | operator | codex | full |
-|------|---------|----------|----------|-------|------|
-| enqueue_goal | — | ✓ | — | ✓ | ✓ |
-| list_goal_queue | — | ✓ | ✓ | ✓ | ✓ |
-| get_goal_queue | — | ✓ | ✓ | ✓ | ✓ |
-| start_next_queued_goal | — | ✓ | — | ✓ | ✓ |
-| update_goal_queue_item | — | ✓ | — | ✓ | ✓ |
-| cancel_goal_queue_item | — | ✓ | — | ✓ | ✓ |
-
-### User-Side Verification
-
-1. Reconnect/refresh the ChatGPT MCP connector.
-2. Call `tools/list` — look for `enqueue_goal`, `list_goal_queue`, `start_next_queued_goal`.
-3. Call a high-frequency tool like `runtime_status` or `gptwork_self_test` — should see the v2 compact card instead of raw JSON.
-4. If card still doesn't display, check:
-   - The tool descriptor has `_meta.openai/outputTemplate === "ui://widget/gptwork-tool-card-v2.html"`.
-   - `resources/list` includes v2 with `mimeType: "text/html;profile=mcp-app"`.
-   - The ChatGPT MCP connector supports Apps SDK widgets.
-
-
-## 2026-06-22 Apps SDK Card v2 Upgrade
-
-**Implemented**: GPTWork widget card upgraded from v1 to v2 with proper ChatGPT Apps SDK metadata and compact structuredContent rendering.
-
-### What Changed
-
-- New v2 widget resource `ui://widget/gptwork-tool-card-v2.html` with full Apps SDK metadata (`openai/widgetDescription`, `openai/widgetPrefersBorder`, `openai/widgetDomain`, `openai/widgetCSP`).
-- v2 card HTML rendered from `backend/src/apps-sdk-card/widget.html` (separate file, easier to maintain).
-- Tool descriptors now include both `_meta["openai/outputTemplate"]` and `_meta.ui.resourceUri`.
-- 12+ high-frequency tools migrated to v2 with compact card formatters.
-- New `docs/widget-card.md` documenting the v2 card contract.
-- v1 card preserved unchanged for backward compatibility.
-
-### v2 Card Features
-
-- Enhanced badge color mapping (ok/warn/fail/cancelled/info).
-- Diff statistics rendering (staged_count, unstaged_count).
-- Diff excerpt preview.
-- Changed files listing (limited to 20).
-- Dark mode via `prefers-color-scheme:dark`.
-- Raw JSON fallback with collapsible toggle.
-
-### New/Updated Tool Card Formatters
-
-- `show_changes` - Git diff summary with file list.
-- `read_handoff` - Handoff status/plan overview.
-- `list_goal_queue` / `get_goal_queue` - Queue items with status breakdown.
-- `start_next_queued_goal` - Queue start result with task ID.
-- `gptwork_self_test` - Self-test results with diagnostics.
-- All existing card formatters (runtime_status, gptwork_doctor, etc.) updated to serve structured data to v2.
-
-### Status
-
-v2 card is default for all high-frequency tools. v1 remains accessible for backward compatibility.
-Date: 2026-06-22
-
-## 2026-06-22 Goal Queue Execution (New)
-
-**Implemented**: Real goal/task queue execution.
-
-### What Changed
-
-- New `goal-queue.mjs` module: Queue data model with status transitions, dependency management, repo concurrency guards, worktree dirty checks, and autostart hooks.
-- New `goal-queue-tools-group.mjs`: 6 MCP tools (`enqueue_goal`, `list_goal_queue`, `get_goal_queue`, `start_next_queued_goal`, `update_goal_queue_item`, `cancel_goal_queue_item`).
-- CLI: New `queue` subcommand with `list`, `start-next`, `enqueue`, `cancel`.
-- Task completion hook: `complete_task` now calls `autoStartNextOnTaskCompleted`.
-- `goal_queue` added to `state.json` (default state).
-- New documentation: `docs/goal-queue.md`.
-- New tests: 12 tests in `test/goal-queue.test.mjs`.
-
-### Key Design Decisions
-
-1. Queue is stored in `state.goal_queue` as an array, using the same `state.json` persistence.
-2. `start_next_queued_goal` performs three checks before creating a task: dependency satisfaction, repo lock status, and worktree cleanliness.
-3. The `complete_task` hook calls `autoStartNextOnTaskCompleted` but failures are non-fatal (do not roll back the completion).
-4. Tool mode exposure follows existing conventions: standard/codex/full have full access, operator has read-only (list/get), minimal has none.
-5. Dependencies support both `depends_on_goal_id` and `depends_on_task_id`.
-
-### Status
-
-Queue 2 (`goal_51da0e55-3395-41b2-8200-fddf6c7045f7`) and Queue 3 (`goal_d11eca32-7bcd-4d9e-ac2d-0405506b0dc7`) are NOT automatically migrated.
-To enqueue them, use `gptwork queue enqueue <goal_id>`.
-
-
-
-## 2026-06-22 P0/P0.5 UX Parity
-
-CLI enhancements:
-- `gptwork setup` — Non-interactive default setup, generates .gptwork/runtime.env without overwriting secrets
-- `gptwork connect --local` — Shows local MCP URL, ChatGPT connector example, and connectivity options
-- `gptwork self-test --local` — Runs 9-category self-check (tool mode matrix, shell_exec boundary, timeout 3600, widget resource, E2E script, GitHub/Bark status, config sources, state store)
-- `gptwork doctor --local` — Shows repo root, workspace root, tool mode, timeout, GitHub/Bark status, E2E script existence
-- `gptwork status --local` — Shows server URL, queue, repo, tool mode, timeout, GitHub/Bark states
-
-MCP tool:
-- `gptwork_self_test` — New MCP tool (standard/operator/codex/full) returning compact structured results
-
-npm script:
-- `npm run release:check` — Chains check:syntax → check:imports → test:e2e-acceptance
-
-Docs:
-- `docs/setup-connect.md` — Detailed setup and connection guide
-- README.md / README.zh-CN.md — Updated with connect/self-test/release:check and setup-connect reference
-
-Status: P2 completed. Tool metadata covers all 6 target groups (goal, task, context/runtime, agent, workspace, git) with modes/audience/tags/outputTemplate. 9 high-frequency tools migrated to rich JSON Schema descriptors (create_encoded_goal, create_task, run_agent_pipeline, handoff_to_agent, show_changes, read_events, git_remote_diff, search_files, read_text_file). Widget compact card renderer upgraded with explicit contract (keyValues, items, warnings, raw JSON fold toggle, renderCard function) and compatibility with legacy structuredContent.
-Status: encoded goal workflow remains implemented and tuned for ChatGPT -> Codex execution on 10.0.1.103. Existing MCP tool names and compatibility entry points remain callable.
-
-## What This Project Is
-
-GPTWork is one backend MCP service used by two clients:
-
-- ChatGPT connects through the public domain and creates shared goals.
-- Codex connects through the marketplace plugin and executes those goals in a workspace.
-- The backend stores tasks, goals, readable goal files, context, transcript, bundles, and results.
-
-Recommended ChatGPT endpoint:
-
-```text
-https://mcp.gptwork.cc.cd/mcp/dev-token
-```
-
-Recommended Codex plugin source:
-
-```text
-9018/gpt-codex-workspace
-```
-
-## Current Ports And Routes
-
-| Item | Value | Purpose |
-|---|---|---|
-| Backend host | `10.0.1.103` | Remote server running GPTWork |
-| Backend port | `8787` | MCP backend HTTP service |
-| Public URL | `https://mcp.gptwork.cc.cd/mcp/dev-token` | ChatGPT connector URL, auth mode none |
-| LAN MCP URL | `http://10.0.1.103:8787/mcp` | Codex plugin and local testing |
-| Workspace root | `/home/a9017/mcp/workspace` | Default hosted workspace root |
-| Backend repo | `/home/a9017/mcp/workspace/gpt-codex-workspace` | Canonical code repo (workspace-relative) |
-| Lucky admin | `16601` | Reverse proxy admin UI |
-| Legacy ports | None | No legacy port is part of the target architecture |
-
-Path-based auth is the preferred ChatGPT setup. The backend extracts the token from `/mcp/<token>`, so ChatGPT does not need to send an Authorization header.
-
-## Current Workflow
-
-```text
-User natural language request
-  -> ChatGPT writes a readable preview
-  -> ChatGPT builds payload JSON
-  -> ChatGPT sends create_encoded_goal(preview_text, payload_base64, assign_to_codex=true, wait_ms=90000)
-  -> Backend decodes base64 and saves readable files
-  -> Backend creates/links task and assigns Codex
-  -> Codex reads .gptwork/goals/<goal_id>/goal.md and context.json
-  -> Codex executes, writes result.md, and GPTWork appends the result to the shared transcript
-  -> ChatGPT receives an execution snapshot in the same tool response when wait_ms is set
-```
-
-Primary ChatGPT entry:
-
-```text
-open_project_context
-create_encoded_goal
-```
-
-Call `open_project_context` first for a compact repo/worker/queue/scripts/recent-work snapshot. Use `create_encoded_goal` for implementation, deployment, maintenance, or multi-step work that Codex should execute.
-
-Default tool discovery is controlled by `GPTWORK_TOOL_MODE=standard`. Use `minimal`, `standard`, `codex`, `operator`, or `full` to tune the advertised MCP tool surface; known tool calls remain compatible.
-
-Compatibility entries still work:
-
-- `create_goal` remains available.
-- `create_task` automatically creates a linked goal.
-- `assign_task_to_codex` automatically links old tasks to a goal.
-- If `create_task.description` contains a `gptwork.encoded_goal.v1` envelope, the backend decodes it and creates the readable goal context.
-
-## Encoded Goal Files
-
-Every goal writes these workspace files:
-
-```text
-.gptwork/goals/<goal_id>/goal.md
-.gptwork/goals/<goal_id>/context.json
-.gptwork/goals/<goal_id>/transcript.md
-.gptwork/goals/<goal_id>/payload.json
-.gptwork/goals/<goal_id>/payload.base64
-.gptwork/goals/<goal_id>/result.md
-```
-
-The public `create_encoded_goal` response intentionally returns only concise paths (`dir`, `goal_md`, `result_md`). Internal/debug paths (`context.json`, `transcript.md`, `payload.json`, `payload.base64`) are available as `internal_files` and through `get_goal_context`. Attachment directories are only created and returned when a bundle is uploaded.
-
-Important boundary: base64 is transport encoding only. The user sees the readable preview, the backend stores readable JSON/Markdown, and Codex executes readable instructions.
-
-## Attachments
-
-Instruction payloads use:
-
-```text
-JSON -> base64
-```
-
-File bundles use:
-
-```text
-zip -> base64
-```
-
-Available bundle tools:
-
-- `upload_bundle_base64`
-- `download_bundle_base64`
-- existing `create_zip_archive` / `extract_zip_archive`
-
-
-## Bark Notifications
-
-Bark push notifications are sent for task lifecycle events. All events are policy-gated and env-configurable.
-
-### Lifecycle Events
-
-| Event | Default | Description |
-|---|---|---|
-| created | enabled | Task intentionally assigned to Codex (🆕 GPTWork task created) |
-| completed | enabled | Task completed successfully (✅ GPTWork completed) |
-| failed | enabled | Task failed or codex_error (❌ GPTWork failed) |
-| timed_out | enabled | Task timed out (⏱️ GPTWork timed out) |
-| waiting_for_review | enabled | Task reached human-review state (👀 GPTWork waiting for review) |
-| started | disabled | Task started (not sent by default) |
-| lock-blocked | disabled | Repo-lock waiting states (not sent by default) |
-
-### Created Notifications
-
-Sent when a user-visible task is assigned to Codex via:
-- Goal creation with Codex assignment (`create_goal` with `assign_to_codex=true`)
-- Encoded goal creation (`create_encoded_goal` with `assign_to_codex=true`)
-- Direct task creation with Codex assignee (`create_task` with `assignee="codex"`)
-- Assigning an existing task (`assign_task_to_codex`)
-
-**Not sent for:** draft tasks, readonly session inventory tasks (by default), internal/test mode tasks.
-
-### Terminal Notifications
-
-Sent for task state transitions to terminal or human-review states:
-- `completed`, `failed` / `codex_error`, `timed_out` / `codex_timeout`, `waiting_for_review` / `waiting_review`
-
-Title and body include: task id, status, mode, workspace, tests, commit, remote head, summary, changed files, duration.
-
-### Noise Suppression
-
-Repo-lock waiting / retryable lock-blocked states (`waiting_for_lock`) never send a notification directly. If a task later reaches a true terminal failure or human-review state due to a lock issue, that notification is about the actual resolution state.
-
-### Policy Switches (env vars)
-
-| Variable | Default | Effect |
-|---|---|---|
-| `GPTWORK_BARK_NOTIFY_TASKS` | true | Global notification toggle |
-| `GPTWORK_BARK_NOTIFY_CREATED` | true | Notify on task creation |
-| `GPTWORK_BARK_NOTIFY_STARTED` | false | Notify on task started |
-| `GPTWORK_BARK_NOTIFY_COMPLETED` | true | Notify on completions |
-| `GPTWORK_BARK_NOTIFY_FAILURES` | true | Notify on failures |
-| `GPTWORK_BARK_NOTIFY_TIMEOUTS` | true | Notify on timeouts |
-| `GPTWORK_BARK_NOTIFY_WAITING_REVIEW` | true | Notify on waiting_for_review |
-| `GPTWORK_BARK_NOTIFY_LOCK_BLOCKED` | false | Notify on lock-blocked states |
-| `GPTWORK_BARK_NOTIFY_READONLY` | false | Suppress readonly tasks |
-| `GPTWORK_BARK_NOTIFY_INTERNAL` | false | Suppress internal tasks |
-| `GPTWORK_BARK_NOTIFY_TESTS` | false | Suppress test mode tasks |
-| `GPTWORK_BARK_NOTIFY_CANCELLED` | false | Suppress cancelled tasks |
-
-### Deduplication
-
-One notification per task/event/status/channel:
-- `created`: once per task via `notified:bark:created` flag
-- Terminal events: once per task/status via `notified:bark:<status>` flag
-
-### Diagnostics
-
-The `notification_status` tool exposes safe metadata:
-- `last_task_id`, `last_task_status`, `last_task_event` (e.g. created/completed/failed/timed_out/waiting_for_review)
-- `last_attempt_at`, `last_success_at`, `last_failure_at`
-- Destination/credentials are never exposed.
-
-## First Diagnostic Checks
-
-After starting the service, verify with these MCP tools (in order):
-
-1. `runtime_status` — Check process pid, running commit, workspace root, env loading, git state, and safe restart markers summary (`restart_markers`)
-2. `notification_status` — Check Bark notification config and connectivity
-3. `git_remote_status` — Check remote tracking refs and dirty worktree
-4. `gptwork_doctor` — Comprehensive single-call diagnostics with suggested next actions
-
-Key verification values after a healthy deployment:
-
-```
-defaultWorkspaceRoot=/home/a9017/mcp/workspace
-codex_exec_timeout=3600
-default_repo=9018/gpt-codex-workspace
-default_repo_path=/home/a9017/mcp/workspace/gpt-codex-workspace
-runtime_env_loaded=true
-github.api_sync_enabled=false
-direct_git_reader_available=true
-worktree_dirty=false
-```
-
-
-## Context Layer (v3 Feature)
-
-### MCP Tool: preview_codex_context
-
-A new `preview_codex_context(task_id)` tool shows what Codex will see before execution. Use this before large Codex runs to verify the execution environment.
-
-Preview fields:
-- Task title, status, mode
-- Linked goal ID
-- Workspace root and type
-- Canonical repo path
-- Runtime/state paths
-- Project context files discovered (.gptwork/project.md, .gptwork/project.env)
-- Included transcript/memory counts
-- Acceptance criteria / constraints summary
-- Approximate size metrics
-- Warnings for missing repo, missing goal, dirty worktree, stale clone, or huge transcript
-
-### MCP Tool: project_context_status / context_status
-
-Two names for the same context health diagnostic:
-
-- `project_context_status(task_id?)` — Canonical name, recommended for scripts and automation.
-- `context_status(task_id?)` — Friendly alias, responds naturally to queries like "上下文状态". Calls the same implementation.
-
-Both return:
-
-A new `project_context_status(task_id?)` / `context_status(task_id?)` tool returns a concise context health and source precedence diagnostic. Use this before large Codex runs to verify project-level context is configured and understand what sources contribute to the Codex prompt.
-
-Output fields (base diagnostic, no task_id required):
-- `canonical_repo_path` — Absolute path to the canonical repo
-- `repo_registered` — Whether the repo is registered in the repo registry
-- `workspace_root` — Workspace root directory
-- `project_context` — Object with project.md and project.env existence, path, size, key counts (without exposing secret values)
-- `context_index` — Safe context-index/Zvec summary: configured store, effective store, optional dependency availability, bundle budgets, retrieval top-K settings, max scanned goals, and warnings
-- `context_source_precedence` — Ordered array explaining the 5-layer context precedence:
-  1. task.description / task fields
-  2. linked goal prompt/context files
-  3. project.md / project.env (project-level)
-  4. durable goal transcript/memories
-  5. runtime defaults / repo registry
-- `warnings` — Array of warnings for missing canonical repo, dirty worktree, missing project.md, empty project.env, stale clones, etc.
-
-When `task_id` is provided, the output also includes:
-- `task` — Object with task_id, task_status, linked_goal_id, preview_available, transcript_count, memory_count, approximate_context_bytes
-- Additional warnings for task_no_linked_goal, huge_context
-
-Use preview_codex_context when you need the full execution preview. Use project_context_status or context_status when you need a quick health check.
-
-
-A new `context_prepare(task_id?, mode?)` tool provides safe, non-secret context hygiene fixes after `project_context_status` detects issues.
-
-Supported modes:
-- `check` (default) — Dry-run: returns planned safe fixes without writing any files.
-- `fix_safe` — Applies only safe, deterministic fixes that require no semantic judgment. Never overwrites existing content.
-- `fix_with_codex` — Reserved for future work; not yet implemented.
-
-Safe fixes in fix_safe mode:
-1. Create `.gptwork/` directory under canonical repo if missing.
-2. Create `.gptwork/project.md` from minimal template (repo name, purpose placeholder, test commands, deploy notes, "Do not store secrets here" warning).
-3. Create `.gptwork/project.env` from minimal non-secret template (commented example keys only).
-4. Populate empty `project.env` with non-secret template comments.
-5. If `task_id` is provided and the task has no linked goal, return a warning with a suggested `create_goal`/`create_task` flow.
-
-Output includes: mode, changed boolean, actions_planned, actions_applied, skipped_actions with reasons, warnings,
-project_context_status_before, project_context_status_after (when fix_safe), files_created, files_modified, and no_secrets_exposed flag.
-
-**Never writes secrets.** Does not overwrite existing project.md or project.env content. Refuses to run fix_safe on a dirty worktree to avoid racing.
-
-Comparison:
-- `project_context_status` = diagnose context health
-- `preview_codex_context` = full execution preview
-- `context_prepare(check)` = dry-run plan
-- `context_prepare(fix_safe)` = creates safe missing project context templates
-
-
-### Project-Level Context Files
-
-Project-level configuration is now supported under the canonical repo:
-
-- `.gptwork/project.md` — Project-level Markdown context, hot-loaded on each Codex context build
-- `.gptwork/project.env` — Project-level env vars (KEY=VALUE), hot-loaded on each Codex context build
-- These are distinct from `runtime.env` (service-level, requires restart)
-- `project.env` is parsed safely like runtime.env but does NOT mutate process.env
-- Do not put secrets into project.md
-
-### result.json Contract
-
-Codex workers now prefer reading a structured `result.json` file. Contract:
-
-| Field | Type | Description |
-|---|---|---|
-| `status` | string | `completed`, `failed`, or `timed_out` |
-| `summary` | string | One-line summary |
-| `changed_files` | string[] | Files modified during execution |
-| `tests` | string | Test command and outcome |
-| `commit` | string | Local commit SHA |
-| `remote_head` | string | Remote HEAD SHA |
-| `warnings` | string[] | Warning messages |
-| `followups` | string[] | Follow-up items |
-
-The server reads result.json first when present, falling back to the existing stdout parser.
-
-
-## Codex Worker Defaults
-
-The backend worker runs Codex with:
-
-```bash
-codex exec --yolo --skip-git-repo-check < promptFile
-```
-
-Override with:
-
-```bash
-GPTWORK_CODEX_EXEC_ARGS="--yolo --skip-git-repo-check"
-```
-
-Codex execution timeout defaults to 3600 seconds. Override with:
-
-```bash
-GPTWORK_CODEX_EXEC_TIMEOUT=3600
-```
-
-Zip operations use Python. Override if needed:
-
-```bash
-GPTWORK_PYTHON=python3
-```
-
-## Expected Environment (runtime.env)
-
-Actual config is loaded from `/home/a9017/mcp/workspace/.gptwork/runtime.env`. Key values:
-
-```bash
-GPTWORK_HOST=0.0.0.0
-GPTWORK_PORT=8787
-GPTWORK_REQUIRE_AUTH=true
-GPTWORK_STATE_PATH=/home/a9017/mcp/workspace/.gptwork/state.json
-GPTWORK_TOKENS=dev-token,test
-GPTWORK_WORKSPACE_ROOT=/home/a9017/mcp/workspace
-GPTWORK_RUNTIME_ENV_FILE=/home/a9017/mcp/workspace/.gptwork/runtime.env
-GPTWORK_CODEX_HOME=/home/a9017
-GPTWORK_CODEX_WORKER=true
-GPTWORK_CODEX_WORKER_INTERVAL_MS=5000
-GPTWORK_CODEX_WORKER_CONCURRENCY=4
-GPTWORK_GITHUB_SYNC_LIMIT=20
-GPTWORK_CODEX_EXEC_ARGS=--yolo --skip-git-repo-check
-GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace
-GPTWORK_DEFAULT_BRANCH=main
-GPTWORK_DEFAULT_REPO_PATH=/home/a9017/mcp/workspace/gpt-codex-workspace
-GPTWORK_DEFAULT_REMOTE=origin
-GPTWORK_SSH_SOCKS_PROXY=10.0.1.105:20177
-```
-
-SSH workspaces prefer key authentication. For hosts outside `10.0.0.0/8`, the default SOCKS proxy is `10.0.1.105:20177` unless a workspace-specific proxy is configured.
-
-## Docs Kept
-
-| File | Purpose |
+| Term | Current meaning |
 |---|---|
-| `README.md` | Project overview and quick start |
-| `docs/current-status.md` | Current operating state |
-| `docs/architecture.md` | System design |
-| `docs/chatgpt-prompting-guide.md` | ChatGPT encoded goal behavior |
-| `docs/chatgpt-app-manifest.json` | ChatGPT MCP connector metadata |
-| `plugins/gpt-codex-workspace/skills/workspace-coordination/SKILL.md` | Codex workflow skill |
+| verification | Commands or checks passed, such as syntax/import tests or release checks. |
+| acceptance | The user goal is satisfied according to the acceptance contract and evidence. |
+| integration | The change entered canonical main or was explicitly not required. |
+| deployment | The running environment is using the expected commit/configuration. |
+| closure | The task can be closed because blocking gates passed or no longer apply. |
+| review | Human judgment is required. Review is not the same as failure. |
 
-Removed/obsolete docs should not describe base64 as a way to hide unsafe intent.
+Important boundaries are enforced in code and docs: `branch_pushed` is not `merged`; `pr_opened` is not `merged`; `merged` is not `deployed`; `health 200` is not proof of the expected running commit. `quality_notes` and `non_blocking_followups` are preserved but do not block current task closure.
 
-## GPTWork Safe Self-Restart Protocol
+## Delivered Capabilities
 
-### Root Cause Addressed
+### Acceptance Contract
 
-The recurring stuck-task issue was caused by a task restarting `gptwork-mcp.service` while
-that same service was running the worker. The restart killed the worker before it could
-write a final task result or complete the task. The new backend process cannot resume the
-old in-memory execution chain.
+`backend/src/acceptance/` contains contract construction, profiles, schema validation, semantic checks, and the contract-aware verifier. New goals can carry an `acceptance_contract.json`; result processing uses the contract to distinguish required evidence, operation kind, blocking requirements, and optional follow-up notes.
 
-### Focused Protocol
+The semantic layer rejects common state conflations, including treating branch push or PR creation as a merge. This keeps the acceptance gate aligned with user intent instead of raw tool success.
 
-Self-restarts now use a durable two-phase marker flow:
+### Operation-Specific Evidence
 
-1. Finish code/test/commit/push work.
-2. Write `result.json`.
-3. Call `schedule_service_restart(task_id, expected_commit, expected_remote_head)`.
-4. GPTWork writes `.gptwork/pending-restarts/<task_id>.json` before scheduling restart.
-5. The restart is detached from the current worker request.
-6. On startup, GPTWork scans pending restart markers, verifies running/local/remote commit,
-   and finalizes or marks the task for review.
+`backend/src/evidence/` normalizes result data into operation evidence. The evidence profiles separate implementation, integration, deployment, verification, and recovery facts so that a command pass does not accidentally imply user acceptance or production deployment.
 
-### MCP Tools
+The recovery path also generates evidence for missing or incomplete task results when possible. If required evidence is absent, compact review APIs report `missing_evidence` rather than hiding the gap.
 
-| Tool | Description |
-|---|---|
-| `runtime_status` (restart_markers field) | Safe summary of restart markers: total_count (all marker files), active_count (active: pending/scheduled/restarted only), statuses breakdown (pending/scheduled/restarted/verified/failed), marker_dir_exists. Verified/failed markers are historical and do not require action. |
-| `schedule_service_restart(task_id, expected_commit, expected_remote_head)` | Writes a pending restart marker and schedules a detached restart. |
-| `list_pending_restarts()` | Lists pending restart markers awaiting startup verification. |
+### Contract-Aware Verifier
 
-### Active vs Historical Markers
+`backend/src/acceptance/contract-verifier.mjs` evaluates verification commands, normalized result data, state assertions, blockers, non-blocking follow-ups, and quality notes. It returns a structured contract verification result with blocking status and completion eligibility.
 
-The `restart_markers` field distinguishes between active and historical markers:
+`quality_notes` and `non_blocking_followups` are intentionally non-blocking. They can create follow-up tasks or review notes, but do not prevent closure after blocking gates pass.
 
-- **total_count**: Number of all marker files found in the restart marker directory.
-- **active_count**: Count of markers with status `pending`, `scheduled`, or `restarted`. These represent in-progress or incomplete restarts that may need attention.
-- **statuses**: Breakdown counts by individual status (pending/scheduled/restarted/verified/failed).
-- **marker_dir_exists**: Whether the marker directory exists at all.
+### Deterministic Closure
 
-Markers with status `verified` or `failed` are historical — the restart protocol has already completed or ended for those tasks. The `total_count` includes all markers (active + historical), while `active_count` only includes markers that still need action. Verified historical markers do not generate warnings in `gptwork_doctor suggested_next_actions`.
+`backend/src/closure/task-closure-decider.mjs` decides whether a task can close, needs review, needs integration, or needs repair. Closure consumes verification, acceptance, integration, and result shape as separate inputs. That means:
 
-### Marker Path
+- A task can have passing verification but failed acceptance.
+- A task can be merged but not deployed.
+- A task can require review without being failed.
+- A task can close with non-blocking follow-ups.
+
+`backend/src/closure/followup-task-planner.mjs` preserves follow-up and quality-note information for later work.
+
+### Compact Review Packet
+
+`backend/src/review/task-acceptance-bundle.mjs` and `backend/src/review/review-packet-builder.mjs` provide the preferred review path:
 
 ```text
-.gptwork/pending-restarts/<task_id>.json
+get_task_acceptance_bundle(task_id)
+get_task_review_packet(task_id)
 ```
 
-Marker fields include `task_id`, `requested_at`, `requested_by`, `service_name`,
-`expected_commit`, `expected_remote_head`, `repo_path`, `restart_kind`, `status`, `logs`,
-and `attempts`.
+These tools return the minimal evidence needed for review or closure: contract summary, result summary, verification, contract verification, closure decision, changed files, blockers, non-blocking follow-ups, missing evidence, report paths, compact git summary, and recommended next action.
 
-### Minimal Fallback Reconciliation
+They deliberately do not return complete transcripts, durable memories, complete context bundles, payload files, or large diffs. Operators and ChatGPT should prefer these packets over full `get_goal_context` reads.
 
-Run metadata remains under `.gptwork/runs/<task_id>/<run_id>/` as a fallback. On startup,
-if a task is still `running`, has no pending restart marker, has stale heartbeat, and has no
-active Codex process, GPTWork marks it `waiting_for_review` with
-`result.kind=codex_stalled`. Repo changes are never discarded automatically.
+### Zvec Context-Index
 
-### Configuration
+`backend/src/context-index/` builds bounded `context.bundle.md` files and retrieval diagnostics. The store mode is controlled by `GPTWORK_CONTEXT_VECTOR_STORE=auto|zvec|local`.
 
-| Env Var | Default | Description |
-|---|---|---|
-| `GPTWORK_CODEX_STALL_THRESHOLD_SECONDS` | `600` | Seconds without heartbeat before a running task is considered stalled |
+Zvec is optional and rebuildable. It is an index for retrieval, not the source of truth. Durable facts remain in goal/task/result files, conversation state, Git commits, and runtime diagnostics. `context.retrieval.json` records the store, retrieval mode, store capabilities, embedding provider, selected chunks, budget, top-K values, and scan caps.
 
+### Directory Semantics Cleanup
 
-## Per-Repository Codex Execution Lock
+Goal workspaces now distinguish bounded entry, supporting context, metadata, deep lookup, and result files:
 
-GPTWork serializes Codex builder/deploy/admin tasks per canonical repository to prevent concurrent edits that could corrupt the worktree.
-
-### Lock File
-
-```
-.gptwork/locks/repos/<safe-repo-id>.json
+```text
+.gptwork/goals/<goal_id>/codex.entry.md          required bounded entry
+.gptwork/goals/<goal_id>/context.bundle.md       preferred supporting context when present
+.gptwork/goals/<goal_id>/context.retrieval.json  retrieval diagnostics when generated
+.gptwork/goals/<goal_id>/context.json            metadata lookup
+.gptwork/goals/<goal_id>/goal.md                 deep lookup
+.gptwork/goals/<goal_id>/transcript.md           deep conversation lookup
+.gptwork/goals/<goal_id>/result.json             structured result
+.gptwork/goals/<goal_id>/result.md               human-readable result
 ```
 
-The `<safe-repo-id>` is a filesystem-safe identifier derived from the canonical repo path using a SHA-256 hash prefix and a cleaned path:
+Codex prompts are entry-first and instruct workers not to read full goal context unless the bounded entry and bundle are insufficient.
 
+### Finalizer and Processor Slimming
+
+Large finalization and task-processing responsibilities have been split into focused modules: result parsers, result fact factories, finalizer validation, runtime change handling, status handling, task final writeback, delivery result recovery, and closure/integration helpers. The remaining processor paths orchestrate these modules rather than embedding all policy in one place.
+
+## Tooling State
+
+### ChatGPT Entry Tools
+
+- `open_project_context` returns a compact repo/worker/queue/scripts/recent-work snapshot and recommended next tools.
+- `create_encoded_goal` is the preferred execution entry for implementation, deployment, maintenance, and multi-step work.
+- `project_context_status` and `context_status` provide safe context-health diagnostics, including context-index/Zvec status without exposing secret values.
+
+### Review Tools
+
+- `get_task_acceptance_bundle` returns compact acceptance evidence.
+- `get_task_review_packet` returns review-ready evidence, blockers, changed files, and recommended next action.
+
+### Operations Tools
+
+- `runtime_status`, `worker_status`, `gptwork_doctor`, and `gptwork_self_test` cover liveness and diagnostics.
+- `schedule_service_restart` implements safe two-phase restart for self-restart tasks.
+- Recovery, retention, tmp cleanup, goal cleanup, and repo-lock tools provide the recovery plane.
+
+### Queue and Integration Tools
+
+- Queue tools are available in standard/codex/full mode, with operator read access for list/get.
+- Per-task worktrees isolate Codex execution.
+- ff-only integration completion can mark a task merged only after merge and verification evidence align.
+- `branch_pushed` and `pr_opened` are non-terminal integration states and must not be treated as merged or deployed.
+
+## Verification Commands
+
+Use these as the narrow current release gate for documentation-only and delivery-contract changes:
+
+```bash
+cd backend && npm run check:syntax
+cd backend && npm run check:imports
+cd backend && node scripts/release-delivery-check.mjs --fast
 ```
-<12-char-hex>-<cleaned-path>
+
+Broader test suites remain available when changing behavior:
+
+```bash
+cd backend && npm test
+cd backend && npm run test:e2e-acceptance
+cd backend && npm run test:e2e-delivery
 ```
 
-Example for `/home/a9017/mcp/workspace/gpt-codex-workspace`:
+## Known Boundaries
 
-```json
-{
-  "canonical_repo_path": "/home/a9017/mcp/workspace/gpt-codex-workspace",
-  "safe_repo_id": "0eb1aa94d0b6-home--a9017--mcp--workspace--gpt-codex-workspace",
-  "task_id": "task_xxx",
-  "run_id": "uuid-here",
-  "pid": 12345,
-  "acquired_at": "2026-06-17T12:00:00.000Z",
-  "last_heartbeat_at": "2026-06-17T12:00:00.000Z",
-  "mode": "deploy",
-  "restart_state": null,
-  "status": "held"
-}
-```
+- Health checks prove process liveness, not expected commit deployment.
+- A merged commit still needs deployment/restart verification when the running service matters.
+- Review packets are intentionally compact; use deeper files only when the packet is insufficient.
+- Zvec/local retrieval can be rebuilt and should not be cited as durable fact.
+- Secrets must not be copied into docs, issue bodies, goal payloads, transcripts, result files, or review packets.
 
-### Lock Acquisition
+## Related Documents
 
-Before spawning Codex for a builder/deploy/admin task, `processGeneralTask` acquires a repo lock keyed by the canonical repo path (`config.defaultRepoPath`):
-
-1. If no lock exists for that repo, a new lock file is created with `status: "held"`.
-2. If a lock exists with `status: "released"`, it can be overwritten.
-3. If a lock is held by **the same task** (re-entrant), the heartbeat is updated and acquisition succeeds.
-4. If a lock is held by **a different task**, acquisition returns `{ acquired: false, heldByTask }` — the task is marked `waiting_for_lock` with log message, `lock_blocked_by` metadata (holding task id), and Codex is not spawned. No Bark notification is sent for `waiting_for_lock`.
-
-### Lock Release
-
-The lock is released after Codex execution completes (regardless of result: completed, failed, or timed out) unless:
-
-- **Safe-restart scheduled**: If the task has an active restart marker (pending/scheduled/restarted), the lock stays held with `restart_state: "scheduled"` during the restart window. The lock is released after Phase C verification finalizes the task.
-
-### Lock Retry (waiting_for_lock)
-
-When a builder/deploy/admin task encounters a held repo lock, it is set to `waiting_for_lock` status. This is a non-terminal, transient state:
-
-- The `run_assigned_codex_tasks` worker includes `waiting_for_lock` in its candidate filter, so blocked tasks are automatically retried on each worker tick (default interval: 5 seconds).
-- On each retry, `acquireRepoLock` is called again. If the lock is now free, the task proceeds to `running` and Codex execution begins.
-- If the lock is still held, the task remains `waiting_for_lock` with updated `lock_blocked_by` metadata.
-- On retry, any stale `lock_blocked_at` / `lock_blocked_by` fields are cleared before attempting lock acquisition.
-- No Bark notification is sent for `waiting_for_lock` transitions — this is a transient internal state, not a terminal status requiring human review.
-
-### How Same-Repo Concurrency Is Blocked
-
-The `runAssignedCodexTasks` tool processes assigned tasks with bounded concurrency (default: 4). For each builder/deploy/admin task, it calls `processGeneralTask` which:
-
-1. Checks if the task has a canonical repo path
-2. Calls `acquireRepoLock` — if another task holds the lock, the current task is marked `waiting_for_lock` with `lock_blocked_by` metadata and log: `"repo locked by task X, retry after completion. Skipping."`
-3. If lock acquired, proceeds to spawn Codex normally
-
-Since lock acquisition happens early in `processGeneralTask` (before marking `running`), two concurrent worker ticks cannot both spawn Codex for the same repo.
-
-### Stale Lock Reconciliation
-
-The `reconcileStaleTasks` method (called on worker startup) includes Phase B that reconciles repo locks:
-
-- If lock heartbeat is older than 15 minutes and the lock owner's child process is dead, the lock is marked `stale`.
-- If the lock has `restart_state` and the restart marker is still active, the lock is kept.
-- If the lock has `restart_state` but no restart marker exists, the lock is marked `stale`.
-- Worktree changes are never discarded automatically.
-
-### What to Do If Repo Lock Is Stale
-
-1. Check `list_repo_locks` or `runtime_status.repo_locks` for active/stale counts.
-2. If a lock is stale (owner task completed or crashed), it will be reconciled automatically on the next worker tick or service restart.
-3. For manual release, the lock file can be edited to set `"status": "released"` or deleted.
-4. The `forceReleaseRepoLock` function in the module provides programmatic release.
-
-### Diagnostics
-
-Available via:
-- `runtime_status.repo_locks` — `{ active_repo_locks, stale_repo_locks, locks[] }`
-- `gptwork_doctor.repo_locks` — Same summary, integrated into doctor output
-- `list_repo_locks` — Standalone tool with safe fields (no secrets)
-
-### MCP Tools
-
-| Tool | Description |
-|---|---|
-| `runtime_status` (repo_locks field) | Active/stale repo lock counts and lock entries |
-| `gptwork_doctor` (repo_locks field) | Same repo lock summary integrated into doctor diagnostics |
-| `list_repo_locks` | Standalone tool listing repo execution locks with safe diagnostics |
-
-## SSH Workspace Diagnostics
-
-SSH workspaces support file and shell operations but Codex worker execution (`processGeneralTask`) currently requires a hosted workspace. This behavior is explicit and intentional:
-
-- `preview_codex_context` shows a warning when the task workspace type is SSH.
-- `project_context_status` / `context_status` shows a warning when the task workspace type is SSH.
-- `processGeneralTask` skips SSH workspaces with a clear log message: "unsupported workspace type: ssh".
-- SSH file/shell tools (list_dir, read_text_file, write_text_file, shell_exec, etc.) work normally.
-
-To use Codex execution, assign tasks to a hosted workspace.
-
-
-## 2026-06-21 Verification Summary
-
-Backend modules are split behind compatibility facades. Verification passed with npm test, test:clean, test:perf-smoke, check:syntax, and check:imports.
-
----
-
-## 2026-06-22 E2E Product Acceptance
-
-**Result**: PASS — 38 automated acceptance tests passed.
-
-### Verification Summary
-
-| Area | Description | Status |
-|------|-------------|--------|
-| Area 1 | Runtime / Doctor / Context | PASS (6 tests) |
-| Area 2 | Tool Mode / Direct Call Security | PASS (7 tests) |
-| Area 3 | Goal → Task → Codex Result | PASS (5 tests) |
-| Area 4 | Agent Pipeline / Handoff | PASS (5 tests) |
-| Area 5 | Event Log / Recent Activity | PASS (3 tests) |
-| Area 6 | GitHub / Bark Integration (dry-run) | PASS (4 tests) |
-| Area 7 | Widget / Apps SDK Resource | PASS (5 tests) |
-| Contract | normalizeToolMode / VALID_TOOL_MODES / filterToolsForMode | PASS (3 tests) |
-
-### Other Checks
-
-- `npm run check:syntax` — PASS
-- `npm run check:imports` — PASS
-- `npm test` — PASS (all unit tests)
-- `node bin/gptwork.mjs --help` — PASS
-- `node bin/gptwork.mjs doctor --local` — PASS
-- `npm run test:e2e-acceptance` — PASS (38 tests)
-
-### Key Findings
-
-- All 5 tool modes (`minimal`, `standard`, `operator`, `codex`, `full`) enforce correct tool boundaries.
-- `shell_exec` is correctly denied in `minimal`/`standard` and available in `codex`/`full`.
-- Goal→Task→Result pipeline (create_goal/create_encoded_goal → get_goal_context → result.md) works end-to-end.
-- Agent runs, handoff files, and event logs are written correctly.
-- GitHub and Bark integrations show graceful disabled-state behavior; no credentials are leaked.
-- Widget card resource is registered, returns valid HTML with all contract sections.
-- 8+ tool descriptors reference the widget via `_meta["openai/outputTemplate"]`.
-
-### New Files
-
-- `backend/test/e2e-product-acceptance.test.mjs` — 38 automated E2E acceptance tests
-- `docs/e2e-acceptance.md` — Human-readable acceptance documentation
-
-### Latest Commit
-
-Will be: `Add E2E product acceptance documentation`
-
----
-
-## 2026-06-26 GitHub Fallback Documentation (P1)
-
-**Implemented**: Comprehensive GitHub fallback documentation and issue templates.
-
-### What Changed
-
-- **New `docs/github-fallback.md`**: Complete guide covering label taxonomy, issue templates, user workflows, task-intake markers, migration strategy, troubleshooting tables, diagnostics reference, and FAQ.
-- **New `.github/ISSUE_TEMPLATE/`**: Three issue templates:
-  - `01-gptwork-task.yml` — Plain-text Codex task
-  - `02-gptwork-question.yml` — ChatGPT request/question
-  - `03-gptwork-dispatch.yml` — Payload bundle dispatch
-- **Key principles documented**:
-  - `gptwork-task` for plain text tasks (sync_from_github/import_task_handoffs)
-  - `gptwork-question` for questions (no task by default)
-  - `gptwork-task-intake` / body marker to upgrade question → task
-  - `gptwork-dispatch` for payload dispatch (GitHub Actions, not sync)
-- **Migration guidance** for historical issues like #125 and #130.
-- **Troubleshooting table** covering 12+ scenarios with auto-fix indicators.
-
-### Background / Rationale
-
-The P0 task (task_952ce95c) fixed the core dispatch bot behavior — issues with only `gptwork-task` label no longer receive "GPTWork dispatch failed" comments. The P1 documentation layer now provides the user-facing guidance to make the system usable without confusion.
-
-### Status
-
-Documents are additive (no existing files modified). No core code changes required.
-
-### Verification
-
-- `git diff --check` — PASS (no whitespace errors)
-- Markdown structure — 3 issue templates with valid YAML
-- No conflicts with P0 task files
+- [Architecture](architecture.md)
+- [Operations](operations.md)
+- [Context and Worktree Contract](delivery/context-and-worktree-contract.md)
+- [Acceptance and Repair Contract](delivery/acceptance-and-repair-contract.md)
+- [Goal Queue](goal-queue.md)
+- [GitHub Fallback](github-fallback.md)
+- [中文主文档](../README.zh-CN.md)
