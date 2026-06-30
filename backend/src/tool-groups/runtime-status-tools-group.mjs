@@ -72,6 +72,7 @@ export function createRuntimeStatusToolsGroup({
       resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const startTime = Date.now();
+        const warnings = [];
         const repoDir = resolveRepoDir();
         const gitInfo = await collectRuntimeGitInfoCached(repoDir);
         const statePath = config.statePath;
@@ -83,11 +84,13 @@ export function createRuntimeStatusToolsGroup({
         if (envPath) {
           try {
             envFileExists = existsSync(envPath);
-          } catch (e) {}
+          } catch (e) {
+            warnings.push({ code: "runtime_env_stat_failed", message: e?.message || String(e) });
+          }
         }
 
         // Auto-verify pending restart markers where expected_commit matches running_commit
-try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.defaultRepoPath); } catch {}
+try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.defaultRepoPath); } catch (e) { warnings.push({ code: "restart_marker_reconcile_failed", message: e?.message || String(e) }); }
         const restartMarkerData = await collectRestartMarkerStatus(config.defaultWorkspaceRoot);
         const codexTuiGoal = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
 
@@ -182,6 +185,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           repo_locks: await getCachedRepoLockSummary(),
           worker: workerStatusExtendedSnapshot(workerState),
           queue: await collectWorkerQueueCounts(store),
+          warnings,
         };
         if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
         return result;
@@ -354,6 +358,10 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
                 const actionableReview = queueCounts.actionable_review ?? queueCounts.waiting_for_review ?? 0;
                 if (actionableReview > 0) {
                   actions.push(actionableReview + ' Codex task(s) needing actionable review — check and approve or reassign');
+                }
+                const repairBacklog = queueCounts.waiting_for_repair ?? queueCounts.policy_counts?.waiting_for_repair ?? 0;
+                if (repairBacklog > 0) {
+                  actions.push(repairBacklog + ' Codex task(s) waiting for repair — inspect failed review results and create repair tasks');
                 }
               } catch (e) {}
             })();

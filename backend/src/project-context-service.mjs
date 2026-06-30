@@ -74,14 +74,18 @@ export async function collectProjectContext({ config, store, workerState, regist
   const branch = safeGit(["branch", "--show-current"], repoRoot) || null;
   const dirty = safeGit(["status", "--short"], repoRoot).split("\n").filter(Boolean);
   const queue = await collectWorkerQueueCounts(store);
+  const policyQueue = queue.policy_counts || queue;
   const tasks = state.tasks || [];
   const resolvedLegacyReview = tasks.filter((task) => isResolvedLegacyReviewTask(task));
   const currentBlockers = {
-    running: queue[TASK_STATUSES.RUNNING] || 0,
-    waiting_for_lock: queue[TASK_STATUSES.WAITING_FOR_LOCK] || 0,
-    waiting_for_review: queue[TASK_STATUSES.WAITING_FOR_REVIEW] || 0,
-    actionable_review: queue.actionable_review ?? queue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0,
-    failed: queue[TASK_STATUSES.FAILED] || 0,
+    running: policyQueue[TASK_STATUSES.RUNNING] || 0,
+    waiting_for_lock: policyQueue[TASK_STATUSES.WAITING_FOR_LOCK] || 0,
+    waiting_for_review: policyQueue[TASK_STATUSES.WAITING_FOR_REVIEW] || 0,
+    waiting_for_repair: policyQueue[TASK_STATUSES.WAITING_FOR_REPAIR] || 0,
+    waiting_for_integration: policyQueue[TASK_STATUSES.WAITING_FOR_INTEGRATION] || 0,
+    actionable_review: queue.actionable_review ?? policyQueue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0,
+    failed: policyQueue[TASK_STATUSES.FAILED] || 0,
+    total: queue.current_blockers ?? 0,
   };
   const packageScripts = scriptsFromPackage(repoRoot);
   const backendScripts = scriptsFromPackage(join(repoRoot, "backend"));

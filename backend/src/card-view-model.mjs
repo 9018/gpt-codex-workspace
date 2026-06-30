@@ -168,6 +168,7 @@ const RUNTIME_QUEUE_ROW_KEYS = [
   TASK_STATUSES.RUNNING,
   TASK_STATUSES.WAITING_FOR_LOCK,
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
   "current_blockers",
   "actionable_review",
   TASK_STATUSES.COMPLETED,
@@ -176,19 +177,24 @@ const RUNTIME_QUEUE_ROW_KEYS = [
 ];
 
 function runtimeQueueActionableReview(queue = {}) {
-  return queue.actionable_review ?? queue.waiting_for_review ?? 0;
+  const policy = queue.policy_counts || queue;
+  return queue.actionable_review ?? policy.waiting_for_review ?? queue.waiting_for_review ?? 0;
 }
 
 function runtimeQueueCurrentBlockers(queue = {}) {
-  return (queue.waiting_for_lock ?? 0)
-    + (queue.waiting_for_integration ?? 0)
+  const policy = queue.policy_counts || queue;
+  return (policy.waiting_for_lock ?? 0)
+    + (policy.waiting_for_integration ?? 0)
+    + (policy.waiting_for_repair ?? 0)
     + runtimeQueueActionableReview(queue)
-    + (queue.failed ?? 0);
+    + (policy.failed ?? 0);
 }
 
 function runtimeQueueDisplay(queue = {}) {
+  const policy = queue.policy_counts || queue;
   return {
     ...queue,
+    ...policy,
     current_blockers: queue.current_blockers ?? runtimeQueueCurrentBlockers(queue),
     actionable_review: runtimeQueueActionableReview(queue),
   };
@@ -242,6 +248,7 @@ function buildRuntimeStatusCard(tool, data, meta) {
   if (dirty) blockages.push("dirty_worktree");
   if ((queue.waiting_for_lock ?? 0) > 0) blockages.push(TASK_STATUSES.WAITING_FOR_LOCK);
   if ((queue.waiting_for_integration ?? 0) > 0) blockages.push(TASK_STATUSES.WAITING_FOR_INTEGRATION);
+  if ((queue.waiting_for_repair ?? 0) > 0) blockages.push(TASK_STATUSES.WAITING_FOR_REPAIR);
   if ((queue.actionable_review ?? 0) > 0) blockages.push("actionable_review");
   if ((queue.failed ?? 0) > 0 || queue.legacy_failed_policy?.blocks_current_work) blockages.push(TASK_STATUSES.FAILED);
   if (data.running_commit && data.repo_head && data.running_commit !== data.repo_head) blockages.push("runtime_restart_required");

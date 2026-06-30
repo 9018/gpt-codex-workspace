@@ -7,6 +7,7 @@ const QUEUE_DISPLAY_ROWS = [
   [TASK_STATUSES.RUNNING, "running"],
   [TASK_STATUSES.WAITING_FOR_LOCK, "waiting for lock"],
   [TASK_STATUSES.WAITING_FOR_INTEGRATION, "waiting for integration"],
+  [TASK_STATUSES.WAITING_FOR_REPAIR, "waiting for repair"],
   ["current_blockers", "current blockers"],
   ["actionable_review", "actionable review"],
   [TASK_STATUSES.COMPLETED, "completed"],
@@ -14,17 +15,20 @@ const QUEUE_DISPLAY_ROWS = [
 ];
 
 function queueCurrentBlockers(q = {}) {
-  const actionableReview = q.actionable_review ?? q.waiting_for_review ?? 0;
-  return (q.waiting_for_lock ?? 0)
-    + (q.waiting_for_integration ?? 0)
+  const policy = q.policy_counts || q;
+  const actionableReview = q.actionable_review ?? policy.waiting_for_review ?? q.waiting_for_review ?? 0;
+  return (policy.waiting_for_lock ?? 0)
+    + (policy.waiting_for_integration ?? 0)
+    + (policy.waiting_for_repair ?? 0)
     + actionableReview
-    + (q.failed ?? 0);
+    + (policy.failed ?? 0);
 }
 
 function queueDisplayValue(q = {}, key) {
+  const policy = q.policy_counts || q;
   if (key === "current_blockers") return q.current_blockers ?? queueCurrentBlockers(q);
-  if (key === "actionable_review") return q.actionable_review ?? q.waiting_for_review ?? 0;
-  return q[key] ?? 0;
+  if (key === "actionable_review") return q.actionable_review ?? policy.waiting_for_review ?? q.waiting_for_review ?? 0;
+  return policy[key] ?? q[key] ?? 0;
 }
 
 function addQueueDisplayRows(lines, q = {}) {

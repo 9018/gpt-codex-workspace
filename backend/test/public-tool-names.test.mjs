@@ -54,6 +54,12 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "cleanup_goals",
   "cleanup_tmp",
   "clear_repo_lock",
+  "codex_tui_collect",
+  "codex_tui_read",
+  "codex_tui_send",
+  "codex_tui_start_goal",
+  "codex_tui_status",
+  "codex_tui_stop",
  "complete_agent_run",
   "complete_task",
   "context_prepare",
@@ -265,9 +271,8 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
       assert.equal(names.includes(placeholder), true,
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
-    // Also verify total count is 118 (114 public + 4 placeholder)
-    assert.equal(names.length, 130,
-      `Expected 129 tools with placeholder flag set, got ${names.length}`);
+    assert.equal(names.length, 136,
+      `Expected 136 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;

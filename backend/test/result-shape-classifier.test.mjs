@@ -15,6 +15,7 @@ test('exports frozen canonical result shape types', () => {
     PROVIDER_NOOP: 'provider_noop',
     PROVIDER_TIMEOUT: 'provider_timeout',
     PROVIDER_NO_EVIDENCE: 'provider_no_evidence',
+    FAILURE_EVIDENCE: 'failure_evidence',
     CODE_EVIDENCE: 'code_evidence',
     COMPLETION_EVIDENCE: 'completion_evidence',
     UNKNOWN: 'unknown',
@@ -67,6 +68,24 @@ test('classifyResultShape detects codex failed results without evidence', () => 
   assert.equal(classifyResultShape({ kind: 'codex_failed' }), RESULT_SHAPE_TYPES.PROVIDER_NO_EVIDENCE);
 });
 
+test('classifyResultShape detects explicit failure evidence before provider-empty fallbacks', () => {
+  for (const result of [
+    { verification: { passed: false } },
+    { findings: [{ code: 'verification_failed', message: 'Tests failed' }] },
+    { commands: [{ cmd: 'npm test', exit_code: 1 }] },
+    { failure_class: 'tests_failed' },
+    { kind: 'verification_failed' },
+    { requires_review: true },
+  ]) {
+    assert.equal(classifyResultShape(result), RESULT_SHAPE_TYPES.FAILURE_EVIDENCE);
+  }
+});
+
+test('classifyResultShape keeps explicit noop and resolved failures non-blocking', () => {
+  assert.equal(classifyResultShape({ noop: true, verification: { passed: false } }), RESULT_SHAPE_TYPES.PROVIDER_NOOP);
+  assert.equal(classifyResultShape({ failure_class: 'result_missing', requires_review: false }), RESULT_SHAPE_TYPES.PROVIDER_NOOP);
+});
+
 test('classifyResultShape returns unknown for unrecognized object results', () => {
   assert.equal(classifyResultShape({ status: 'failed', summary: 'No classifier evidence' }), RESULT_SHAPE_TYPES.UNKNOWN);
 });
@@ -87,6 +106,7 @@ test('resultEvidenceSummary returns deterministic evidence counts', () => {
     verification_passed: 1,
     reviewer_passed: 1,
     integration_passed: 0,
+    failure_evidence: 0,
     code_evidence: 5,
     completion_evidence: 2,
     total: 7,
@@ -102,6 +122,7 @@ test('resultEvidenceSummary returns zeroed counts for missing result shape', () 
     verification_passed: 0,
     reviewer_passed: 0,
     integration_passed: 0,
+    failure_evidence: 0,
     code_evidence: 0,
     completion_evidence: 0,
     total: 0,

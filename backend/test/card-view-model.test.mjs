@@ -49,6 +49,7 @@ test("buildCardViewModel labels runtime current blockers from normalized queue s
       running: 0,
       waiting_for_lock: 1,
       waiting_for_review: 4,
+      waiting_for_repair: 1,
       actionable_review: 2,
       waiting_for_integration: 1,
       completed: 5,
@@ -57,10 +58,12 @@ test("buildCardViewModel labels runtime current blockers from normalized queue s
     },
   });
 
-  assert.match(card.summary, /current blockers=4/);
-  assert.ok(card.key_values.some((row) => row.key === "queue.current_blockers" && row.value === 4));
+  assert.match(card.summary, /current blockers=5/);
+  assert.ok(card.key_values.some((row) => row.key === "queue.current_blockers" && row.value === 5));
   assert.ok(card.key_values.some((row) => row.key === "queue.actionable_review" && row.value === 2));
+  assert.ok(card.sections.some((section) => section.title === "Queue" && section.rows.some((row) => row.key === "waiting_for_repair" && row.value === 1)));
   assert.ok(card.sections.some((section) => section.title === "Current blockers" && section.items.includes("waiting_for_lock")));
+  assert.ok(card.sections.some((section) => section.title === "Current blockers" && section.items.includes("waiting_for_repair")));
   assert.ok(card.sections.some((section) => section.title === "Current blockers" && section.items.includes("actionable_review")));
   assert.ok(!card.sections.some((section) => section.title === "Current blockers" && section.items.includes("waiting_for_review")));
 });

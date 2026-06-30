@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { createWriteStream, mkdirSync } from "node:fs";
+import { createWriteStream, mkdirSync, statSync } from "node:fs";
 import { dirname } from "node:path";
 
 export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpawned, options = {}) {
@@ -49,26 +49,39 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     let settled = false;
     let stdoutLogStream = null;
     let stderrLogStream = null;
+    const warnings = [];
+
+    function addWarning(code, detail = {}) {
+      warnings.push({ code, ...detail });
+    }
 
     function getLogStream(streamName) {
       const streamPath = streamName === "stdout" ? options.streamStdoutPath : options.streamStderrPath;
       if (!streamPath) return null;
       try {
+        try {
+          if (statSync(streamPath).isDirectory()) {
+            throw new Error(`stream log path is a directory: ${streamPath}`);
+          }
+        } catch (err) {
+          if (err?.code !== "ENOENT") throw err;
+        }
         if (streamName === "stdout") {
           if (!stdoutLogStream) {
             mkdirSync(dirname(streamPath), { recursive: true });
             stdoutLogStream = createWriteStream(streamPath, { flags: "a" });
-            stdoutLogStream.on("error", () => {});
+            stdoutLogStream.on("error", (err) => addWarning("stream_log_write_failed", { stream: "stdout", path: streamPath, message: err?.message || String(err) }));
           }
           return stdoutLogStream;
         }
         if (!stderrLogStream) {
           mkdirSync(dirname(streamPath), { recursive: true });
           stderrLogStream = createWriteStream(streamPath, { flags: "a" });
-          stderrLogStream.on("error", () => {});
+          stderrLogStream.on("error", (err) => addWarning("stream_log_write_failed", { stream: "stderr", path: streamPath, message: err?.message || String(err) }));
         }
         return stderrLogStream;
-      } catch {
+      } catch (err) {
+        addWarning("stream_log_setup_failed", { stream: streamName, path: streamPath, message: err?.message || String(err) });
         return null;
       }
     }
@@ -76,7 +89,9 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
     function writeLogChunk(streamName, chunk) {
       try {
         getLogStream(streamName)?.write(chunk);
-      } catch {}
+      } catch (err) {
+        addWarning("stream_log_write_failed", { stream: streamName, message: err?.message || String(err) });
+      }
     }
 
     function closeLogStreams(done) {
@@ -199,6 +214,7 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
         content_first_output_timeout_seconds: contentFirstOutputTimeoutSeconds || null,
         no_progress_timeout_seconds: noProgressTimeoutSeconds || null,
         started_at: startedAtIso,
+        warnings,
       };
       closeLogStreams(() => resolve(result));
     }

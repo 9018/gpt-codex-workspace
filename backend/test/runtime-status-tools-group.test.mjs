@@ -105,7 +105,7 @@ const fakeProcessStartedAt = new Date('2025-01-01T00:00:00Z');
 
 const fakeCollectWorkerQueueCounts = async (store) => ({
   assigned: 0, queued: 0, running: 0,
-  waiting_for_lock: 0, waiting_for_review: 0,
+  waiting_for_lock: 0, waiting_for_review: 0, waiting_for_repair: 0,
   completed: 0, failed: 0,
 });
 
@@ -342,6 +342,7 @@ test('gptwork_doctor suggested actions use actionable review queue blockers', as
       running: 0,
       waiting_for_lock: 0,
       waiting_for_review: 4,
+      waiting_for_repair: 2,
       actionable_review: 1,
       completed: 0,
       failed: 0,
@@ -350,5 +351,6 @@ test('gptwork_doctor suggested actions use actionable review queue blockers', as
 
   const result = await tools.gptwork_doctor.handler({});
   assert.ok(result.suggested_next_actions.some((action) => action.includes('1 Codex task(s) needing actionable review')));
+  assert.ok(result.suggested_next_actions.some((action) => action.includes('2 Codex task(s) waiting for repair')));
   assert.equal(result.suggested_next_actions.some((action) => action.includes('4 Codex task(s) waiting for review')), false);
 });

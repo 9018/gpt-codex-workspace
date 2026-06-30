@@ -53,7 +53,7 @@ const fakeWorkerState = {
 
 const fakeCollectWorkerQueueCounts = async () => ({
   assigned: 0, queued: 0, running: 0,
-  waiting_for_lock: 0, waiting_for_review: 0,
+  waiting_for_lock: 0, waiting_for_review: 0, waiting_for_repair: 0,
   completed: 0, failed: 0,
 });
 
@@ -65,7 +65,7 @@ function makeDiagnostics(overrides = {}) {
     worktree: { dirty: false, dirty_paths: [] },
     repo_locks: { active: 0, stale: 0, details: [] },
     worker: { enabled: true, running: false, health: { phase: "idle" } },
-    queue: { assigned: 0, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, completed: 0, failed: 0 },
+    queue: { assigned: 0, queued: 0, running: 0, waiting_for_lock: 0, waiting_for_review: 0, waiting_for_repair: 0, completed: 0, failed: 0 },
     ...overrides,
   };
 }
@@ -679,6 +679,7 @@ test("workflow_status labels current blockers from normalized queue semantics", 
   const taskState = makeTask({ status: "completed" });
   const resolvedReview = makeTask({ status: "waiting_for_review", result: { resolved_by_task_id: "task_fix" } });
   const actionableReview = makeTask({ status: "waiting_for_review", result: { summary: "Needs review" } });
+  const repairBacklog = makeTask({ status: "waiting_for_repair", result: { summary: "Needs repair" } });
   const unresolvedFailed = makeTask({ status: "failed", result: { changed_files: ["src/file.js"], tests: "npm test failed" } });
   const store = {
     load: async () => ({
@@ -686,6 +687,7 @@ test("workflow_status labels current blockers from normalized queue semantics", 
         taskState,
         resolvedReview,
         actionableReview,
+        repairBacklog,
         unresolvedFailed,
         makeTask({ status: "waiting_for_lock" }),
         makeTask({ status: "waiting_for_integration" }),
@@ -699,8 +701,10 @@ test("workflow_status labels current blockers from normalized queue semantics", 
   const result = await tools.workflow_status.handler({ task_id: taskState.id });
 
   assert.equal(result.queue.waiting_for_review, 1);
+  assert.equal(result.queue.waiting_for_repair, 1);
   assert.equal(result.queue.actionable_review, 1);
-  assert.equal(result.queue.current_blockers, 4);
-  assert.ok(result.keyValues.some((row) => row.key === "Current Blockers" && row.value === "4"));
+  assert.equal(result.queue.current_blockers, 5);
+  assert.ok(result.keyValues.some((row) => row.key === "Current Blockers" && row.value === "5"));
   assert.ok(result.keyValues.some((row) => row.key === "Actionable Review" && row.value === "1"));
+  assert.ok(result.keyValues.some((row) => row.key === "Repair Backlog" && row.value === "1"));
 });

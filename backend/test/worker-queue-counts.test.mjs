@@ -13,6 +13,7 @@ const ZERO_AGES = {
   running: 0,
   waiting_for_integration: 0,
   waiting_for_lock: 0,
+  waiting_for_repair: 0,
   waiting_for_review: 0,
   completed: 0,
   failed: 0,
@@ -41,6 +42,7 @@ test('collectWorkerQueueCounts counts codex task statuses in one pass shape', as
           { assignee: 'codex', status: 'running' },
           { assignee: 'codex', status: 'waiting_for_lock' },
           { assignee: 'codex', status: 'waiting_for_review' },
+          { assignee: 'codex', status: 'waiting_for_repair' },
           { assignee: 'codex', status: 'completed' },
           { assignee: 'codex', status: 'failed', id: 'task_code_failed', result: { changed_files: ['backend/src/example.mjs'] } },
           { assignee: 'human', status: 'assigned' },
@@ -55,9 +57,40 @@ test('collectWorkerQueueCounts counts codex task statuses in one pass shape', as
   assert.equal(result.running, 1);
   assert.equal(result.waiting_for_lock, 1);
   assert.equal(result.waiting_for_review, 1);
+  assert.equal(result.waiting_for_repair, 1);
   assert.equal(result.completed, 1);
   assert.equal(result.failed, 1);
+  assert.equal(result.actionable_review, 1);
+  assert.equal(result.current_blockers, 4);
+  assert.deepEqual(result.raw_counts.waiting_for_repair, 1);
+  assert.deepEqual(result.policy_counts.waiting_for_repair, 1);
   assert.ok(result.oldest_age_ms.assigned >= 0);
+});
+
+test('collectWorkerQueueCounts separates raw indexed review counts from policy blockers', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'waiting_for_review', id: 'task_resolved_review', result: { resolved_by_task_id: 'task_done' } },
+          { assignee: 'codex', status: 'waiting_for_repair', id: 'task_repair', result: { summary: 'Needs repair' } },
+          { assignee: 'codex', status: 'completed', id: 'task_done', result: { verification: { passed: true } } },
+        ],
+      };
+    },
+    getCodexTaskQueue() {
+      return { counts: { waiting_for_review: 2, waiting_for_repair: 1, completed: 1 } };
+    },
+  };
+
+  const result = await collectWorkerQueueCounts(store);
+
+  assert.equal(result.raw_counts.waiting_for_review, 2);
+  assert.equal(result.policy_counts.waiting_for_review, 0);
+  assert.equal(result.waiting_for_review, 0, 'legacy fields follow policy counts for blockers');
+  assert.equal(result.waiting_for_repair, 1);
+  assert.equal(result.actionable_review, 0);
+  assert.equal(result.current_blockers, 1);
 });
 
 test('collectWorkerQueueCounts returns zero counts when load fails', async () => {
@@ -68,10 +101,14 @@ test('collectWorkerQueueCounts returns zero counts when load fails', async () =>
     running: 0,
     waiting_for_integration: 0,
     waiting_for_lock: 0,
+    waiting_for_repair: 0,
     waiting_for_review: 0,
     completed: 0,
     failed: 0,
+    raw_counts: ZERO_AGES,
+    policy_counts: ZERO_AGES,
     actionable_review: 0,
+    current_blockers: 0,
     legacy_failed_policy: {
       policy: 'resolved_legacy_failed_excluded_from_current_blockers',
       resolved_legacy_failed: 0,

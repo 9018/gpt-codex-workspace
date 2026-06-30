@@ -30,6 +30,26 @@ test("runLocalShell streams stdout and stderr to log files", async () => {
   }
 });
 
+test("runLocalShell records warning when stream log setup fails", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gptwork-run-shell-warning-"));
+  try {
+    const result = await runLocalShell(
+      "node -e \"process.stdout.write('out')\"",
+      dir,
+      5,
+      10000,
+      null,
+      { streamStdoutPath: dir }
+    );
+
+    assert.equal(result.returncode, 0);
+    assert.ok(Array.isArray(result.warnings));
+    assert.ok(result.warnings.some((warning) => warning.code === "stream_log_setup_failed" && warning.stream === "stdout"));
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
 test("runLocalShell records contentful output metrics when classifier matches", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gptwork-contentful-shell-"));
   try {

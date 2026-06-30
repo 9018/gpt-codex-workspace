@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -129,4 +129,34 @@ test('verifyTaskCompletion passes with git diff fallback when no project checks 
   assert.equal(verification.passed, true);
   assert.equal(verification.reason_no_tests, 'No project verification commands were available.');
   assert.deepEqual(calls.map((call) => call.command), ['git diff --check']);
+});
+
+test('verifyTaskCompletion discovers bounded backend package checks when root package is absent', async (t) => {
+  const { dir, resultJsonPath } = await makeResultDir(t);
+  await mkdir(join(dir, 'backend'), { recursive: true });
+  await writeFile(join(dir, 'backend', 'package.json'), JSON.stringify({
+    scripts: {
+      'check:syntax': 'node --check src/index.mjs',
+      'check:imports': 'node scripts/check-imports.mjs',
+      test: 'node --test',
+    },
+  }), 'utf8');
+  const { calls, runCommand } = commandRunner();
+
+  const verification = await verifyTaskCompletion({
+    repoPath: dir,
+    resultJson: { status: 'completed', summary: 'done', changed_files: ['backend/src/index.mjs'], verification: { passed: true } },
+    resultJsonPath,
+    config: { runCommand },
+  });
+
+  assert.equal(verification.passed, true);
+  assert.deepEqual(calls.map((call) => call.command), [
+    'git diff --check',
+    'npm --prefix backend run check:syntax',
+    'npm --prefix backend run check:imports',
+    'npm --prefix backend test',
+  ]);
+  assert.ok(calls.every((call) => call.cwd === dir));
+  assert.equal(verification.reason_no_tests, null);
 });

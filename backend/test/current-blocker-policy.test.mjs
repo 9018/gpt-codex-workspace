@@ -14,6 +14,7 @@ test('exports frozen canonical current-work decision labels', () => {
     INTEGRATION: 'integration',
     COMPLETED: 'completed',
     PROVIDER_EMPTY: 'provider_empty',
+    FAILURE_EVIDENCE: 'failure_evidence',
     CODE_EVIDENCE_FAILURE: 'code_evidence_failure',
     RESOLVED_BY_OPTIONS: 'resolved_by_options',
     UNKNOWN_STATUS: 'unknown_status',
@@ -91,6 +92,34 @@ test('classifyCurrentBlockerTask labels terminal code evidence failures as block
     assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.CODE_EVIDENCE_FAILURE);
     assert.equal(decision.blocks_current_work, true);
     assert.equal(decision.result_shape, 'code_evidence');
+  }
+});
+
+test('classifyCurrentBlockerTask labels terminal failure evidence as blocking', () => {
+  for (const result of [
+    { verification: { passed: false } },
+    { findings: [{ code: 'blocker', message: 'Broken' }] },
+    { commands: [{ cmd: 'npm test', exit_code: 1 }] },
+    { failure_class: 'verification_failed' },
+    { kind: 'verification_failed' },
+    { requires_review: true },
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: 'failed', result });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.FAILURE_EVIDENCE);
+    assert.equal(decision.blocks_current_work, true);
+    assert.equal(decision.result_shape, 'failure_evidence');
+  }
+});
+
+test('classifyCurrentBlockerTask keeps resolved failure evidence non-blocking', () => {
+  for (const result of [
+    { resolved_by_task_id: 'task_successor', verification: { passed: false } },
+    { superseded_by_task_id: 'task_successor', findings: [{ code: 'old' }] },
+    { noop: true, commands: [{ cmd: 'npm test', exit_code: 1 }] },
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: 'failed', result });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS);
+    assert.equal(decision.blocks_current_work, false);
   }
 });
 

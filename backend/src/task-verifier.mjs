@@ -127,14 +127,12 @@ async function discoverProjectChecks(repoPath, config = {}) {
   if (!repoPath) return [];
 
   const commands = [];
-  const packageJsonPath = join(repoPath, 'package.json');
-  if (await exists(packageJsonPath)) {
+  for (const packageDir of ['', 'backend', 'frontend', 'app']) {
+    const packageJsonPath = join(repoPath, packageDir, 'package.json');
+    if (!(await exists(packageJsonPath))) continue;
     try {
       const pkg = await readJsonFile(packageJsonPath);
-      const scripts = pkg?.scripts || {};
-      for (const script of ['check', 'test', 'build', 'typecheck', 'lint']) {
-        if (scripts[script]) commands.push(`npm run ${script}`);
-      }
+      commands.push(...commandsForPackageScripts(pkg?.scripts || {}, packageDir));
     } catch {}
   }
   if (await exists(join(repoPath, 'pyproject.toml')) || await exists(join(repoPath, 'pytest.ini'))) commands.push('python -m pytest');
@@ -142,6 +140,20 @@ async function discoverProjectChecks(repoPath, config = {}) {
   if (await exists(join(repoPath, 'Cargo.toml'))) commands.push('cargo test');
   if (await exists(join(repoPath, 'pom.xml'))) commands.push('mvn test');
   return [...new Set(commands)];
+}
+
+function commandsForPackageScripts(scripts, packageDir = '') {
+  const commands = [];
+  const prefix = packageDir ? `npm --prefix ${packageDir}` : 'npm';
+  for (const script of ['check:syntax', 'check:imports', 'check', 'typecheck', 'lint', 'test', 'build']) {
+    if (!scripts?.[script]) continue;
+    if (script === 'test') {
+      commands.push(packageDir ? `${prefix} test` : 'npm run test');
+    } else {
+      commands.push(`${prefix} run ${script}`);
+    }
+  }
+  return commands;
 }
 
 async function persistVerification(resultJsonPath, verification, logger) {

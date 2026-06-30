@@ -15,6 +15,7 @@ export const CURRENT_WORK_DECISION_LABELS = Object.freeze({
   INTEGRATION: 'integration',
   COMPLETED: 'completed',
   PROVIDER_EMPTY: 'provider_empty',
+  FAILURE_EVIDENCE: 'failure_evidence',
   CODE_EVIDENCE_FAILURE: 'code_evidence_failure',
   RESOLVED_BY_OPTIONS: 'resolved_by_options',
   UNKNOWN_STATUS: 'unknown_status',
@@ -35,7 +36,10 @@ export function classifyCurrentBlockerTask(task) {
 
   if (!isKnownTaskStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS, status, resultShape, false);
   if (isResolvedByOptions(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
-  if (status === TASK_STATUSES.WAITING_FOR_REVIEW || status === TASK_STATUSES.WAITING_FOR_REPAIR) {
+  if (status === TASK_STATUSES.WAITING_FOR_REVIEW) {
+    return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, hasActionableReviewEvidence(result, resultShape));
+  }
+  if (status === TASK_STATUSES.WAITING_FOR_REPAIR) {
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, true);
   }
   if (status === TASK_STATUSES.WAITING_FOR_INTEGRATION) {
@@ -44,6 +48,9 @@ export function classifyCurrentBlockerTask(task) {
   if (isActiveExecutionStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.ACTIVE, status, resultShape, true);
   if (status === TASK_STATUSES.COMPLETED) return decision(CURRENT_WORK_DECISION_LABELS.COMPLETED, status, resultShape, false);
   if (PROVIDER_EMPTY_RESULT_SHAPES.has(resultShape)) return decision(CURRENT_WORK_DECISION_LABELS.PROVIDER_EMPTY, status, resultShape, false);
+  if (resultShape === RESULT_SHAPE_TYPES.FAILURE_EVIDENCE) {
+    return decision(CURRENT_WORK_DECISION_LABELS.FAILURE_EVIDENCE, status, resultShape, true);
+  }
   if (resultShape === RESULT_SHAPE_TYPES.CODE_EVIDENCE) {
     return decision(CURRENT_WORK_DECISION_LABELS.CODE_EVIDENCE_FAILURE, status, resultShape, true);
   }
@@ -66,6 +73,17 @@ function isResolvedByOptions(result) {
 
 function hasStringEvidence(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasActionableReviewEvidence(result, resultShape) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return true;
+  if (Object.keys(result).length === 0) return false;
+  if ([RESULT_SHAPE_TYPES.CODE_EVIDENCE, RESULT_SHAPE_TYPES.COMPLETION_EVIDENCE, RESULT_SHAPE_TYPES.FAILURE_EVIDENCE].includes(resultShape)) return true;
+  return hasStringEvidence(result.summary)
+    || hasStringEvidence(result.status)
+    || hasStringEvidence(result.kind)
+    || Array.isArray(result.acceptance_findings)
+    || Boolean(result.reviewer_decision);
 }
 
 function decision(label, status, resultShape, blocksCurrentWork) {

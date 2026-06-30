@@ -8,6 +8,7 @@ const EMPTY_QUEUE_COUNTS = {
   [TASK_STATUSES.RUNNING]: 0,
   [TASK_STATUSES.WAITING_FOR_LOCK]: 0,
   [TASK_STATUSES.WAITING_FOR_REVIEW]: 0,
+  [TASK_STATUSES.WAITING_FOR_REPAIR]: 0,
   [TASK_STATUSES.WAITING_FOR_INTEGRATION]: 0,
   [TASK_STATUSES.COMPLETED]: 0,
   [TASK_STATUSES.FAILED]: 0,
@@ -25,6 +26,7 @@ const COUNTED_STATUSES = new Set([
   TASK_STATUSES.RUNNING,
   TASK_STATUSES.WAITING_FOR_LOCK,
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
   TASK_STATUSES.COMPLETED,
   TASK_STATUSES.FAILED,
@@ -124,6 +126,39 @@ function computePolicyQueueCounts(tasks = []) {
   return counts;
 }
 
+function computeRawQueueCounts(tasks = []) {
+  const counts = { ...EMPTY_QUEUE_COUNTS };
+  for (const task of tasks || []) {
+    if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
+    counts[task.status] += 1;
+  }
+  return counts;
+}
+
+function computeCurrentBlockers(policyCounts = {}) {
+  return (policyCounts[TASK_STATUSES.WAITING_FOR_LOCK] || 0)
+    + (policyCounts[TASK_STATUSES.WAITING_FOR_INTEGRATION] || 0)
+    + (policyCounts[TASK_STATUSES.WAITING_FOR_REPAIR] || 0)
+    + (policyCounts[TASK_STATUSES.WAITING_FOR_REVIEW] || 0)
+    + (policyCounts[TASK_STATUSES.FAILED] || 0);
+}
+
+function buildQueueResult({ rawCounts, policyCounts, legacy_failed_policy, oldest_age_ms }) {
+  const normalizedPolicyCounts = { ...EMPTY_QUEUE_COUNTS, ...(policyCounts || {}) };
+  const normalizedRawCounts = { ...EMPTY_QUEUE_COUNTS, ...(rawCounts || {}) };
+  const actionable_review = normalizedPolicyCounts[TASK_STATUSES.WAITING_FOR_REVIEW] || 0;
+  const current_blockers = computeCurrentBlockers(normalizedPolicyCounts);
+  return {
+    ...normalizedPolicyCounts,
+    raw_counts: normalizedRawCounts,
+    policy_counts: normalizedPolicyCounts,
+    actionable_review,
+    current_blockers,
+    legacy_failed_policy,
+    oldest_age_ms,
+  };
+}
+
 function legacyFailedPolicySummary(tasks = []) {
   const counts = { ...EMPTY_LEGACY_COUNTS };
 
@@ -147,25 +182,28 @@ function legacyFailedPolicySummary(tasks = []) {
 export async function collectWorkerQueueCounts(store) {
   try {
     const state = await store.load();
-    const counts = { ...EMPTY_QUEUE_COUNTS };
     const oldest_age_ms = computeOldestAges(state.tasks || []);
     const legacy_failed_policy = legacyFailedPolicySummary(state.tasks || []);
     const policyCounts = computePolicyQueueCounts(state.tasks || []);
+    let rawCounts = computeRawQueueCounts(state.tasks || []);
     // Prefer indexed lookup when available (O(1) per status)
     if (typeof store.getCodexTaskQueue === "function") {
       const q = store.getCodexTaskQueue();
+      rawCounts = { ...EMPTY_QUEUE_COUNTS };
       for (const st of Object.keys(EMPTY_QUEUE_COUNTS)) {
         if (q?.counts?.[st] !== undefined) {
-          counts[st] = q.counts[st];
+          rawCounts[st] = q.counts[st];
         }
       }
-      counts.waiting_for_review = policyCounts.waiting_for_review;
-      counts.failed = policyCounts.failed;
-      return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };
     }
-    Object.assign(counts, policyCounts);
-    return { ...counts, actionable_review: counts.waiting_for_review, legacy_failed_policy, oldest_age_ms };
+    return buildQueueResult({ rawCounts, policyCounts, legacy_failed_policy, oldest_age_ms });
   } catch {
-    return { ...EMPTY_QUEUE_COUNTS, actionable_review: 0, legacy_failed_policy: { ...EMPTY_LEGACY_COUNTS, policy: "resolved_legacy_failed_excluded_from_current_blockers", blocks_current_work: false }, oldest_age_ms: emptyQueueAges() };
+    const zeroCounts = { ...EMPTY_QUEUE_COUNTS };
+    return buildQueueResult({
+      rawCounts: zeroCounts,
+      policyCounts: zeroCounts,
+      legacy_failed_policy: { ...EMPTY_LEGACY_COUNTS, policy: "resolved_legacy_failed_excluded_from_current_blockers", blocks_current_work: false },
+      oldest_age_ms: emptyQueueAges(),
+    });
   }
 }

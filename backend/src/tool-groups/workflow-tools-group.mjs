@@ -29,19 +29,24 @@ import { TASK_STATUSES, isHumanReviewStatus } from "../task-status-taxonomy.mjs"
 export const WORKFLOW_ADVANCE_HANDLER_VERSION = "workflow_advance.v2.acceptance_first";
 
 function workflowQueueActionableReview(queue = {}) {
-  return queue.actionable_review ?? queue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0;
+  const policy = queue.policy_counts || queue;
+  return queue.actionable_review ?? policy[TASK_STATUSES.WAITING_FOR_REVIEW] ?? queue[TASK_STATUSES.WAITING_FOR_REVIEW] ?? 0;
 }
 
 function workflowQueueCurrentBlockers(queue = {}) {
-  return (queue[TASK_STATUSES.WAITING_FOR_LOCK] ?? 0)
-    + (queue[TASK_STATUSES.WAITING_FOR_INTEGRATION] ?? 0)
+  const policy = queue.policy_counts || queue;
+  return (policy[TASK_STATUSES.WAITING_FOR_LOCK] ?? 0)
+    + (policy[TASK_STATUSES.WAITING_FOR_INTEGRATION] ?? 0)
+    + (policy[TASK_STATUSES.WAITING_FOR_REPAIR] ?? 0)
     + workflowQueueActionableReview(queue)
-    + (queue[TASK_STATUSES.FAILED] ?? 0);
+    + (policy[TASK_STATUSES.FAILED] ?? 0);
 }
 
 function workflowQueueDisplay(queue = {}) {
+  const policy = queue.policy_counts || queue;
   return {
     ...queue,
+    ...policy,
     current_blockers: queue.current_blockers ?? workflowQueueCurrentBlockers(queue),
     actionable_review: workflowQueueActionableReview(queue),
   };
@@ -209,6 +214,10 @@ export function createWorkflowToolsGroup({
             {
               key: "Actionable Review",
               value: String(queueDisplay.actionable_review),
+            },
+            {
+              key: "Repair Backlog",
+              value: String(queueDisplay[TASK_STATUSES.WAITING_FOR_REPAIR] || 0),
             },
           ],
         };
