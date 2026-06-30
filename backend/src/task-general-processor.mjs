@@ -22,6 +22,7 @@ import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergence.mjs";
 import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
 import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
+import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -111,6 +112,43 @@ function commandListFromConfig(config = {}) {
   if (Array.isArray(config.deliveryResultRecoveryCommands)) return config.deliveryResultRecoveryCommands;
   if (Array.isArray(config.resultRecoveryVerificationCommands)) return config.resultRecoveryVerificationCommands;
   return [];
+}
+
+function recoveryCommandListFromConfig(config = {}) {
+  if (Array.isArray(config.deliveryResultRecoveryCommands) && config.deliveryResultRecoveryCommands.length > 0) return config.deliveryResultRecoveryCommands;
+  if (Array.isArray(config.resultRecoveryVerificationCommands) && config.resultRecoveryVerificationCommands.length > 0) return config.resultRecoveryVerificationCommands;
+  if (Array.isArray(config.integrationCheckCommands) && config.integrationCheckCommands.length > 0) return config.integrationCheckCommands;
+  return null;
+}
+
+function clearResolvedDeliveryFindings(findings = []) {
+  const resolvedCodes = new Set(["commit_missing", "dirty_worktree_after_codex"]);
+  return findings.map((finding) => resolvedCodes.has(finding?.code)
+    ? { ...finding, severity: "followup", resolved: true, message: (finding.message || finding.code) + " (resolved by delivery_result_recovery)" }
+    : finding);
+}
+
+function applySuccessfulDeliveryRecovery(taskResult, recovery, summary) {
+  const recoveredSummary = recovery.summary || summary || taskResult.summary || "Recovered Codex delivery result from dirty worktree.";
+  return {
+    ...taskResult,
+    kind: "codex_executed",
+    summary: recoveredSummary,
+    changed_files: Array.isArray(recovery.changed_files) ? recovery.changed_files : (Array.isArray(taskResult.changed_files) ? taskResult.changed_files : []),
+    tests: recovery.tests || taskResult.tests || "delivery recovery verification passed",
+    commit: recovery.commit,
+    local_head: recovery.local_head,
+    remote_head: recovery.remote_head,
+    verification: recovery.verification,
+    integration: { ...(taskResult.integration || {}), ...(recovery.integration || {}), status: "merged", merged: true },
+    delivery_result_recovery: recovery,
+    reviewer_decision: { ...(taskResult.reviewer_decision || {}), status: "accepted", passed: true },
+    acceptance_findings: clearResolvedDeliveryFindings(taskResult.acceptance_findings || []),
+    warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
+    followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+    failure_class: null,
+    convergence: { ...(taskResult.convergence || {}), nextStatus: "completed", closureReason: "delivery_result_recovery" },
+  };
 }
 
 async function isDirectory(path) {
@@ -234,6 +272,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const determineHealingActionFn = deps.determineHealingActionFn || determineHealingAction;
   const convergeTaskAfterRunFn = deps.convergeTaskAfterRunFn || convergeTaskAfterRun;
   const startCodexTuiGoalSessionFn = deps.startCodexTuiGoalSessionFn || startCodexTuiGoalSession;
+  const analyzeDeliveryRecoveryCandidateFn = deps.analyzeDeliveryRecoveryCandidateFn || analyzeDeliveryRecoveryCandidate;
+  const runDeliveryRecoveryFn = deps.runDeliveryRecoveryFn || runDeliveryRecovery;
   const runCommandFn = deps.runCommandFn;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
@@ -506,7 +546,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   if (parsedResult && parsedResult.structured && parsedResult.status === "completed" && cr && cr.returncode !== 0) {
     parsedResult.status = "failed";
   }
-  const taskResult = parsedResult
+  let taskResult = parsedResult
     ? buildTaskResult(parsedResult, { timedOut, timeoutSeconds: config.codexExecTimeout, returnCode: cr?.returncode ?? 0, cr })
     : {
         kind: cr?.no_first_output_timeout ? "no_first_output_timeout" : timedOut ? "codex_timeout" : "codex_failed",
@@ -626,6 +666,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   }
 
   let deliveryResultRecovery = null;
+  let deliveryRecoveryCompleted = false;
   if (taskStatus === "failed" && taskResult.kind === "codex_failed") {
     deliveryResultRecovery = await buildDeliveryResultRecoveryEvidence({
       config,
@@ -653,6 +694,42 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   if (reviewer.decision.repair_proposals.length > 0) {
     taskResult.repair_proposals = reviewer.decision.repair_proposals;
   }
+
+  const recoveryCandidate = analyzeDeliveryRecoveryCandidateFn({ task, taskResult, parsedResult, resolvedRepo, cr });
+  const shouldRunDeliveryRecovery = recoveryCandidate.eligible === true
+    && (taskStatus === "waiting_for_review" || taskStatus === "failed" || taskStatus === "completed");
+  if (shouldRunDeliveryRecovery) {
+    deliveryResultRecovery = await runDeliveryRecoveryFn({
+      task,
+      goal,
+      config,
+      resolvedRepo,
+      taskResult,
+      parsedResult,
+      cr,
+      verificationCommands: recoveryCommandListFromConfig(config),
+      runCommandFn: runCommandFn || (await import("./workspace-service.mjs")).runLocalShell,
+    });
+    taskResult.delivery_result_recovery = deliveryResultRecovery;
+    if (deliveryResultRecovery.recovered === true) {
+      taskStatus = "completed";
+      deliveryRecoveryCompleted = true;
+      summary = deliveryResultRecovery.summary || summary;
+      taskResult.acceptance_findings = acceptanceFindings;
+      taskResult = applySuccessfulDeliveryRecovery(taskResult, deliveryResultRecovery, summary);
+    } else if (deliveryResultRecovery.attempted === true) {
+      taskStatus = "waiting_for_review";
+      taskResult.requires_review = true;
+      taskResult.reason = "delivery_result_recovery_failed: " + (deliveryResultRecovery.reason || "unknown");
+      taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : acceptanceFindings;
+      taskResult.acceptance_findings.push({
+        severity: "blocker",
+        code: "delivery_result_recovery_failed",
+        message: deliveryResultRecovery.blockers?.[0]?.message || deliveryResultRecovery.reason || "Delivery result recovery failed.",
+        source: "delivery_result_recovery",
+      });
+    }
+  }
   // P0: Collect verification evidence before cleanup
   if (taskStatus === "completed" && executionCwd) {
     try {
@@ -679,7 +756,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // ================================================================
   // PR0: Acceptance agent — evidence-based verification
   // ================================================================
-  if (taskStatus === 'completed' && (parsedResult || taskResult)) {
+  if (taskStatus === 'completed' && (parsedResult || taskResult) && !deliveryRecoveryCompleted) {
     const acceptanceResult = await runAcceptanceAgentFn({
       task,
       goal,

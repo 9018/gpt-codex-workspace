@@ -646,6 +646,15 @@ function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config 
     : taskResult.kind === "codex_timeout"
       ? "[worker] timed out after " + config.codexExecTimeout + "s"
       : "[worker] completed: task processed by Codex CLI" });
+  if (taskResult.delivery_result_recovery?.attempted === true) {
+    const recovery = taskResult.delivery_result_recovery;
+    item.logs.push({
+      time: doneAt,
+      message: recovery.recovered === true
+        ? `[worker] delivery recovery attempted: eligible=${recovery.eligible === true} recovered=true commit=${recovery.commit || "none"}`
+        : `[worker] delivery recovery failed: ${recovery.reason || recovery.blockers?.[0]?.code || "unknown"}`,
+    });
+  }
   if (taskResult.failure_class || taskResult.repair_attempt !== undefined || taskResult.repair_of_attempt !== undefined) {
     item.logs.push({
       time: doneAt,

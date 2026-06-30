@@ -671,6 +671,80 @@ test("processGeneralTaskWithDeps: acceptance failed + no repair -> waiting_for_r
   }
 });
 
+test("processGeneralTaskWithDeps: delivery recovery completes commit_missing dirty worktree result", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-delivery-recovery-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_delivery_recovery", "goal_delivery_recovery");
+    const recoveredCommit = "1234567890abcdef1234567890abcdef12345678";
+    let acceptanceCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+      deliveryResultRecoveryCommands: ["true"],
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_delivery_recovery", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_delivery_recovery", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "changed but no commit",
+        parsedResult: {
+          structured: true,
+          status: "completed",
+          summary: "changed but no commit",
+          changed_files: ["src/recovered.mjs"],
+          tests: "pass",
+          commit: "none",
+          acceptance_findings: [],
+        },
+      }),
+      analyzeDeliveryRecoveryCandidateFn: () => ({ attempted: true, eligible: true, triggers: ["commit_missing"] }),
+      runDeliveryRecoveryFn: async () => ({
+        attempted: true,
+        eligible: true,
+        recovered: true,
+        reason: "recovered_dirty_worktree_delivery",
+        changed_files: ["src/recovered.mjs"],
+        commit: recoveredCommit,
+        local_head: recoveredCommit,
+        remote_head: recoveredCommit,
+        canonical_clean_before: true,
+        canonical_clean_after: true,
+        canonical_clean: true,
+        commit_integrated: true,
+        verification: { passed: true, commands: [{ cmd: "true", cwd: tmpDir, exit_code: 0, duration_ms: 1, stdout_tail: "", stderr_tail: "" }] },
+        integration: { mode: "ff_only", merged: true, status: "merged" },
+        blockers: [],
+        warnings: [],
+      }),
+      runAcceptanceAgentFn: async () => {
+        acceptanceCalled = true;
+        return { passed: false, findings: [] };
+      },
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult, deliveryResultRecovery }) => {
+        assert.equal(taskStatus, "completed");
+        assert.equal(taskResult.commit, recoveredCommit);
+        assert.equal(taskResult.integration.status, "merged");
+        assert.equal(taskResult.delivery_result_recovery.recovered, true);
+        assert.equal(deliveryResultRecovery.recovered, true);
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(acceptanceCalled, false, "recovered delivery should not re-enter normal acceptance path");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-int-conflict-"));
   try {
