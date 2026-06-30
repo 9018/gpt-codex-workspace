@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
-import { collectWorkerQueueCounts } from '../src/worker-queue-counts.mjs';
+import { collectWorkerQueueCounts, computePolicyQueueCounts } from '../src/worker-queue-counts.mjs';
 
 const WORKER_QUEUE_COUNTS_SOURCE = fileURLToPath(new URL('../src/worker-queue-counts.mjs', import.meta.url));
 
@@ -448,4 +448,69 @@ test('legacyFailedPolicySummary excludes codex failed without code evidence from
   assert.equal(result.legacy_failed_policy.resolved_legacy_failed, 1);
   assert.equal(result.legacy_failed_policy.unresolved_failed, 1);
   assert.equal(result.legacy_failed_policy.blocks_current_work, true);
+});
+
+test('computePolicyQueueCounts reuses indexes instead of scanning all tasks for each failed task', () => {
+  const failedTasks = Array.from({ length: 1200 }, (_, index) => ({
+    assignee: 'codex',
+    status: 'failed',
+    id: `task_failed_${index}`,
+    root_task_id: `root_${index}`,
+    goal_id: `goal_${index}`,
+    result: {
+      changed_files: [`backend/src/failure-${index}.mjs`],
+      verification: { passed: false },
+    },
+  }));
+  const completedSuccessors = Array.from({ length: 400 }, (_, index) => ({
+    assignee: 'codex',
+    status: 'completed',
+    id: `task_successor_${index}`,
+    root_task_id: `root_${index}`,
+    goal_id: `goal_${index}`,
+    result: { verification: { passed: true }, commit: `abc${index}` },
+  }));
+  const reviewTasks = Array.from({ length: 25 }, (_, index) => ({
+    assignee: 'codex',
+    status: 'waiting_for_review',
+    id: `task_review_${index}`,
+    result: { summary: 'Needs review' },
+  }));
+  const repairTasks = Array.from({ length: 10 }, (_, index) => ({
+    assignee: 'codex',
+    status: 'waiting_for_repair',
+    id: `task_repair_${index}`,
+    result: { summary: 'Needs repair' },
+  }));
+  const tasks = [
+    ...failedTasks,
+    ...completedSuccessors,
+    ...reviewTasks,
+    ...repairTasks,
+    { assignee: 'human', status: 'failed', id: 'task_human_failed' },
+  ];
+
+  let topLevelIterations = 0;
+  const originalIterator = tasks[Symbol.iterator];
+  Object.defineProperty(tasks, Symbol.iterator, {
+    configurable: true,
+    value: function iteratorWithCounter(...args) {
+      topLevelIterations += 1;
+      return originalIterator.apply(this, args);
+    },
+  });
+
+  try {
+    const counts = computePolicyQueueCounts(tasks);
+    assert.equal(counts.failed, 800);
+    assert.equal(counts.completed, 400);
+    assert.equal(counts.waiting_for_review, 25);
+    assert.equal(counts.waiting_for_repair, 10);
+    assert.ok(topLevelIterations <= 3, `expected a small fixed number of task scans, got ${topLevelIterations}`);
+  } finally {
+    Object.defineProperty(tasks, Symbol.iterator, {
+      configurable: true,
+      value: originalIterator,
+    });
+  }
 });

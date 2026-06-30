@@ -56,60 +56,131 @@ function computeOldestAges(tasks = [], now = Date.now()) {
   return ages;
 }
 
+function addToSetMap(map, key, value) {
+  if (!key) return;
+  const normalizedKey = String(key);
+  const values = map.get(normalizedKey) || new Set();
+  values.add(value);
+  map.set(normalizedKey, values);
+}
+
+function addRefsToSet(map, refs = [], value) {
+  for (const ref of refs || []) addToSetMap(map, ref, value);
+}
+
+function taskDirectRelationRefs(task = {}) {
+  return [task.parent_task_id, task.root_task_id, task.repair_of_task_id].filter(Boolean);
+}
+
+/**
+ * Build one-pass lookup structures used by queue policy decisions.
+ * Successor indexes only include completed Codex tasks with completion
+ * evidence, preserving the historical implicit-successor semantics.
+ */
+export function buildTaskQueueIndexes(tasks = []) {
+  const indexes = {
+    tasksById: new Map(),
+    completedWithEvidenceByGoalId: new Map(),
+    completedRelationRefs: new Map(),
+    completedDirectRelationRefs: new Map(),
+    completedFullRelationRefs: new Map(),
+    resolvedByTaskIds: new Set(),
+    supersededByTaskIds: new Set(),
+    relationsByTaskId: new Map(),
+  };
+
+  for (const task of tasks || []) {
+    if (!task || typeof task !== "object") continue;
+    if (task.id) indexes.tasksById.set(task.id, task);
+
+    const relationIds = taskRelationIds(task);
+    if (task.id) indexes.relationsByTaskId.set(task.id, relationIds);
+
+    for (const ref of [task.resolved_by_task_id, task.result?.resolved_by_task_id].filter(Boolean)) {
+      indexes.resolvedByTaskIds.add(ref);
+    }
+    for (const ref of [task.superseded_by_task_id, task.result?.superseded_by_task_id].filter(Boolean)) {
+      indexes.supersededByTaskIds.add(ref);
+    }
+
+    if (task.assignee !== "codex") continue;
+    if (task.status !== TASK_STATUSES.COMPLETED) continue;
+    if (!hasCompletionEvidence(task.result || {})) continue;
+
+    addToSetMap(indexes.completedWithEvidenceByGoalId, task.goal_id, task.id);
+    addRefsToSet(indexes.completedDirectRelationRefs, taskDirectRelationRefs(task), task.id);
+    addRefsToSet(indexes.completedFullRelationRefs, relationIds, task.id);
+    addRefsToSet(indexes.completedRelationRefs, taskDirectRelationRefs(task), task.id);
+    addRefsToSet(indexes.completedRelationRefs, relationIds, task.id);
+  }
+
+  return indexes;
+}
+
 /**
  * Check if a failed/timed_out task has been implicitly resolved by a later
  * completed task that carries completion evidence and references the
  * original task through task-ID, result, or shared-goal relationships.
  */
-function hasImplicitSuccessor(failedTask, allTasks) {
+export function hasImplicitSuccessor(failedTask, indexes = buildTaskQueueIndexes([])) {
   if (!failedTask || !failedTask.id) return false;
-  const failedTaskIds = taskRelationIds(failedTask);
+  const taskIndexes = Array.isArray(indexes) ? buildTaskQueueIndexes(indexes) : indexes || buildTaskQueueIndexes([]);
+  const failedTaskIds = taskIndexes.relationsByTaskId?.get(failedTask.id) || taskRelationIds(failedTask);
 
-  for (const task of allTasks) {
-    if (task.id === failedTask.id) continue;
-    if (task.assignee !== "codex") continue;
-    if (task.status !== TASK_STATUSES.COMPLETED) continue;
-    if (!hasCompletionEvidence(task.result || {})) continue;
-
-    // 1) Direct task-ID-based references (successor's parent/root/repair
-    //    matches any of failed task's own IDs, root IDs, etc.)
-    if (failedTaskIds.size > 0) {
-      const taskRefs = new Set([task.parent_task_id, task.root_task_id, task.repair_of_task_id].filter(Boolean));
-      for (const ref of taskRefs) {
-        if (failedTaskIds.has(ref)) return true;
+  // 1) Direct task-ID-based references (successor's parent/root/repair
+  //    matches any of failed task's own IDs, root IDs, etc.)
+  if (failedTaskIds.size > 0) {
+    for (const ref of failedTaskIds) {
+      const successorIds = taskIndexes.completedDirectRelationRefs?.get(ref);
+      if (successorIds) {
+        for (const successorId of successorIds) {
+          if (successorId !== failedTask.id) return true;
+        }
       }
-
-      // 2) Successor's full task relation set (including result.repair etc.)
-      //    references the failed task's ID
-      if (taskRelationIds(task).has(failedTask.id)) return true;
     }
 
-    // 3) Shared goal_id: both tasks serve the same goal, so a completed task
-    //    with evidence implicitly resolves earlier failures for that goal.
-    if (task.goal_id && task.goal_id === failedTask.goal_id) return true;
+    // 2) Successor's full task relation set (including result.repair etc.)
+    //    references the failed task's ID.
+    const successorIds = taskIndexes.completedFullRelationRefs?.get(failedTask.id);
+    if (successorIds) {
+      for (const successorId of successorIds) {
+        if (successorId !== failedTask.id) return true;
+      }
+    }
+  }
+
+  // 3) Shared goal_id: both tasks serve the same goal, so a completed task
+  //    with evidence implicitly resolves earlier failures for that goal.
+  if (failedTask.goal_id) {
+    const successorIds = taskIndexes.completedWithEvidenceByGoalId?.get(failedTask.goal_id);
+    if (successorIds) {
+      for (const successorId of successorIds) {
+        if (successorId !== failedTask.id) return true;
+      }
+    }
   }
   return false;
 }
 
-function currentWorkDecision(task, tasks = []) {
+function currentWorkDecision(task, indexes = buildTaskQueueIndexes([])) {
   const decision = classifyCurrentBlockerTask(task);
   if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return decision;
-  if (hasImplicitSuccessor(task, tasks)) return { ...decision, blocks_current_work: false };
+  if (hasImplicitSuccessor(task, indexes)) return { ...decision, blocks_current_work: false };
   return decision;
 }
 
-function isFailedCurrentWorkTask(task, tasks = []) {
+function isFailedCurrentWorkTask(task, indexes = buildTaskQueueIndexes([])) {
   if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return false;
   if (isResolvedLegacyTerminalTask(task)) return false;
-  return currentWorkDecision(task, tasks).blocks_current_work;
+  return currentWorkDecision(task, indexes).blocks_current_work;
 }
 
-function isResolvedLegacyFailedTask(task, tasks = []) {
+function isResolvedLegacyFailedTask(task, indexes = buildTaskQueueIndexes([])) {
   if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return false;
-  return !isFailedCurrentWorkTask(task, tasks);
+  return !isFailedCurrentWorkTask(task, indexes);
 }
 
-function computePolicyQueueCounts(tasks = []) {
+export function computePolicyQueueCounts(tasks = [], indexes = buildTaskQueueIndexes(tasks)) {
   const counts = { ...EMPTY_QUEUE_COUNTS };
   for (const task of tasks || []) {
     if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
@@ -118,10 +189,10 @@ function computePolicyQueueCounts(tasks = []) {
       continue;
     }
     if (task.status === TASK_STATUSES.FAILED) {
-      if (isFailedCurrentWorkTask(task, tasks)) counts.failed += 1;
+      if (isFailedCurrentWorkTask(task, indexes)) counts.failed += 1;
       continue;
     }
-    if (currentWorkDecision(task, tasks).blocks_current_work) counts[task.status] += 1;
+    if (currentWorkDecision(task, indexes).blocks_current_work) counts[task.status] += 1;
   }
   return counts;
 }
@@ -159,14 +230,14 @@ function buildQueueResult({ rawCounts, policyCounts, legacy_failed_policy, oldes
   };
 }
 
-function legacyFailedPolicySummary(tasks = []) {
+function legacyFailedPolicySummary(tasks = [], indexes = buildTaskQueueIndexes(tasks)) {
   const counts = { ...EMPTY_LEGACY_COUNTS };
 
   for (const task of tasks || []) {
     if (task.assignee !== "codex") continue;
-    if (isResolvedLegacyFailedTask(task, tasks)) {
+    if (isResolvedLegacyFailedTask(task, indexes)) {
       counts.resolved_legacy_failed += 1;
-    } else if (isFailedCurrentWorkTask(task, tasks)) {
+    } else if (isFailedCurrentWorkTask(task, indexes)) {
       counts.unresolved_failed += 1;
     }
     if (isResolvedLegacyReviewTask(task)) counts.resolved_legacy_review += 1;
@@ -182,9 +253,10 @@ function legacyFailedPolicySummary(tasks = []) {
 export async function collectWorkerQueueCounts(store) {
   try {
     const state = await store.load();
+    const indexes = buildTaskQueueIndexes(state.tasks || []);
     const oldest_age_ms = computeOldestAges(state.tasks || []);
-    const legacy_failed_policy = legacyFailedPolicySummary(state.tasks || []);
-    const policyCounts = computePolicyQueueCounts(state.tasks || []);
+    const legacy_failed_policy = legacyFailedPolicySummary(state.tasks || [], indexes);
+    const policyCounts = computePolicyQueueCounts(state.tasks || [], indexes);
     let rawCounts = computeRawQueueCounts(state.tasks || []);
     // Prefer indexed lookup when available (O(1) per status)
     if (typeof store.getCodexTaskQueue === "function") {
