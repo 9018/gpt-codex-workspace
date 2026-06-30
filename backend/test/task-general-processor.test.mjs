@@ -438,6 +438,60 @@ test("processGeneralTaskWithDeps: acceptance passed + no changes -> completed", 
   }
 });
 
+test("processGeneralTaskWithDeps: acceptance followups stay next_tasks without blocking finalizer", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-followup-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_acc_followup", "goal_acc_followup");
+    let finalizedTaskResult = null;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_followup", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_followup", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "diagnostic completed with followup",
+        parsedResult: { structured: true, status: "completed", summary: "diagnostic completed with followup", operation_kind: "diagnostic", changed_files: [], tests: "diagnostic: passed", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        finalizedTaskResult = taskResult;
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async () => ({
+        passed: true,
+        status: "accepted_with_followups",
+        profile: "diagnostic",
+        findings: [{ severity: "followup", code: "coverage_note", message: "Add a broader report fixture", source: "acceptance_agent" }],
+        repair_proposals: [],
+        next_tasks: [{ title: "Add a broader report fixture", reason: "Useful coverage", severity: "non_blocking", auto_enqueue: false }],
+        evidence: { changed_files: [] },
+        reviewer_decision: { role: "acceptance_agent", summary: "Accepted with followups", decision: { status: "accepted_with_followups", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async () => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(finalizedTaskResult.next_tasks.length, 1);
+    assert.equal(finalizedTaskResult.next_tasks[0].severity, "non_blocking");
+    assert.equal(finalizedTaskResult.next_tasks[0].auto_enqueue, false);
+    assert.ok(finalizedTaskResult.acceptance_findings.some((finding) => finding.code === "coverage_note"));
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("processGeneralTaskWithDeps: acceptance passed + code changes + integration success -> completed", async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-acc-int-"));
   try {

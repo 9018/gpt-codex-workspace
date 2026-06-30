@@ -17,6 +17,8 @@ import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompleti
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
 import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
+import { decideTaskClosure, mapClosureStatusToTaskStatus } from './task-closure-decider.mjs';
+import { planFollowupTasks } from './followup-task-planner.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -36,6 +38,32 @@ function applyRepairMetadata(args = {}, repairGoal = {}) {
 
 function isIntegrationRepairableStatus(status) {
   return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
+}
+
+function mergeNextTasks(existing = [], planned = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(planned) ? planned : [])]) {
+    if (!item || typeof item !== "object") continue;
+    const key = `${item.title || ""}\n${item.reason || ""}\n${item.source_task_id || ""}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+function contractForClosure({ goal, taskResult } = {}) {
+  return goal?.acceptance_contract || taskResult?.acceptance_contract || null;
+}
+
+function resultForClosure({ taskStatus, taskResult = {}, verification = null } = {}) {
+  return {
+    ...taskResult,
+    status: taskStatus,
+    verification: taskResult.verification || verification || null,
+    contract_verification: taskResult.contract_verification || verification?.contract_verification || null,
+  };
 }
 
 function taskWithRepairContext(task, resolvedRepo) {
@@ -268,6 +296,9 @@ export async function finalizeCodexTaskRun({
     } else {
       taskResult.verification = verification;
     }
+    if (verification.contract_verification) {
+      taskResult.contract_verification = verification.contract_verification;
+    }
     taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
     for (const finding of verification.findings || []) {
       const duplicate = taskResult.acceptance_findings.some((existing) => existing.code === finding.code && existing.message === finding.message);
@@ -326,6 +357,42 @@ export async function finalizeCodexTaskRun({
       taskResult.kind = taskResult.kind || "verification_failed";
       taskResult.requires_review = true;
       taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
+    }
+
+    const closureDecision = decideTaskClosure({
+      contract: contractForClosure({ goal, taskResult }),
+      contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+      verification,
+      integration: taskResult.integration,
+      deployment: taskResult.deployment || taskResult.runtime || null,
+      result: resultForClosure({ taskStatus, taskResult, verification }),
+      task,
+      config: {
+        ...config,
+        verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
+      },
+    });
+    taskResult.closure_decision = closureDecision;
+    const mappedStatus = mapClosureStatusToTaskStatus(closureDecision.status, config);
+    if (closureDecision.status === "auto_completed_clean" || closureDecision.status === "auto_completed_with_followups") {
+      taskStatus = mappedStatus;
+      taskResult.requires_review = false;
+      taskResult.reason = closureDecision.reason;
+      const plannedFollowups = planFollowupTasks({
+        task,
+        goal,
+        result: taskResult,
+        contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+        closureDecision,
+      });
+      taskResult.next_tasks = mergeNextTasks(taskResult.next_tasks, plannedFollowups);
+    } else if (closureDecision.status === "requires_review") {
+      taskStatus = mappedStatus;
+      taskResult.requires_review = true;
+      taskResult.reason = closureDecision.reason;
+    } else if (closureDecision.status === "failed") {
+      taskStatus = mappedStatus;
+      taskResult.reason = closureDecision.reason;
     }
   }
 
@@ -516,6 +583,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     verification: taskResult.verification || null,
     contract_verification: taskResult.contract_verification || taskResult.verification?.contract_verification || taskResult.final_verification?.contract_verification || null,
     final_verification: taskResult.final_verification || null,
+    closure_decision: taskResult.closure_decision || null,
     failure_class: taskResult.failure_class || null,
     attempt: taskResult.attempt ?? null,
     repair_of_attempt: taskResult.repair_of_attempt ?? null,

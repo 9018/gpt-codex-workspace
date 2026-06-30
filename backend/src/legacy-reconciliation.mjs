@@ -38,6 +38,8 @@ function isActiveOrReviewStatus(status) {
 }
 
 export function hasCompletionEvidence(taskResult = {}) {
+  if (taskResult.closure_decision?.auto_complete_allowed === true) return true;
+  if (["auto_completed_clean", "auto_completed_with_followups"].includes(taskResult.closure_decision?.status)) return true;
   if (taskResult.reviewer_decision?.passed === true) return true;
   if (["accepted", "accepted_with_followups"].includes(taskResult.reviewer_decision?.status)) return true;
   if (taskResult.verification?.passed === true) return true;

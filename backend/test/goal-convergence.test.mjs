@@ -30,6 +30,26 @@ test("determineGoalStatus completes a verified accepted code-change task", () =>
   assert.equal(status, "completed");
 });
 
+test("determineGoalStatus completes deterministic auto closure with non-blocking followups", () => {
+  const status = determineGoalStatus(
+    { id: "goal_auto_followups", status: "running" },
+    { id: "task_auto_followups", status: "completed" },
+    {
+      status: "completed",
+      closure_decision: {
+        status: "auto_completed_with_followups",
+        blocking_passed: true,
+        auto_complete_allowed: true,
+        requires_human_decision: false,
+      },
+      acceptance_findings: [{ severity: "followup", code: "quality_note", message: "Improve later" }],
+      next_tasks: [{ title: "Improve later", severity: "non_blocking", auto_enqueue: false }],
+    },
+  );
+
+  assert.equal(status, "completed");
+});
+
 test("determineGoalStatus completes verified admin restart evidence without worktree", () => {
   const head = "88546312e483f2ce4a338ae0486e31c9bc4dd739";
   const status = determineGoalStatus(

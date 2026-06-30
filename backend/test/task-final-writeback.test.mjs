@@ -516,6 +516,125 @@ test("task-final-writeback: completed task triggers queue autostart hook", async
   assert.equal(result.auto_start.auto_started, true);
 });
 
+test("task-final-writeback: quality notes produce completed closure with next_tasks", async () => {
+  let savedTask = null;
+  let fallbackJson = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.goal.acceptance_contract = {
+    intent: { operation_kind: "diagnostic", semantic_confidence: "high" },
+    requirements: { requires_commit: false },
+    completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "Diagnostic completed",
+    operation_kind: "diagnostic",
+    diagnostic_evidence: { summary: "No mutation", repo_mutated: false },
+    repo_mutated: false,
+    changed_files: [],
+    warnings: [],
+    followups: [],
+    verification: { passed: true, commands: [] },
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [{ cmd: "diagnostic-check", exit_code: 0 }],
+    changed_files: [],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+    contract_verification: {
+      contract_valid: true,
+      blocking_passed: true,
+      acceptance_status: "satisfied",
+      completion_eligible: true,
+      blockers: [],
+      non_blocking_followups: [],
+      quality_notes: ["Add more diagnostic fixture coverage."],
+      state_assertions: { passed: true, failures: [] },
+    },
+  });
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.closure_decision.status, "auto_completed_with_followups");
+  assert.equal(savedTask.result.requires_review, false);
+  assert.equal(savedTask.result.next_tasks.length, 1);
+  assert.equal(savedTask.result.next_tasks[0].severity, "non_blocking");
+  assert.equal(savedTask.result.next_tasks[0].auto_enqueue, false);
+  assert.equal(fallbackJson.closure_decision.status, "auto_completed_with_followups");
+  assert.equal(fallbackJson.next_tasks.length, 1);
+});
+
+test("task-final-writeback: semantic ambiguity remains waiting_for_review", async () => {
+  let savedTask = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.goal.acceptance_contract = {
+    intent: { operation_kind: "code_change", semantic_confidence: "low" },
+    requirements: { requires_commit: true },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "Needs semantic review",
+    operation_kind: "code_change",
+    changed_files: ["src/app.mjs"],
+    commit: "abc123",
+    warnings: [],
+    followups: [],
+    verification: { passed: true, commands: [] },
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [{ cmd: "check", exit_code: 0 }],
+    changed_files: ["src/app.mjs"],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+    contract_verification: {
+      contract_valid: true,
+      blocking_passed: true,
+      acceptance_status: "indeterminate",
+      completion_eligible: true,
+      blockers: [],
+      non_blocking_followups: [],
+      quality_notes: [],
+      state_assertions: { passed: true, failures: [] },
+    },
+  });
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_review");
+  assert.equal(savedTask.status, "waiting_for_review");
+  assert.equal(savedTask.result.closure_decision.status, "requires_review");
+  assert.equal(savedTask.result.requires_review, true);
+});
+
 test("task-final-writeback: waiting_for_integration branch_pushed does NOT mark completed", async () => {
   // P0: When finalizer runs integration and gets branch_pushed (NOT merged),
   // taskStatus must NOT become "completed"
