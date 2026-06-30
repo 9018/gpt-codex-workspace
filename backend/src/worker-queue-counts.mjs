@@ -32,6 +32,8 @@ const COUNTED_STATUSES = new Set([
   TASK_STATUSES.FAILED,
 ]);
 
+const WORKER_QUEUE_COUNTS_CACHE_KEY = "worker_queue_counts";
+
 function emptyQueueAges() {
   return Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((status) => [status, 0]));
 }
@@ -41,7 +43,7 @@ function taskTimestamp(task) {
   return Number.isFinite(ts) ? ts : null;
 }
 
-function computeOldestAges(tasks = [], now = Date.now()) {
+function computeOldestTimestamps(tasks = []) {
   const oldestTs = Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((status) => [status, null]));
   for (const task of tasks || []) {
     if (task.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) continue;
@@ -49,11 +51,19 @@ function computeOldestAges(tasks = [], now = Date.now()) {
     if (ts == null) continue;
     if (oldestTs[task.status] == null || ts < oldestTs[task.status]) oldestTs[task.status] = ts;
   }
+  return oldestTs;
+}
+
+function computeOldestAgesFromTimestamps(oldestTs = {}, now = Date.now()) {
   const ages = emptyQueueAges();
-  for (const [status, ts] of Object.entries(oldestTs)) {
+  for (const [status, ts] of Object.entries({ ...Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((key) => [key, null])), ...(oldestTs || {}) })) {
     ages[status] = ts == null ? 0 : Math.max(0, now - ts);
   }
   return ages;
+}
+
+function computeOldestAges(tasks = [], now = Date.now()) {
+  return computeOldestAgesFromTimestamps(computeOldestTimestamps(tasks), now);
 }
 
 function addToSetMap(map, key, value) {
@@ -250,25 +260,45 @@ function legacyFailedPolicySummary(tasks = [], indexes = buildTaskQueueIndexes(t
   };
 }
 
+function computeIndexedRawQueueCounts(store) {
+  const q = store.getCodexTaskQueue();
+  const rawCounts = { ...EMPTY_QUEUE_COUNTS };
+  for (const st of Object.keys(EMPTY_QUEUE_COUNTS)) {
+    if (q?.counts?.[st] !== undefined) rawCounts[st] = q.counts[st];
+  }
+  return rawCounts;
+}
+
+function buildWorkerQueueDerivedSnapshot(store, tasks = []) {
+  const indexes = buildTaskQueueIndexes(tasks);
+  const oldest_timestamps = computeOldestTimestamps(tasks);
+  const legacy_failed_policy = legacyFailedPolicySummary(tasks, indexes);
+  const policyCounts = computePolicyQueueCounts(tasks, indexes);
+  const rawCounts = typeof store.getCodexTaskQueue === "function"
+    ? computeIndexedRawQueueCounts(store)
+    : computeRawQueueCounts(tasks);
+  return { rawCounts, policyCounts, legacy_failed_policy, oldest_timestamps };
+}
+
+function getWorkerQueueDerivedSnapshot(store, tasks = []) {
+  const build = () => buildWorkerQueueDerivedSnapshot(store, tasks);
+  if (typeof store.getOrBuildDerived === "function") {
+    return store.getOrBuildDerived(WORKER_QUEUE_COUNTS_CACHE_KEY, build);
+  }
+  return build();
+}
+
 export async function collectWorkerQueueCounts(store) {
   try {
     const state = await store.load();
-    const indexes = buildTaskQueueIndexes(state.tasks || []);
-    const oldest_age_ms = computeOldestAges(state.tasks || []);
-    const legacy_failed_policy = legacyFailedPolicySummary(state.tasks || [], indexes);
-    const policyCounts = computePolicyQueueCounts(state.tasks || [], indexes);
-    let rawCounts = computeRawQueueCounts(state.tasks || []);
-    // Prefer indexed lookup when available (O(1) per status)
-    if (typeof store.getCodexTaskQueue === "function") {
-      const q = store.getCodexTaskQueue();
-      rawCounts = { ...EMPTY_QUEUE_COUNTS };
-      for (const st of Object.keys(EMPTY_QUEUE_COUNTS)) {
-        if (q?.counts?.[st] !== undefined) {
-          rawCounts[st] = q.counts[st];
-        }
-      }
-    }
-    return buildQueueResult({ rawCounts, policyCounts, legacy_failed_policy, oldest_age_ms });
+    const derived = getWorkerQueueDerivedSnapshot(store, state.tasks || []);
+    const oldest_age_ms = computeOldestAgesFromTimestamps(derived.oldest_timestamps);
+    return buildQueueResult({
+      rawCounts: derived.rawCounts,
+      policyCounts: derived.policyCounts,
+      legacy_failed_policy: derived.legacy_failed_policy,
+      oldest_age_ms,
+    });
   } catch {
     const zeroCounts = { ...EMPTY_QUEUE_COUNTS };
     return buildQueueResult({

@@ -447,6 +447,36 @@ test("StateStore mutate batches state update into one save", async () => {
   assert.equal(persisted.activities[0].task_id, "task_mutate");
 });
 
+test("StateStore derived cache is bound to state version and invalidated by save and mutate", async () => {
+  const root = await mkdtemp(join(tmpdir(), "state-derived-cache-"));
+  const store = new StateStore({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: join(root, "workspace")
+  });
+
+  await store.load();
+  const initialVersion = store.getStateVersion();
+  let buildCount = 0;
+  const build = () => ({ build: ++buildCount, tasks: store.state.tasks.length });
+
+  assert.deepEqual(store.getOrBuildDerived("example", build), { build: 1, tasks: 0 });
+  assert.deepEqual(store.getOrBuildDerived("example", build), { build: 1, tasks: 0 });
+  assert.equal(buildCount, 1, "same version should reuse derived value");
+
+  store.state.tasks.push({ id: "task_direct_save", assignee: "codex", status: "queued" });
+  await store.save();
+  assert.equal(store.getStateVersion(), initialVersion + 1);
+  assert.deepEqual(store.getOrBuildDerived("example", build), { build: 2, tasks: 1 });
+  assert.equal(buildCount, 2, "save should invalidate derived values for changed state");
+
+  await store.mutate((state) => {
+    state.tasks.push({ id: "task_mutate_save", assignee: "codex", status: "assigned" });
+  });
+  assert.equal(store.getStateVersion(), initialVersion + 2);
+  assert.deepEqual(store.getOrBuildDerived("example", build), { build: 3, tasks: 2 });
+  assert.equal(buildCount, 3, "mutate should invalidate derived values through save");
+});
+
 // -----------------------------------------------------------------------
 // P0-2: StateStore save chain is resilient to individual failures
 // -----------------------------------------------------------------------

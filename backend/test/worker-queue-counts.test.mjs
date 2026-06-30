@@ -1,9 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { collectWorkerQueueCounts, computePolicyQueueCounts } from '../src/worker-queue-counts.mjs';
+import { StateStore } from '../src/state-store.mjs';
 
 const WORKER_QUEUE_COUNTS_SOURCE = fileURLToPath(new URL('../src/worker-queue-counts.mjs', import.meta.url));
 
@@ -18,6 +22,14 @@ const ZERO_AGES = {
   completed: 0,
   failed: 0,
 };
+
+async function makeStateStore(prefix = 'worker-queue-cache-') {
+  const root = await mkdtemp(join(tmpdir(), prefix));
+  return new StateStore({
+    statePath: join(root, 'state.json'),
+    defaultWorkspaceRoot: join(root, 'workspace'),
+  });
+}
 
 test('worker queue counts derives status taxonomy from task-status-taxonomy module', async () => {
   const source = await readFile(WORKER_QUEUE_COUNTS_SOURCE, 'utf8');
@@ -91,6 +103,103 @@ test('collectWorkerQueueCounts separates raw indexed review counts from policy b
   assert.equal(result.waiting_for_repair, 1);
   assert.equal(result.actionable_review, 0);
   assert.equal(result.current_blockers, 1);
+});
+
+test('collectWorkerQueueCounts reuses state-version derived cache and refreshes oldest ages', async () => {
+  const store = await makeStateStore();
+  const state = await store.load();
+  state.tasks.push(
+    { assignee: 'codex', status: 'waiting_for_review', id: 'task_review', result: { summary: 'Needs review' }, created_at: new Date(Date.now() - 30_000).toISOString() },
+    { assignee: 'codex', status: 'waiting_for_repair', id: 'task_repair', result: { summary: 'Needs repair' } },
+    { assignee: 'codex', status: 'failed', id: 'task_history', result: {} },
+    { assignee: 'codex', status: 'completed', id: 'task_done', result: { verification: { passed: true } } },
+  );
+  await store.save();
+
+  let buildCount = 0;
+  const originalGetOrBuildDerived = store.getOrBuildDerived.bind(store);
+  store.getOrBuildDerived = (key, builder) => originalGetOrBuildDerived(key, () => {
+    buildCount += 1;
+    return builder();
+  });
+
+  const first = await collectWorkerQueueCounts(store);
+  const second = await collectWorkerQueueCounts(store);
+
+  assert.equal(buildCount, 1, 'same state version should build worker queue derived data once');
+  assert.equal(second.actionable_review, first.actionable_review);
+  assert.equal(second.current_blockers, first.current_blockers);
+  assert.equal(first.raw_counts.failed, 1, 'raw history remains visible');
+  assert.equal(first.policy_counts.failed, 0, 'resolved legacy failed does not block current work');
+  assert.equal(first.actionable_review, first.policy_counts.waiting_for_review, 'actionable review follows policy counts');
+  assert.equal(first.current_blockers, 2, 'waiting_for_review and waiting_for_repair remain blockers');
+  assert.ok(second.oldest_age_ms.waiting_for_review >= first.oldest_age_ms.waiting_for_review,
+    'oldest ages are recomputed from cached timestamps using current time');
+});
+
+test('collectWorkerQueueCounts rebuilds derived cache after mutate invalidates state version', async () => {
+  const store = await makeStateStore();
+  await store.load();
+  await store.mutate((state) => {
+    state.tasks.push({ assignee: 'codex', status: 'queued', id: 'task_queued' });
+  });
+
+  let buildCount = 0;
+  const originalGetOrBuildDerived = store.getOrBuildDerived.bind(store);
+  store.getOrBuildDerived = (key, builder) => originalGetOrBuildDerived(key, () => {
+    buildCount += 1;
+    return builder();
+  });
+
+  assert.equal((await collectWorkerQueueCounts(store)).queued, 1);
+  assert.equal((await collectWorkerQueueCounts(store)).queued, 1);
+  assert.equal(buildCount, 1);
+
+  await store.mutate((state) => {
+    state.tasks[0].status = 'waiting_for_lock';
+  });
+
+  const afterMutation = await collectWorkerQueueCounts(store);
+  assert.equal(buildCount, 2, 'state mutation should force a new derived build');
+  assert.equal(afterMutation.queued, 0);
+  assert.equal(afterMutation.waiting_for_lock, 1);
+  assert.equal(afterMutation.current_blockers, 1);
+});
+
+test('collectWorkerQueueCounts cache smoke avoids repeated heavy builds for large queues', async () => {
+  const store = await makeStateStore();
+  await store.load();
+  await store.mutate((state) => {
+    state.tasks.push(...Array.from({ length: 3000 }, (_, index) => ({
+      assignee: 'codex',
+      status: index % 3 === 0 ? 'queued' : index % 3 === 1 ? 'waiting_for_repair' : 'completed',
+      id: `task_bulk_${index}`,
+      result: index % 3 === 2 ? { verification: { passed: true } } : { summary: 'queued' },
+    })));
+  });
+
+  let buildCount = 0;
+  const originalGetOrBuildDerived = store.getOrBuildDerived.bind(store);
+  store.getOrBuildDerived = (key, builder) => originalGetOrBuildDerived(key, () => {
+    buildCount += 1;
+    return builder();
+  });
+
+  for (let i = 0; i < 8; i += 1) {
+    const counts = await collectWorkerQueueCounts(store);
+    assert.equal(counts.queued, 1000);
+    assert.equal(counts.waiting_for_repair, 1000);
+    assert.equal(counts.completed, 1000);
+  }
+  assert.equal(buildCount, 1, 'large queue repeated reads should reuse one derived build');
+
+  await store.mutate((state) => {
+    state.tasks[0].status = 'waiting_for_lock';
+  });
+  const afterMutation = await collectWorkerQueueCounts(store);
+  assert.equal(buildCount, 2, 'large queue derived cache should rebuild once after mutation');
+  assert.equal(afterMutation.waiting_for_lock, 1);
+  assert.equal(afterMutation.queued, 999);
 });
 
 test('collectWorkerQueueCounts returns zero counts when load fails', async () => {

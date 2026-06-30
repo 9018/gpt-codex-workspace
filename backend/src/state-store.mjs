@@ -35,6 +35,8 @@ export class StateStore {
     this._migrationSource = null;
     this._saveLock = null;
     this._mutationLock = null;
+    this._stateVersion = 0;
+    this._derivedCache = new Map();
     this._clearIndexes();
   }
 
@@ -180,6 +182,31 @@ export class StateStore {
     return { tasks: allTasks, counts };
   }
 
+  getStateVersion() {
+    return this._stateVersion || 0;
+  }
+
+  clearDerivedCache() {
+    this._derivedCache.clear();
+  }
+
+  getDerivedCache(key) {
+    const entry = this._derivedCache.get(key);
+    if (!entry || entry.version !== this.getStateVersion()) return undefined;
+    return entry.value;
+  }
+
+  setDerivedCache(key, value) {
+    this._derivedCache.set(key, { version: this.getStateVersion(), value });
+    return value;
+  }
+
+  getOrBuildDerived(key, builder) {
+    const cached = this.getDerivedCache(key);
+    if (cached !== undefined) return cached;
+    return this.setDerivedCache(key, builder());
+  }
+
   /**
    * Index-based query for worker candidate tasks.
    * Returns tasks matching any of the given statuses without scanning state.tasks.
@@ -238,6 +265,8 @@ export class StateStore {
       await rename(tmpPath, this.statePath);
       // Rebuild indexes so they stay consistent with the written state
       this._buildIndexes();
+      this._stateVersion += 1;
+      this.clearDerivedCache();
     });
     // Reset on failure so subsequent saves still execute
     this._saveLock = chain.catch(() => {});
