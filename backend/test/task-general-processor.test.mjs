@@ -1030,6 +1030,142 @@ test("processGeneralTaskWithDeps: integration branch_pushed does NOT mark task c
   }
 });
 
+test("processGeneralTaskWithDeps: branch_pushed auto completion can ff-only close task", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-branch-pushed-auto-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_branch_pushed_auto", "goal_branch_pushed_auto");
+    let autoCompletionCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed_auto", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed_auto", base_sha: "base123", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "commit123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "completed");
+        assert.equal(taskResult.integration.status, "merged");
+        assert.equal(taskResult.integration.merged, true);
+        assert.equal(taskResult.integration.auto_completed, true);
+        assert.equal(taskResult.auto_integration_completion.completed, true);
+        assert.equal(taskResult.verification.source, "auto_integration_completion");
+        assert.equal(taskResult.needs_integration, false);
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async () => ({
+        passed: true,
+        status: "accepted",
+        profile: "code_change",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "All checks passed", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: true, reason: "repair possible" }),
+      createRepairGoalFromFindingsFn: async () => ({ id: "repair_mock", parent_task_id: task.id }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "branch_pushed", merged: false, pushed: true, pr_opened: false }),
+      runAutoIntegrationCompletionFn: async ({ taskResult, integrationResult }) => {
+        autoCompletionCalled = true;
+        assert.equal(integrationResult.status, "branch_pushed");
+        assert.equal(taskResult.commit, "commit123");
+        return {
+          attempted: true,
+          eligible: true,
+          completed: true,
+          reason: "ff_only_merged_and_verified",
+          blockers: [],
+          warnings: [],
+          base_sha: "base123",
+          commit: "commit123",
+          canonical_clean_before: true,
+          canonical_clean_after: true,
+          verification_report_path: join(tmpDir, "report.json"),
+          verification_report: { passed: true, profile: "changed", head: "commit123", dirty: false, steps: 2 },
+          commands: [{ cmd: "node scripts/release-delivery-check.mjs --profile changed", exit_code: 0 }],
+        };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(autoCompletionCalled, true);
+    assert.equal(result.status, "completed");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("processGeneralTaskWithDeps: branch_pushed without passed acceptance does not try auto completion", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-branch-pushed-no-accept-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_branch_pushed_no_accept", "goal_branch_pushed_no_accept");
+    let autoCompletionCalled = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      codexExecTimeout: 10,
+      maxRepairAttempts: 0,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed_no_accept", tmpDir, "github.com/acme/repo"),
+      materializeTaskWorktreeFn: async (plan) => ({
+        lock_repo_path: plan.worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed_no_accept", created_at: new Date().toISOString() },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: null }),
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        summary: "code change",
+        parsedResult: { structured: true, status: "completed", summary: "code change", changed_files: ["src/app.mjs"], tests: "pass", commit: "commit123", acceptance_findings: [] },
+      }),
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        assert.equal(taskStatus, "waiting_for_review");
+        assert.equal(taskResult.integration, undefined);
+        assert.equal(taskResult.auto_integration_completion, undefined);
+        return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async () => ({
+        passed: false,
+        status: "rejected",
+        profile: "code_change",
+        findings: [{ severity: "blocker", code: "tests_failed", message: "tests failed" }],
+        repair_proposals: [],
+        next_tasks: [],
+        evidence: { changed_files: ["src/app.mjs"] },
+        reviewer_decision: { role: "acceptance_agent", summary: "Rejected", decision: { status: "rejected", passed: false } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: false, reason: "no repair" }),
+      runIntegrationQueueFn: async () => {
+        throw new Error("integration must not run when acceptance fails");
+      },
+      runAutoIntegrationCompletionFn: async () => {
+        autoCompletionCalled = true;
+        return { attempted: true, completed: true };
+      },
+      createGoalFn: async () => ({ goal: { id: "repair_goal_mock" }, task: { id: "repair_task_mock" } }),
+    });
+
+    assert.equal(autoCompletionCalled, false);
+    assert.equal(result.status, "waiting_for_review");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test("processGeneralTaskWithDeps: integration pr_opened does NOT mark task completed", async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-pr-opened-"));
   try {

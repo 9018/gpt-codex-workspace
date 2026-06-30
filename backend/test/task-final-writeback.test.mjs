@@ -558,6 +558,73 @@ test("task-final-writeback: waiting_for_integration branch_pushed does NOT mark 
   assert.equal(savedTask.result.integration.status, "branch_pushed");
 });
 
+test("task-final-writeback: waiting_for_integration branch_pushed auto completion marks completed", async () => {
+  let savedTask = null;
+  let removedWorktree = false;
+  const args = makeMinimalArgs("waiting_for_integration");
+  args.task = { id: "task_wfi_branch_pushed_auto", logs: [] };
+  args.goal = { id: "goal_wfi_branch_pushed_auto", workspace_id: "hosted-default" };
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_wfi_branch_pushed_auto", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/test" },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "Test result",
+    changed_files: ["src/app.mjs"],
+    commit: "commit123",
+    local_head: "commit123",
+    warnings: [],
+    followups: [],
+    verification: { passed: true, findings: [] },
+    reviewer_decision: { decision: { passed: true } },
+  };
+  args.runIntegrationQueueFn = async () => ({ ok: true, status: "branch_pushed", merged: false, pushed: true, pr_opened: false });
+  args.runAutoIntegrationCompletionFn = async () => ({
+    attempted: true,
+    eligible: true,
+    completed: true,
+    reason: "ff_only_merged_and_verified",
+    blockers: [],
+    warnings: [],
+    commit: "commit123",
+    verification_report_path: "/tmp/report.json",
+    verification_report: { passed: true, profile: "changed", head: "commit123", dirty: false, steps: 2 },
+    commands: [{ cmd: "node scripts/release-delivery-check.mjs --profile changed", exit_code: 0 }],
+  });
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true, status: "completed", commands: [], changed_files: [], reason_no_tests: null,
+    failure_class: null, requires_review: false, findings: [],
+  });
+  args.removeTaskWorktreeFn = async () => {
+    removedWorktree = true;
+    return { ok: true, removed: true, worktree_path: "/tmp/worktree" };
+  };
+  args.autoStartNextOnTaskCompletedFn = async () => ({ auto_started: false, details: [] });
+  args.github = { syncTask: async () => {} };
+  args.workspaceFiles = { result_md: "/tmp/test.md", dir: "/tmp/test" };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.integration.status, "merged");
+  assert.equal(savedTask.result.integration.auto_completed, true);
+  assert.equal(savedTask.result.auto_integration_completion.completed, true);
+  assert.equal(savedTask.result.needs_integration, false);
+  assert.equal(removedWorktree, true);
+});
+
 test("task-final-writeback: waiting_for_integration merged -> completed", async () => {
   // P0: When finalizer runs integration and gets merged, task should complete
   let savedTask = null;

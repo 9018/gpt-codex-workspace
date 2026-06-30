@@ -16,6 +16,7 @@ import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion, scheduleRepairAttempt } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
+import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -87,6 +88,7 @@ export async function finalizeCodexTaskRun({
   verifyTaskCompletionFn = verifyTaskCompletion,
   autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted,
   runIntegrationQueueFn = runIntegrationQueue,
+  runAutoIntegrationCompletionFn = runAutoIntegrationCompletion,
   shouldAttemptRepairFn = shouldAttemptRepair,
   createRepairGoalFromFindingsFn = createRepairGoalFromFindings,
   scheduleRepairAttemptFn = scheduleRepairAttempt,
@@ -132,6 +134,43 @@ export async function finalizeCodexTaskRun({
           taskResult.integration = { ...integrationResult };
           if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
             taskStatus = "completed";
+          } else if ((integrationResult.status === 'branch_pushed' || integrationResult.status === 'pr_opened') && integrationResult.merged !== true) {
+            const autoCompletion = await runAutoIntegrationCompletionFn({
+              task,
+              goal,
+              taskResult,
+              resolvedRepo,
+              integrationResult,
+              config,
+            });
+            taskResult.auto_integration_completion = autoCompletion;
+            if (autoCompletion.completed === true) {
+              taskStatus = "completed";
+              taskResult.integration = {
+                ...integrationResult,
+                status: 'merged',
+                merged: true,
+                auto_completed: true,
+                commit: autoCompletion.commit || taskResult.commit || integrationResult.commit || null,
+              };
+              taskResult.commit = autoCompletion.commit || taskResult.commit || null;
+              taskResult.local_head = autoCompletion.commit || taskResult.local_head || null;
+              taskResult.repo_head = autoCompletion.commit || taskResult.repo_head || null;
+              taskResult.verification = autoIntegrationVerificationFromReport(autoCompletion);
+              taskResult.needs_integration = false;
+              taskResult.needs_restart_check = false;
+            } else {
+              taskStatus = "waiting_for_review";
+              taskResult.reason = "auto_integration_completion_failed: " + (autoCompletion.reason || "unknown");
+              taskResult.requires_review = true;
+              taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+              taskResult.acceptance_findings.push({
+                severity: "blocker",
+                code: "auto_integration_completion_failed",
+                message: autoCompletion.blockers?.[0]?.message || autoCompletion.reason || "Auto integration completion failed.",
+                source: "auto_integration_completion",
+              });
+            }
           } else {
             taskStatus = "waiting_for_review";
           }
@@ -189,7 +228,9 @@ export async function finalizeCodexTaskRun({
   taskResult = recoveryDecision.taskResult;
   summary = recoveryDecision.summary;
 
-  const verifierRepoPath = taskResult?.execution_cwd
+  const verifierRepoPath = taskResult?.auto_integration_completion?.completed === true
+    ? (resolvedRepo?.canonical_repo_path || taskResult?.execution_cwd || resolvedRepo?.task_worktree_path || workspace?.root || config.defaultRepoPath || config.defaultWorkspaceRoot)
+    : taskResult?.execution_cwd
     || resolvedRepo?.task_worktree_path
     || resolvedRepo?.canonical_repo_path
     || workspace?.root
@@ -221,7 +262,12 @@ export async function finalizeCodexTaskRun({
       };
     }
 
-    taskResult.verification = verification;
+    if (taskResult.auto_integration_completion?.completed === true) {
+      taskResult.final_verification = verification;
+      taskResult.verification = taskResult.verification || autoIntegrationVerificationFromReport(taskResult.auto_integration_completion);
+    } else {
+      taskResult.verification = verification;
+    }
     taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
     for (const finding of verification.findings || []) {
       const duplicate = taskResult.acceptance_findings.some((existing) => existing.code === finding.code && existing.message === finding.message);
@@ -458,6 +504,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
     followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
     verification: taskResult.verification || null,
+    final_verification: taskResult.final_verification || null,
     failure_class: taskResult.failure_class || null,
     attempt: taskResult.attempt ?? null,
     repair_of_attempt: taskResult.repair_of_attempt ?? null,
@@ -469,6 +516,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     queue_autostart_fix: taskResult.queue_autostart_fix || null,
     evidence_paths: taskResult.evidence_paths || null,
     reviewer_decision: taskResult.reviewer_decision || null,
+    auto_integration_completion: taskResult.auto_integration_completion || null,
     acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
     next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
     delivery_result_recovery: taskResult.delivery_result_recovery || null,
@@ -506,13 +554,15 @@ function hasIntegratedCommitEvidence(taskResult = {}) {
   const integration = taskResult.integration || {};
   if (integration.merged === true) return true;
   if (["merged", "skipped"].includes(integration.status)) return true;
+  if (taskResult.auto_integration_completion?.completed === true) return true;
   if (taskResult.delivery_result_recovery?.commit_integrated === true) return true;
   return false;
 }
 
 function hasRuntimeHeadConvergence(taskResult = {}) {
-  const commit = taskResult.commit || taskResult.delivery_result_recovery?.commit || null;
-  const localHead = taskResult.local_head || taskResult.delivery_result_recovery?.local_head || taskResult.repo_head || null;
+  const autoCompletion = taskResult.auto_integration_completion || null;
+  const commit = taskResult.commit || autoCompletion?.commit || taskResult.delivery_result_recovery?.commit || null;
+  const localHead = taskResult.local_head || autoCompletion?.commit || taskResult.delivery_result_recovery?.local_head || taskResult.repo_head || null;
   const runningCommit = taskResult.running_commit || taskResult.runtime?.running_commit || null;
   const repoHead = taskResult.repo_head || taskResult.runtime?.repo_head || localHead;
   const remoteHead = taskResult.remote_head || taskResult.delivery_result_recovery?.remote_head || null;
@@ -653,6 +703,15 @@ function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config 
       message: recovery.recovered === true
         ? `[worker] delivery recovery attempted: eligible=${recovery.eligible === true} recovered=true commit=${recovery.commit || "none"}`
         : `[worker] delivery recovery failed: ${recovery.reason || recovery.blockers?.[0]?.code || "unknown"}`,
+    });
+  }
+  if (taskResult.auto_integration_completion?.attempted === true) {
+    const autoCompletion = taskResult.auto_integration_completion;
+    item.logs.push({
+      time: doneAt,
+      message: autoCompletion.completed === true
+        ? `[worker] auto integration completion: ff-only merged and verified commit=${autoCompletion.commit || "none"} report=${autoCompletion.verification_report_path || "none"}`
+        : `[worker] auto integration completion failed: ${autoCompletion.reason || autoCompletion.blockers?.[0]?.code || "unknown"}`,
     });
   }
   if (taskResult.failure_class || taskResult.repair_attempt !== undefined || taskResult.repair_of_attempt !== undefined) {

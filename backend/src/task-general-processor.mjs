@@ -23,6 +23,7 @@ import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergenc
 import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
 import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
+import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from "./auto-integration-completion.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -268,6 +269,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const createRepairGoalFromFindingsFn = deps.createRepairGoalFromFindingsFn || createRepairGoalFromFindings;
   const shouldAttemptRepairFn = deps.shouldAttemptRepairFn || shouldAttemptRepair;
   const runIntegrationQueueFn = deps.runIntegrationQueueFn || runIntegrationQueue;
+  const runAutoIntegrationCompletionFn = deps.runAutoIntegrationCompletionFn || runAutoIntegrationCompletion;
   const createGoalFn = deps.createGoalFn || createGoal;
   const determineHealingActionFn = deps.determineHealingActionFn || determineHealingAction;
   const convergeTaskAfterRunFn = deps.convergeTaskAfterRunFn || convergeTaskAfterRun;
@@ -903,6 +905,44 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           // - branch_pushed / pr_opened: NOT merged — not terminal
           if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
             taskStatus = 'completed';
+          } else if ((integrationResult.status === 'branch_pushed' || integrationResult.status === 'pr_opened') && integrationResult.merged !== true) {
+            const autoCompletion = await runAutoIntegrationCompletionFn({
+              task,
+              goal,
+              taskResult,
+              resolvedRepo,
+              integrationResult,
+              config,
+              runCommandFn: runCommandFn || (await import("./workspace-service.mjs")).runLocalShell,
+            });
+            taskResult.auto_integration_completion = autoCompletion;
+            if (autoCompletion.completed === true) {
+              taskStatus = 'completed';
+              taskResult.integration = {
+                ...integrationResult,
+                status: 'merged',
+                merged: true,
+                auto_completed: true,
+                commit: autoCompletion.commit || taskResult.commit || integrationResult.commit || null,
+              };
+              taskResult.commit = autoCompletion.commit || taskResult.commit || null;
+              taskResult.local_head = autoCompletion.commit || taskResult.local_head || null;
+              taskResult.repo_head = autoCompletion.commit || taskResult.repo_head || null;
+              taskResult.verification = autoIntegrationVerificationFromReport(autoCompletion);
+              taskResult.needs_integration = false;
+              taskResult.needs_restart_check = false;
+            } else {
+              taskStatus = 'waiting_for_review';
+              taskResult.reason = 'auto_integration_completion_failed: ' + (autoCompletion.reason || 'unknown');
+              taskResult.requires_review = true;
+              taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+              taskResult.acceptance_findings.push({
+                severity: 'blocker',
+                code: 'auto_integration_completion_failed',
+                message: autoCompletion.blockers?.[0]?.message || autoCompletion.reason || 'Auto integration completion failed.',
+                source: 'auto_integration_completion',
+              });
+            }
           } else {
             taskStatus = 'waiting_for_review';
           }
