@@ -11,7 +11,7 @@
     "test": "node --test --test-reporter=dot 'test/**/*.test.mjs'",
     "test:clean": "node test/helpers/run-clean.mjs",
     "test:tap": "node --test 'test/**/*.test.mjs'",
-    "check:syntax": "find src -name '*.mjs' -exec node --check {} \\; && find test -name '*.test.mjs' -exec node --check {} \\;",
+    "check:syntax": "node scripts/check-syntax.mjs",
     "check:imports": "node -e 'Promise.all([import(\"./src/state-store.mjs\"), import(\"./src/task-lifecycle.mjs\"), import(\"./src/goal-files.mjs\"), import(\"./src/goal-lifecycle.mjs\"), import(\"./src/goal-task-lifecycle.mjs\"), import(\"./src/diagnostics-service.mjs\"), import(\"./src/codex-run-metadata.mjs\"), import(\"./src/worker-queue-counts.mjs\"), import(\"./src/goal-queue.mjs\"), import(\"./src/tool-groups/goal-queue-tools-group.mjs\"), import(\"./src/goal-storage-service.mjs\"), import(\"./src/gptwork-tmp.mjs\"), import(\"./src/admin-audit-log.mjs\"), import(\"./src/tool-groups/recovery-tools-group.mjs\")]).then(() => console.log(\"imports ok\")).catch(e => { console.error(e); process.exit(1); })'",
     "test:perf-smoke": "node --test --test-reporter=dot 'test/perf-smoke.test.mjs'",
     "test:e2e-acceptance": "node --test --test-reporter=dot test/e2e-product-acceptance.test.mjs",

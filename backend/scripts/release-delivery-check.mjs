@@ -104,16 +104,7 @@ async function main() {
 
   const fastSteps = [
     { name: "fast syntax core files", cmd: "node", args: [
-      "--input-type=module", "-e",
-      `import { spawnSync } from 'node:child_process';
-       const files = ${JSON.stringify(fastSyntaxFiles)};
-       for (const file of files) {
-         const r = spawnSync(process.execPath, ['--check', file], { encoding: 'utf8' });
-         if (r.stdout) process.stdout.write(r.stdout);
-         if (r.stderr) process.stderr.write(r.stderr);
-         if (r.status !== 0) process.exit(r.status || 1);
-       }
-       console.log('syntax ok: '+files.length+' core files');`,
+      "scripts/check-syntax.mjs", "--files", fastSyntaxFiles.join("\n"),
     ], timeout: 30_000 },
     ...fullSteps.filter((step) => [
       "check:imports",

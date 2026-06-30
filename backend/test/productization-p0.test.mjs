@@ -144,6 +144,75 @@ test("open_project_context uses queue-derived actionable review counts", async (
   assert.equal(context.raw_history.resolved_legacy_review, 1);
 });
 
+test("P0 integrated context and cards keep raw history out of current blockers", async () => {
+  const server = await makeServer();
+  const store = server.getStoreForTests();
+  store.state.tasks = [
+    {
+      id: "task_raw_review_history",
+      title: "Raw review history already resolved",
+      status: "waiting_for_review",
+      assignee: "codex",
+      result: { resolved_by_task_id: "task_successor_done" },
+    },
+    {
+      id: "task_raw_failed_history",
+      title: "Historical failure already integrated",
+      status: "failed",
+      assignee: "codex",
+      goal_id: "goal_main",
+      result: { tests: "old failed run" },
+    },
+    {
+      id: "task_successor_done",
+      title: "Integrated successor",
+      status: "completed",
+      assignee: "codex",
+      goal_id: "goal_main",
+      result: { verification: { passed: true }, commit: "4666957538bb5ff62602ff22bfff5d183eb24b9b" },
+    },
+    {
+      id: "task_waiting_repair",
+      title: "Repair is pending",
+      status: "waiting_for_repair",
+      assignee: "codex",
+      result: { summary: "Needs repair" },
+    },
+  ];
+  await store.save();
+
+  const contextResponse = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 12,
+    method: "tools/call",
+    params: { name: "open_project_context", arguments: {} },
+  }, { authorization: "Bearer test-token" });
+  const context = contextResponse.result.structuredContent;
+
+  assert.equal(context.current_blockers.actionable_review, 0);
+  assert.equal(context.current_blockers.failed, 0);
+  assert.equal(context.current_blockers.waiting_for_repair, 1);
+  assert.equal(context.worker.queue.actionable_review, 0);
+  assert.equal(context.worker.queue.failed, 0);
+  assert.equal(context.worker.queue.policy_counts.waiting_for_repair, 1);
+  assert.equal(context.worker.queue.raw_counts.waiting_for_repair, 1);
+  assert.equal(context.raw_history.waiting_for_review_total, 1);
+  assert.equal(context.raw_history.resolved_legacy_review, 1);
+  assert.equal(context.worktree_retention.ok, true);
+  assert.equal(typeof context.worktree_retention.cleanup_candidates_count, "number");
+
+  const workerResponse = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 13,
+    method: "tools/call",
+    params: { name: "worker_status", arguments: {} },
+  }, { authorization: "Bearer test-token" });
+  const workerText = workerResponse.result.content[0].text;
+  assert.match(workerText, /waiting_for_repair/);
+  assert.match(JSON.stringify(workerResponse.result.structuredContent.queue), /waiting_for_repair/);
+  assert.match(JSON.stringify(workerResponse.result.structuredContent.card || {}), /waiting_for_repair/);
+});
+
 test("gptwork CLI settings show/set edits runtime env file", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-cli-settings-"));
   track(root);

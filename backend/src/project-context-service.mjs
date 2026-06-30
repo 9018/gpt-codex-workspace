@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
 import { TASK_STATUSES, isHumanReviewStatus } from "./task-status-taxonomy.mjs";
+import { collectRetainedWorktreeDiagnostics } from "./task-worktree-manager.mjs";
 
 const TEXT_LIMIT = 8000;
 
@@ -76,6 +77,12 @@ export async function collectProjectContext({ config, store, workerState, regist
   const queue = await collectWorkerQueueCounts(store);
   const policyQueue = queue.policy_counts || queue;
   const tasks = state.tasks || [];
+  const retainedWorktrees = await collectRetainedWorktreeDiagnostics({
+    workspaceRoot: config.defaultWorkspaceRoot,
+    canonicalRepoPath: repoRoot,
+    tasks,
+    limit: 20,
+  }).catch((error) => ({ ok: false, error: error?.message || String(error || "retained worktree diagnostics failed") }));
   const resolvedLegacyReview = tasks.filter((task) => isResolvedLegacyReviewTask(task));
   const currentBlockers = {
     running: policyQueue[TASK_STATUSES.RUNNING] || 0,
@@ -140,6 +147,7 @@ export async function collectProjectContext({ config, store, workerState, regist
       running: !!workerState?.running,
       queue,
     },
+    worktree_retention: retainedWorktrees,
     repositories: typeof registry?.list === "function" ? registry.list().slice(0, 20) : [],
     file_tree: boundedTree(repoRoot, 80),
     readme_excerpt: (() => {

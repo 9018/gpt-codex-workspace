@@ -11,6 +11,7 @@ import { access, mkdir, readFile, readdir, rm, writeFile, stat } from "node:fs/p
 import { constants, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { isActiveExecutionStatus, isCompletedStatus, isHumanReviewStatus, isRepairStatus, TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -248,6 +249,127 @@ async function collectOrphans(worktreesRoot) {
     }
   }
   return orphans;
+}
+
+function parseWorktreePorcelain(text = "") {
+  return String(text || "")
+    .trim()
+    .split(/\n\s*\n/)
+    .map((block) => {
+      const item = {};
+      for (const line of block.split("\n")) {
+        const index = line.indexOf(" ");
+        if (index <= 0) continue;
+        const key = line.slice(0, index);
+        const value = line.slice(index + 1).trim();
+        if (key === "worktree") item.path = value;
+        else if (key === "branch") item.branch = value.replace(/^refs\/heads\//, "");
+        else if (key === "HEAD") item.head = value;
+      }
+      return item.path ? item : null;
+    })
+    .filter(Boolean);
+}
+
+function parseBranchList(text = "") {
+  return String(text || "")
+    .split("\n")
+    .map((line) => line.replace(/^\*\s*/, "").trim())
+    .filter(Boolean)
+    .filter((branch) => branch.startsWith("gptwork/task/"));
+}
+
+function taskWorktreePath(task = {}) {
+  return task.worktree_path
+    || task.result?.worktree_path
+    || task.result?.repo_resolution?.task_worktree_path
+    || task.result?.worktree_lifecycle?.worktree_path
+    || task.worktree?.path
+    || null;
+}
+
+function taskBranchName(task = {}) {
+  return task.worktree?.branch
+    || task.result?.worktree?.branch
+    || task.result?.repo_resolution?.worktree_lifecycle?.branch_name
+    || task.result?.worktree_lifecycle?.branch_name
+    || (task.id ? sanitizeTaskBranchName(task.id) : null);
+}
+
+function isProtectedRetainedStatus(status) {
+  return isActiveExecutionStatus(status)
+    || isHumanReviewStatus(status)
+    || isRepairStatus(status)
+    || status === TASK_STATUSES.WAITING_FOR_INTEGRATION;
+}
+
+function hasIntegratedCompletionEvidence(task = {}) {
+  const result = task.result || {};
+  return result.commit_integrated === true
+    || result.integration?.merged === true
+    || result.delivery?.merged === true
+    || result.worktree_lifecycle?.cleanup?.ok === true
+    || result.verification?.passed === true
+    || Boolean(result.commit || result.remote_head);
+}
+
+export async function collectRetainedWorktreeDiagnostics(options = {}) {
+  const workspaceRoot = resolve(options.workspaceRoot || options.defaultWorkspaceRoot || process.cwd());
+  const canonicalRepoPath = options.canonicalRepoPath || options.canonical_repo_path || options.defaultRepoPath;
+  if (!canonicalRepoPath) return { ok: false, error: "canonicalRepoPath is required" };
+
+  let worktreeText = options.gitWorktreeListPorcelain;
+  if (worktreeText === undefined) {
+    const listResult = await git(["worktree", "list", "--porcelain"], { cwd: resolve(canonicalRepoPath), timeout: 30_000 });
+    worktreeText = listResult.ok ? listResult.stdout : "";
+  }
+  let branchText = options.gitBranchList;
+  if (branchText === undefined) {
+    const branchResult = await git(["branch", "--list", "gptwork/task/*", "--format=%(refname:short)"], { cwd: resolve(canonicalRepoPath), timeout: 30_000 });
+    branchText = branchResult.ok ? branchResult.stdout : "";
+  }
+
+  const worktrees = parseWorktreePorcelain(worktreeText)
+    .filter((worktree) => worktree.path !== resolve(canonicalRepoPath))
+    .filter((worktree) => worktree.path.startsWith(workspaceRoot + "/") || worktree.path.includes("/.gptwork/worktrees/"));
+  const taskBranches = parseBranchList(branchText);
+  const tasks = Array.isArray(options.tasks) ? options.tasks : [];
+  const tasksByPath = new Map();
+  const tasksByBranch = new Map();
+  for (const task of tasks) {
+    const path = taskWorktreePath(task);
+    const branch = taskBranchName(task);
+    if (path) tasksByPath.set(resolve(path), task);
+    if (branch) tasksByBranch.set(branch, task);
+  }
+
+  const retained = worktrees.map((worktree) => {
+    const task = tasksByPath.get(resolve(worktree.path)) || tasksByBranch.get(worktree.branch) || null;
+    return {
+      path: worktree.path,
+      branch: worktree.branch || null,
+      head: worktree.head || null,
+      task_id: task?.id || null,
+      task_status: task?.status || null,
+      terminal: task ? isCompletedStatus(task.status) : false,
+      integrated: task ? hasIntegratedCompletionEvidence(task) : false,
+    };
+  });
+  const protectedRetained = retained.filter((item) => isProtectedRetainedStatus(item.task_status));
+  const cleanupCandidates = retained.filter((item) => item.terminal && item.integrated);
+
+  return {
+    ok: true,
+    retained_worktrees_count: retained.length,
+    retained_task_branches_count: taskBranches.length,
+    terminal_retained_worktrees_count: retained.filter((item) => item.terminal).length,
+    cleanup_candidates_count: cleanupCandidates.length,
+    protected_retained_worktrees_count: protectedRetained.length,
+    retained_worktrees: retained.slice(0, options.limit || 50),
+    protected_retained_worktrees: protectedRetained.slice(0, options.limit || 50),
+    cleanup_candidates: cleanupCandidates.slice(0, options.limit || 50),
+    safe_cleanup_hint: "dry-run only: review cleanup_candidates, never remove running/assigned/queued/waiting_for_review/waiting_for_repair/waiting_for_integration worktrees.",
+  };
 }
 
 /**

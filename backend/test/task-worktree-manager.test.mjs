@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import {
+  collectRetainedWorktreeDiagnostics,
   ensureTaskWorktree,
   removeTaskWorktree,
   pruneStaleWorktrees,
@@ -32,6 +33,59 @@ test("task worktree manager sanitizes repo/task path segments and branch names",
   const root = "/tmp/gptwork";
   const path = getTaskWorktreePath(root, "github.com/acme/../target repo", "task/../../bad name");
   assert.equal(path, join(root, ".gptwork", "worktrees", "github.com-acme-target-repo", "task-bad-name"));
+});
+
+test("collectRetainedWorktreeDiagnostics reports dry-run cleanup candidates without active tasks", async () => {
+  const workspaceRoot = "/tmp/gptwork-ws";
+  const completedPath = `${workspaceRoot}/.gptwork/worktrees/github.com-acme-repo/task_done`;
+  const runningPath = `${workspaceRoot}/.gptwork/worktrees/github.com-acme-repo/task_running`;
+  const reviewPath = `${workspaceRoot}/.gptwork/worktrees/github.com-acme-repo/task_review`;
+  const diagnostics = await collectRetainedWorktreeDiagnostics({
+    workspaceRoot,
+    canonicalRepoPath: "/tmp/repo",
+    tasks: [
+      {
+        id: "task_done",
+        status: "completed",
+        assignee: "codex",
+        worktree_path: completedPath,
+        result: { commit_integrated: true, commit: "abc123" },
+      },
+      {
+        id: "task_running",
+        status: "running",
+        assignee: "codex",
+        worktree_path: runningPath,
+      },
+      {
+        id: "task_review",
+        status: "waiting_for_review",
+        assignee: "codex",
+        worktree_path: reviewPath,
+      },
+    ],
+    gitWorktreeListPorcelain: [
+      "worktree /tmp/repo\nHEAD aaa\nbranch refs/heads/main",
+      `worktree ${completedPath}\nHEAD bbb\nbranch refs/heads/gptwork/task/task_done`,
+      `worktree ${runningPath}\nHEAD ccc\nbranch refs/heads/gptwork/task/task_running`,
+      `worktree ${reviewPath}\nHEAD ddd\nbranch refs/heads/gptwork/task/task_review`,
+    ].join("\n\n"),
+    gitBranchList: [
+      "gptwork/task/task_done",
+      "gptwork/task/task_running",
+      "gptwork/task/task_review",
+      "gptwork/task/orphan_branch",
+    ].join("\n"),
+  });
+
+  assert.equal(diagnostics.ok, true);
+  assert.equal(diagnostics.retained_worktrees_count, 3);
+  assert.equal(diagnostics.retained_task_branches_count, 4);
+  assert.equal(diagnostics.terminal_retained_worktrees_count, 1);
+  assert.equal(diagnostics.cleanup_candidates_count, 1);
+  assert.deepEqual(diagnostics.cleanup_candidates.map((candidate) => candidate.task_id), ["task_done"]);
+  assert.deepEqual(diagnostics.protected_retained_worktrees.map((item) => item.task_id).sort(), ["task_review", "task_running"]);
+  assert.ok(diagnostics.safe_cleanup_hint.includes("dry-run"));
 });
 
 test("ensureTaskWorktree creates and reuses a real git worktree, then remove/prune clean it", async () => {
