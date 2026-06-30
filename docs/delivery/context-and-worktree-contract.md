@@ -6,6 +6,31 @@
 
 The context bundle (`context.bundle.md`) is how long GPTChat transcripts and
 relevant history are passed to Codex without overwhelming the prompt window.
+Codex starts from `codex.entry.md` and uses `context.bundle.md` as the default
+supporting context when present. `context.json`, `goal.md`, and `transcript.md`
+remain explicit deep-lookup files rather than default full reads.
+
+Zvec is an optional, rebuildable context index backing retrieval. It is not the
+GPTWork source of truth; durable facts remain in goal, conversation, task, and
+result state files.
+
+### Runtime Configuration
+
+```bash
+GPTWORK_CONTEXT_VECTOR_STORE=auto   # default: use @zvec/zvec when available, otherwise fallback local
+GPTWORK_CONTEXT_VECTOR_STORE=zvec   # force Zvec; unavailable Zvec is reported as a clear failure
+GPTWORK_CONTEXT_VECTOR_STORE=local  # only use local json fallback
+GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS=2048
+GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS=8
+GPTWORK_CONTEXT_CROSS_GOAL_TOP_K=4
+GPTWORK_CONTEXT_PER_GOAL_TOP_K=4
+GPTWORK_CONTEXT_MAX_GOALS_SCANNED=20
+```
+
+`project_context_status` / `context_status` exposes a safe `context_index`
+diagnostic with configured/effective store, optional dependency availability,
+budget settings, top-K settings, scan cap, and warnings. It never exposes secret
+values.
 
 ### Bundle Contents
 
@@ -26,13 +51,13 @@ relevant history are passed to Codex without overwhelming the prompt window.
 ### Retrieval Metadata
 
 Every retrieval records `context.retrieval.json` with:
-- `store_name`: Which store was used (zvec, local, fallback)
-- `embedding_provider`: Which embedding provider (openai, local, fallback-hash-sha256)
-- `semantic`: Whether semantic retrieval was used
-- `retrieval_scope`: Which scopes were queried
-- `query`: The retrieval query
-- `results`: Number and quality of results
-- `warnings`: Any degradation warnings
+- `store_name`: Which store was used, such as `zvec-collection-store` or `local-json-store`
+- `retrieval_mode` / `requested_retrieval_mode`: Effective and requested retrieval mode
+- `store_capabilities`: Vector, hybrid, full-text, and multi-query capabilities reported by the store
+- `embedding_provider`: Which embedding provider produced vectors
+- `cross_goal_retrieval` and `per_goal_retrieval`: Counts and selected result previews for each phase
+- `budget`: Bundle token/chunk limits, top-K settings, max goals scanned, and scoped filters
+- `selection`: Why specific chunks entered the bounded bundle
 
 ## Worktree Contract
 

@@ -376,6 +376,7 @@ Output fields (base diagnostic, no task_id required):
 - `repo_registered` — Whether the repo is registered in the repo registry
 - `workspace_root` — Workspace root directory
 - `project_context` — Object with project.md and project.env existence, path, size, key counts (without exposing secret values)
+- `context_index` — Safe context-index/Zvec summary: configured store, effective store, optional dependency availability, bundle budgets, retrieval top-K settings, max scanned goals, and warnings
 - `context_source_precedence` — Ordered array explaining the 5-layer context precedence:
   1. task.description / task fields
   2. linked goal prompt/context files

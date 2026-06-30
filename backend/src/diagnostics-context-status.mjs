@@ -5,6 +5,68 @@ import { requireScope } from "./auth-context.mjs";
 import { findTask } from "./task-lifecycle.mjs";
 import { formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
 
+const DEFAULT_CONTEXT_INDEX = Object.freeze({
+  vectorStore: "auto",
+  bundleMaxTokens: 2048,
+  bundleMaxChunks: 8,
+  crossGoalTopK: 4,
+  perGoalTopK: 4,
+  maxGoalsScanned: 20,
+});
+
+function normalizeContextVectorStore(value) {
+  const mode = String(value || DEFAULT_CONTEXT_INDEX.vectorStore).trim().toLowerCase();
+  return ["auto", "zvec", "local"].includes(mode) ? mode : "auto";
+}
+
+function positiveInt(value, fallback) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(0, Math.floor(n));
+}
+
+async function checkZvecOptionalDependency(importZvec = () => import("@zvec/zvec")) {
+  try {
+    await importZvec();
+    return "available";
+  } catch {
+    return "unavailable";
+  }
+}
+
+export async function collectContextIndexStatus(config = {}, options = {}) {
+  const configuredStore = normalizeContextVectorStore(config.contextVectorStore);
+  const warnings = [];
+  let zvecOptionalDependency = "not_checked";
+
+  if (configuredStore !== "local") {
+    zvecOptionalDependency = await checkZvecOptionalDependency(options.importZvec);
+  }
+
+  let effectiveStore = "unknown";
+  if (configuredStore === "local") {
+    effectiveStore = "local-json-store";
+  } else if (zvecOptionalDependency === "available") {
+    effectiveStore = "zvec-collection-store";
+  } else if (configuredStore === "auto") {
+    effectiveStore = "local-json-store";
+  } else if (configuredStore === "zvec") {
+    warnings.push("GPTWORK_CONTEXT_VECTOR_STORE=zvec but @zvec/zvec is unavailable; context bundle generation will report a clear failure.");
+  }
+
+  return {
+    configured_store: configuredStore,
+    effective_store: effectiveStore,
+    zvec_optional_dependency: zvecOptionalDependency,
+    bundle_max_tokens: positiveInt(config.contextBundleMaxTokens, DEFAULT_CONTEXT_INDEX.bundleMaxTokens),
+    bundle_max_chunks: positiveInt(config.contextBundleMaxChunks, DEFAULT_CONTEXT_INDEX.bundleMaxChunks),
+    cross_goal_top_k: positiveInt(config.contextCrossGoalTopK, DEFAULT_CONTEXT_INDEX.crossGoalTopK),
+    per_goal_top_k: positiveInt(config.contextPerGoalTopK, DEFAULT_CONTEXT_INDEX.perGoalTopK),
+    max_goals_scanned: positiveInt(config.contextMaxGoalsScanned, DEFAULT_CONTEXT_INDEX.maxGoalsScanned),
+    warnings,
+  };
+}
+
 export async function queryContextStatus(task_id, context, { config, registry, store }) {
   requireScope(context, "task:read");
 
@@ -40,6 +102,7 @@ export async function queryContextStatus(task_id, context, { config, registry, s
   });
 
   // 3. Context source precedence summary
+  const contextIndex = await collectContextIndexStatus(config);
   const contextSourcePrecedence = [
     { rank: 1, source: "task.description / task fields", description: "Direct task metadata from the task object" },
     { rank: 2, source: "linked goal prompt/context files", description: "goal.md and context.json from the linked goal workspace files" },
@@ -168,6 +231,7 @@ export async function queryContextStatus(task_id, context, { config, registry, s
       project_env_secret_like_key_count: secretLikeKeys.length,
       redacted_key_names: secretLikeKeys.length > 0 ? secretLikeKeys : [],
     },
+    context_index: contextIndex,
     context_source_precedence: contextSourcePrecedence,
     warnings: warnings,
   };

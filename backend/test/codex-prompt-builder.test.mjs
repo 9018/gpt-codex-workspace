@@ -392,6 +392,10 @@ test('buildCodexPrompt: context.bundle.md is preferred over transcript.md', () =
   assert.ok(fullPrompt.includes('Prefer'), 'Should have "Prefer" directive');
   assert.ok(fullPrompt.includes('context.bundle.md'), 'context.bundle.md must be referenced');
   assert.ok(fullPrompt.includes('supporting context when present'), 'Should say "supporting context when present"');
+  assert.ok(fullPrompt.includes('Use codex.entry.md plus context.bundle.md as the default execution context'),
+    'Should explicitly define codex.entry.md + context.bundle.md as the default execution context');
+  assert.ok(fullPrompt.includes('Do not read context.json, goal.md, or transcript.md wholesale by default'),
+    'Should explicitly forbid default wholesale reads of deep lookup files');
 });
 
 test('buildCodexPrompt: transcript.md is only for explicit deep lookup', () => {

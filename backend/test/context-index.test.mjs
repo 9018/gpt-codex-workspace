@@ -22,7 +22,7 @@ const backendRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 // Module imports
 // ---------------------------------------------------------------------------
 
-let chunker, embeddings, zvecStore, retriever, bundleBuilder, contextIndexHooks, runtimeConfig;
+let chunker, embeddings, zvecStore, retriever, bundleBuilder, contextIndexHooks, runtimeConfig, workspaceFileWriter;
 
 before(async () => {
   chunker = await import("../src/context-index/chunker.mjs");
@@ -32,7 +32,40 @@ before(async () => {
   bundleBuilder = await import("../src/context-index/context-bundle-builder.mjs");
   contextIndexHooks = await import("../src/context-index/context-index-hooks.mjs");
   runtimeConfig = await import("../src/runtime-config.mjs");
+  workspaceFileWriter = await import("../src/goal-task-workspace-files.mjs");
 });
+
+function withEnv(key, value, fn) {
+  const previous = process.env[key];
+  if (value === undefined) delete process.env[key];
+  else process.env[key] = value;
+  return Promise.resolve()
+    .then(fn)
+    .finally(() => {
+      if (previous === undefined) delete process.env[key];
+      else process.env[key] = previous;
+    });
+}
+
+function createWorkspaceStore(root) {
+  return {
+    async load() {
+      return {
+        workspaces: [{ id: "hosted-default", root, type: "local" }],
+        goals: [],
+        memories: [],
+      };
+    },
+  };
+}
+
+function workspaceTestContext() {
+  return {
+    scopes: ["workspace:read", "workspace:write", "files:upload", "files:download"],
+    workspace_ids: ["*"],
+    project_ids: ["*"],
+  };
+}
 
 // ---------------------------------------------------------------------------
 // 1. Chunking determinism
@@ -492,6 +525,16 @@ describe("runtime-config — context vector store selection", () => {
     }
   });
 
+  it("reads GPTWORK_CONTEXT_VECTOR_STORE zvec, auto, and local modes", async () => {
+    for (const mode of ["zvec", "auto", "local"]) {
+      await withEnv("GPTWORK_CONTEXT_VECTOR_STORE", mode, () => {
+        const { config, sources } = runtimeConfig.buildRuntimeConfig(process.cwd());
+        assert.strictEqual(config.contextVectorStore, mode);
+        assert.strictEqual(sources.contextVectorStore, "process.env");
+      });
+    }
+  });
+
   it("reads bounded context bundle tuning from process.env", () => {
     const previous = {
       max: process.env.GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS,
@@ -763,6 +806,10 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.strictEqual(result.retrievalJson.selected_bundle_chunks, result.retrievalJson.selection.results.length);
       assert.ok(result.retrievalJson.selection.quota);
       assert.strictEqual(result.retrievalJson.retrieval_mode, "vector");
+      assert.strictEqual(typeof result.retrievalJson.store_name, "string");
+      assert.strictEqual(typeof result.retrievalJson.retrieval_mode, "string");
+      assert.ok(result.retrievalJson.store_capabilities && typeof result.retrievalJson.store_capabilities === "object");
+      assert.ok(result.retrievalJson.embedding_provider && typeof result.retrievalJson.embedding_provider === "object");
       assert.ok(result.retrievalJson.fallback_reason || result.retrievalJson.store_capabilities);
       assert.ok(Array.isArray(result.retrievalJson.query_terms));
       assert.ok(result.retrievalJson.keyword_query.includes("Implement context retrieval MVP"));
@@ -826,6 +873,106 @@ describe("context-index-hooks — integration does not break workflow", () => {
   it("tryBuildContextBundle returns null on failure", async () => {
     const bundle = await contextIndexHooks.tryBuildContextBundle(null, null, null);
     assert.strictEqual(bundle, null);
+  });
+
+  it("writeGoalWorkspaceFiles writes bounded context bundle and retrieval metadata for new goals", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-workspace-files-"));
+    try {
+      const store = createWorkspaceStore(tmpDir);
+      const config = {
+        workspaceRoot: tmpDir,
+        defaultWorkspaceRoot: tmpDir,
+        contextVectorStore: "local",
+        shellMode: "full",
+        writeMode: "workspace",
+        shellTranscript: "compact",
+      };
+      const goal = {
+        id: "goal_workspace_files",
+        workspace_id: "hosted-default",
+        project_id: "default",
+        conversation_id: "conv_workspace_files",
+        title: "Workspace File Goal",
+        user_request: "Use zvec context bundle in Codex execution.",
+        goal_prompt: "Generate bounded context.bundle.md and retrieval proof.",
+        context_summary: "Testing writeGoalWorkspaceFiles context-index hook.",
+        status: "assigned",
+        mode: "builder",
+      };
+      const conversation = {
+        id: "conv_workspace_files",
+        messages: [{ role: "user", content: "Please make Zvec context visible to Codex." }],
+      };
+      const task = { id: "task_workspace_files", title: "Workspace task", description: "Task description" };
+
+      const files = await workspaceFileWriter.writeGoalWorkspaceFiles(
+        store,
+        config,
+        goal,
+        conversation,
+        [],
+        task,
+        { initialize_result: true },
+        workspaceTestContext(),
+      );
+
+      const bundlePath = join(tmpDir, files.context_bundle_md);
+      const retrievalPath = join(tmpDir, files.context_retrieval_json);
+      assert.ok(existsSync(bundlePath), "context.bundle.md should be written for a new goal");
+      assert.ok(existsSync(retrievalPath), "context.retrieval.json should be written when retrieval data exists");
+      const retrieval = JSON.parse(readFileSync(retrievalPath, "utf8"));
+      assert.strictEqual(retrieval.goal_id, goal.id);
+      assert.strictEqual(retrieval.store_name, "local-json-store");
+      assert.strictEqual(typeof retrieval.retrieval_mode, "string");
+      assert.ok(retrieval.store_capabilities);
+      assert.ok(retrieval.embedding_provider);
+    } finally {
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("writeGoalWorkspaceFiles continues goal creation in auto mode when zvec is unavailable", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-workspace-auto-"));
+    const previous = process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+    process.env.GPTWORK_CONTEXT_VECTOR_STORE = "auto";
+    try {
+      const store = createWorkspaceStore(tmpDir);
+      const config = {
+        workspaceRoot: tmpDir,
+        defaultWorkspaceRoot: tmpDir,
+        shellMode: "full",
+        writeMode: "workspace",
+        shellTranscript: "compact",
+      };
+      const goal = {
+        id: "goal_auto_fallback",
+        workspace_id: "hosted-default",
+        title: "Auto fallback Goal",
+        user_request: "Goal creation must continue when optional zvec is unavailable.",
+        goal_prompt: "Use the local fallback if zvec cannot be loaded.",
+        status: "assigned",
+        mode: "builder",
+      };
+
+      const files = await workspaceFileWriter.writeGoalWorkspaceFiles(
+        store,
+        config,
+        goal,
+        { messages: [] },
+        [],
+        null,
+        {},
+        workspaceTestContext(),
+      );
+
+      assert.ok(existsSync(join(tmpDir, files.codex_entry_md)), "codex.entry.md should still be written");
+      assert.ok(existsSync(join(tmpDir, files.goal_md)), "goal.md should still be written");
+      assert.ok(existsSync(join(tmpDir, files.context_bundle_md)), "fallback should still produce context.bundle.md");
+    } finally {
+      if (previous === undefined) delete process.env.GPTWORK_CONTEXT_VECTOR_STORE;
+      else process.env.GPTWORK_CONTEXT_VECTOR_STORE = previous;
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 });
 

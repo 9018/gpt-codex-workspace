@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createContextHealthToolsGroup } from '../src/tool-groups/context-health-tools-group.mjs';
+import { collectContextIndexStatus } from '../src/diagnostics-service.mjs';
 
 function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
   if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
@@ -16,6 +17,12 @@ function fakeSchema(shape = {}, required = []) {
 const fakeConfig = {
   defaultRepoPath: '/tmp/fake-repo',
   defaultRepo: 'owner/repo',
+  contextVectorStore: 'local',
+  contextBundleMaxTokens: 1536,
+  contextBundleMaxChunks: 6,
+  contextCrossGoalTopK: 3,
+  contextPerGoalTopK: 5,
+  contextMaxGoalsScanned: 9,
 };
 
 const fakeStore = {
@@ -164,4 +171,44 @@ test('context_prepare handler returns expected shape keys', async () => {
   assert.ok(Array.isArray(result.skipped_actions));
   assert.ok(Array.isArray(result.warnings));
   assert.equal(result.no_secrets_exposed, true);
+});
+
+test('project_context_status exposes safe context_index diagnostics', async () => {
+  const tools = createContextHealthToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    config: fakeConfig,
+    registry: fakeRegistry,
+    store: fakeStore,
+  });
+
+  const result = await tools.project_context_status.handler({}, { scopes: ['task:read'] });
+
+  assert.equal(result.context_index.configured_store, 'local');
+  assert.equal(result.context_index.effective_store, 'local-json-store');
+  assert.equal(result.context_index.zvec_optional_dependency, 'not_checked');
+  assert.equal(result.context_index.bundle_max_tokens, 1536);
+  assert.equal(result.context_index.bundle_max_chunks, 6);
+  assert.equal(result.context_index.cross_goal_top_k, 3);
+  assert.equal(result.context_index.per_goal_top_k, 5);
+  assert.equal(result.context_index.max_goals_scanned, 9);
+  assert.ok(Array.isArray(result.context_index.warnings));
+});
+
+test('context_index diagnostics show auto fallback and zvec strict-mode warning when zvec is unavailable', async () => {
+  const unavailable = async () => {
+    throw new Error('simulated missing @zvec/zvec');
+  };
+
+  const auto = await collectContextIndexStatus({ contextVectorStore: 'auto' }, { importZvec: unavailable });
+  assert.equal(auto.configured_store, 'auto');
+  assert.equal(auto.effective_store, 'local-json-store');
+  assert.equal(auto.zvec_optional_dependency, 'unavailable');
+  assert.deepEqual(auto.warnings, []);
+
+  const strict = await collectContextIndexStatus({ contextVectorStore: 'zvec' }, { importZvec: unavailable });
+  assert.equal(strict.configured_store, 'zvec');
+  assert.equal(strict.effective_store, 'unknown');
+  assert.equal(strict.zvec_optional_dependency, 'unavailable');
+  assert.match(strict.warnings.join('\n'), /GPTWORK_CONTEXT_VECTOR_STORE=zvec/);
 });

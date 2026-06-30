@@ -453,6 +453,25 @@ Before executing large Codex tasks, use the MCP tool:
 - `project_context_status(task_id?)` — Concise context health and source precedence diagnostic: checks canonical repo registration, project.md/project.env existence and sizes/key counts (without secrets), context source precedence (5 layers), and optionally task-specific diagnostics (status, goal, transcript/memory counts). Lightweight alternative when you do not need the full preview.
 - `context_prepare(task_id?, mode?)` — Safe auto-fix for context hygiene after diagnostics detect issues. Defaults to `check` (dry-run, no writes). Set `mode=fix_safe` to create missing .gptwork/ directory, project.md, and project.env templates. Never overwrites existing content or exposes secrets. If the repo is dirty or another Codex run is active, stops and reports rather than racing. fix_with_codex mode is reserved for future work without semantic context summarization.
 
+### Context Index / Zvec
+
+GPTWork builds a bounded context bundle for new goals through the existing context-index path. Configure it with runtime environment variables:
+
+```bash
+GPTWORK_CONTEXT_VECTOR_STORE=auto   # default: use @zvec/zvec when available, otherwise fallback local
+GPTWORK_CONTEXT_VECTOR_STORE=zvec   # force Zvec; unavailable Zvec is reported as a clear failure
+GPTWORK_CONTEXT_VECTOR_STORE=local  # only use local json fallback
+GPTWORK_CONTEXT_BUNDLE_MAX_TOKENS=2048
+GPTWORK_CONTEXT_BUNDLE_MAX_CHUNKS=8
+GPTWORK_CONTEXT_CROSS_GOAL_TOP_K=4
+GPTWORK_CONTEXT_PER_GOAL_TOP_K=4
+GPTWORK_CONTEXT_MAX_GOALS_SCANNED=20
+```
+
+Zvec is a rebuildable context index, not the GPTWork source of truth. Goals, conversations, task state, and result files remain the durable facts. New goal workspace files include `codex.entry.md`; when retrieval succeeds they also include `context.bundle.md` and `context.retrieval.json`. Codex execution prompts use `codex.entry.md + context.bundle.md` as the default context. `context.json`, `goal.md`, and `transcript.md` are deep-lookup files and should not be read wholesale by default.
+
+Use `project_context_status` / `context_status` to inspect the safe `context_index` summary: configured store, effective store, optional Zvec dependency availability, bundle budgets, retrieval top-K limits, scan cap, and warnings. No `.env`, token, or key values are exposed.
+
 The preview includes:
 - Task title, status, mode
 - Linked goal ID
