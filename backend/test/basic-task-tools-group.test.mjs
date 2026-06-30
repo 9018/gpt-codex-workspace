@@ -27,6 +27,8 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
     'create_task',
     'list_tasks',
     'get_task',
+    'get_task_acceptance_bundle',
+    'get_task_review_packet',
     'update_task_status',
     'append_task_log',
     'attach_task_artifact',
@@ -57,6 +59,12 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
   // get_task: required = ['task_id']
   assert.deepEqual(tools.get_task.inputSchema.required, ['task_id']);
   assert.equal(tools.get_task.inputSchema.properties.task_id, 'string');
+
+  // update_task_status: required = ['task_id', 'status']
+  assert.deepEqual(tools.get_task_acceptance_bundle.inputSchema.required, ['task_id']);
+  assert.equal(tools.get_task_acceptance_bundle.inputSchema.properties.task_id, 'string');
+  assert.deepEqual(tools.get_task_review_packet.inputSchema.required, ['task_id']);
+  assert.equal(tools.get_task_review_packet.inputSchema.properties.task_id, 'string');
 
   // update_task_status: required = ['task_id', 'status']
   assert.deepEqual(tools.update_task_status.inputSchema.required, ['task_id', 'status']);

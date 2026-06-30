@@ -1,5 +1,7 @@
 import { basename } from 'node:path';
 import { findTask, updateTask, normalizeLegacyModes } from '../task-lifecycle.mjs';
+import { getTaskAcceptanceBundle } from '../review/task-acceptance-bundle.mjs';
+import { getTaskReviewPacket } from '../review/review-packet-builder.mjs';
 
 /**
  * Factory for basic task MCP tool registration.
@@ -54,6 +56,20 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       inputSchema: schema({ task_id: "string" }, ["task_id"]),
       ...common,
       handler: async ({ task_id }) => ({ task: await findTask(store, task_id) }),
+    }),
+    get_task_acceptance_bundle: tool({
+      name: "get_task_acceptance_bundle",
+      description: "Return compact task acceptance evidence for review or closure without full goal context, transcripts, memories, or large diffs.",
+      inputSchema: schema({ task_id: "string" }, ["task_id"]),
+      ...common,
+      handler: async ({ task_id }) => ({ acceptance_bundle: await getTaskAcceptanceBundle({ store, config, task_id }) }),
+    }),
+    get_task_review_packet: tool({
+      name: "get_task_review_packet",
+      description: "Return a minimal task review packet with result, verification, blockers, changed files, and recommended next action.",
+      inputSchema: schema({ task_id: "string" }, ["task_id"]),
+      ...common,
+      handler: async ({ task_id }) => ({ review_packet: await getTaskReviewPacket({ store, config, task_id }) }),
     }),
     update_task_status: tool({
       name: "update_task_status",
