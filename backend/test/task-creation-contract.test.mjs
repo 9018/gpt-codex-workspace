@@ -6,8 +6,10 @@ import { join } from 'node:path';
 
 import { StateStore } from '../src/state-store.mjs';
 import { createTask } from '../src/goal-task-creation.mjs';
+import { createGoal } from '../src/goal-task-goals.mjs';
 import { buildGoalTask } from '../src/goal-task-task-factory.mjs';
 import { defaultTokenContext } from '../src/auth-context.mjs';
+import { loadWorkflowRun } from '../src/workflow-run-store.mjs';
 
 test('createTask persists execution metadata fields for ordinary builder tasks', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-task-create-contract-'));
@@ -34,6 +36,12 @@ test('createTask persists execution metadata fields for ordinary builder tasks',
   });
   assert.equal(task.attempt, 0);
   assert.equal(task.max_attempts, 2);
+
+  const workflowRun = loadWorkflowRun(root, task.id);
+  assert.equal(workflowRun.task_id, task.id);
+  assert.equal(workflowRun.goal_id, task.goal_id);
+  assert.equal(workflowRun.status, 'queued');
+  assert.equal(workflowRun.refs.source, 'create_task');
 });
 
 test('buildGoalTask includes execution metadata fields for queue-created builder tasks', () => {
@@ -56,4 +64,24 @@ test('buildGoalTask includes execution metadata fields for queue-created builder
   assert.equal(task.worktree.status, 'pending');
   assert.equal(task.attempt, 0);
   assert.equal(task.max_attempts, 2);
+});
+
+test('createGoal persists a workflow_run for assigned Codex goals', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-goal-create-workflow-run-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const store = new StateStore({ statePath: join(root, 'state.json'), defaultWorkspaceRoot: root });
+  await store.load();
+
+  const { goal, task } = await createGoal(store, { defaultWorkspaceRoot: root }, {
+    user_request: 'Build the feature',
+    goal_prompt: 'Implement and verify the feature.',
+    assign_to_codex: true,
+    mode: 'builder',
+  }, { ...defaultTokenContext('test'), user_id: 'user_1' });
+
+  const workflowRun = loadWorkflowRun(root, task.id);
+  assert.equal(workflowRun.goal_id, goal.id);
+  assert.equal(workflowRun.task_id, task.id);
+  assert.equal(workflowRun.current_step, 'goal_created');
+  assert.equal(workflowRun.refs.source, 'create_goal');
 });

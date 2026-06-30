@@ -8,6 +8,7 @@ import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
+import { ensureWorkflowRun } from "./workflow-run-store.mjs";
 
 const REPAIR_METADATA_KEYS = [
   "root_task_id",
@@ -112,6 +113,16 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     initialize_result: true
   }, context);
   await store.save();
+  if (task && !args.skip_workflow_run && config?.defaultWorkspaceRoot) {
+    ensureWorkflowRun(config.defaultWorkspaceRoot, {
+      workflow_id: "default",
+      goal_id: goal.id,
+      task_id: task.id,
+      current_step: "goal_created",
+      status: "queued",
+      refs: { source: "create_goal", conversation_id: conversation.id },
+    });
+  }
   return { goal, conversation, memories, task, workspace_files };
 }
 

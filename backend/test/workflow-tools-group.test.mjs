@@ -243,6 +243,42 @@ test("workflow_status returns state without mutation", async () => {
   assert.ok(result.status_checks);
 });
 
+test("workflow_status exposes workflow_run current_step and blocking reason", async () => {
+  const mod = await import("../src/tool-groups/workflow-tools-group.mjs");
+  const { createWorkflowRun, transitionWorkflowRun } = await import("../src/workflow-run-store.mjs");
+  const root = uniqueRoot();
+  const taskState = makeTask({ id: "task_blocked_status", status: "waiting_for_lock" });
+  createWorkflowRun(root, {
+    workflow_id: "default",
+    goal_id: "goal_blocked_status",
+    task_id: taskState.id,
+    current_step: "queue_wait",
+  });
+  transitionWorkflowRun(root, taskState.id, {
+    to_status: "blocked",
+    current_step: "waiting_for_lock",
+    reason: "repo locked by task_other",
+    blocker: { code: "repo_lock", detail: "repo locked by task_other" },
+  });
+
+  const store = { load: async () => ({ tasks: [taskState] }), save: async () => {} };
+  const tools = mod.createWorkflowToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store,
+    config: { defaultWorkspaceRoot: root },
+    workerState: fakeWorkerState,
+    collectWorkerQueueCounts: fakeCollectWorkerQueueCounts,
+  });
+
+  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+  assert.equal(result.workflow_run.current_step, "waiting_for_lock");
+  assert.equal(result.workflow_run.blocking_reason, "repo locked by task_other");
+  assert.equal(result.workflow_run.status, "blocked");
+  assert.ok(result.keyValues.some((item) => item.key === "Current Step" && item.value === "waiting_for_lock"));
+  assert.ok(result.keyValues.some((item) => item.key === "Blocking Reason" && item.value === "repo locked by task_other"));
+});
+
 // ---------------------------------------------------------------------------
 // workflow_record_result
 // ---------------------------------------------------------------------------

@@ -10,6 +10,14 @@
  * "检查任务" / "下发任务" after each manual acceptance step.
  */
 import {
+  deriveWorkflowRunBlocker,
+  deriveWorkflowRunStatusFromTask,
+  deriveWorkflowRunStepFromTask,
+  ensureWorkflowRun,
+  transitionWorkflowRun,
+  workflowRunStatusView,
+} from "../workflow-run-store.mjs";
+import {
   collectWorkflowDiagnostics,
   computeFingerprint,
   createProposalTask,
@@ -57,6 +65,53 @@ function handlerDiagnostics(diagnostics) {
     workflow_advance_handler_version: WORKFLOW_ADVANCE_HANDLER_VERSION,
     runtime_handler_commit: diagnostics?.runtime?.running_commit || diagnostics?.runtime?.repo_head || null,
   };
+}
+
+function taskGoalIdFromStoreState(state, taskId) {
+  if (!taskId) return null;
+  return (state.goals || []).find((goal) => goal.task_id === taskId)?.id || null;
+}
+
+async function ensureStatusWorkflowRun({ store, config, wfId, task, diagnostics }) {
+  if (!task || !config?.defaultWorkspaceRoot) return null;
+  let goalId = task.goal_id || null;
+  try {
+    const state = await store.load();
+    goalId ||= taskGoalIdFromStoreState(state, task.id);
+  } catch {
+    // Best-effort; workflow_run can still be keyed by task id.
+  }
+
+  const desiredStatus = deriveWorkflowRunStatusFromTask(task);
+  const desiredStep = deriveWorkflowRunStepFromTask(task);
+  const blocker = deriveWorkflowRunBlocker({ task, diagnostics });
+  const run = ensureWorkflowRun(config.defaultWorkspaceRoot, {
+    workflow_id: wfId,
+    goal_id: goalId,
+    task_id: task.id,
+    current_step: desiredStep,
+    status: desiredStatus,
+    blocker,
+  });
+
+  const effectiveBlocker = blocker || (desiredStatus === "blocked" && run.blocker ? run.blocker : null);
+  if (run.status !== desiredStatus || run.current_step !== desiredStep || (effectiveBlocker?.detail || null) !== (run.blocking_reason || null)) {
+    try {
+      return transitionWorkflowRun(config.defaultWorkspaceRoot, run.run_id, {
+        to_status: desiredStatus,
+        current_step: desiredStep,
+        reason: effectiveBlocker?.detail || `task status ${task.status}`,
+        blocker: effectiveBlocker,
+        refs: { task_status: task.status, goal_id: goalId },
+      });
+    } catch {
+      // If the persisted run is terminal or otherwise incompatible, keep it
+      // visible instead of hiding diagnostics from workflow_status.
+      return run;
+    }
+  }
+
+  return run;
 }
 
 /**
@@ -147,6 +202,16 @@ export function createWorkflowToolsGroup({
         }
 
         const queueDisplay = workflowQueueDisplay(diagnostics.queue);
+        const workflowRun = await ensureStatusWorkflowRun({
+          store,
+          config,
+          wfId,
+          task,
+          diagnostics,
+        });
+        const workflowRunView = workflowRunStatusView(workflowRun);
+        const currentStep = workflowRunView?.current_step || deriveWorkflowRunStepFromTask(task);
+        const blockingReason = workflowRunView?.blocking_reason || null;
 
         return {
           title: "Workflow Status",
@@ -165,6 +230,9 @@ export function createWorkflowToolsGroup({
               }
             : null,
           latest_task: diagnostics.latest_task,
+          workflow_run: workflowRunView,
+          current_step: currentStep,
+          blocking_reason: blockingReason,
           runtime: diagnostics.runtime,
           worktree: diagnostics.worktree,
           repo_locks: diagnostics.repo_locks,
@@ -211,6 +279,13 @@ export function createWorkflowToolsGroup({
               key: "Current Blockers",
               value: String(queueDisplay.current_blockers),
             },
+            {
+              key: "Current Step",
+              value: currentStep || "unknown",
+            },
+            ...(blockingReason
+              ? [{ key: "Blocking Reason", value: blockingReason }]
+              : []),
             {
               key: "Actionable Review",
               value: String(queueDisplay.actionable_review),

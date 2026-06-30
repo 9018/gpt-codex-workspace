@@ -5,6 +5,7 @@ import { ensureGoalState } from "./task-lifecycle.mjs";
 import { ensureTaskGoal } from "./goal-task-ensure.mjs";
 import { defaultTaskExecutionFields, normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
+import { ensureWorkflowRun } from "./workflow-run-store.mjs";
 
 function copyNotificationPolicyFields(task, args) {
   for (const key of ["notify", "silent", "suppress_notifications", "notification_policy"]) {
@@ -46,6 +47,16 @@ export async function createTask(store, config, args, context = defaultTokenCont
   await store.save();
   if (isCodexSessionInventoryTaskKind(task)) return { task };
   const linked = await ensureTaskGoal(store, config, task.id, context, { assign_to_codex: Boolean(task.assignee) });
+  if (task.assignee === "codex" && config?.defaultWorkspaceRoot) {
+    ensureWorkflowRun(config.defaultWorkspaceRoot, {
+      workflow_id: "default",
+      goal_id: linked.goal?.id || linked.task?.goal_id || null,
+      task_id: linked.task?.id || task.id,
+      current_step: "task_queue",
+      status: "queued",
+      refs: { source: "create_task" },
+    });
+  }
   // Send created notification for newly created/assigned Codex task.
   // ensureTaskGoal calls createGoal with skip_created_notification, so we
   // must fire the notification from here for the original task.
