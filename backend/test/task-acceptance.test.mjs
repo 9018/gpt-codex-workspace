@@ -42,6 +42,59 @@ test('verifyTaskCompletion runs discovered npm scripts as npm run <script> comma
   assert.ok(commands.every((entry) => entry.cwd === repoPath));
 });
 
+test('verifyTaskCompletion reuses matching verification report for finalizer project commands', async (t) => {
+  const repoPath = await mkdtemp(join(tmpdir(), 'gptwork-acceptance-report-'));
+  t.after(() => rm(repoPath, { recursive: true, force: true }));
+
+  await writeFile(join(repoPath, 'package.json'), JSON.stringify({ scripts: { test: 'node --version' } }), 'utf8');
+  execFileSync('git', ['init', '-b', 'main'], { cwd: repoPath, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repoPath });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repoPath });
+  execFileSync('git', ['add', 'package.json'], { cwd: repoPath });
+  execFileSync('git', ['commit', '-m', 'initial'], { cwd: repoPath, stdio: 'ignore' });
+  const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repoPath, encoding: 'utf8' }).trim();
+  const reportDir = await mkdtemp(join(tmpdir(), 'gptwork-acceptance-report-file-'));
+  t.after(() => rm(reportDir, { recursive: true, force: true }));
+  const reportPath = join(reportDir, 'release-check.json');
+  await writeFile(reportPath, JSON.stringify({
+    schema_version: 1,
+    mode: 'fast',
+    profile: 'fast',
+    completed_at: '2026-06-30T00:00:00.000Z',
+    repo: { head, dirty: false },
+    passed: true,
+    steps: [
+      { name: 'npm test', cmd: 'npm', args: ['run', 'test'], cwd: repoPath, exit_code: 0, stdout_tail: 'ok', stderr_tail: '', passed: true },
+    ],
+    failures: [],
+  }), 'utf8');
+
+  const commands = [];
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_acceptance_report', title: 'Acceptance' },
+    repoPath,
+    resultJson: {
+      status: 'completed',
+      summary: 'done',
+      changed_files: [],
+      verification: { passed: true, report_path: reportPath },
+    },
+    config: { now: () => '2026-06-30T00:00:10.000Z' },
+    runCommandFn: async (command, opts) => {
+      commands.push({ command, cwd: opts.cwd });
+      return { cmd: String(command), exit_code: 0, stdout_tail: '', stderr_tail: '' };
+    },
+  });
+
+  assert.equal(verification.passed, true);
+  assert.deepEqual(commands.map((entry) => entry.command), ['git diff --check']);
+  assert.equal(verification.report_reuse.reused, true);
+  assert.deepEqual(verification.commands.map((command) => ({ cmd: command.cmd, reused: command.reused })), [
+    { cmd: 'git diff --check', reused: undefined },
+    { cmd: 'npm run test', reused: true },
+  ]);
+});
+
 test('verifyTaskCompletion fail-closes when completed result lacks verification.passed true', async () => {
   const verification = await verifyTaskCompletion({
     resultJson: {

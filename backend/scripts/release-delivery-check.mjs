@@ -5,7 +5,8 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { join, dirname } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { mkdir, writeFile } from 'node:fs/promises';
 
 const DEFAULT_TIMEOUT_MS = 180_000;
 const FAST_TIMEOUT_MS = 180_000;
@@ -19,9 +20,76 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
+function argValue(name) {
+  const index = process.argv.indexOf(name);
+  return index >= 0 ? process.argv[index + 1] : null;
+}
+
+function runGit(execFileSync, args, cwd) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch {
+    return '';
+  }
+}
+
+function repoInfo(execFileSync, backendRoot) {
+  const root = runGit(execFileSync, ['rev-parse', '--show-toplevel'], backendRoot) || resolve(backendRoot, '..');
+  const status = runGit(execFileSync, ['status', '--porcelain'], root);
+  return {
+    root,
+    head: runGit(execFileSync, ['rev-parse', 'HEAD'], root) || null,
+    branch: runGit(execFileSync, ['branch', '--show-current'], root) || null,
+    dirty: status.length > 0,
+  };
+}
+
+function changedFiles(execFileSync, repoRoot, base) {
+  if (!base) return [];
+  const output = runGit(execFileSync, ['diff', `${base}..HEAD`, '--name-only'], repoRoot);
+  return output ? output.split('\n').filter(Boolean) : [];
+}
+
+function isDocsFile(file) {
+  return /(^|\/)README(\.|$)/i.test(file) || /(^|\/)docs\//.test(file) || /\.(md|mdx|txt)$/i.test(file);
+}
+
+function touchesCore(file) {
+  return /(^backend\/)?(scripts\/release-delivery-check\.mjs|src\/(codex-worker|worker|goal-queue|worker-queue|task-final|delivery-result-recovery|task-verifier|acceptance-agent)|test\/)/.test(file);
+}
+
+function selectMode({ fast, profile, files }) {
+  if (profile === 'fast' || fast) return { mode: 'fast', effectiveProfile: 'fast' };
+  if (profile !== 'changed') return { mode: 'full', effectiveProfile: 'full' };
+  if (files.length === 0 || files.every(isDocsFile)) return { mode: 'changed', effectiveProfile: 'docs' };
+  if (files.some(touchesCore)) return { mode: 'changed', effectiveProfile: 'fast' };
+  return { mode: 'changed', effectiveProfile: 'changed' };
+}
+
+function makeChangedSteps(files) {
+  const jsFiles = files.filter((file) => /\.(mjs|js|cjs)$/i.test(file)).map((file) => file.replace(/^backend\//, ''));
+  const steps = [];
+  if (jsFiles.length > 0) {
+    steps.push({ name: 'changed syntax files', cmd: 'node', args: ['scripts/check-syntax.mjs', '--files', jsFiles.join('\n')], timeout: 30_000 });
+  }
+  steps.push({ name: 'check:imports', cmd: 'npm', args: ['run', 'check:imports'] });
+  return steps;
+}
+
+async function writeJsonReport(path, report) {
+  if (!path) return;
+  const absolutePath = resolve(path);
+  await mkdir(dirname(absolutePath), { recursive: true });
+  await writeFile(absolutePath, `${JSON.stringify(report, null, 2)}\n`, 'utf8');
+  console.log(`[release-delivery-check] json report: ${absolutePath}`);
+}
+
 async function main() {
   const { execFileSync } = await import("node:child_process");
   const fast = process.argv.includes('--fast');
+  const profile = argValue('--profile') || (fast ? 'fast' : 'full');
+  const jsonReportPath = argValue('--json-report');
+  const base = argValue('--base');
 
   // Run from backend/ root, NOT from scripts/ directory
   const scriptsDir = dirname(fileURLToPath(import.meta.url));
@@ -114,28 +182,56 @@ async function main() {
       "runtime workflow card tests",
     ].includes(step.name)),
   ];
-  const steps = fast ? fastSteps : fullSteps;
-
+  const repo = repoInfo(execFileSync, backendRoot);
+  const files = profile === 'changed' ? changedFiles(execFileSync, repo.root, base) : [];
+  const selection = selectMode({ fast, profile, files });
+  const docsSteps = [{ name: 'check:imports', cmd: 'npm', args: ['run', 'check:imports'] }];
+  let steps = selection.effectiveProfile === 'fast' ? fastSteps : fullSteps;
+  if (profile === 'changed' && selection.effectiveProfile === 'changed') steps = makeChangedSteps(files);
+  if (profile === 'changed' && selection.effectiveProfile === 'docs') steps = docsSteps;
   const failures = [];
-  console.log(`[release-delivery-check] mode=${fast ? 'fast' : 'full'} steps=${steps.length}`);
+  const stepReports = [];
+  const startedAt = new Date();
+  const startedMs = Date.now();
+  console.log(`[release-delivery-check] mode=${selection.mode} profile=${selection.effectiveProfile} steps=${steps.length}`);
   for (const step of steps) {
     const timeout = step.timeout || (fast ? FAST_TIMEOUT_MS : DEFAULT_TIMEOUT_MS);
     const started = Date.now();
     console.log(`[RUN] ${step.name} timeout=${formatDuration(timeout)}`);
     try {
       const stdout = execFileSync(step.cmd, step.args, { cwd: backendRoot, stdio: "pipe", timeout, encoding: "utf8" });
+      const stepReport = {
+        name: step.name,
+        cmd: step.cmd,
+        args: step.args || [],
+        cwd: backendRoot,
+        timeout_ms: timeout,
+        exit_code: 0,
+        signal: null,
+        duration_ms: Date.now() - started,
+        stdout_tail: tail(stdout),
+        stderr_tail: '',
+        passed: true,
+      };
+      stepReports.push(stepReport);
       console.log(`[PASS] ${step.name} duration=${formatDuration(Date.now() - started)}`);
       if (stdout.trim()) console.log(tail(stdout, 1200));
     } catch (err) {
       const failure = {
         name: step.name,
+        cmd: step.cmd,
+        args: step.args || [],
+        cwd: backendRoot,
+        timeout_ms: timeout,
         exit_code: typeof err.status === 'number' ? err.status : (typeof err.code === 'number' ? err.code : 1),
         signal: err.signal || null,
         duration_ms: Date.now() - started,
         stdout_tail: tail(err.stdout),
         stderr_tail: tail(err.stderr || err.message),
+        passed: false,
       };
       failures.push(failure);
+      stepReports.push(failure);
       console.log(`[FAIL] ${failure.name} duration=${formatDuration(failure.duration_ms)} exit=${failure.exit_code}${failure.signal ? ` signal=${failure.signal}` : ''}`);
       if (failure.stdout_tail) console.error(`--- stdout tail: ${failure.name} ---\n${failure.stdout_tail}`);
       if (failure.stderr_tail) console.error(`--- stderr tail: ${failure.name} ---\n${failure.stderr_tail}`);
@@ -149,6 +245,22 @@ async function main() {
     }
   }
   console.log(`\n=== ${failures.length === 0 ? "ALL PASS" : "SOME FAILED"} ===`);
+  await writeJsonReport(jsonReportPath, {
+    schema_version: 1,
+    mode: selection.mode,
+    profile: selection.effectiveProfile,
+    requested_profile: profile,
+    base: base || null,
+    changed_files: files,
+    started_at: startedAt.toISOString(),
+    completed_at: new Date().toISOString(),
+    duration_ms: Date.now() - startedMs,
+    cwd: backendRoot,
+    repo,
+    passed: failures.length === 0,
+    steps: stepReports,
+    failures,
+  });
   process.exit(failures.length === 0 ? 0 : 1);
 }
 

@@ -5,6 +5,11 @@ import { exec, execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { buildEvidence, runAcceptanceAgent } from "./acceptance-agent.mjs";
 import { classifyFailure } from "./failure-classifier.mjs";
+import {
+  commandEvidenceFromReport,
+  isVerificationReportReusable,
+  readVerificationReport,
+} from "./verification-report.mjs";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -59,6 +64,55 @@ async function discoverCommands(repoPath) {
   if (await exists(join(repoPath, "Cargo.toml"))) commands.push("cargo test");
   if (await exists(join(repoPath, "pom.xml"))) commands.push("mvn test");
   return [...new Set(commands)];
+}
+
+async function gitHead(repoPath) {
+  if (!repoPath) return null;
+  try {
+    const result = await execAsync("git rev-parse HEAD", { cwd: repoPath, timeout: 15_000, encoding: "utf8" });
+    return result.stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function verificationReportPathFrom(result) {
+  return result?.verification_report_path
+    || result?.verification?.report_path
+    || result?.evidence_paths?.verification_report
+    || null;
+}
+
+async function loadReusableReport({ result, repoPath, discovered, config }) {
+  const path = verificationReportPathFrom(result);
+  if (!path) return { report: null, report_reuse: null };
+  const attempted = { attempted: true, reused: false, path };
+  let report = null;
+  try {
+    report = await readVerificationReport(path);
+  } catch (err) {
+    return { report: null, report_reuse: { ...attempted, reason: "read_failed", error: err?.message || String(err) } };
+  }
+  const repoHead = config.repoHead || await gitHead(repoPath);
+  const reusable = isVerificationReportReusable(report, {
+    repoHead,
+    requiredCommands: discovered,
+    profile: config.verificationReportProfile || result?.verification?.profile || "fast",
+    maxAgeMs: config.verificationReportMaxAgeMs,
+    now: config.now,
+  });
+  const report_reuse = {
+    ...attempted,
+    reused: reusable.reusable,
+    reason: reusable.reason,
+    path,
+    profile: reusable.profile,
+    head: reusable.head,
+  };
+  for (const key of ["expected_head", "report_head", "expected_profile", "report_profile", "missing_commands", "matched_commands", "completed_at", "max_age_ms"]) {
+    if (reusable[key] !== undefined) report_reuse[key] = reusable[key];
+  }
+  return { report: reusable.reusable ? report : null, report_reuse };
 }
 
 function normalizeResultJson(input) {
@@ -140,8 +194,10 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     commands.push(await runCommand("git diff --check", { cwd: repoPath, timeout: 30_000, runCommandFn }));
   }
   const discovered = config.discoverVerificationCommands === false ? [] : await discoverCommands(repoPath || process.cwd());
+  const { report, report_reuse } = await loadReusableReport({ result, repoPath, discovered, config });
   for (const command of discovered) {
-    commands.push(await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, runCommandFn }));
+    const reused = report ? commandEvidenceFromReport(report, command) : null;
+    commands.push(reused || await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, runCommandFn }));
   }
 
   if (commands.some((command) => command.exit_code !== 0)) {
@@ -185,6 +241,7 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings,
     evidence: acceptance.evidence || evidence || null,
   };
+  if (report_reuse) verification.report_reuse = report_reuse;
 
   if (resultJsonPath) {
     await writeFile(join(dirname(resultJsonPath), "verification.json"), JSON.stringify(verification, null, 2), "utf8").catch(() => {});

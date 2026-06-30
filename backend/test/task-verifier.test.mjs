@@ -160,3 +160,100 @@ test('verifyTaskCompletion discovers bounded backend package checks when root pa
   assert.ok(calls.every((call) => call.cwd === dir));
   assert.equal(verification.reason_no_tests, null);
 });
+
+test('verifyTaskCompletion reuses matching verification report for project commands', async (t) => {
+  const { dir, resultJsonPath } = await makeResultDir(t);
+  await writeFile(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node --version' } }), 'utf8');
+  const reportPath = join(dir, 'release-check.json');
+  await writeFile(reportPath, JSON.stringify({
+    schema_version: 1,
+    mode: 'fast',
+    profile: 'fast',
+    completed_at: '2026-06-30T00:00:00.000Z',
+    repo: { head: 'abc123', dirty: false },
+    passed: true,
+    steps: [
+      { name: 'npm test', cmd: 'npm', args: ['run', 'test'], cwd: dir, exit_code: 0, stdout_tail: 'ok', stderr_tail: '', duration_ms: 10, passed: true },
+    ],
+    failures: [],
+  }), 'utf8');
+  const { calls, runCommand } = commandRunner();
+
+  const verification = await verifyTaskCompletion({
+    task: { id: 'task_reuse' },
+    goal: { id: 'goal_reuse' },
+    repoPath: dir,
+    resultJson: {
+      status: 'completed',
+      summary: 'done',
+      changed_files: ['index.mjs'],
+      verification: { passed: true, report_path: reportPath },
+    },
+    resultJsonPath,
+    config: {
+      runCommand,
+      repoHead: 'abc123',
+      now: () => '2026-06-30T00:00:10.000Z',
+    },
+  });
+
+  assert.equal(verification.passed, true);
+  assert.deepEqual(calls.map((call) => call.command), ['git diff --check']);
+  assert.deepEqual(verification.report_reuse, {
+    attempted: true,
+    reused: true,
+    reason: 'reusable',
+    path: reportPath,
+    profile: 'fast',
+    head: 'abc123',
+    matched_commands: ['npm run test'],
+  });
+  assert.deepEqual(verification.commands.map((command) => ({ cmd: command.cmd, exit_code: command.exit_code, reused: command.reused })), [
+    { cmd: 'git diff --check', exit_code: 0, reused: undefined },
+    { cmd: 'npm run test', exit_code: 0, reused: true },
+  ]);
+});
+
+test('verifyTaskCompletion rejects stale report and falls back to runner', async (t) => {
+  const { dir, resultJsonPath } = await makeResultDir(t);
+  await writeFile(join(dir, 'package.json'), JSON.stringify({ scripts: { test: 'node --version' } }), 'utf8');
+  const reportPath = join(dir, 'release-check.json');
+  await writeFile(reportPath, JSON.stringify({
+    schema_version: 1,
+    mode: 'fast',
+    profile: 'fast',
+    completed_at: '2026-06-30T00:00:00.000Z',
+    repo: { head: 'old123', dirty: false },
+    passed: true,
+    steps: [
+      { name: 'npm test', cmd: 'npm', args: ['run', 'test'], cwd: dir, exit_code: 0, stdout_tail: 'ok', stderr_tail: '', passed: true },
+    ],
+    failures: [],
+  }), 'utf8');
+  const { calls, runCommand } = commandRunner();
+
+  const verification = await verifyTaskCompletion({
+    repoPath: dir,
+    resultJson: {
+      status: 'completed',
+      summary: 'done',
+      changed_files: ['index.mjs'],
+      verification_report_path: reportPath,
+      verification: { passed: true },
+    },
+    resultJsonPath,
+    config: {
+      runCommand,
+      repoHead: 'new456',
+      now: () => '2026-06-30T00:00:10.000Z',
+    },
+  });
+
+  assert.equal(verification.passed, true);
+  assert.deepEqual(calls.map((call) => call.command), ['git diff --check', 'npm run test']);
+  assert.equal(verification.report_reuse.attempted, true);
+  assert.equal(verification.report_reuse.reused, false);
+  assert.equal(verification.report_reuse.reason, 'head_mismatch');
+  assert.equal(verification.report_reuse.expected_head, 'new456');
+  assert.equal(verification.report_reuse.report_head, 'old123');
+});

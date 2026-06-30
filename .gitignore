@@ -18,6 +18,8 @@ data/state.json
 .gptwork/*.state.json
 .gptwork/pending-restarts/
 .gptwork/locks/
+.gptwork/reports/
+backend/.gptwork/reports/
 data/*.bak-*
 backend/tmp-deploy/
 backend/data/

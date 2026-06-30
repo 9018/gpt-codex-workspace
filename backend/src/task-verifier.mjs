@@ -3,6 +3,11 @@ import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import { exec } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, join } from 'node:path';
+import {
+  commandEvidenceFromReport,
+  isVerificationReportReusable,
+  readVerificationReport,
+} from './verification-report.mjs';
 
 const execAsync = promisify(exec);
 const RESULT_STATUSES = new Set(['completed', 'failed', 'timed_out', 'waiting_for_review']);
@@ -67,6 +72,17 @@ async function runCommand(command, { cwd, timeout, config } = {}) {
   }
 }
 
+async function gitHead(repoPath, config = {}) {
+  if (config.repoHead) return config.repoHead;
+  if (!repoPath) return null;
+  try {
+    const result = await execAsync('git rev-parse HEAD', { cwd: repoPath, timeout: 15_000, encoding: 'utf8' });
+    return result.stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
 async function parseResultJson(resultJson, resultJsonPath) {
   if (resultJson !== undefined && resultJson !== null) {
     if (typeof resultJson === 'string') {
@@ -102,6 +118,49 @@ function changedFilesFrom({ result, task, workspaceFiles }) {
   if (Array.isArray(task?.changed_files)) return task.changed_files;
   if (Array.isArray(workspaceFiles)) return workspaceFiles;
   return [];
+}
+
+function verificationReportPathFrom(result) {
+  return result?.verification_report_path
+    || result?.verification?.report_path
+    || result?.evidence_paths?.verification_report
+    || null;
+}
+
+function reportProfileFrom(result, config = {}) {
+  return config.verificationReportProfile || result?.verification?.profile || result?.verification_profile || 'fast';
+}
+
+async function loadReusableReport({ result, repoPath, projectCommands, config }) {
+  const path = verificationReportPathFrom(result);
+  if (!path) return { report: null, report_reuse: null };
+  const attempted = { attempted: true, reused: false, path };
+  let report = null;
+  try {
+    report = await readVerificationReport(path);
+  } catch (err) {
+    return { report: null, report_reuse: { ...attempted, reason: 'read_failed', error: err?.message || String(err) } };
+  }
+  const repoHead = await gitHead(repoPath, config);
+  const reusable = isVerificationReportReusable(report, {
+    repoHead,
+    profile: reportProfileFrom(result, config),
+    requiredCommands: projectCommands,
+    maxAgeMs: config.verificationReportMaxAgeMs,
+    now: config.now,
+  });
+  const report_reuse = {
+    ...attempted,
+    reused: reusable.reusable,
+    reason: reusable.reason,
+    path,
+    profile: reusable.profile,
+    head: reusable.head,
+  };
+  for (const key of ['expected_head', 'report_head', 'expected_profile', 'report_profile', 'missing_commands', 'matched_commands', 'completed_at', 'max_age_ms']) {
+    if (reusable[key] !== undefined) report_reuse[key] = reusable[key];
+  }
+  return { report: reusable.reusable ? report : null, report_reuse };
 }
 
 function validateResult(result) {
@@ -194,11 +253,13 @@ export async function verifyTaskCompletion({
   const projectCommands = parsed.findings.some((entry) => entry.code === 'result_json_invalid')
     ? []
     : await discoverProjectChecks(repoPath, config);
+  const { report, report_reuse } = await loadReusableReport({ result, repoPath, projectCommands, config });
   if (projectCommands.length === 0) {
     skipped_checks.push({ kind: 'project_checks', reason: NO_PROJECT_CHECKS_REASON });
   }
   for (const command of projectCommands) {
-    commands.push(await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, config }));
+    const reused = report ? commandEvidenceFromReport(report, command) : null;
+    commands.push(reused || await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, config }));
   }
 
   if (commands.some((command) => command.exit_code !== 0)) {
@@ -220,6 +281,7 @@ export async function verifyTaskCompletion({
     goal_id: goal?.id || null,
     findings,
   };
+  if (report_reuse) verification.report_reuse = report_reuse;
 
   await persistVerification(resultJsonPath, verification, logger);
   if (stateStore && typeof stateStore.save === 'function') await stateStore.save();
