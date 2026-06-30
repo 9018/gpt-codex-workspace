@@ -1,4 +1,4 @@
-import { normalizeList } from './acceptance-contract-schema.mjs';
+import { normalizeList } from '../acceptance/contract-schema.mjs';
 import { operationEvidenceProfile } from './operation-evidence-profiles.mjs';
 
 function hasValue(value) {

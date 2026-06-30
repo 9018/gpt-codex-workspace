@@ -6,7 +6,7 @@ import { mkdtemp, rm, writeFile, mkdir } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { runStateAssertions } from '../src/state-assertion-runner.mjs';
+import { runStateAssertions } from '../src/assertions/state-assertion-runner.mjs';
 
 async function makeRepo(t) {
   const repoPath = await mkdtemp(join(tmpdir(), 'gptwork-state-assertions-'));

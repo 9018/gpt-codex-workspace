@@ -4,8 +4,8 @@ import { createHash } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { join, isAbsolute } from 'node:path';
-import { normalizeList } from './acceptance-contract-schema.mjs';
-import { healthPassed, integrationSatisfied } from './operation-evidence-profiles.mjs';
+import { normalizeList } from '../acceptance/contract-schema.mjs';
+import { healthPassed, integrationSatisfied } from '../evidence/operation-evidence-profiles.mjs';
 
 const execFileAsync = promisify(execFile);
 

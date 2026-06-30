@@ -7,7 +7,7 @@ import { buildGoalTask, normalizeCreatedTaskMode } from "./goal-task-task-factor
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
-import { buildAcceptanceContract } from "./acceptance-contract-builder.mjs";
+import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
 
 const REPAIR_METADATA_KEYS = [
   "root_task_id",

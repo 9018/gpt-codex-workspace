@@ -1,8 +1,8 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAcceptanceContract } from "../src/acceptance-contract-builder.mjs";
-import { validateContractSemantics } from "../src/acceptance-semantics.mjs";
+import { buildAcceptanceContract } from "../src/acceptance/contract-builder.mjs";
+import { validateContractSemantics } from "../src/acceptance/semantics.mjs";
 
 test("accepts a default code_change contract", () => {
   const contract = buildAcceptanceContract({ user_request: "Fix backend code", goal_prompt: "Modify code, test and commit." });

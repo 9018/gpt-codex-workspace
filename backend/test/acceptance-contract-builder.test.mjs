@@ -1,7 +1,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildAcceptanceContract } from "../src/acceptance-contract-builder.mjs";
+import { buildAcceptanceContract } from "../src/acceptance/contract-builder.mjs";
 
 test("infers code_change contracts with commit and integration requirements", () => {
   const contract = buildAcceptanceContract({

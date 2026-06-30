@@ -1,8 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideTaskClosure, mapClosureStatusToTaskStatus } from "../src/task-closure-decider.mjs";
-import { planFollowupTasks } from "../src/followup-task-planner.mjs";
+import { decideTaskClosure, mapClosureStatusToTaskStatus } from "../src/closure/task-closure-decider.mjs";
+import { planFollowupTasks } from "../src/closure/followup-task-planner.mjs";
 
 function decide({ operationKind, result = {}, contractVerification = {}, contract = {}, verification = {} }) {
   const resolvedContract = {

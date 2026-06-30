@@ -1,6 +1,6 @@
-import { normalizeList } from './acceptance-contract-schema.mjs';
+import { normalizeList } from '../acceptance/contract-schema.mjs';
 import { CLOSURE_STATUSES, mapClosureStatusToTaskStatus, closureAllowsAutoComplete } from './auto-progress-policy.mjs';
-import { healthPassed } from './operation-evidence-profiles.mjs';
+import { healthPassed } from '../evidence/operation-evidence-profiles.mjs';
 
 export { CLOSURE_STATUSES, mapClosureStatusToTaskStatus, closureAllowsAutoComplete };
 
@@ -279,4 +279,3 @@ export function decideTaskClosure({
     config,
   });
 }
-

@@ -1,4 +1,4 @@
-import { normalizeList } from './acceptance-contract-schema.mjs';
+import { normalizeList } from '../acceptance/contract-schema.mjs';
 import { CLOSURE_STATUSES } from './auto-progress-policy.mjs';
 
 function textFrom(value) {
@@ -74,4 +74,3 @@ export function planFollowupTasks({ task = {}, goal = {}, result = {}, contractV
   }
   return tasks;
 }
-

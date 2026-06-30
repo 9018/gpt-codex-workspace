@@ -1,4 +1,4 @@
-import { normalizeList } from './acceptance-contract-schema.mjs';
+import { normalizeList } from '../acceptance/contract-schema.mjs';
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;

@@ -17,8 +17,8 @@ import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompleti
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
 import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
-import { decideTaskClosure, mapClosureStatusToTaskStatus } from './task-closure-decider.mjs';
-import { planFollowupTasks } from './followup-task-planner.mjs';
+import { decideTaskClosure, mapClosureStatusToTaskStatus } from './closure/task-closure-decider.mjs';
+import { planFollowupTasks } from './closure/followup-task-planner.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [

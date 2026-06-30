@@ -11,7 +11,7 @@ import {
   normalizeList,
   normalizeReviewPolicy,
   requirementIds
-} from "./acceptance-contract-schema.mjs";
+} from "./contract-schema.mjs";
 
 const AMBIGUOUS_CLOSURE_FIELDS = new Set(["ok", "done", "success", "safe", "passed"]);
 

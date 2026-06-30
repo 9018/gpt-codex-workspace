@@ -1,8 +1,8 @@
-import { normalizeList } from './acceptance-contract-schema.mjs';
-import { getDefaultAcceptanceContractProfile } from './acceptance-contract-profiles.mjs';
-import { validateContractSemantics } from './acceptance-semantics.mjs';
-import { normalizeOperationEvidence } from './evidence-normalizer.mjs';
-import { getRequirementCheck } from './operation-evidence-profiles.mjs';
+import { normalizeList } from './contract-schema.mjs';
+import { getDefaultAcceptanceContractProfile } from './contract-profiles.mjs';
+import { validateContractSemantics } from './semantics.mjs';
+import { normalizeOperationEvidence } from '../evidence/evidence-normalizer.mjs';
+import { getRequirementCheck } from '../evidence/operation-evidence-profiles.mjs';
 
 function blocker(code, message, evidence = {}, source = 'acceptance_contract_verifier') {
   return { severity: 'blocker', code, message, source, evidence };

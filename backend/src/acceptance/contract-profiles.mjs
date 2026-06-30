@@ -1,4 +1,4 @@
-import { ACCEPTANCE_CONTRACT_SCHEMA_VERSION, DEFAULT_COMPLETION_POLICY, cloneJson } from "./acceptance-contract-schema.mjs";
+import { ACCEPTANCE_CONTRACT_SCHEMA_VERSION, DEFAULT_COMPLETION_POLICY, cloneJson } from "./contract-schema.mjs";
 
 const QUALITY_EXPECTATIONS = Object.freeze([
   { id: "quality_notes_as_followups", description: "Report non-blocking quality concerns as followup_findings instead of blocking closure." },

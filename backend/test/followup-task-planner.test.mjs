@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { planFollowupTasks } from "../src/followup-task-planner.mjs";
+import { planFollowupTasks } from "../src/closure/followup-task-planner.mjs";
 
 test("planFollowupTasks turns quality notes into non-enqueued next_tasks", () => {
   const tasks = planFollowupTasks({

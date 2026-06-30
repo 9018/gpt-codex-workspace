@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { verifyAcceptanceContract } from '../src/acceptance-contract-verifier.mjs';
+import { verifyAcceptanceContract } from '../src/acceptance/contract-verifier.mjs';
 
 function contract(kind, extra = {}) {
   return {

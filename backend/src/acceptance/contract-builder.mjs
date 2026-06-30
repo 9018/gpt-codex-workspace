@@ -1,4 +1,4 @@
-import { getDefaultAcceptanceContractProfile } from "./acceptance-contract-profiles.mjs";
+import { getDefaultAcceptanceContractProfile } from "./contract-profiles.mjs";
 import {
   ACCEPTANCE_CONTRACT_SCHEMA_VERSION,
   DEFAULT_COMPLETION_POLICY,
@@ -8,8 +8,8 @@ import {
   disableAutoCompletion,
   normalizeList,
   normalizeReviewPolicy
-} from "./acceptance-contract-schema.mjs";
-import { validateContractSemantics } from "./acceptance-semantics.mjs";
+} from "./contract-schema.mjs";
+import { validateContractSemantics } from "./semantics.mjs";
 
 const OPERATION_PATTERNS = [
   ["data_migration", /\b(migrat(e|ion)|schema migration|backfill|rollback plan|database migration)\b|数据迁移|回滚/iu],

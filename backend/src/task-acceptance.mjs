@@ -10,9 +10,9 @@ import {
   isVerificationReportReusable,
   readVerificationReport,
 } from "./verification-report.mjs";
-import { normalizeOperationEvidence } from "./evidence-normalizer.mjs";
-import { runStateAssertions } from "./state-assertion-runner.mjs";
-import { verifyAcceptanceContract } from "./acceptance-contract-verifier.mjs";
+import { normalizeOperationEvidence } from "./evidence/evidence-normalizer.mjs";
+import { runStateAssertions } from "./assertions/state-assertion-runner.mjs";
+import { verifyAcceptanceContract } from "./acceptance/contract-verifier.mjs";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);

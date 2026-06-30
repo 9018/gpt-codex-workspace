@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideTaskClosure } from "../src/task-closure-decider.mjs";
+import { decideTaskClosure } from "../src/closure/task-closure-decider.mjs";
 
 function baseContract(overrides = {}) {
   return {

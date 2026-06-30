@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { normalizeOperationEvidence } from '../src/evidence-normalizer.mjs';
+import { normalizeOperationEvidence } from '../src/evidence/evidence-normalizer.mjs';
 
 test('normalizes code_change evidence with verification and integration fields', () => {
   const normalized = normalizeOperationEvidence({
