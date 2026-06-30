@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { decideTaskClosure } from "../src/closure/task-closure-decider.mjs";
+import { applyClosureDecisionToTaskResult, decideTaskClosure } from "../src/closure/task-closure-decider.mjs";
 
 function baseContract(overrides = {}) {
   return {
@@ -150,3 +150,36 @@ test("decideTaskClosure accepts ff_only_merged with post-merge verification", ()
   assert.equal(decision.status, "auto_completed_clean");
 });
 
+test("applyClosureDecisionToTaskResult auto-completes with followups without requiring review", () => {
+  const taskResult = { next_tasks: [{ title: "Existing", reason: "Already planned" }] };
+  const decision = {
+    status: "auto_completed_with_followups",
+    task_status: "completed",
+    reason: "blocking_gate_passed_with_non_blocking_followups",
+  };
+
+  const applied = applyClosureDecisionToTaskResult({
+    taskStatus: "completed",
+    taskResult,
+    closureDecision: decision,
+    plannedFollowups: [{ title: "Existing", reason: "Already planned" }, { title: "New followup", reason: "Useful later" }],
+  });
+
+  assert.equal(applied.taskStatus, "completed");
+  assert.equal(applied.taskResult.requires_review, false);
+  assert.equal(applied.taskResult.reason, "blocking_gate_passed_with_non_blocking_followups");
+  assert.deepEqual(applied.taskResult.next_tasks.map((item) => item.title), ["Existing", "New followup"]);
+});
+
+test("applyClosureDecisionToTaskResult maps requires_review without creating blockers from quality notes", () => {
+  const applied = applyClosureDecisionToTaskResult({
+    taskStatus: "completed",
+    taskResult: { quality_notes: ["Later polish"] },
+    closureDecision: { status: "requires_review", task_status: "waiting_for_review", reason: "semantic_ambiguity" },
+  });
+
+  assert.equal(applied.taskStatus, "waiting_for_review");
+  assert.equal(applied.taskResult.requires_review, true);
+  assert.equal(applied.taskResult.reason, "semantic_ambiguity");
+  assert.deepEqual(applied.taskResult.quality_notes, ["Later polish"]);
+});

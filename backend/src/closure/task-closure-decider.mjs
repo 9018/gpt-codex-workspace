@@ -122,6 +122,41 @@ function repairableFromContractBlockers(contractBlockers = []) {
   return contractBlockers.filter((entry) => repairableCodes.has(entry?.code));
 }
 
+function mergeNextTasks(existing = [], planned = []) {
+  const merged = [];
+  const seen = new Set();
+  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(planned) ? planned : [])]) {
+    if (!item || typeof item !== 'object') continue;
+    const key = `${item.title || ''}\n${item.reason || ''}\n${item.source_task_id || ''}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    merged.push(item);
+  }
+  return merged;
+}
+
+export function applyClosureDecisionToTaskResult({ taskStatus, taskResult = {}, closureDecision = {}, plannedFollowups = [], config = {} } = {}) {
+  const mappedStatus = closureDecision.task_status || mapClosureStatusToTaskStatus(closureDecision.status, config);
+  const nextTaskResult = { ...taskResult, closure_decision: closureDecision };
+
+  if (closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN || closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS) {
+    nextTaskResult.requires_review = false;
+    nextTaskResult.reason = closureDecision.reason;
+    nextTaskResult.next_tasks = mergeNextTasks(nextTaskResult.next_tasks, plannedFollowups);
+    return { taskStatus: mappedStatus, taskResult: nextTaskResult };
+  }
+  if (closureDecision.status === CLOSURE_STATUSES.REQUIRES_REVIEW) {
+    nextTaskResult.requires_review = true;
+    nextTaskResult.reason = closureDecision.reason;
+    return { taskStatus: mappedStatus, taskResult: nextTaskResult };
+  }
+  if (closureDecision.status === CLOSURE_STATUSES.FAILED) {
+    nextTaskResult.reason = closureDecision.reason;
+    return { taskStatus: mappedStatus, taskResult: nextTaskResult };
+  }
+  return { taskStatus, taskResult: nextTaskResult };
+}
+
 export function decideTaskClosure({
   contract = null,
   contractVerification = null,

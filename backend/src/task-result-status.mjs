@@ -16,6 +16,35 @@ export const DIAGNOSIS_CODES = {
   SUMMARY_FIELD_CONFLICT: "summary_field_conflict",
 };
 
+const NON_BLOCKING_CONTRACT_CODES_BY_PROFILE = {
+  tests_missing: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry"]),
+  changed_files_mismatch: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop"]),
+};
+
+export function isNonBlockingResultContractCode(code, profile) {
+  return NON_BLOCKING_CONTRACT_CODES_BY_PROFILE[code]?.has(profile) === true;
+}
+
+export function classifyResultContractFindings({ diagnosisCodes = [], profile = null } = {}) {
+  const blockingCodes = [];
+  const nonBlockingCodes = [];
+  const findingSeverityForCode = {};
+  for (const code of Array.isArray(diagnosisCodes) ? diagnosisCodes : []) {
+    if (isNonBlockingResultContractCode(code, profile)) {
+      nonBlockingCodes.push(code);
+      findingSeverityForCode[code] = "followup";
+    } else {
+      blockingCodes.push(code);
+      findingSeverityForCode[code] = "major";
+    }
+  }
+  return {
+    blocking_codes: blockingCodes,
+    non_blocking_codes: nonBlockingCodes,
+    finding_severity_for_code: findingSeverityForCode,
+  };
+}
+
 /**
  * Validate a result JSON against the P0 contract.
  *

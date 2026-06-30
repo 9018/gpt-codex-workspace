@@ -6,7 +6,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
-import { analyzeAutoIntegrationCandidate, runAutoIntegrationCompletion } from '../src/auto-integration-completion.mjs';
+import { analyzeAutoIntegrationCandidate, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from '../src/auto-integration-completion.mjs';
 
 function git(cwd, args) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
@@ -224,6 +224,30 @@ test('analyzeAutoIntegrationCandidate rejects branch_pushed task without passed 
   assert.equal(candidate.eligible, false);
   assert.equal(candidate.reason, 'acceptance_not_passed');
   assert.equal(candidate.blockers[0].code, 'acceptance_not_passed');
+});
+
+test('classifyIntegrationQueueResult marks merged and skipped as terminal completion', () => {
+  assert.deepEqual(classifyIntegrationQueueResult({ ok: true, status: 'merged', merged: true }), {
+    kind: 'terminal_completed',
+    task_status: 'completed',
+    should_attempt_auto_completion: false,
+    should_attempt_repair: false,
+  });
+  assert.equal(classifyIntegrationQueueResult({ ok: true, status: 'skipped' }).task_status, 'completed');
+});
+
+test('classifyIntegrationQueueResult separates auto-completion candidates from repairable failures', () => {
+  const pushed = classifyIntegrationQueueResult({ ok: true, status: 'branch_pushed', merged: false });
+  assert.equal(pushed.kind, 'auto_completion_candidate');
+  assert.equal(pushed.task_status, null);
+  assert.equal(pushed.should_attempt_auto_completion, true);
+  assert.equal(pushed.should_attempt_repair, false);
+
+  const conflict = classifyIntegrationQueueResult({ ok: false, status: 'conflict' });
+  assert.equal(conflict.kind, 'repairable_failure');
+  assert.equal(conflict.task_status, null);
+  assert.equal(conflict.should_attempt_auto_completion, false);
+  assert.equal(conflict.should_attempt_repair, true);
 });
 
 test('runAutoIntegrationCompletion returns already_integrated evidence when canonical already contains task commit', async () => {

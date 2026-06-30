@@ -16,8 +16,8 @@ import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion, scheduleRepairAttempt } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
-import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
-import { decideTaskClosure, mapClosureStatusToTaskStatus } from './closure/task-closure-decider.mjs';
+import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
+import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
 import { planFollowupTasks } from './closure/followup-task-planner.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
@@ -34,23 +34,6 @@ function applyRepairMetadata(args = {}, repairGoal = {}) {
     if (repairGoal[key] !== undefined) args[key] = repairGoal[key];
   }
   return args;
-}
-
-function isIntegrationRepairableStatus(status) {
-  return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
-}
-
-function mergeNextTasks(existing = [], planned = []) {
-  const merged = [];
-  const seen = new Set();
-  for (const item of [...(Array.isArray(existing) ? existing : []), ...(Array.isArray(planned) ? planned : [])]) {
-    if (!item || typeof item !== "object") continue;
-    const key = `${item.title || ""}\n${item.reason || ""}\n${item.source_task_id || ""}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    merged.push(item);
-  }
-  return merged;
 }
 
 function contractForClosure({ goal, taskResult } = {}) {
@@ -157,12 +140,11 @@ export async function finalizeCodexTaskRun({
         });
 
         if (integrationResult.ok) {
-          // Integration completion semantics:
-          // Only merged/skipped are terminal; branch_pushed/pr_opened are not merged
           taskResult.integration = { ...integrationResult };
-          if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
-            taskStatus = "completed";
-          } else if ((integrationResult.status === 'branch_pushed' || integrationResult.status === 'pr_opened') && integrationResult.merged !== true) {
+          const integrationDecision = classifyIntegrationQueueResult(integrationResult);
+          if (integrationDecision.kind === 'terminal_completed') {
+            taskStatus = integrationDecision.task_status;
+          } else if (integrationDecision.should_attempt_auto_completion) {
             const autoCompletion = await runAutoIntegrationCompletionFn({
               task,
               goal,
@@ -174,35 +156,15 @@ export async function finalizeCodexTaskRun({
             taskResult.auto_integration_completion = autoCompletion;
             if (autoCompletion.completed === true) {
               taskStatus = "completed";
-              taskResult.integration = {
-                ...integrationResult,
-                status: 'merged',
-                merged: true,
-                auto_completed: true,
-                commit: autoCompletion.commit || taskResult.commit || integrationResult.commit || null,
-              };
-              taskResult.commit = autoCompletion.commit || taskResult.commit || null;
-              taskResult.local_head = autoCompletion.commit || taskResult.local_head || null;
-              taskResult.repo_head = autoCompletion.commit || taskResult.repo_head || null;
-              taskResult.verification = autoIntegrationVerificationFromReport(autoCompletion);
-              taskResult.needs_integration = false;
-              taskResult.needs_restart_check = false;
+              taskResult = applySuccessfulAutoIntegrationCompletion({ taskResult, integrationResult, autoCompletion });
             } else {
               taskStatus = "waiting_for_review";
-              taskResult.reason = "auto_integration_completion_failed: " + (autoCompletion.reason || "unknown");
-              taskResult.requires_review = true;
-              taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
-              taskResult.acceptance_findings.push({
-                severity: "blocker",
-                code: "auto_integration_completion_failed",
-                message: autoCompletion.blockers?.[0]?.message || autoCompletion.reason || "Auto integration completion failed.",
-                source: "auto_integration_completion",
-              });
+              taskResult = applyFailedAutoIntegrationCompletion({ taskResult, autoCompletion });
             }
           } else {
-            taskStatus = "waiting_for_review";
+            taskStatus = integrationDecision.task_status;
           }
-        } else if (isIntegrationRepairableStatus(integrationResult.status)) {
+        } else if (classifyIntegrationQueueResult(integrationResult).should_attempt_repair) {
           // Integration failed — create repair or escalate
           const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           if (intCanRepair.should_repair) {
@@ -372,28 +334,22 @@ export async function finalizeCodexTaskRun({
         verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
       },
     });
-    taskResult.closure_decision = closureDecision;
-    const mappedStatus = mapClosureStatusToTaskStatus(closureDecision.status, config);
-    if (closureDecision.status === "auto_completed_clean" || closureDecision.status === "auto_completed_with_followups") {
-      taskStatus = mappedStatus;
-      taskResult.requires_review = false;
-      taskResult.reason = closureDecision.reason;
-      const plannedFollowups = planFollowupTasks({
-        task,
-        goal,
-        result: taskResult,
-        contractVerification: taskResult.contract_verification || verification.contract_verification || null,
-        closureDecision,
-      });
-      taskResult.next_tasks = mergeNextTasks(taskResult.next_tasks, plannedFollowups);
-    } else if (closureDecision.status === "requires_review") {
-      taskStatus = mappedStatus;
-      taskResult.requires_review = true;
-      taskResult.reason = closureDecision.reason;
-    } else if (closureDecision.status === "failed") {
-      taskStatus = mappedStatus;
-      taskResult.reason = closureDecision.reason;
-    }
+    const plannedFollowups = planFollowupTasks({
+      task,
+      goal,
+      result: taskResult,
+      contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+      closureDecision,
+    });
+    const closureApplied = applyClosureDecisionToTaskResult({
+      taskStatus,
+      taskResult,
+      closureDecision,
+      plannedFollowups,
+      config,
+    });
+    taskStatus = closureApplied.taskStatus;
+    taskResult = closureApplied.taskResult;
   }
 
   // Cleanup policy: remove_on_success_retain_on_failure.

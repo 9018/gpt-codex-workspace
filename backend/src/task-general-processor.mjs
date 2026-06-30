@@ -7,7 +7,7 @@ import { buildTaskResult } from "./codex-result-parser.mjs";
 import { prepareCodexTaskRun } from "./task-run-setup.mjs";
 import { executeCodexTaskRun } from "./task-codex-execution.mjs";
 import { finalizeCodexTaskRun } from "./task-final-writeback.mjs";
-import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, deriveTaskStatusFromTaskResult, isP0TaskTitle, validateResultContract, DIAGNOSIS_CODES } from "./task-result-status.mjs";
+import { applyAutonomyValidation, applyRuntimeCodeChangeGuard, classifyResultContractFindings, deriveTaskStatusFromTaskResult, isP0TaskTitle, validateResultContract } from "./task-result-status.mjs";
 import { updateTask } from "./task-lifecycle.mjs";
 import { appendGoalMessage, ensureTaskGoal } from "./goal-task-lifecycle.mjs";
 import { resolveTaskRepositoryPlan as _resolveTaskRepositoryPlan, materializeTaskWorktree as _materializeTaskWorktree } from "./task-repo-resolution.mjs";
@@ -23,7 +23,7 @@ import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergenc
 import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
 import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
-import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from "./auto-integration-completion.mjs";
+import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -33,12 +33,6 @@ const RETRY_HEALING_ACTIONS = new Set([
   "recover_and_retry",
   "fallback_parse_and_retry",
 ]);
-
-function isNonBlockingContractCodeForProfile(code, profile) {
-  if (code === "tests_missing") return ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry"].includes(profile);
-  if (code === "changed_files_mismatch") return ["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop"].includes(profile);
-  return false;
-}
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -95,10 +89,6 @@ async function parkTaskForHealingRetry({ store, config, task, goal, context, upd
     } catch {}
   }
   return { task_id: task.id, status, kind: "operational_error", reason: summary, healing_action: healingAction.action, healing_retry_count: retryCount };
-}
-
-function isIntegrationRepairableStatus(status) {
-  return status === "conflict" || status === "check_failed" || status === "push_failed" || status === "pr_failed";
 }
 
 function gitOutput(repoPath, args) {
@@ -630,8 +620,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     if (!contractValidation.valid) {
       const profile = detectAcceptanceProfile(task, taskResult);
       const diagnosisMsg = "Contract violation: " + contractValidation.diagnosis_codes.join(", ");
-      const blockingCodes = contractValidation.diagnosis_codes.filter((code) => !isNonBlockingContractCodeForProfile(code, profile));
-      const nonBlockingCodes = contractValidation.diagnosis_codes.filter((code) => isNonBlockingContractCodeForProfile(code, profile));
+      const classifiedFindings = classifyResultContractFindings({
+        diagnosisCodes: contractValidation.diagnosis_codes,
+        profile,
+      });
+      const blockingCodes = classifiedFindings.blocking_codes;
+      const nonBlockingCodes = classifiedFindings.non_blocking_codes;
       if (blockingCodes.length > 0) {
         taskStatus = "waiting_for_review";
         taskResult.warnings = taskResult.warnings || [];
@@ -897,15 +891,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         });
 
         taskResult.integration = { ...integrationResult };
+        const integrationDecision = classifyIntegrationQueueResult(integrationResult);
 
-        if (integrationResult.ok) {
-          // Integration completion semantics:
-          // - merged === true or status === 'merged': actually merged to target branch (terminal)
-          // - status === 'skipped': integration explicitly skipped, e.g. mode=none (terminal)
-          // - branch_pushed / pr_opened: NOT merged — not terminal
-          if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
-            taskStatus = 'completed';
-          } else if ((integrationResult.status === 'branch_pushed' || integrationResult.status === 'pr_opened') && integrationResult.merged !== true) {
+        if (integrationDecision.kind === 'terminal_completed') {
+          taskStatus = integrationDecision.task_status;
+        } else if (integrationDecision.should_attempt_auto_completion) {
             const autoCompletion = await runAutoIntegrationCompletionFn({
               task,
               goal,
@@ -918,35 +908,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             taskResult.auto_integration_completion = autoCompletion;
             if (autoCompletion.completed === true) {
               taskStatus = 'completed';
-              taskResult.integration = {
-                ...integrationResult,
-                status: 'merged',
-                merged: true,
-                auto_completed: true,
-                commit: autoCompletion.commit || taskResult.commit || integrationResult.commit || null,
-              };
-              taskResult.commit = autoCompletion.commit || taskResult.commit || null;
-              taskResult.local_head = autoCompletion.commit || taskResult.local_head || null;
-              taskResult.repo_head = autoCompletion.commit || taskResult.repo_head || null;
-              taskResult.verification = autoIntegrationVerificationFromReport(autoCompletion);
-              taskResult.needs_integration = false;
-              taskResult.needs_restart_check = false;
+              taskResult = applySuccessfulAutoIntegrationCompletion({ taskResult, integrationResult, autoCompletion });
             } else {
               taskStatus = 'waiting_for_review';
-              taskResult.reason = 'auto_integration_completion_failed: ' + (autoCompletion.reason || 'unknown');
-              taskResult.requires_review = true;
-              taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
-              taskResult.acceptance_findings.push({
-                severity: 'blocker',
-                code: 'auto_integration_completion_failed',
-                message: autoCompletion.blockers?.[0]?.message || autoCompletion.reason || 'Auto integration completion failed.',
-                source: 'auto_integration_completion',
-              });
+              taskResult = applyFailedAutoIntegrationCompletion({ taskResult, autoCompletion });
             }
-          } else {
-            taskStatus = 'waiting_for_review';
-          }
-        } else if (isIntegrationRepairableStatus(integrationResult.status)) {
+        } else if (integrationDecision.should_attempt_repair) {
           // Integration failure — create repair or escalate
           const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           const conflictFindings = [{
@@ -998,7 +965,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           }
         } else {
           // Integration locked or other non-terminal state
-          taskStatus = 'waiting_for_integration';
+          taskStatus = integrationDecision.task_status || 'waiting_for_integration';
         }
       }
       // NOTE: For multi-process integration, replace INTEGRATION_LOCKS Map with

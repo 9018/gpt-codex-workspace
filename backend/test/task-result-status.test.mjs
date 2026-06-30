@@ -9,6 +9,7 @@ import {
   getRestartVerification,
   verifyToolExposure,
   validateResultContract,
+  classifyResultContractFindings,
 } from '../src/task-result-status.mjs';
 
 // ===========================================================================
@@ -542,6 +543,29 @@ test("validateResultContract returns valid for noop completed result", () => {
   };
   const validation = validateResultContract(result, { repoPath: process.cwd(), skipWorktreeCheck: true });
   assert.equal(validation.valid, true);
+});
+
+test("classifyResultContractFindings keeps sync-only missing tests as followup", () => {
+  const classification = classifyResultContractFindings({
+    diagnosisCodes: ["tests_missing", "commit_missing"],
+    profile: "sync_only",
+  });
+
+  assert.deepEqual(classification.blocking_codes, ["commit_missing"]);
+  assert.deepEqual(classification.non_blocking_codes, ["tests_missing"]);
+  assert.equal(classification.finding_severity_for_code.tests_missing, "followup");
+  assert.equal(classification.finding_severity_for_code.commit_missing, "major");
+});
+
+test("classifyResultContractFindings treats commit missing as blocking for code changes", () => {
+  const classification = classifyResultContractFindings({
+    diagnosisCodes: ["commit_missing"],
+    profile: "code_change",
+  });
+
+  assert.deepEqual(classification.blocking_codes, ["commit_missing"]);
+  assert.deepEqual(classification.non_blocking_codes, []);
+  assert.equal(classification.finding_severity_for_code.commit_missing, "major");
 });
 
 console.log('task-result-status tests loaded');

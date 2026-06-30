@@ -7,6 +7,7 @@ import { runLocalShell } from './workspace-service.mjs';
 
 const AUTO_INTEGRATION_STATUSES = new Set(['branch_pushed', 'pr_opened']);
 const BLOCKED_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed', 'locked']);
+const REPAIRABLE_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed']);
 
 function blocker(code, message, source = 'auto_integration_completion') {
   return { severity: 'blocker', code, message, source };
@@ -72,6 +73,88 @@ function acceptancePassed(taskResult = {}) {
   if (taskResult.reviewer_decision?.passed === true) return true;
   if (taskResult.verification?.passed === true && !hasBlockerFindings(taskResult)) return true;
   return false;
+}
+
+export function isIntegrationRepairableStatus(status) {
+  return REPAIRABLE_INTEGRATION_STATUSES.has(status);
+}
+
+export function classifyIntegrationQueueResult(integrationResult = {}) {
+  const status = integrationResult?.status || null;
+  if (integrationResult?.ok === true) {
+    if (integrationResult.merged === true || status === 'merged' || status === 'skipped') {
+      return {
+        kind: 'terminal_completed',
+        task_status: 'completed',
+        should_attempt_auto_completion: false,
+        should_attempt_repair: false,
+      };
+    }
+    if (AUTO_INTEGRATION_STATUSES.has(status) && integrationResult.merged !== true) {
+      return {
+        kind: 'auto_completion_candidate',
+        task_status: null,
+        should_attempt_auto_completion: true,
+        should_attempt_repair: false,
+      };
+    }
+    return {
+      kind: 'requires_review',
+      task_status: 'waiting_for_review',
+      should_attempt_auto_completion: false,
+      should_attempt_repair: false,
+    };
+  }
+  if (isIntegrationRepairableStatus(status)) {
+    return {
+      kind: 'repairable_failure',
+      task_status: null,
+      should_attempt_auto_completion: false,
+      should_attempt_repair: true,
+    };
+  }
+  return {
+    kind: 'waiting_for_integration',
+    task_status: 'waiting_for_integration',
+    should_attempt_auto_completion: false,
+    should_attempt_repair: false,
+  };
+}
+
+export function applySuccessfulAutoIntegrationCompletion({ taskResult = {}, integrationResult = {}, autoCompletion = {} } = {}) {
+  const commit = autoCompletion.commit || taskResult.commit || integrationResult.commit || null;
+  return {
+    ...taskResult,
+    integration: {
+      ...integrationResult,
+      status: 'merged',
+      merged: true,
+      auto_completed: true,
+      commit,
+    },
+    commit: autoCompletion.commit || taskResult.commit || null,
+    local_head: autoCompletion.commit || taskResult.local_head || null,
+    repo_head: autoCompletion.commit || taskResult.repo_head || null,
+    verification: autoIntegrationVerificationFromReport(autoCompletion),
+    needs_integration: false,
+    needs_restart_check: false,
+  };
+}
+
+export function applyFailedAutoIntegrationCompletion({ taskResult = {}, autoCompletion = {} } = {}) {
+  const findings = Array.isArray(taskResult.acceptance_findings) ? [...taskResult.acceptance_findings] : [];
+  findings.push({
+    severity: 'blocker',
+    code: 'auto_integration_completion_failed',
+    message: autoCompletion.blockers?.[0]?.message || autoCompletion.reason || 'Auto integration completion failed.',
+    source: 'auto_integration_completion',
+  });
+  return {
+    ...taskResult,
+    reason: 'auto_integration_completion_failed: ' + (autoCompletion.reason || 'unknown'),
+    requires_review: true,
+    acceptance_findings: findings,
+  };
 }
 
 function candidatePaths(resolvedRepo = {}) {
