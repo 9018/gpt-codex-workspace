@@ -8,6 +8,9 @@ import {
   isVerificationReportReusable,
   readVerificationReport,
 } from './verification-report.mjs';
+import { normalizeOperationEvidence } from './evidence-normalizer.mjs';
+import { runStateAssertions } from './state-assertion-runner.mjs';
+import { verifyAcceptanceContract } from './acceptance-contract-verifier.mjs';
 
 const execAsync = promisify(exec);
 const RESULT_STATUSES = new Set(['completed', 'failed', 'timed_out', 'waiting_for_review']);
@@ -127,6 +130,29 @@ function verificationReportPathFrom(result) {
     || null;
 }
 
+async function loadAcceptanceContract({ goal = {}, result = {}, resultJsonPath = null } = {}) {
+  if (goal?.acceptance_contract) return goal.acceptance_contract;
+  if (result?.acceptance_contract && typeof result.acceptance_contract === 'object') return result.acceptance_contract;
+  if (!resultJsonPath) return null;
+  const path = join(dirname(resultJsonPath), 'acceptance.contract.json');
+  try {
+    return await readJsonFile(path);
+  } catch {
+    return null;
+  }
+}
+
+function contractFindings(contractVerification = null) {
+  if (!contractVerification) return [];
+  return (contractVerification.blockers || []).map((blocker) => ({
+    severity: blocker.severity || 'blocker',
+    code: blocker.code || 'acceptance_contract_blocker',
+    message: blocker.message || 'Acceptance contract blocker',
+    source: blocker.source || 'acceptance_contract_verifier',
+    evidence: blocker.evidence,
+  }));
+}
+
 function reportProfileFrom(result, config = {}) {
   return config.verificationReportProfile || result?.verification?.profile || result?.verification_profile || 'fast';
 }
@@ -163,7 +189,7 @@ async function loadReusableReport({ result, repoPath, projectCommands, config })
   return { report: reusable.reusable ? report : null, report_reuse };
 }
 
-function validateResult(result) {
+function validateResult(result, { contract = null } = {}) {
   const findings = [];
   if (!result || typeof result !== 'object' || Array.isArray(result)) {
     return [finding('result_json_invalid', 'Task result must be a JSON object')];
@@ -174,7 +200,7 @@ function validateResult(result) {
   if (result.status === 'completed' && !String(result.summary || '').trim()) {
     findings.push(finding('summary_missing', 'Completed result must include a summary'));
   }
-  if (result.status === 'completed' && result.verification?.passed !== true) {
+  if (!contract && result.status === 'completed' && result.verification?.passed !== true) {
     findings.push(finding('verification_not_passed', 'Completed result must include verification.passed === true'));
   }
   return findings;
@@ -241,8 +267,10 @@ export async function verifyTaskCompletion({
   const commands = [];
   const skipped_checks = [];
   const parsed = await parseResultJson(resultJson, resultJsonPath);
-  const result = parsed.result;
-  const findings = [...parsed.findings, ...validateResult(result)];
+  const rawResult = parsed.result;
+  const contract = await loadAcceptanceContract({ goal, result: rawResult, resultJsonPath });
+  const result = rawResult && contract ? normalizeOperationEvidence({ result: rawResult, contract }) : rawResult;
+  const findings = [...parsed.findings, ...validateResult(result, { contract })];
 
   if (repoPath) {
     commands.push(await runCommand('git diff --check', { cwd: repoPath, timeout: 30_000, config }));
@@ -268,7 +296,28 @@ export async function verifyTaskCompletion({
 
   const changed_files = changedFilesFrom({ result, task, workspaceFiles });
   const reason_no_tests = projectCommands.length === 0 ? NO_PROJECT_CHECKS_REASON : null;
-  const passed = findings.length === 0 && commands.every((command) => command.exit_code === 0);
+  const stateAssertions = contract ? await runStateAssertions({
+    contract,
+    result: result || {},
+    repoPath,
+    workspaceRoot: config.workspaceRoot || config.defaultWorkspaceRoot,
+    runtimeContext: config.runtimeContext || {},
+    config,
+  }) : null;
+  const contract_verification = contract ? verifyAcceptanceContract({
+    contract,
+    task,
+    goal,
+    result: result || {},
+    verification: { commands, report_reuse, passed: findings.length === 0 && commands.every((command) => command.exit_code === 0) },
+    stateAssertions,
+    repoState: { repoPath },
+  }) : null;
+  if (contract_verification?.requires_review === true || contract_verification?.blocking_passed === false) {
+    findings.push(...contractFindings(contract_verification));
+  }
+
+  const passed = findings.length === 0 && commands.every((command) => command.exit_code === 0) && (contract_verification ? contract_verification.completion_eligible === true : true);
   const verification = {
     passed,
     status: passed ? 'completed' : 'waiting_for_review',
@@ -280,6 +329,7 @@ export async function verifyTaskCompletion({
     task_id: task?.id || null,
     goal_id: goal?.id || null,
     findings,
+    contract_verification,
   };
   if (report_reuse) verification.report_reuse = report_reuse;
 

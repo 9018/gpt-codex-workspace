@@ -10,6 +10,9 @@ import {
   isVerificationReportReusable,
   readVerificationReport,
 } from "./verification-report.mjs";
+import { normalizeOperationEvidence } from "./evidence-normalizer.mjs";
+import { runStateAssertions } from "./state-assertion-runner.mjs";
+import { verifyAcceptanceContract } from "./acceptance-contract-verifier.mjs";
 
 const execFileAsync = promisify(execFile);
 const execAsync = promisify(exec);
@@ -81,6 +84,28 @@ function verificationReportPathFrom(result) {
     || result?.verification?.report_path
     || result?.evidence_paths?.verification_report
     || null;
+}
+
+async function loadAcceptanceContract({ goal = {}, result = {}, resultJsonPath = null } = {}) {
+  if (goal?.acceptance_contract) return goal.acceptance_contract;
+  if (result?.acceptance_contract && typeof result.acceptance_contract === "object") return result.acceptance_contract;
+  if (!resultJsonPath) return null;
+  try {
+    return JSON.parse(await readFile(join(dirname(resultJsonPath), "acceptance.contract.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function contractFindings(contractVerification = null) {
+  if (!contractVerification) return [];
+  return (contractVerification.blockers || []).map((blocker) => ({
+    severity: blocker.severity || "blocker",
+    code: blocker.code || "acceptance_contract_blocker",
+    message: blocker.message || "Acceptance contract blocker",
+    source: blocker.source || "acceptance_contract_verifier",
+    evidence: blocker.evidence,
+  }));
 }
 
 async function loadReusableReport({ result, repoPath, discovered, config }) {
@@ -169,7 +194,9 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings.push({ severity: "blocker", code: "result_json_invalid", message: parsed.error, source: "task_acceptance" });
   }
 
-  const result = parsed.result || {};
+  const rawResult = parsed.result || {};
+  const contract = parsed.ok ? await loadAcceptanceContract({ goal, result: rawResult, resultJsonPath }) : null;
+  const result = contract ? normalizeOperationEvidence({ result: rawResult, contract }) : rawResult;
   const status = result.status || "failed";
   if (!new Set(["completed", "waiting_for_review", "failed"]).has(status)) {
     findings.push({ severity: "blocker", code: "unsupported_result_status", message: `Unsupported result status: ${status}`, source: "task_acceptance" });
@@ -225,6 +252,27 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     findings.push({ severity: "blocker", code: "profile_evidence_missing", message: "Completed sync/admin/restart no-change tasks require explicit verification/evidence", source: "task_acceptance" });
   }
 
+  const stateAssertions = contract ? await runStateAssertions({
+    contract,
+    result,
+    repoPath,
+    workspaceRoot: config.workspaceRoot || config.defaultWorkspaceRoot,
+    runtimeContext: config.runtimeContext || {},
+    config,
+  }) : null;
+  const contract_verification = contract ? verifyAcceptanceContract({
+    contract,
+    task,
+    goal,
+    result,
+    verification: { commands, report_reuse, passed: findings.length === 0 && commands.every((command) => command.exit_code === 0) },
+    stateAssertions,
+    repoState: { repoPath },
+  }) : null;
+  if (contract_verification?.requires_review === true || contract_verification?.blocking_passed === false) {
+    findings.push(...contractFindings(contract_verification));
+  }
+
   const hardFailed = findings.some((finding) => finding.severity === "blocker" || finding.severity === "major");
   const noChangeProfileSatisfied = changedFilesFrom(task, result).length === 0 &&
     (isNoopProfile(task, result) ? hasNoopEvidence(result) : isEvidenceGatedNoChangeProfile(task, result) && hasProfileEvidence(task, result));
@@ -240,6 +288,7 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     requires_review: !passed,
     findings,
     evidence: acceptance.evidence || evidence || null,
+    contract_verification,
   };
   if (report_reuse) verification.report_reuse = report_reuse;
 
