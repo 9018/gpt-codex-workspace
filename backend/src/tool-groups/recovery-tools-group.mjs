@@ -426,6 +426,19 @@ export function createRecoveryToolsGroup({
       }
 
 
+      const countBlockers = Number(queueCounts.current_blockers || 0);
+      const countActionable = Number(queueCounts["actionable_" + "review"] || 0);
+      if (countBlockers > 0) {
+        issues.push({ severity: "high", category: "blockers", detail: countBlockers + " current blockers" });
+      }
+      if (countActionable > 0) {
+        issues.push({ severity: "high", category: "review", detail: countActionable + " actionable review tasks" });
+      }
+      if (ws.enabled === true && ws.running !== true && countBlockers > 0) {
+        issues.push({ severity: "high", category: "worker", detail: "worker stopped with blockers" });
+      }
+
+
       const high = issues.filter(i => i.severity === "high");
       const med = issues.filter(i => i.severity === "medium");
       const overall = high.length > 0 ? "high" : med.length > 0 ? "medium" : "low";
