@@ -149,7 +149,7 @@ test('runAutoIntegrationCompletion refuses dirty canonical repo without merging'
   }
 });
 
-test('runAutoIntegrationCompletion leaves divergent branch waiting for review', async () => {
+test('runAutoIntegrationCompletion handles clean divergent branch fallback', async () => {
   const fixture = createGitFixture('diverged');
   try {
     const taskCommit = commit(fixture.worktree, 'src/app.mjs', 'export const value = 3;\n', 'task change');
@@ -157,21 +157,20 @@ test('runAutoIntegrationCompletion leaves divergent branch waiting for review', 
     const canonicalHead = git(fixture.canonical, ['rev-parse', 'HEAD']);
 
     const result = await runAutoIntegrationCompletion({
-      task: { id: 'task_diverged' },
+      task: { id: 'task_diverged', title: 'Diverged clean task' },
       goal: { id: 'goal_diverged' },
       taskResult: baseTaskResult(taskCommit),
       resolvedRepo: resolvedRepo(fixture),
       integrationResult: { ok: true, status: 'branch_pushed', merged: false },
       config: {},
-      runCommandFn: async () => { throw new Error('verification must not run'); },
+      runCommandFn: async (cmd) => { const reportPath = cmd.match(/--json-report\s+(\S+)/)?.[1]; writeFileSync(reportPath, JSON.stringify(passedReport({ head: git(fixture.canonical, ['rev-parse', 'HEAD']) }), null, 2), 'utf8'); return { returncode: 0, stdout: 'ok', stderr: '' }; },
     });
 
-    assert.equal(result.completed, false);
-    assert.equal(result.reason, 'ff_only_merge_failed');
-    assert.equal(result.blockers[0].code, 'ff_only_merge_failed');
+    assert.equal(result.completed, true);
+    assert.equal(result.reason, 'cherry_pick_merged_and_verified');
     assert.equal(result.merge.attempted, true);
-    assert.equal(result.merge.merged, false);
-    assert.equal(git(fixture.canonical, ['rev-parse', 'HEAD']), canonicalHead);
+    assert.equal(result.merge.merged, true);
+    assert.notEqual(git(fixture.canonical, ['rev-parse', 'HEAD']), canonicalHead);
   } finally {
     rmSync(fixture.root, { recursive: true, force: true });
   }

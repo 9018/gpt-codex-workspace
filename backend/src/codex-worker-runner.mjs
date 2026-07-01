@@ -10,6 +10,7 @@ import { completeCodexSessionInventoryTask } from "./tool-groups/session-invento
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
 import { startQueuedGoals } from "./goal-queue.mjs";
 import { runIntegrationQueue } from "./integration-queue.mjs";
+import { runAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, applyFailedAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from "./repair-loop.mjs";
 import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
@@ -117,6 +118,35 @@ function shouldRecoverAcceptedVerifiedReviewTask(task = {}) {
   return true;
 }
 
+function repairFindingsForTask(task = {}) {
+  const result = task.result || {};
+  const findings = [
+    ...(Array.isArray(result.acceptance_findings) ? result.acceptance_findings : []),
+    ...(Array.isArray(result.findings) ? result.findings : []),
+    ...(Array.isArray(result.verification?.findings) ? result.verification.findings : []),
+  ].filter(Boolean);
+  if (findings.length > 0) return findings;
+  return [{ severity: "blocker", code: result.failure_class || result.kind || "waiting_for_repair", message: result.reason || result.summary || "Task is waiting for automatic repair.", source: "repair_backlog" }];
+}
+
+function findLinkedRepair(tasks = [], item = {}) {
+  const linked = item.result?.repair_task_id || item.repair_task_id || null;
+  if (linked) return tasks.find((candidate) => candidate.id === linked) || null;
+  return tasks.find((candidate) => candidate.id !== item.id && candidate.parent_task_id === item.id) || null;
+}
+
+function buildFollowupPayload({ task = {}, goal = {}, descriptor = {} } = {}) {
+  return {
+    ...descriptor,
+    user_request: descriptor.user_request,
+    goal_prompt: descriptor.goal_prompt,
+    title: `Followup: ${task.title || task.id}`,
+    project_id: task.project_id || goal?.project_id || "default",
+    workspace_id: descriptor.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
+    mode: descriptor.mode || task.mode || goal?.mode || "builder",
+  };
+}
+
 function buildRecoveredContractVerification(result = {}) {
   return {
     ...(result.contract_verification || {}),
@@ -143,6 +173,32 @@ function recoveryTargetStatus(result = {}) {
   const needsIntegration = result.needs_integration === true || result.closure_path === "integrate" || result.operation_kind === "code_change";
   if ((hasCodeChange || needsIntegration) && !integrationSatisfied(result)) return TASK_STATUSES.WAITING_FOR_INTEGRATION;
   return TASK_STATUSES.COMPLETED;
+}
+
+async function ensureRepairTaskForWaitingParent(store, config, task) {
+  const state = await store.load();
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const current = tasks.find((item) => item.id === task.id) || task;
+  const linked = findLinkedRepair(tasks, current);
+  if (linked) {
+    await transitionTaskForWorker(store, current, TASK_STATUSES.WAITING_FOR_REPAIR, `[worker] repair task already exists: ${linked.id}`, {
+      result: { repair_task_id: linked.id, repair_goal_id: linked.goal_id || current.result?.repair_goal_id || null, repair_status: linked.status },
+    });
+    return { task_id: current.id, status: TASK_STATUSES.WAITING_FOR_REPAIR, progressed: false, transitioned: true, repair_task_id: linked.id };
+  }
+  const canRepair = shouldAttemptRepair({ task: current, tasks, maxAttempts: config.maxRepairAttempts || current.max_attempts });
+  if (!canRepair.should_repair) {
+    await transitionTaskForWorker(store, current, TASK_STATUSES.WAITING_FOR_REVIEW, `[worker] repair budget exhausted: ${canRepair.reason}`, { result: { repair_denied_reason: canRepair.reason, requires_review: true } });
+    return { task_id: current.id, status: TASK_STATUSES.WAITING_FOR_REVIEW, progressed: true, transitioned: true, reason: canRepair.reason };
+  }
+  const goal = Array.isArray(state.goals) ? state.goals.find((item) => item.id === current.goal_id) : null;
+  const findings = repairFindingsForTask(current);
+  const descriptor = createRepairGoalFromFindings({ task: current, goal, findings, repairProposals: current.result?.repair_proposals || [] });
+  const created = await createGoal(store, config, { ...buildFollowupPayload({ task: current, goal, descriptor }), assign_to_codex: true, skip_created_notification: false });
+  await transitionTaskForWorker(store, current, TASK_STATUSES.WAITING_FOR_REPAIR, `[worker] created repair task: ${created?.task?.id || created?.goal?.id || "unknown"}`, {
+    result: { repair_goal_id: created?.goal?.id || null, repair_task_id: created?.task?.id || null, repair_goal: descriptor, repair_attempt: descriptor.repair_attempt, repair_status: "created", repair_created_at: new Date().toISOString(), requires_review: false },
+  });
+  return { task_id: current.id, status: TASK_STATUSES.WAITING_FOR_REPAIR, progressed: true, transitioned: true, repair_goal_id: created?.goal?.id || null, repair_task_id: created?.task?.id || null };
 }
 
 async function recoverAcceptedVerifiedReviewTasks(store, maxTasks = 10) {
@@ -280,10 +336,11 @@ async function retryIntegrationForTask(store, config, task) {
       } else {
         // branch_pushed, pr_opened — not a terminal integration state
         await transitionTaskForWorker(
-          store, task, "waiting_for_review",
+          store, task, "waiting_for_integration",
           "[worker] integration retry: " + (integrationResult.status || "pushed") + " (not merged)",
           { result: { integration: { ...integrationResult }, integration_retried: true } }
         );
+        return { task_id: task.id, status: "waiting_for_integration", progressed: false, transitioned: true };
       }
 
       // P0: Repair parent-child loop — propagate completion to parent/root task
@@ -381,6 +438,11 @@ async function runSingleCodexTask(store, config, github, task, context, processG
     // P0: Retry waiting_for_integration tasks that got stuck (lock held, etc.)
     if (task.status === "waiting_for_integration") {
       const result = await retryIntegrationForTask(store, config, task);
+      return normalizeWorkerResult(task, result, { transitioned: result.transitioned || false });
+    }
+
+    if (task.status === "waiting_for_repair") {
+      const result = await ensureRepairTaskForWaitingParent(store, config, task);
       return normalizeWorkerResult(task, result, { transitioned: result.transitioned || false });
     }
 

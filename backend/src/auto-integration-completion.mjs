@@ -52,6 +52,10 @@ function gitCapture(repoPath, args) {
   }
 }
 
+function commitSubject(task = {}) {
+  return String(task.title || task.id || 'GPTWork task').replace(/[\r\n]+/g, ' ').slice(0, 120);
+}
+
 function currentHead(repoPath) {
   return git(repoPath, ['rev-parse', 'HEAD']);
 }
@@ -433,10 +437,55 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       const merge = gitCapture(candidate.canonical_repo_path, ['merge', '--ff-only', candidate.commit]);
       evidence.commands.push({ cmd: `git merge --ff-only ${candidate.commit}`, cwd: candidate.canonical_repo_path, exit_code: merge.exit_code, stdout_tail: merge.stdout, stderr_tail: merge.stderr });
       if (!merge.ok) {
-        evidence.reason = 'ff_only_merge_failed';
-        evidence.blockers.push(blocker('ff_only_merge_failed', merge.stderr || merge.error || 'git merge --ff-only failed.'));
-        evidence.canonical_clean_after = repoClean(candidate.canonical_repo_path);
-        return evidence;
+        const allowCherryPick = config.autoIntegrationCherryPickFallback !== false;
+        if (!allowCherryPick) {
+          evidence.reason = 'ff_only_merge_failed';
+          evidence.blockers.push(blocker('ff_only_merge_failed', merge.stderr || merge.error || 'git merge --ff-only failed.'));
+          evidence.canonical_clean_after = repoClean(candidate.canonical_repo_path);
+          return evidence;
+        }
+
+        evidence.merge.ff_only_failed = true;
+        evidence.merge.fallback = 'cherry_pick';
+        const cherryPick = gitCapture(candidate.canonical_repo_path, ['cherry-pick', '--no-commit', candidate.commit]);
+        evidence.commands.push({
+          cmd: `git cherry-pick --no-commit ${candidate.commit}`,
+          cwd: candidate.canonical_repo_path,
+          exit_code: cherryPick.exit_code,
+          stdout_tail: cherryPick.stdout,
+          stderr_tail: cherryPick.stderr,
+        });
+        if (!cherryPick.ok) {
+          gitCapture(candidate.canonical_repo_path, ['cherry-pick', '--abort']);
+          evidence.reason = 'cherry_pick_failed';
+          evidence.blockers.push(blocker('cherry_pick_failed', cherryPick.stderr || cherryPick.error || 'git cherry-pick --no-commit failed.'));
+          evidence.canonical_clean_after = repoClean(candidate.canonical_repo_path);
+          return evidence;
+        }
+
+        const commit = gitCapture(candidate.canonical_repo_path, [
+          'commit',
+          '-m', `Auto integrate ${task?.id || 'GPTWork task'}: ${commitSubject(task)}`,
+          '-m', `Original task commit: ${candidate.commit}`,
+        ]);
+        evidence.commands.push({
+          cmd: `git commit -m "Auto integrate ${task?.id || 'GPTWork task'}"`,
+          cwd: candidate.canonical_repo_path,
+          exit_code: commit.exit_code,
+          stdout_tail: commit.stdout,
+          stderr_tail: commit.stderr,
+        });
+        if (!commit.ok) {
+          gitCapture(candidate.canonical_repo_path, ['cherry-pick', '--abort']);
+          evidence.reason = 'cherry_pick_commit_failed';
+          evidence.blockers.push(blocker('cherry_pick_commit_failed', commit.stderr || commit.error || 'git commit after cherry-pick failed.'));
+          evidence.canonical_clean_after = repoClean(candidate.canonical_repo_path);
+          return evidence;
+        }
+
+        evidence.merge.mode = 'cherry_pick';
+        evidence.merge.merged = true;
+        evidence.merge.original_commit = candidate.commit;
       }
       evidence.merge.merged = true;
     }
@@ -468,7 +517,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
 
     evidence.completed = true;
     evidence.eligible = true;
-    evidence.reason = alreadyIntegrated ? 'already_integrated_and_verified' : 'ff_only_merged_and_verified';
+    evidence.reason = alreadyIntegrated ? 'already_integrated_and_verified' : (evidence.merge.mode === 'cherry_pick' ? 'cherry_pick_merged_and_verified' : 'ff_only_merged_and_verified');
     return evidence;
   } finally {
     evidence.duration_ms = Date.now() - started;
