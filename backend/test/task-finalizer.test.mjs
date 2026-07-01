@@ -152,6 +152,64 @@ test("task-finalizer: G8/G9/G10 style auto integration success maps to completed
   assert.equal(decision.integration_effect.status, "satisfied");
 });
 
+test("task-finalizer: repair_noop already-integrated evidence completes with changed_files empty", () => {
+  const decision = decideTaskFinalState({
+    current_status: "completed",
+    task: { id: "task_78ee_like", title: "Repair: P0 auto convergence routing", repair_of_task_id: "task_original" },
+    codex_result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "Original changes already integrated into main; affected files match main exactly; tests pass.",
+      changed_files: [],
+      repair_noop: true,
+      already_integrated: true,
+      no_change_repair_evidence: {
+        affected_files: ["backend/src/goal-convergence.mjs"],
+        files_match_canonical: true,
+        diff_empty: true,
+      },
+      verification: { passed: true, commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }] },
+      reviewer_decision: { status: "accepted", passed: true },
+      contract_verification: { blocking_passed: true, completion_eligible: true, requires_review: false, blockers: [] },
+      integration: { status: "not_required", required: false },
+      needs_integration: false,
+      acceptance_findings: [],
+    },
+    verification: { passed: true, findings: [] },
+    contract_verification: { blocking_passed: true, completion_eligible: true, requires_review: false, blockers: [] },
+    integration: { required: false, status: "not_required" },
+  });
+
+  assert.equal(decision.status, "completed");
+  assert.equal(decision.reason, "no_change_repair_evidence_satisfied");
+  assert.equal(decision.safe_to_auto_advance, true);
+});
+
+test("task-finalizer: generic builder no-change without already-integrated evidence does not complete", () => {
+  const decision = decideTaskFinalState({
+    current_status: "completed",
+    task: { id: "task_builder_noop", title: "Build feature", mode: "builder" },
+    codex_result: {
+      status: "completed",
+      kind: "codex_executed",
+      summary: "No changes were needed.",
+      changed_files: [],
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      reviewer_decision: { status: "accepted", passed: true },
+      contract_verification: { blocking_passed: false, completion_eligible: false, requires_review: true, blockers: [] },
+      integration: { status: "not_required", required: false },
+      needs_integration: false,
+      acceptance_findings: [],
+    },
+    verification: { passed: true, findings: [] },
+    contract_verification: { blocking_passed: false, completion_eligible: false, requires_review: true, blockers: [] },
+    integration: { required: false, status: "not_required" },
+  });
+
+  assert.equal(decision.status, "waiting_for_review");
+  assert.equal(decision.safe_to_auto_advance, false);
+});
+
 test("task-finalizer: unrecoverable failed execution can remain failed", () => {
   const decision = decideTaskFinalState({
     current_status: "failed",

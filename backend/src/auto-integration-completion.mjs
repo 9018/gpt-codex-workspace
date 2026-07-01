@@ -4,6 +4,7 @@ import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { readVerificationReport, isVerificationReportReusable } from './verification-report.mjs';
 import { runLocalShell } from './workspace-service.mjs';
+import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
 const AUTO_INTEGRATION_STATUSES = new Set(['branch_pushed', 'pr_opened']);
 const BLOCKED_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed', 'locked']);
@@ -174,6 +175,8 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   const { canonicalRepoPath, taskWorktreePath, taskBranch, baseSha } = candidatePaths(resolvedRepo);
   const changedFiles = Array.isArray(taskResult.changed_files) ? taskResult.changed_files.filter(Boolean) : [];
   const commit = taskResult.commit || integrationResult?.commit || taskResult.local_head || null;
+  const noChangeRepair = classifyNoChangeRepairOutcome({ task, taskResult, integrationResult });
+  const noChangeRepairEligible = noChangeRepair.completion_eligible === true;
 
   if (!integrationResult || integrationResult.ok !== true) {
     blockers.push(blocker('integration_not_successful', 'Integration result is not successful.'));
@@ -189,19 +192,19 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   if (hasBlockerFindings(taskResult)) {
     blockers.push(blocker('blocker_findings_present', 'Existing blocker findings prevent automatic completion.'));
   }
-  if (changedFiles.length === 0) {
+  if (changedFiles.length === 0 && !noChangeRepairEligible) {
     blockers.push(blocker('changed_files_missing', 'No changed_files evidence is present.'));
   }
-  if (!commit || commit === 'none') {
+  if ((!commit || commit === 'none') && !noChangeRepairEligible) {
     blockers.push(blocker('commit_missing', 'No task commit evidence is present.'));
   }
-  if (!taskBranch) {
+  if (!taskBranch && !noChangeRepairEligible) {
     blockers.push(blocker('task_branch_missing', 'Task branch evidence is missing.'));
   }
-  if (resolvedRepo?.worktree_lifecycle?.mode !== 'git_worktree') {
+  if (resolvedRepo?.worktree_lifecycle?.mode !== 'git_worktree' && !noChangeRepairEligible) {
     blockers.push(blocker('worktree_mode_not_git_worktree', 'Auto completion requires git_worktree lifecycle mode.'));
   }
-  if (!taskWorktreePath) {
+  if (!taskWorktreePath && !noChangeRepairEligible) {
     blockers.push(blocker('task_worktree_missing', 'Task worktree path is missing.'));
   }
   if (!canonicalRepoPath) {
@@ -220,6 +223,7 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
     task_branch: taskBranch,
     task_worktree_path: taskWorktreePath,
     canonical_repo_path: canonicalRepoPath,
+    no_change_repair: noChangeRepair,
   };
 }
 
@@ -337,6 +341,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
     verification_report_validation: null,
     commands: [],
     duration_ms: 0,
+    no_change_repair: candidate.no_change_repair || null,
   };
 
   try {
@@ -347,7 +352,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       evidence.blockers.push(blocker('canonical_repo_missing', 'Canonical repo path does not exist.'));
       return evidence;
     }
-    if (!existsSync(candidate.task_worktree_path)) {
+    if (candidate.no_change_repair?.completion_eligible !== true && !existsSync(candidate.task_worktree_path)) {
       evidence.reason = 'task_worktree_missing';
       evidence.blockers.push(blocker('task_worktree_missing', 'Task worktree path does not exist.'));
       return evidence;
@@ -357,6 +362,40 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
     if (!evidence.canonical_clean_before) {
       evidence.reason = 'canonical_dirty';
       evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before auto integration.'));
+      return evidence;
+    }
+
+    if (candidate.no_change_repair?.completion_eligible === true) {
+      evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
+      if (!evidence.canonical_clean_before) {
+        evidence.reason = 'canonical_dirty';
+        evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before no-change repair completion.'));
+        return evidence;
+      }
+      evidence.canonical_clean_after = evidence.canonical_clean_before;
+      const canonicalHead = currentHead(candidate.canonical_repo_path);
+      evidence.commit = candidate.commit || canonicalHead;
+      evidence.merge = {
+        ...evidence.merge,
+        attempted: false,
+        merged: true,
+        skipped: true,
+        already_integrated: true,
+        no_change_repair: true,
+        commit: candidate.commit || canonicalHead,
+      };
+      evidence.verification_report = {
+        passed: true,
+        profile: taskResult.verification?.profile || taskResult.acceptance_profile || 'repair_noop',
+        requested_profile: taskResult.verification?.requested_profile || null,
+        head: taskResult.verification?.head || canonicalHead,
+        dirty: false,
+        steps: Array.isArray(taskResult.verification?.commands) ? taskResult.verification.commands.length : 0,
+        failures: 0,
+      };
+      evidence.completed = true;
+      evidence.eligible = true;
+      evidence.reason = 'no_change_repair_already_integrated_and_verified';
       return evidence;
     }
 

@@ -48,6 +48,7 @@ function keyEvidence(bundle = {}) {
     result_summary: bundle.result_summary,
     verification: bundle.verification,
     contract_verification: bundle.contract_verification,
+    no_change_repair_completion_summary: bundle.no_change_repair_completion_summary || null,
     closure_decision: bundle.closure_decision,
     report_paths: bundle.report_paths,
     run_evidence: bundle.run_evidence,

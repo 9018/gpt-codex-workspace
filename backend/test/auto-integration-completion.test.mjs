@@ -226,6 +226,88 @@ test('analyzeAutoIntegrationCandidate rejects branch_pushed task without passed 
   assert.equal(candidate.blockers[0].code, 'acceptance_not_passed');
 });
 
+test('analyzeAutoIntegrationCandidate allows repair_noop already-integrated evidence with changed_files empty', () => {
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_78ee_like', title: 'Repair: P0 auto convergence routing', repair_of_task_id: 'task_original' },
+    taskResult: baseTaskResult(null, {
+      summary: 'Original changes already integrated into main; affected files match main exactly; tests pass.',
+      changed_files: [],
+      commit: null,
+      repair_noop: true,
+      already_integrated: true,
+      no_change_repair_evidence: {
+        affected_files: ['backend/src/goal-convergence.mjs'],
+        files_match_canonical: true,
+        diff_empty: true,
+      },
+      verification: { passed: true, commands: [{ cmd: 'npm --prefix backend run check:syntax', exit_code: 0 }], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+      needs_integration: false,
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false, already_integrated: true },
+  });
+
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.reason, 'eligible');
+  assert.equal(candidate.no_change_repair.completion_eligible, true);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'), false);
+});
+
+test('analyzeAutoIntegrationCandidate keeps generic builder changed_files empty blocked', () => {
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_builder_noop', title: 'Build feature' },
+    taskResult: baseTaskResult(null, {
+      changed_files: [],
+      commit: null,
+      verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+  });
+
+  assert.equal(candidate.eligible, false);
+  assert.ok(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'));
+});
+
+test('analyzeAutoIntegrationCandidate blocks repair_noop without passed verification', () => {
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_repair_no_verify', title: 'Repair: no changes needed', repair_of_task_id: 'task_original' },
+    taskResult: baseTaskResult(null, {
+      changed_files: [],
+      commit: null,
+      repair_noop: true,
+      already_integrated: true,
+      no_change_repair_evidence: { affected_files: ['backend/src/x.mjs'], files_match_canonical: true },
+      verification: { passed: null, commands: [], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+      needs_integration: false,
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+  });
+
+  assert.equal(candidate.eligible, false);
+  assert.equal(candidate.no_change_repair.reason, 'verification_not_passed');
+  assert.ok(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'));
+});
+
 test('classifyIntegrationQueueResult marks merged and skipped as terminal completion', () => {
   assert.deepEqual(classifyIntegrationQueueResult({ ok: true, status: 'merged', merged: true }), {
     kind: 'terminal_completed',
