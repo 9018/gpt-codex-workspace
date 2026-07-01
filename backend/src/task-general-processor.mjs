@@ -24,6 +24,7 @@ import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } fr
 import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
+import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -267,6 +268,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const releaseLockForTaskFn = deps.releaseLockForTaskFn || releaseLockForTask;
   const prepareCodexTaskRunFn = deps.prepareCodexTaskRunFn || prepareCodexTaskRun;
   const executeCodexTaskRunFn = deps.executeCodexTaskRunFn || executeCodexTaskRun;
+  const runCommandFn = deps.runCommandFn;
+  const executeAgentBackendRunFn = deps.executeAgentBackendRunFn || ((args) => executeAgentBackendRun(args, { runCodexTaskFn: executeCodexTaskRunFn, runLocalShellFn: runCommandFn }));
   const finalizeCodexTaskRunFn = deps.finalizeCodexTaskRunFn || finalizeCodexTaskRun;
   const updateTaskFn = deps.updateTaskFn || updateTask;
   const appendGoalMessageFn = deps.appendGoalMessageFn || appendGoalMessage;
@@ -284,7 +287,6 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const startCodexTuiGoalSessionFn = deps.startCodexTuiGoalSessionFn || startCodexTuiGoalSession;
   const analyzeDeliveryRecoveryCandidateFn = deps.analyzeDeliveryRecoveryCandidateFn || analyzeDeliveryRecoveryCandidate;
   const runDeliveryRecoveryFn = deps.runDeliveryRecoveryFn || runDeliveryRecovery;
-  const runCommandFn = deps.runCommandFn;
   const now = new Date().toISOString();
   await updateTaskFn(store, task.id, (item) => {
     delete item.lock_blocked_at;
@@ -519,13 +521,16 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   let parsedResult = null;
   let cr = null;
   let healingAction = null;
+  const executionBackendRole = task.role || task.agent_role || goal?.role || goal?.agent_role || mode;
+  const executionBackend = resolveAgentBackendId({ config, role: executionBackendRole, task });
 
   try {
-    ({ cr, parsedResult, summary } = await executeCodexTaskRunFn({
+    ({ cr, parsedResult, summary } = await executeAgentBackendRunFn({
       config,
       workspaceRoot: workspace.root,
       task,
       goal,
+      role: executionBackendRole,
       resultJsonPath: _resultJsonPath,
       promptFile,
       runFilePath,
@@ -580,6 +585,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     uses_default_fallback: resolvedRepo.uses_default_fallback,
     worktree_lifecycle: resolvedRepo.worktree_lifecycle,
   };
+  taskResult.execution_backend = executionBackend;
+  taskResult.execution_backend_role = executionBackendRole;
   taskResult.worktree_lifecycle = resolvedRepo.worktree_lifecycle;
   taskResult.execution_cwd = executionCwd;
   taskResult.execution_cwd_proof = {

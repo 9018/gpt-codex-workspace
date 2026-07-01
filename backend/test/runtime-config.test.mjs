@@ -71,6 +71,42 @@ test("buildRuntimeConfig defaults delivery result recovery commands to empty lis
   assert.equal(sources.deliveryResultRecoveryCommands, "default");
 });
 
+test("buildRuntimeConfig defaults agent backend to codex_exec", () => {
+  clearGptWorkVars();
+  const { config, sources } = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(config.agentBackend, "codex_exec");
+  assert.deepEqual(config.agentRoleBackends, {});
+  assert.deepEqual(config.agentRoleCommands, {});
+  assert.equal(config.agentLocalCommand, "");
+  assert.equal(sources.agentBackend, "default");
+});
+
+test("buildRuntimeConfig parses agent backend settings from runtime.env", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile(
+    "GPTWORK_AGENT_BACKEND=local_command\n" +
+    "GPTWORK_AGENT_ROLE_BACKENDS=builder=codex_exec,reviewer=null,verifier=local_command\n" +
+    "GPTWORK_AGENT_LOCAL_COMMAND=node scripts/agent.mjs\n" +
+    "GPTWORK_AGENT_ROLE_COMMANDS=reviewer=node review.mjs||verifier=npm test\n" +
+    "GPTWORK_AGENT_COMMAND_TIMEOUT=90\n"
+  );
+  const { config, sources } = buildRuntimeConfig(root);
+  assert.equal(config.agentBackend, "local_command");
+  assert.deepEqual(config.agentRoleBackends, {
+    builder: "codex_exec",
+    reviewer: "null",
+    verifier: "local_command",
+  });
+  assert.equal(config.agentLocalCommand, "node scripts/agent.mjs");
+  assert.deepEqual(config.agentRoleCommands, {
+    reviewer: "node review.mjs",
+    verifier: "npm test",
+  });
+  assert.equal(config.agentCommandTimeout, 90);
+  assert.equal(sources.agentRoleBackends, "runtime.env");
+  assert.equal(sources.agentRoleCommands, "runtime.env");
+});
+
 test("buildRuntimeConfig parses delivery result recovery commands from runtime.env", async () => {
   clearGptWorkVars();
   const { root } = await makeEnvFile(
@@ -310,6 +346,33 @@ test("runtime_status includes shell_timeout and max_read_bytes values", async ()
   assert.equal(typeof status.shell_timeout, "number");
   assert.equal(typeof status.max_read_bytes, "number");
   assert.equal(typeof status.max_shell_output_bytes, "number");
+});
+
+test("runtime_status exposes agent backend routing without command text", async () => {
+  clearGptWorkVars();
+  process.env.GPTWORK_AGENT_BACKEND = "local_command";
+  process.env.GPTWORK_AGENT_ROLE_BACKENDS = "builder=codex_exec,reviewer=null";
+  process.env.GPTWORK_AGENT_LOCAL_COMMAND = "echo secret-command-text";
+  process.env.GPTWORK_AGENT_ROLE_COMMANDS = "reviewer=node review.mjs";
+  const root = await mkdtemp(join(tmpdir(), "gptwork-rc-agent-status-"));
+  const workspaceRoot = root + "/workspace";
+  const server = await createGptWorkServer({
+    statePath: join(root, "state.json"),
+    defaultWorkspaceRoot: workspaceRoot,
+    tokens: ["test-token"],
+    requireAuth: true,
+  });
+  const status = await callTool(server, "runtime_status");
+  assert.equal(status.agent_backend, "local_command");
+  assert.deepEqual(status.agent_role_backends, { builder: "codex_exec", reviewer: "null" });
+  assert.equal(status.agent_local_command_configured, true);
+  assert.deepEqual(status.agent_role_commands, { reviewer: true });
+  assert.equal(status.config_sources.agent_backend, "process.env");
+  assert.ok(!JSON.stringify(status).includes("secret-command-text"));
+  delete process.env.GPTWORK_AGENT_BACKEND;
+  delete process.env.GPTWORK_AGENT_ROLE_BACKENDS;
+  delete process.env.GPTWORK_AGENT_LOCAL_COMMAND;
+  delete process.env.GPTWORK_AGENT_ROLE_COMMANDS;
 });
 
 test("runtime_status includes default_repo, default_branch, default_repo_path, default_remote", async () => {

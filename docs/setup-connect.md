@@ -48,6 +48,10 @@ All configuration lives in `.gptwork/runtime.env` (excluded from git via `.gitig
 | `GPTWORK_PORT` | `8787` | Server port |
 | `GPTWORK_TOOL_MODE` | `standard` | Tool exposure mode (minimal/standard/operator/codex/full) |
 | `GPTWORK_CODEX_EXEC_TIMEOUT` | `3600` | Codex execution timeout in seconds |
+| `GPTWORK_AGENT_BACKEND` | `codex_exec` | Default execution backend (`codex_exec`, `local_command`, `null`) |
+| `GPTWORK_AGENT_ROLE_BACKENDS` | — | Comma-separated role routing, for example `verifier=local_command,reviewer=null` |
+| `GPTWORK_AGENT_LOCAL_COMMAND` | — | Shell command for the `local_command` backend |
+| `GPTWORK_AGENT_ROLE_COMMANDS` | — | Role command overrides separated by `||`, for example `verifier=npm test` |
 | `GPTWORK_GITHUB_ENABLED` | `false` | Enable GitHub Issues sync |
 | `GPTWORK_GITHUB_REPO` | — | GitHub repo for issue sync |
 | `GPTWORK_GITHUB_TOKEN` | — | GitHub token |
@@ -63,6 +67,9 @@ GPTWORK_PORT=8787
 GPTWORK_TOOL_MODE=standard
 GPTWORK_REQUIRE_AUTH=true
 GPTWORK_CODEX_EXEC_TIMEOUT=3600
+GPTWORK_AGENT_BACKEND=codex_exec
+# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=null
+# GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
 
 # GitHub Issues sync (optional)
 # GPTWORK_GITHUB_ENABLED=true

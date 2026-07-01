@@ -249,6 +249,7 @@ backend/
   src/evidence/                   操作证据归一化
   src/review/                     acceptance bundle、review packet
   src/tool-groups/                MCP 工具分组
+  src/agent-execution-backends.mjs 多 Agent 执行后端抽象
   src/task-*.mjs                  任务生命周期、执行、结果写回
   src/codex-*.mjs                 Codex prompt、worker、run metadata、finalizer helpers
 docs/

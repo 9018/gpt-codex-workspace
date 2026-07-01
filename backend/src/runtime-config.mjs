@@ -41,6 +41,39 @@ function _getBool(key, defaultVal) {
   return v === "true" || v === "1";
 }
 
+function parseRoleBackendMap(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return {};
+  const out = {};
+  for (const entry of text.split(",")) {
+    const part = entry.trim();
+    if (!part) continue;
+    const sep = part.includes("=") ? "=" : part.includes(":") ? ":" : null;
+    if (!sep) continue;
+    const idx = part.indexOf(sep);
+    const role = part.slice(0, idx).trim().toLowerCase();
+    const backend = part.slice(idx + 1).trim().toLowerCase();
+    if (role && backend) out[role] = backend;
+  }
+  return out;
+}
+
+function parseRoleCommandMap(raw) {
+  const text = String(raw || "").trim();
+  if (!text) return {};
+  const out = {};
+  for (const entry of text.split("||")) {
+    const part = entry.trim();
+    if (!part) continue;
+    const idx = part.indexOf("=");
+    if (idx < 0) continue;
+    const role = part.slice(0, idx).trim().toLowerCase();
+    const command = part.slice(idx + 1).trim();
+    if (role && command) out[role] = command;
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -110,6 +143,13 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     codexExecArgs: _get("GPTWORK_CODEX_EXEC_ARGS", "--yolo --skip-git-repo-check"),
     codexConcurrency: _getNum("GPTWORK_CODEX_CONCURRENCY", 4),
     codexStallThreshold: _getNum("GPTWORK_CODEX_STALL_THRESHOLD_SECONDS", 600),
+    agentBackend: _get("GPTWORK_AGENT_BACKEND", "codex_exec"),
+    agentRoleBackends: parseRoleBackendMap(_get("GPTWORK_AGENT_ROLE_BACKENDS", "")),
+    agentLocalCommand: _get("GPTWORK_AGENT_LOCAL_COMMAND", ""),
+    agentRoleCommands: parseRoleCommandMap(_get("GPTWORK_AGENT_ROLE_COMMANDS", "")),
+    agentCommandTimeout: _getNum("GPTWORK_AGENT_COMMAND_TIMEOUT", 60),
+    agentCommandFirstOutputTimeout: _getNum("GPTWORK_AGENT_COMMAND_FIRST_OUTPUT_TIMEOUT", 0),
+    agentCommandNoProgressTimeout: _getNum("GPTWORK_AGENT_COMMAND_NO_PROGRESS_TIMEOUT", 0),
     deliveryResultRecoveryCommands: parseCommandList(_get("GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS", "")),
     resultRecoveryCommandTimeout: _getNum("GPTWORK_RESULT_RECOVERY_COMMAND_TIMEOUT", 600),
 
@@ -208,6 +248,13 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     shellTranscript: "GPTWORK_SHELL_TRANSCRIPT",
     codexConcurrency: "GPTWORK_CODEX_CONCURRENCY",
     codexStallThreshold: "GPTWORK_CODEX_STALL_THRESHOLD_SECONDS",
+    agentBackend: "GPTWORK_AGENT_BACKEND",
+    agentRoleBackends: "GPTWORK_AGENT_ROLE_BACKENDS",
+    agentLocalCommand: "GPTWORK_AGENT_LOCAL_COMMAND",
+    agentRoleCommands: "GPTWORK_AGENT_ROLE_COMMANDS",
+    agentCommandTimeout: "GPTWORK_AGENT_COMMAND_TIMEOUT",
+    agentCommandFirstOutputTimeout: "GPTWORK_AGENT_COMMAND_FIRST_OUTPUT_TIMEOUT",
+    agentCommandNoProgressTimeout: "GPTWORK_AGENT_COMMAND_NO_PROGRESS_TIMEOUT",
     deliveryResultRecoveryCommands: "GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS",
     resultRecoveryCommandTimeout: "GPTWORK_RESULT_RECOVERY_COMMAND_TIMEOUT",
     defaultRepo: "GPTWORK_DEFAULT_REPO",

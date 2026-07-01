@@ -1439,3 +1439,80 @@ function makeRepoPlan(taskId, tmpDir, repoId) {
     worktree_lifecycle: null,
   };
 }
+
+test("processGeneralTaskWithDeps routes execution through selected agent backend", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-agent-backend-route-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_backend_route", "goal_backend_route", { role: "verifier" });
+    await store.load();
+    const plan = makeRepoPlan("task_backend_route", tmpDir, "github.com/acme/repo");
+    const calls = [];
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: plan.canonical_repo_path,
+      codexExecTimeout: 10,
+      agentBackend: "codex_exec",
+      agentRoleBackends: { verifier: "null" },
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => plan,
+      materializeTaskWorktreeFn: async () => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_backend_route" },
+      }),
+      acquireRepoLockFn: async () => ({ acquired: true }),
+      prepareCodexTaskRunFn: async () => ({ promptFile: join(tmpDir, "prompt.txt"), runFilePath: null, runId: "run_backend" }),
+      executeCodexTaskRunFn: async () => {
+        throw new Error("legacy codex executor should not be called when verifier routes to null backend");
+      },
+      executeAgentBackendRunFn: async ({ task: routedTask, role, executionCwd }) => {
+        calls.push({ type: "execute", role, taskRole: routedTask.role, executionCwd });
+        return {
+          backend: "null",
+          cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+          summary: "null backend completed",
+          parsedResult: {
+            structured: true,
+            status: "completed",
+            summary: "null backend completed",
+            backend: "null",
+            role,
+            changed_files: [],
+            tests: "null backend: no-op",
+            warnings: [],
+            followups: [],
+            acceptance_findings: [],
+          },
+        };
+      },
+      finalizeCodexTaskRunFn: async ({ taskStatus, taskResult }) => {
+        calls.push({ type: "finalize", taskStatus, taskResult });
+        return { task_id: task.id, status: taskStatus, backend: taskResult.execution_backend };
+      },
+      appendGoalMessageFn: async () => {},
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+      runAcceptanceAgentFn: async () => ({
+        passed: true,
+        status: "accepted",
+        profile: "default",
+        findings: [],
+        repair_proposals: [],
+        next_tasks: [],
+        reviewer_decision: { role: "acceptance_agent", summary: "accepted", decision: { status: "accepted", passed: true } },
+      }),
+      shouldAttemptRepairFn: async () => ({ should_repair: false, reason: "mock" }),
+      createRepairGoalFromFindingsFn: async () => ({ id: "mock_repair" }),
+      runIntegrationQueueFn: async () => ({ ok: true, status: "completed" }),
+      createGoalFn: async () => ({ goal: {}, task: {} }),
+    });
+
+    assert.equal(result.status, "completed");
+    assert.equal(result.backend, "null");
+    assert.deepEqual(calls.map((call) => call.type), ["execute", "finalize"]);
+    const finalized = calls.find((call) => call.type === "finalize").taskResult;
+    assert.equal(finalized.execution_backend, "null");
+    assert.equal(finalized.execution_backend_role, "verifier");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

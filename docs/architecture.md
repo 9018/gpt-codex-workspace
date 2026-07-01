@@ -157,6 +157,21 @@ Responsibilities:
 
 The task processor orchestrates smaller modules rather than owning all acceptance, integration, and closure policy inline.
 
+### Agent Execution Backends
+
+Path: `backend/src/agent-execution-backends.mjs`
+
+Assigned agent tasks execute through a small backend abstraction before result parsing and final writeback. The default backend is `codex_exec`, which preserves the existing Codex CLI path. Operators can select `local_command` or `null` globally or per role with runtime config:
+
+```text
+GPTWORK_AGENT_BACKEND=codex_exec
+GPTWORK_AGENT_ROLE_BACKENDS=builder=codex_exec,verifier=local_command,reviewer=null
+GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
+GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
+```
+
+All backends return the same execution envelope: `cr`, `parsedResult`, `summary`, `backend`, and role metadata. Task results record `execution_backend` and `execution_backend_role` so review packets can tell which backend produced the evidence.
+
 ## Goal Workspace Files
 
 ```text

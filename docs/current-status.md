@@ -52,6 +52,12 @@ The recovery path also generates evidence for missing or incomplete task results
 
 `backend/src/closure/followup-task-planner.mjs` preserves follow-up and quality-note information for later work.
 
+### Agent Execution Backends
+
+`backend/src/agent-execution-backends.mjs` provides the G3 execution backend abstraction. The legacy Codex path remains the default `codex_exec` backend, while `local_command` can run a configured shell command and `null` returns a structured no-op result for tests. Runtime config supports global and per-role routing with `GPTWORK_AGENT_BACKEND`, `GPTWORK_AGENT_ROLE_BACKENDS`, `GPTWORK_AGENT_LOCAL_COMMAND`, and `GPTWORK_AGENT_ROLE_COMMANDS`.
+
+The task processor still owns worktree setup, locking, prompt preparation, parsing, acceptance, and final writeback. Backend output is normalized into `cr`, `parsedResult`, and `summary`, and final task results include `execution_backend` and `execution_backend_role` for review and diagnostics.
+
 ### Compact Review Packet
 
 `backend/src/review/task-acceptance-bundle.mjs` and `backend/src/review/review-packet-builder.mjs` provide the preferred review path:
