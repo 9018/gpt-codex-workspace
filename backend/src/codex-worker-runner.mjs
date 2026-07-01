@@ -268,6 +268,8 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   // The query is fair across status buckets so large assigned backlogs do not
   // starve queued or waiting_for_lock tasks.
   // Added waiting_for_integration — P0 fix: prevent stuck integration tasks.
+  // P0: Ensure indexes are rebuilt before querying (state may have changed since last tick)
+  store._buildIndexes();
   let candidates = store.getCodexActiveQueueCandidates(
     CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES,
     maxTasks

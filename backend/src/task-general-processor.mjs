@@ -520,12 +520,13 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   let summary = "";
   let parsedResult = null;
   let cr = null;
+  let codexMeta = null;
   let healingAction = null;
   const executionBackendRole = task.role || task.agent_role || goal?.role || goal?.agent_role || mode;
   const executionBackend = resolveAgentBackendId({ config, role: executionBackendRole, task });
 
   try {
-    ({ cr, parsedResult, summary } = await executeAgentBackendRunFn({
+    ({ cr, parsedResult, summary, codexMeta } = await executeAgentBackendRunFn({
       config,
       workspaceRoot: workspace.root,
       task,
@@ -595,6 +596,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     canonical_repo_path: resolvedRepo.canonical_repo_path || null,
     used_task_worktree_path: Boolean(resolvedRepo.task_worktree_path) && executionCwd === resolvedRepo.task_worktree_path,
   };
+
+  // P0: Record effective model/provider from the execution header
+  if (codexMeta) {
+    taskResult.model = codexMeta.model || taskResult.model || null;
+    taskResult.provider = codexMeta.provider || taskResult.provider || null;
+    taskResult.reasoning_effort = codexMeta.reasoning_effort || taskResult.reasoning_effort || null;
+    taskResult.codex_config_source = codexMeta.config_source || null;
+    taskResult.codex_effective_args = codexMeta.effective_args || null;
+  } else if (parsedResult) {
+    taskResult.model = parsedResult.model || taskResult.model || null;
+    taskResult.provider = parsedResult.provider || taskResult.provider || null;
+  }
 
   if (parsedResult) applyLegacyNoChangeCompatibility(parsedResult);
   applyLegacyNoChangeCompatibility(taskResult);

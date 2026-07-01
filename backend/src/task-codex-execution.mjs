@@ -2,6 +2,46 @@ import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, ensureRunLogFiles, cre
 import { parseCodexResultWithFallback } from "./codex-result-parser.mjs";
 import { updateRepoLock } from "./repo-lock.mjs";
 import { runLocalShell } from "./workspace-service.mjs";
+/**
+ * Re-resolve codex exec CLI arguments at execution time.
+ * Reads from the current process.env GPTWORK_CODEX_EXEC_ARGS so that
+ * runtime.env or environment changes between startup and execution are
+ * picked up per task/retry.  Falls back to the startup-snapshot config,
+ * then to a hardcoded default.
+ *
+ * @param {object}  config    - Startup runtime config snapshot
+ * @param {object}  [task]    - Task object for optional per-task overrides
+ * @returns {string} Effective codex exec CLI args
+ */
+export function resolveCodexExecArgs(config, task = null) {
+  if (task?.metadata?.codex_exec_args && typeof task.metadata.codex_exec_args === "string" && task.metadata.codex_exec_args.trim()) {
+    return task.metadata.codex_exec_args.trim();
+  }
+  const envVal = process.env.GPTWORK_CODEX_EXEC_ARGS;
+  if (envVal && typeof envVal === "string" && envVal.trim()) {
+    return envVal.trim();
+  }
+  if (config?.codexExecArgs && typeof config.codexExecArgs === "string" && config.codexExecArgs.trim()) {
+    return config.codexExecArgs.trim();
+  }
+  return "--yolo --skip-git-repo-check";
+}
+
+/**
+ * Extract model/provider/reasoning_effort from Codex CLI banner output.
+ */
+export function extractHeaderMetadata(text) {
+  const result = { model: null, provider: null, reasoning_effort: null };
+  if (!text) return result;
+  for (const line of String(text).split("\n")) {
+    if (!result.model) { const m = line.match(/^model:\s*(.+)/im); if (m) result.model = m[1].trim(); }
+    if (!result.provider) { const m = line.match(/(?:api\s+)?provider:\s*(.+)/im); if (m) result.provider = m[1].trim(); }
+    if (!result.reasoning_effort) { const m = line.match(/reasoning\s+effort:\s*(.+)/im); if (m) result.reasoning_effort = m[1].trim(); }
+  }
+  return result;
+}
+
+
 
 const RESULT_SEPARATOR = "=".repeat(60);
 
@@ -65,7 +105,10 @@ export async function executeCodexTaskRun({
   let cr = null;
 
   const lastMessagePath = workspaceRoot + "/.gptwork/tmp/codex-lastmsg-" + task.id + ".txt";
-  const cmd = "codex exec " + config.codexExecArgs + " --output-last-message " + lastMessagePath + " < " + promptFile;
+    // P0: Re-resolve codex exec args at execution time, not from stale startup config.
+  const effectiveCodexExecArgs = resolveCodexExecArgs(config, task);
+  const effectiveConfigSource = process.env.GPTWORK_CODEX_EXEC_ARGS ? "process.env" : (config?.codexExecArgs ? "startup_config" : "default");
+  const cmd = "codex exec " + effectiveCodexExecArgs + " --output-last-message " + lastMessagePath + " < " + promptFile;
 
   const throttledHb = runFilePath ? createThrottledHeartbeat(runFilePath, 1000, updateRunHeartbeatFn) : null;
 
@@ -157,8 +200,13 @@ export async function executeCodexTaskRun({
   const out = (cr.stdout || "").trim();
   const resolvedResultJsonPath = resultJsonPath || (workspaceRoot + "/.gptwork/goals/" + (goal ? goal.id : task.id) + "/result.json");
   parsedResult = await parseCodexResultFn({ resultJsonPath: resolvedResultJsonPath, stdout: out });
+  let headerMeta = null;
   if (parsedResult.summary) {
     summary = parsedResult.summary;
+    // P0: Annotate parsed result with effective model/provider from codex CLI header
+    headerMeta = extractHeaderMetadata((cr?.stdout || "") + "\n" + (cr?.stderr || ""));
+    parsedResult.model = headerMeta.model || parsedResult.model || null;
+    parsedResult.provider = headerMeta.provider || parsedResult.provider || null;
   } else {
     if (out) {
       const headerIndex = out.indexOf(RESULT_SEPARATOR);
@@ -167,5 +215,14 @@ export async function executeCodexTaskRun({
     if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
   }
 
-  return { cr, parsedResult, summary };
+  // Build diagnostic metadata for caller
+  const codexMeta = {
+    model: headerMeta?.model || null,
+    provider: headerMeta?.provider || null,
+    reasoning_effort: headerMeta?.reasoning_effort || null,
+    config_source: effectiveConfigSource,
+    effective_args: effectiveCodexExecArgs,
+  };
+
+  return { cr, parsedResult, summary, codexMeta };
 }

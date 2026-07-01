@@ -11,6 +11,9 @@ test('isCodexContentfulOutput ignores Codex banner and prompt echo but accepts a
 });
 
 test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and returns parsed summary', async () => {
+  // P0: Isolate from process.env so resolveCodexExecArgs uses config values
+  const _origCodexArgs = process.env.GPTWORK_CODEX_EXEC_ARGS;
+  delete process.env.GPTWORK_CODEX_EXEC_ARGS;
   const calls = [];
   const result = await executeCodexTaskRun({
     config: {
@@ -57,6 +60,8 @@ test('executeCodexTaskRun runs codex command, streams logs, heartbeats, and retu
   assert.equal(calls.some(c => c.type === 'logs'), false, 'streamed logs must not be appended again after run completion');
   assert.ok(calls.some(c => c.type === 'fire' && c.phase === 'parsing_result' && c.fields.content_first_output_at === 'content-now'));
   assert.ok(calls.some(c => c.type === 'heartbeat' && c.fields.codex_child_pid === 1234));
+  // Restore process.env
+  if (_origCodexArgs !== undefined) process.env.GPTWORK_CODEX_EXEC_ARGS = _origCodexArgs;
 });
 
 

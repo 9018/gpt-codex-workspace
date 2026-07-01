@@ -101,6 +101,22 @@ export function resolveDependencyTarget(state, item) {
     const goal = Array.isArray(state.goals)
       ? state.goals.find((g) => g.id === item.depends_on_goal_id)
       : null;
+    // P0: If goal status is stale (open), look for a completed task with
+    // acceptance/integration evidence instead of blocking on the goal status.
+    if (goal && goal.status !== "completed") {
+      const completedTask = Array.isArray(state.tasks)
+        ? state.tasks.find((t) => t.goal_id === goal.id && t.status === "completed")
+        : null;
+      if (completedTask) {
+        return {
+          status: "completed",
+          kind: "goal",
+          target_id: item.depends_on_goal_id,
+          actual_source: "completed_task",
+          task_id: completedTask.id,
+        };
+      }
+    }
     return {
       status: goal ? goal.status : null,
       kind: "goal",
