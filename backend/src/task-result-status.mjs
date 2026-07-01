@@ -154,7 +154,9 @@ export function applyAutonomyValidation(taskStatus, taskResult, goal, parsedResu
  * Apply the runtime code change guard to a completed task.
  *
  * If the task changed runtime/server/tool files AND did not schedule a safe
- * restart, the task is moved to "waiting_for_review" with a clear warning.
+ * restart, evidence-less results still require review; results that already
+ * contain commit/test/verification evidence continue through acceptance,
+ * integration, and final writeback with structured restart-required metadata.
  *
  * Triggers when:
  *   1. mode === "deploy" (existing behavior)
@@ -207,7 +209,25 @@ export async function applyRuntimeCodeChangeGuard({
 
   if (hasRestartMarker) return taskStatus;
   appendWarning(taskResult, "runtime_code_changed_without_safe_restart: " + runtimeCheck.matchedFiles.join(", "));
-  return "waiting_for_review";
+
+  const hasCompletionEvidence = Boolean(
+    taskResult.commit || parsedResult.commit
+      || taskResult.tests || parsedResult.tests
+      || taskResult.verification?.passed === true
+      || parsedResult.verification?.passed === true
+  );
+  if (!hasCompletionEvidence) return "waiting_for_review";
+
+  taskResult.restart_required = true;
+  taskResult.requires_restart_check = true;
+  taskResult.restart_state = taskResult.restart_state || "missing_safe_restart_marker";
+  taskResult.runtime_restart_guard = {
+    status: "restart_required",
+    requires_review: false,
+    matched_files: runtimeCheck.matchedFiles,
+    reason: "runtime_code_changed_without_safe_restart",
+  };
+  return taskStatus;
 }
 
 /**
