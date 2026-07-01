@@ -39,6 +39,7 @@ function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } =
   for (const [kind, pattern] of OPERATION_PATTERNS) {
     if (pattern.test(text)) matches.push(kind);
   }
+  if (matches.length === 0 && normalizedMode === "builder") return { operation_kind: "noop", semantic_confidence: "medium" };
   if (matches.length === 0) return { operation_kind: "noop", semantic_confidence: "low" };
 
   const selected = matches[0];

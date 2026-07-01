@@ -86,6 +86,7 @@ test('isVerificationReportReusable rejects missing required command', () => {
     repoHead: 'abc123',
     profile: 'fast',
     requiredCommands: ['npm test'],
+    now: () => Date.parse('2026-06-30T00:00:30.000Z'),
   });
 
   assert.equal(reusable.reusable, false);

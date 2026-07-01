@@ -1,6 +1,6 @@
 import { appendAgentEvent, completeAgentRun, createAgentRun, getAgentRun, listAgentRuns, runAgentPipeline, cancelAgentRun } from "../agent-run-service.mjs";
 import { handoffToAgent, readHandoff, showChanges } from "../handoff-service.mjs";
-import { AGENT_ROLES } from "../subagent-policy.mjs";
+import { ACCEPTED_AGENT_ROLES } from "../subagent-policy.mjs";
 
 export function createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }) {
   const common = { modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["agent", "handoff"] };
@@ -55,8 +55,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
         goal_id: { type: "string", description: "Goal ID to link the pipeline runs to." },
         task_id: { type: "string", description: "Task ID to link the pipeline runs to." },
         agent: { type: "string", description: "Agent name to run the pipeline.", default: "codex" },
-        roles: { type: "array", description: "Roles in execution order, e.g. [\"planner\",\"implementer\",\"tester\",\"reviewer\",\"finalizer\"].", items: { type: "string", enum: AGENT_ROLES }, examples: [["planner", "implementer", "tester", "reviewer", "finalizer"]] },
-        review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: AGENT_ROLES },
+        roles: { type: "array", description: "Roles in execution order, e.g. [\"planner\",\"builder\",\"verifier\",\"reviewer\",\"finalizer\"]. Legacy labels are accepted for compatibility.", items: { type: "string", enum: ACCEPTED_AGENT_ROLES }, examples: [["context_curator", "planner", "builder", "verifier", "reviewer", "finalizer", "integrator"], ["planner", "implementer", "tester", "reviewer", "finalizer"]] },
+        review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: ACCEPTED_AGENT_ROLES },
         execution_order: { type: "array", description: "Custom execution order override.", items: { type: "string" } }
       }),
       ...common,

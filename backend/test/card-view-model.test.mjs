@@ -137,6 +137,31 @@ test("buildCardViewModel builds get_task card with lifecycle progress and P1 sum
   assert.ok(card.diagnostics.some((diagnostic) => diagnostic.message.includes("Retained failed worktree")));
 });
 
+test("get_task card shows finalizing convergence instead of manual checkpoint", () => {
+  const card = buildCardViewModel("get_task", {
+    task: {
+      id: "task_finalizing",
+      goal_id: "goal_finalizing",
+      title: "Finish code task",
+      status: "completed",
+      mode: "builder",
+      assignee: "codex",
+      result: {
+        summary: "Verification passed; finalization is converging automatically.",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+        convergence: { status: "finalizing", next_action: "auto_finalize_convergence" },
+      },
+    },
+  });
+
+  assert.ok(card.key_values.some((row) => row.key === "convergence" && row.value === "finalizing"));
+  assert.ok(card.diagnostics.some((diagnostic) => diagnostic.code === "finalizing_convergence" && /finalizing/i.test(diagnostic.message)));
+  assert.equal(card.diagnostics.some((diagnostic) => /manual checkpoint/i.test(diagnostic.message)), false);
+});
+
 test("renderCardText uses the ViewModel fields consistently", () => {
   const card = buildCardViewModel("list_tasks", {
     tasks: [

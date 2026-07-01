@@ -218,12 +218,13 @@ test('delivery e2e: queue -> task -> processor -> finalizer creates isolated wor
     runs.push(await runQueuedTask({ store, config, autoStarted, statusByTaskId: statuses }));
 
     assert.equal(runs.length, 3);
-    assert.equal(new Set(runs.map((run) => run.task.result.repo_resolution.task_worktree_path)).size, 3);
+    const persistedTasks = await Promise.all(runs.map((run) => store.findTaskById(run.task.id)));
+    assert.equal(new Set(persistedTasks.map((task) => task.result.repo_resolution.task_worktree_path)).size, 3);
     assert.deepEqual(runs.map((run) => run.result.status), ['completed', 'completed', 'completed']);
 
     for (const run of runs) {
       const taskWorktreePath = join(root, '.gptwork', 'worktrees', 'github.com-acme-repo', run.task.id);
-      const task = await store.findTaskById(run.task.id);
+      const task = persistedTasks.find((candidate) => candidate.id === run.task.id);
       assert.equal(task.status, 'completed');
       assert.equal(task.result.repo_resolution.task_worktree_path, taskWorktreePath);
       assert.equal(task.result.execution_cwd, taskWorktreePath);

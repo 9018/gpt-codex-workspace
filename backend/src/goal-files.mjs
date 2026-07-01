@@ -15,6 +15,7 @@ export function goalWorkspaceFiles(goal) {
     context_json: `${dir}/context.json`,
     transcript_md: `${dir}/transcript.md`,
     result_md: `${dir}/result.md`,
+    result_json: `${dir}/result.json`,
     payload_json: `${dir}/payload.json`,
     payload_base64: `${dir}/payload.base64`,
     bundle_zip: `${dir}/bundle.zip`,
@@ -22,6 +23,8 @@ export function goalWorkspaceFiles(goal) {
     context_bundle_md: `${dir}/context.bundle.md`,
     context_retrieval_json: `${dir}/context.retrieval.json`,
     acceptance_contract_json: `${dir}/acceptance.contract.json`,
+    artifact_contract_json: `${dir}/artifact.contract.json`,
+    reviewer_decision_json: `${dir}/reviewer_decision.json`,
     codex_entry_md: `${dir}/codex.entry.md`
   };
 }
@@ -38,7 +41,9 @@ export function publicGoalWorkspaceFiles(goal, payload = {}) {
     dir: files.dir,
     goal_md: files.goal_md,
     result_md: files.result_md,
-    acceptance_contract_json: files.acceptance_contract_json
+    result_json: files.result_json,
+    acceptance_contract_json: files.acceptance_contract_json,
+    artifact_contract_json: files.artifact_contract_json
   };
   if (hasGoalBundles(payload)) visible.attachments_dir = files.attachments_dir;
   return visible;
@@ -58,6 +63,8 @@ export function internalGoalWorkspaceFiles(goal, payload = {}) {
     context_bundle_md: files.context_bundle_md,
     context_retrieval_json: files.context_retrieval_json,
     acceptance_contract_json: files.acceptance_contract_json,
+    artifact_contract_json: files.artifact_contract_json,
+    reviewer_decision_json: files.reviewer_decision_json,
     codex_entry_md: files.codex_entry_md,
     payload_json: files.payload_json,
     payload_base64: files.payload_base64

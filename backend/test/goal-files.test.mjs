@@ -27,6 +27,9 @@ test("goalWorkspaceFiles returns correct paths for a goal", () => {
   assert.equal(files.attachments_dir, ".gptwork/goals/goal_test_123/attachments");
   assert.equal(files.context_bundle_md, ".gptwork/goals/goal_test_123/context.bundle.md");
   assert.equal(files.context_retrieval_json, ".gptwork/goals/goal_test_123/context.retrieval.json");
+  assert.equal(files.result_json, ".gptwork/goals/goal_test_123/result.json");
+  assert.equal(files.reviewer_decision_json, ".gptwork/goals/goal_test_123/reviewer_decision.json");
+  assert.equal(files.artifact_contract_json, ".gptwork/goals/goal_test_123/artifact.contract.json");
   assert.equal(files.codex_entry_md, ".gptwork/goals/goal_test_123/codex.entry.md");
 });
 
@@ -57,6 +60,7 @@ test("internalGoalWorkspaceFiles returns internal-only subset", () => {
   assert.equal(internal.transcript_md, ".gptwork/goals/goal_internal_1/transcript.md");
   assert.equal(internal.context_bundle_md, ".gptwork/goals/goal_internal_1/context.bundle.md");
   assert.equal(internal.context_retrieval_json, ".gptwork/goals/goal_internal_1/context.retrieval.json");
+  assert.equal(internal.artifact_contract_json, ".gptwork/goals/goal_internal_1/artifact.contract.json");
   assert.equal(internal.codex_entry_md, ".gptwork/goals/goal_internal_1/codex.entry.md");
   assert.equal(internal.payload_json, ".gptwork/goals/goal_internal_1/payload.json");
   assert.equal(internal.payload_base64, ".gptwork/goals/goal_internal_1/payload.base64");

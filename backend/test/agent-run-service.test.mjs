@@ -103,4 +103,39 @@ test("agent-run-service: runAgentPipeline with repairer role creates agent_run c
   assert.equal(result.agent_runs[2].role, "escalation_judge", "Third pipeline role should be escalation_judge");
 });
 
+test("agent-run-service: completed finalizer without result artifact blocks completion gates", async () => {
+  const { evaluateAgentGates } = await import("../src/agent-run-service.mjs");
+
+  const result = evaluateAgentGates([
+    { id: "r1", role: "context_curator", status: "completed", summary: "context", output_artifacts: [".gptwork/goals/goal_1/context.bundle.md"] },
+    { id: "r2", role: "planner", status: "completed", summary: "plan", output_artifacts: ["plan.md"] },
+    { id: "r3", role: "builder", status: "completed", summary: "build", output_artifacts: ["changes.diff"] },
+    { id: "r4", role: "verifier", status: "completed", summary: "tests", output_artifacts: ["verification.json"] },
+    { id: "r5", role: "reviewer", status: "completed", summary: "accepted", output_artifacts: [{ kind: "reviewer_decision", status: "accepted", passed: true }] },
+    { id: "r6", role: "finalizer", status: "completed", summary: "done", output_artifacts: [] },
+  ]);
+
+  assert.equal(result.gates_satisfied, false);
+  assert.ok(result.blocking_gates.includes("finalizer"));
+  const finalizerGate = result.gates.find((gate) => gate.role === "finalizer");
+  assert.deepEqual(finalizerGate.missing_artifacts, ["result"]);
+});
+
+test("agent-run-service: canonical pipeline gates pass with required artifacts", async () => {
+  const { evaluateAgentGates } = await import("../src/agent-run-service.mjs");
+
+  const result = evaluateAgentGates([
+    { id: "r1", role: "context_curator", status: "completed", summary: "context", output_artifacts: [".gptwork/goals/goal_1/context.bundle.md"] },
+    { id: "r2", role: "planner", status: "completed", summary: "plan", output_artifacts: ["plan.md"] },
+    { id: "r3", role: "builder", status: "completed", summary: "build", output_artifacts: ["changes.diff"] },
+    { id: "r4", role: "verifier", status: "completed", summary: "tests", output_artifacts: ["verification.json"] },
+    { id: "r5", role: "reviewer", status: "completed", summary: "accepted", output_artifacts: [{ kind: "reviewer_decision", status: "accepted", passed: true }] },
+    { id: "r6", role: "finalizer", status: "completed", summary: "done", output_artifacts: [".gptwork/goals/goal_1/result.json"] },
+    { id: "r7", role: "integrator", status: "completed", summary: "merged", output_artifacts: ["integration.json"] },
+  ]);
+
+  assert.equal(result.gates_satisfied, true);
+  assert.deepEqual(result.blocking_gates, []);
+});
+
 console.log("agent-run-service tests loaded");

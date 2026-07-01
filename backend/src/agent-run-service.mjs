@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_AGENT_PIPELINE, normalizeAgentRole, validateAgentRoles } from "./subagent-policy.mjs";
+import { ARTIFACT_SCHEMA, AGENT_ROLE_ENUM, normalizeContractRole, validateAgentArtifactContract } from "./agent-artifact-contract.mjs";
 
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
@@ -16,6 +17,12 @@ function normalizeStatus(status, fallback = "queued") {
   return STATUSES.has(status) ? status : fallback;
 }
 
+function normalizeStoredAgentRole(role) {
+  const value = role || "builder";
+  normalizeAgentRole(value);
+  return value;
+}
+
 export async function createAgentRun(store, args = {}, context = {}) {
   const result = await store.mutate((state) => {
     const at = now();
@@ -23,7 +30,8 @@ export async function createAgentRun(store, args = {}, context = {}) {
       id: `agent_run_${randomUUID()}`,
       goal_id: args.goal_id || "",
       task_id: args.task_id || "",
-      role: normalizeAgentRole(args.role),
+      role: normalizeStoredAgentRole(args.role),
+      contract_role: normalizeAgentRole(args.role),
       agent: args.agent || "codex",
       status: normalizeStatus(args.status),
       input_artifacts: Array.isArray(args.input_artifacts) ? args.input_artifacts : [],
@@ -97,7 +105,8 @@ export async function runAgentPipeline(store, args = {}, context = {}) {
   const pipelineId = `pipeline_${randomUUID()}`;
   const roles = validateAgentRoles(args.roles || DEFAULT_AGENT_PIPELINE);
   const executionOrder = validateAgentRoles(args.execution_order || roles);
-  const reviewGateAfter = normalizeAgentRole(args.review_gate_after || "reviewer");
+  const reviewGateAfter = args.review_gate_after || "reviewer";
+  normalizeAgentRole(reviewGateAfter);
   const pipeline = {
     id: pipelineId,
     goal_id: args.goal_id || "",
@@ -140,6 +149,7 @@ export function buildSubagentsFromAgentRuns(agentRuns = []) {
     .sort((a, b) => String(a.created_at || "").localeCompare(String(b.created_at || "")))
     .map((run) => ({
       role: run.role,
+      contract_role: normalizeContractRole(run.role),
       status: run.status,
       summary: run.summary || "",
       agent_run_id: run.id,
@@ -149,8 +159,14 @@ export function buildSubagentsFromAgentRuns(agentRuns = []) {
 }
 
 export function agentRunsBlockCompletion(agentRuns = []) {
-  const blockingRoles = new Set(["tester", "reviewer", "finalizer"]);
-  return agentRuns.some((run) => blockingRoles.has(run.role) && !["completed", "skipped"].includes(run.status));
+  const blockingRoles = new Set(["verifier", "reviewer", "finalizer", "integrator"]);
+  return agentRuns.some((run) => {
+    const role = normalizeAgentRole(run.role);
+    if (!blockingRoles.has(role)) return false;
+    if (!["completed", "skipped"].includes(run.status)) return true;
+    if (run.status === "skipped") return false;
+    return !validateAgentArtifactContract(run).valid;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +176,7 @@ export function agentRunsBlockCompletion(agentRuns = []) {
 // The acceptance/reviewer/finalizer roles must produce output before the
 // task can proceed to completion.
 //
-// Gate order: planner → implementer → tester → reviewer → finalizer
+// Gate order follows the G2 role/artifact contract.
 //
 // Each gate:
 // - Checks whether its required agent run is completed
@@ -168,14 +184,8 @@ export function agentRunsBlockCompletion(agentRuns = []) {
 // - Reports whether the gate is satisfied
 
 /** Ordered roles for gating task completion */
-const GATE_ROLES = ["planner", "implementer", "tester", "reviewer", "finalizer"];
-const GATE_CONTRACT_FIELDS = {
-  planner: ["summary", "plan_artifact"],
-  implementer: ["summary", "implementation_artifact"],
-  tester: ["summary", "test_artifact", "test_results"],
-  reviewer: ["summary", "review_artifact", "review_decision"],
-  finalizer: ["summary", "result_artifact", "completion_evidence"],
-};
+const GATE_ROLES = AGENT_ROLE_ENUM.filter((role) => role !== "repairer");
+const BASE_GATE_ROLES = ["planner", "builder", "verifier", "reviewer", "finalizer"];
 
 /**
  * Get all artifacts from completed agent runs for a task/goal.
@@ -185,13 +195,16 @@ const GATE_CONTRACT_FIELDS = {
  * @returns {Array<{ role: string, status: string, summary: string, artifacts: string[] }>}
  */
 export function getAgentRunArtifacts(agentRuns = [], role) {
+  const roleFilter = role ? normalizeContractRole(role) : null;
   return agentRuns
     .filter((run) => {
-      if (role && run.role !== role) return false;
+      const runRole = normalizeContractRole(run.role);
+      if (roleFilter && runRole !== roleFilter) return false;
       return ["completed", "skipped"].includes(run.status);
     })
     .map((run) => ({
       role: run.role,
+      contract_role: normalizeContractRole(run.role),
       status: run.status,
       summary: run.summary || "",
       artifacts: [
@@ -218,46 +231,30 @@ export function getAgentRunArtifacts(agentRuns = [], role) {
 export function evaluateAgentGates(agentRuns = []) {
   const gates = [];
   let lastCompletedRole = null;
+  const presentRoles = new Set(agentRuns.map((run) => normalizeContractRole(run.role)));
+  const gateRoles = GATE_ROLES.filter((role) => BASE_GATE_ROLES.includes(role) || presentRoles.has(role));
 
-  for (const role of GATE_ROLES) {
-    const runs = agentRuns.filter((r) => r.role === role);
+  for (const role of gateRoles) {
+    const runs = agentRuns.filter((r) => normalizeContractRole(r.role) === role);
     const completedRun = runs.find((r) => r.status === "completed");
     const skippedRun = runs.find((r) => r.status === "skipped");
-    const satisfied = Boolean(completedRun || skippedRun);
+    const artifactValidation = completedRun ? validateAgentArtifactContract(completedRun) : null;
+    const satisfied = Boolean(skippedRun || (completedRun && artifactValidation.valid));
 
-    if (completedRun) lastCompletedRole = role;
+    if (completedRun) lastCompletedRole = completedRun.role || role;
 
-    const requiredFields = GATE_CONTRACT_FIELDS[role] || [];
-    const missingFields = completedRun
-      ? requiredFields.filter((field) => {
-          if (field === "summary") return !completedRun.summary;
-          if (field === "review_decision") {
-            const decision = completedRun.output_artifacts?.find((a) =>
-              typeof a === "object" && (a.decision || a.status || a.passed !== undefined)
-            );
-            return !decision;
-          }
-          if (field.endsWith("_artifact")) {
-            const hasArtifact = (completedRun.output_artifacts || []).some((a) =>
-              typeof a === "string" ? a.includes(field.replace("_artifact", "")) : true
-            );
-            return !completedRun.summary && !hasArtifact;
-          }
-          if (field === "test_results") {
-            return !completedRun.summary?.includes("test") && !(completedRun.output_artifacts || []).length;
-          }
-          if (field === "completion_evidence") {
-            return !completedRun.summary;
-          }
-          return false;
-        })
-      : [];
+    const requiredArtifacts = Array.from(ARTIFACT_SCHEMA.required_by_role[role] || []);
+    const missingArtifacts = completedRun ? artifactValidation.missing_artifacts : requiredArtifacts;
 
     gates.push({
-      role,
+      role: completedRun?.role || skippedRun?.role || runs[0]?.role || role,
+      contract_role: role,
       satisfied,
-      required_fields: requiredFields,
-      missing_fields: missingFields,
+      required_fields: requiredArtifacts,
+      missing_fields: missingArtifacts,
+      required_artifacts: requiredArtifacts,
+      missing_artifacts: missingArtifacts,
+      findings: artifactValidation?.findings || [],
       summary: completedRun?.summary || (skippedRun ? "(skipped)" : ""),
       status: completedRun ? "completed" : skippedRun ? "skipped" : runs.some((r) => r.status === "failed") ? "failed" : "pending",
     });

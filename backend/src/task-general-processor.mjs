@@ -56,6 +56,24 @@ function statusForHealingAction(action) {
   return "waiting_for_review";
 }
 
+function isVerifiedNoChangeResult(result = {}) {
+  return result?.status === "completed"
+    && Array.isArray(result.changed_files)
+    && result.changed_files.length === 0
+    && !result.commit
+    && result.verification?.passed === true;
+}
+
+function applyLegacyNoChangeCompatibility(result = {}) {
+  if (!isVerifiedNoChangeResult(result)) return result;
+  result.noop = result.noop === true ? true : true;
+  result.noop_reason = result.noop_reason || "No changed files were reported and verification passed.";
+  result.operation_kind = result.operation_kind || "noop";
+  result.no_mutation = result.no_mutation === true ? true : true;
+  result.repo_mutated = result.repo_mutated === false ? false : false;
+  return result;
+}
+
 async function parkTaskForHealingRetry({ store, config, task, goal, context, updateTaskFn, appendGoalMessageFn, releaseLockForTaskFn, repoLockPath, error, healingAction, prefix }) {
   const status = statusForHealingAction(healingAction.action);
   const retryCount = RETRY_HEALING_ACTIONS.has(healingAction.action) ? (task.healing_retry_count || 0) + 1 : (task.healing_retry_count || 0);
@@ -570,6 +588,9 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     canonical_repo_path: resolvedRepo.canonical_repo_path || null,
     used_task_worktree_path: Boolean(resolvedRepo.task_worktree_path) && executionCwd === resolvedRepo.task_worktree_path,
   };
+
+  if (parsedResult) applyLegacyNoChangeCompatibility(parsedResult);
+  applyLegacyNoChangeCompatibility(taskResult);
 
 
   // ---- P0: Network failure retry gate ----

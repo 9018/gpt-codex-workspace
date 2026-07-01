@@ -99,6 +99,21 @@ test('runs runtime/admin/diagnostic/cleanup assertions', async (t) => {
   assert.deepEqual(result.failures, []);
 });
 
+test('no_mutation ignores GPTWork metadata artifacts', async (t) => {
+  const { repoPath } = await makeRepo(t);
+  await mkdir(join(repoPath, '.gptwork', 'goals', 'goal_1'), { recursive: true });
+  await writeFile(join(repoPath, '.gptwork', 'goals', 'goal_1', 'result.json'), '{"status":"completed"}\n', 'utf8');
+
+  const result = await runStateAssertions({
+    repoPath,
+    contract: { state_assertions: [{ kind: 'no_mutation' }] },
+    result: { no_mutation: true, repo_mutated: false },
+  });
+
+  assert.equal(result.passed, true);
+  assert.deepEqual(result.failures, []);
+});
+
 test('repo dirty and report head mismatch produce failures', async (t) => {
   const { repoPath, head } = await makeRepo(t);
   const reportPath = join(repoPath, 'report.json');

@@ -356,11 +356,11 @@ describe("Multi-agent pipeline gates", () => {
     const { buildAgentCompletionArtifact } = await import("../src/agent-run-service.mjs");
 
     const runs = [
-      { id: "r1", role: "planner", status: "completed", summary: "plan", input_artifacts: [], output_artifacts: [] },
-      { id: "r2", role: "implementer", status: "completed", summary: "impl", input_artifacts: [], output_artifacts: [] },
-      { id: "r3", role: "tester", status: "completed", summary: "all tests pass", input_artifacts: [], output_artifacts: [] },
+      { id: "r1", role: "planner", status: "completed", summary: "plan", input_artifacts: [], output_artifacts: ["plan.md"] },
+      { id: "r2", role: "implementer", status: "completed", summary: "impl", input_artifacts: [], output_artifacts: ["changes.diff"] },
+      { id: "r3", role: "tester", status: "completed", summary: "all tests pass", input_artifacts: [], output_artifacts: ["verification.json"] },
       { id: "r4", role: "reviewer", status: "completed", summary: "approved", input_artifacts: [], output_artifacts: [{ decision: "accepted", passed: true }] },
-      { id: "r5", role: "finalizer", status: "completed", summary: "finalized", input_artifacts: [], output_artifacts: [] },
+      { id: "r5", role: "finalizer", status: "completed", summary: "finalized", input_artifacts: [], output_artifacts: [".gptwork/goals/goal_1/result.json"] },
     ];
 
     const artifact = buildAgentCompletionArtifact(runs);

@@ -101,6 +101,18 @@ test("ambiguous requests remain low confidence and require review", () => {
   assert.equal(contract.completion_policy.auto_complete_when_blocking_requirements_pass, false);
 });
 
+test("generic builder no-change tasks avoid low-confidence semantic review", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Task 1",
+    goal_prompt: "First task for same repo",
+    mode: "builder"
+  });
+
+  assert.equal(contract.intent.operation_kind, "noop");
+  assert.equal(contract.intent.semantic_confidence, "medium");
+  assert.ok(!contract.review_policy.requires_review_when.includes("semantic_ambiguity"));
+});
+
 test("normalizes an explicit contract while preserving caller intent", () => {
   const contract = buildAcceptanceContract({
     user_request: "Restart the service",

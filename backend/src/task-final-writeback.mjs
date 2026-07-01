@@ -516,10 +516,19 @@ export async function finalizeCodexTaskRun({
 }
 
 function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) {
+  const verifiedNoChange = taskStatus === "completed"
+    && Array.isArray(taskResult.changed_files)
+    && taskResult.changed_files.length === 0
+    && !taskResult.commit
+    && taskResult.verification?.passed === true;
   return {
     status: taskStatus,
     summary: taskResult.summary || summary || "",
-    operation_kind: taskResult.operation_kind || taskResult.operationKind || taskResult.acceptance_contract?.intent?.operation_kind || null,
+    noop: taskResult.noop === true || verifiedNoChange,
+    noop_reason: taskResult.noop_reason || (verifiedNoChange ? "No changed files were reported and verification passed." : null),
+    no_mutation: taskResult.no_mutation === true || verifiedNoChange,
+    repo_mutated: taskResult.repo_mutated === false || verifiedNoChange ? false : (taskResult.repo_mutated === true ? true : null),
+    operation_kind: taskResult.operation_kind || taskResult.operationKind || taskResult.acceptance_contract?.intent?.operation_kind || (verifiedNoChange ? "noop" : null),
     acceptance_contract_id: taskResult.acceptance_contract_id || taskResult.acceptanceContractId || taskResult.acceptance_contract?.id || null,
     blocking_evidence: taskResult.blocking_evidence || null,
     changed_files: Array.isArray(taskResult.changed_files) ? taskResult.changed_files : [],

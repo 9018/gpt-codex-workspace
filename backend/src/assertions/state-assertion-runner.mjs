@@ -77,6 +77,18 @@ function diagnosticEvidence(result = {}) {
   return result.diagnostic_evidence || {};
 }
 
+function nonGptWorkStatus(status) {
+  return String(status || '')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .filter((line) => {
+      const path = line.replace(/^[ MADRCU?!]{1,2}\s+/, '').trim();
+      return !path.startsWith('.gptwork/');
+    })
+    .join('\n');
+}
+
 function pass(kind, evidence = {}) {
   return { kind, passed: true, evidence };
 }
@@ -170,10 +182,12 @@ async function evaluateAssertion({ assertion, result, repoPath, workspaceRoot, r
       const ok = evidence.pre_state_snapshot !== undefined && evidence.post_state_snapshot !== undefined && evidence.state_delta !== undefined;
       return ok ? pass(kind, { state_delta: evidence.state_delta }) : fail(kind, { pre_state_snapshot: evidence.pre_state_snapshot ?? null, post_state_snapshot: evidence.post_state_snapshot ?? null, state_delta: evidence.state_delta ?? null });
     }
+    case 'no_mutation':
     case 'no_repo_mutation': {
       const status = await git(repoPath, ['status', '--porcelain'], config);
+      const relevantStatus = nonGptWorkStatus(status);
       const explicit = diagnosticEvidence(result).repo_mutated === false || result.repo_mutated === false || result.no_mutation === true;
-      return explicit && status === '' ? pass(kind, { repo_mutated: false, status }) : fail(kind, { explicit_no_mutation: explicit, status });
+      return explicit && relevantStatus === '' ? pass(kind, { repo_mutated: false, status }) : fail(kind, { explicit_no_mutation: explicit, status: relevantStatus || status });
     }
     case 'active_items_preserved':
       return cleanupEvidence(result).active_items_preserved === true ? pass(kind, { active_items_preserved: true }) : fail(kind, { active_items_preserved: false });
