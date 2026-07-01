@@ -19,6 +19,7 @@ import { classifyClosure, checkNotificationConsistency } from './auto-closure-cl
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
 import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
 import { planFollowupTasks } from './closure/followup-task-planner.mjs';
+import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -156,6 +157,7 @@ export async function finalizeCodexTaskRun({
   removeTaskWorktreeFn = removeTaskWorktree,
   writeFileFn = nodeWriteFile,
   verifyTaskCompletionFn = verifyTaskCompletion,
+  runAcceptanceGateFn = runAcceptanceGate,
   autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted,
   runIntegrationQueueFn = runIntegrationQueue,
   runAutoIntegrationCompletionFn = runAutoIntegrationCompletion,
@@ -389,19 +391,43 @@ export async function finalizeCodexTaskRun({
       taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
     }
 
-    const closureDecision = decideTaskClosure({
-      contract: contractForClosure({ goal, taskResult }),
-      contractVerification: taskResult.contract_verification || verification.contract_verification || null,
-      verification,
-      integration: taskResult.integration,
-      deployment: taskResult.deployment || taskResult.runtime || null,
-      result: resultForClosure({ taskStatus, taskResult, verification }),
-      task,
-      config: {
-        ...config,
-        verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
-      },
-    });
+    let acceptanceGate = null;
+    try {
+      acceptanceGate = await runAcceptanceGateFn({
+        task,
+        goal,
+        repoPath: verifierRepoPath,
+        resultJson: resultForClosure({ taskStatus, taskResult, verification }),
+        resultJsonPath,
+        config: {
+          ...config,
+          verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
+        },
+        verification,
+        writeArtifacts: true,
+      });
+    } catch (err) {
+      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+      taskResult.warnings.push("Acceptance gate execution failed: " + (err?.message || String(err)));
+    }
+    if (acceptanceGate) {
+      taskResult.acceptance_gate = acceptanceGate;
+      taskResult.acceptance_result_path = acceptanceGate.artifacts?.acceptance_json || null;
+      if (acceptanceGate.contract_verification) taskResult.contract_verification = acceptanceGate.contract_verification;
+    }
+    const closureDecision = acceptanceGate?.closure_decision || decideTaskClosure({
+        contract: contractForClosure({ goal, taskResult }),
+        contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+        verification,
+        integration: taskResult.integration,
+        deployment: taskResult.deployment || taskResult.runtime || null,
+        result: resultForClosure({ taskStatus, taskResult, verification }),
+        task,
+        config: {
+          ...config,
+          verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
+        },
+      });
     const plannedFollowups = planFollowupTasks({
       task,
       goal,
@@ -616,6 +642,8 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     verification: taskResult.verification || null,
     contract_verification: taskResult.contract_verification || taskResult.verification?.contract_verification || taskResult.final_verification?.contract_verification || null,
     final_verification: taskResult.final_verification || null,
+    acceptance_gate: taskResult.acceptance_gate || null,
+    acceptance_result_path: taskResult.acceptance_result_path || null,
     closure_decision: taskResult.closure_decision || null,
     failure_class: taskResult.failure_class || null,
     attempt: taskResult.attempt ?? null,

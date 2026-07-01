@@ -149,11 +149,24 @@ GPTWork 把几个容易混淆的概念分开处理：
 核心模块：
 
 - `backend/src/acceptance/`：契约生成、契约 schema、语义检查、contract-aware verifier。
+- `backend/src/acceptance-gate-engine.mjs`：独立验收闸门，统一调用 verifier、contract verifier 和 closure decider，并写出 `verification.json` / `acceptance.json`。
 - `backend/src/evidence/`：不同操作类型的证据归一化和 profile。
 - `backend/src/assertions/`：状态断言运行器。
 - `backend/src/closure/`：确定性收口决策和 follow-up 规划。
 - `backend/src/review/`：acceptance bundle 与 review packet。
 - `backend/src/integration-queue.mjs`、`backend/src/auto-integration-completion.mjs`：集成状态和 ff-only 自动完成。
+
+### 独立 Verifier 与 Acceptance Gate
+
+任务进入完成态前必须先经过独立 verifier。verifier 负责运行命令检查、复用有效 verification report、验证 result evidence 和 acceptance contract，并把结果写入 goal 目录下的 `verification.json`。Acceptance Gate Engine 读取 verifier 输出、验收契约、integration/deployment evidence 和 closure policy，写入同目录的 `acceptance.json`，并只返回三类结果：
+
+| Gate status | 含义 | 后续状态 |
+|---|---|---|
+| `passed` | verification 通过，阻塞验收项满足，可自动关闭。 | `completed` |
+| `failed` | 任务自身报告失败或不可恢复失败。 | `failed` |
+| `needs_action` | verification、contract、integration 或语义判断仍缺证据/需修复。 | `waiting_for_repair` 或 `waiting_for_review` |
+
+旧任务流程仍兼容：finalizer 继续接受既有 `verifyTaskCompletionFn` 注入和 legacy `result.json` 字段；新增 gate 只补充 `acceptance_gate` / `acceptance_result_path` 证据，并复用现有 repair、review、follow-up 和 closure 决策。
 
 ## 小包化 review/context
 

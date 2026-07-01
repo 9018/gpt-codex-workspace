@@ -158,6 +158,10 @@ test('refactor goals: finalizer synchronizes current queue item and creates repa
   assert.ok(repairGoal, 'repair goal should be created');
   assert.ok(savedTask.logs.some((log) => /failure_class=test_failed/.test(log.message)));
   assert.ok(existsSync(join(root, '.gptwork/goals/goal_finalizer_sync/verification.json')));
+  assert.ok(existsSync(join(root, '.gptwork/goals/goal_finalizer_sync/acceptance.json')));
+  const acceptance = JSON.parse(await readFile(join(root, '.gptwork/goals/goal_finalizer_sync/acceptance.json'), 'utf8'));
+  assert.equal(acceptance.status, 'needs_action');
+  assert.equal(acceptance.task_status, 'waiting_for_repair');
 });
 
 test('refactor goals: local context retrieval can search across workspace without current goal filter', async (t) => {
