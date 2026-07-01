@@ -101,16 +101,50 @@ test("ambiguous requests remain low confidence and require review", () => {
   assert.equal(contract.completion_policy.auto_complete_when_blocking_requirements_pass, false);
 });
 
-test("generic builder no-change tasks avoid low-confidence semantic review", () => {
+test("builder optimization repair requests are not inferred as noop", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "优化修复后端自动推进",
+    goal_prompt: "修复自动推进问题并增加测试。",
+    mode: "builder"
+  });
+
+  assert.notEqual(contract.intent.operation_kind, "noop");
+  assert.equal(contract.intent.operation_kind, "code_change");
+});
+
+test("vague builder requests do not auto-complete", () => {
   const contract = buildAcceptanceContract({
     user_request: "Task 1",
     goal_prompt: "First task for same repo",
     mode: "builder"
   });
 
+  assert.notEqual(contract.intent.operation_kind, "noop");
+  assert.equal(contract.intent.semantic_confidence, "low");
+  assert.ok(contract.review_policy.requires_review_when.includes("semantic_ambiguity"));
+  assert.equal(contract.completion_policy.auto_complete_when_blocking_requirements_pass, false);
+});
+
+test("explicit builder no-op requests remain noop", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "No-op: this task is already done, do nothing",
+    goal_prompt: "无需操作，报告无需改动即可。",
+    mode: "builder"
+  });
+
   assert.equal(contract.intent.operation_kind, "noop");
-  assert.equal(contract.intent.semantic_confidence, "medium");
-  assert.ok(!contract.review_policy.requires_review_when.includes("semantic_ambiguity"));
+  assert.equal(contract.intent.semantic_confidence, "high");
+});
+
+test("explicit Chinese builder noop requests remain noop", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "无需操作",
+    goal_prompt: "无需改动，报告现状即可。",
+    mode: "builder"
+  });
+
+  assert.equal(contract.intent.operation_kind, "noop");
+  assert.equal(contract.intent.semantic_confidence, "high");
 });
 
 test("normalizes an explicit contract while preserving caller intent", () => {

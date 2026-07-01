@@ -379,8 +379,8 @@ test("general Codex worker completes linked goals and writes concise results", a
   });
 
   const created = await callToolAs(server, "test-token", "create_goal", {
-    user_request: "Run worker",
-    goal_prompt: "Return worker-ok.",
+    user_request: "No-op: Run worker fixture is already done",
+    goal_prompt: "Do nothing and return worker-ok.",
     context_summary: "Worker status sync test.",
     assign_to_codex: true
   });
@@ -392,6 +392,11 @@ test("general Codex worker completes linked goals and writes concise results", a
     summary: "worker-ok",
     changed_files: [],
     tests: "passed 1/1",
+    noop: true,
+    noop_reason: "test fixture requested no-op",
+    no_mutation: true,
+    repo_mutated: false,
+    operation_kind: "noop",
     verification: { passed: true, commands: [{ cmd: "mock", exit_code: 0 }] },
     subagents_used: true,
     subagents: [

@@ -22,7 +22,7 @@ const OPERATION_PATTERNS = [
   ["file_write", /\b(write|create|add|save|generate)\b.{0,80}\bfile\b|写入文件|添加文件|新建文件/iu],
   ["docs_only", /\b(docs?|documentation|readme|changelog|guide|manual)\b|文档|说明/iu],
   ["config_change", /\b(config|configuration|env var|\.env|settings|yaml|toml|reload config)\b|配置/iu],
-  ["noop", /\b(noop|no-op|do nothing|no action|already done|无需操作)\b/iu],
+  ["noop", /\b(noop|no-op|do nothing|no action|already done)\b|无需操作|无需改动/iu],
   ["code_change", /\b(fix|implement|modify|refactor|add tests?|bug|feature|code|backend|frontend|api|module)\b|修复|实现|代码|改造/iu]
 ];
 
@@ -39,7 +39,7 @@ function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } =
   for (const [kind, pattern] of OPERATION_PATTERNS) {
     if (pattern.test(text)) matches.push(kind);
   }
-  if (matches.length === 0 && normalizedMode === "builder") return { operation_kind: "noop", semantic_confidence: "medium" };
+  if (matches.length === 0 && normalizedMode === "builder") return { operation_kind: "code_change", semantic_confidence: "low" };
   if (matches.length === 0) return { operation_kind: "noop", semantic_confidence: "low" };
 
   const selected = matches[0];

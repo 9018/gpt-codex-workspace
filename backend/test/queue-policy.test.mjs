@@ -155,7 +155,7 @@ test("queue-policy: checkDependency completed_only passes only for completed", a
   assert.equal(r3.satisfied, false);
 });
 
-test("queue-policy: completed task does not satisfy stale open goal dependency", async () => {
+test("queue-policy: completed task satisfies stale open goal dependency", async () => {
   const { checkDependency, resolveDependencyTarget } = await loadPolicy();
   const state = makeState({
     goals: [{ id: "goal_dep", status: "open" }],
@@ -165,10 +165,12 @@ test("queue-policy: completed task does not satisfy stale open goal dependency",
   const target = resolveDependencyTarget(state, { depends_on_goal_id: "goal_dep" });
   const dependency = checkDependency(state, { depends_on_goal_id: "goal_dep", dependency_policy: "completed_only" });
 
-  assert.equal(target.status, "open");
+  assert.equal(target.status, "completed");
   assert.equal(target.kind, "goal");
-  assert.equal(dependency.satisfied, false);
-  assert.match(dependency.reason, /status=open/);
+  assert.equal(target.actual_source, "completed_task");
+  assert.equal(target.task_id, "task_dep");
+  assert.equal(dependency.satisfied, true);
+  assert.equal(dependency.reason, null);
 });
 
 test("queue-policy: checkDependency terminal_any passes for any terminal", async () => {

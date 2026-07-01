@@ -3,7 +3,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { track, afterEachHook } from "./helpers/temp-cleanup.mjs";
 import { execFileSync } from "node:child_process";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,10 +16,14 @@ const CLI_BIN = resolve(TEST_DIR, "../bin/gptwork.mjs");
 
 async function makeServer() {
   const root = await mkdtemp(join(tmpdir(), "gptwork-p0-"));
+  const workspaceRoot = join(root, "workspace");
+  await mkdir(workspaceRoot, { recursive: true });
+  await writeFile(join(workspaceRoot, "README.md"), "test workspace\n", "utf8");
   track(root);
   return createGptWorkServer({
     statePath: join(root, "state.json"),
-    defaultWorkspaceRoot: join(root, "workspace"),
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: workspaceRoot,
     tokens: ["test-token"],
     requireAuth: true,
   });
@@ -36,9 +40,7 @@ test("open_project_context returns bounded first-step project context", async ()
 
   const context = response.result.structuredContent;
   assert.equal(context.ok, true);
-  // Use includes (not endsWith) to support git worktree environments
-  // where the repo root is a worktree path containing the canonical repo name
-  assert.ok(context.repo.root.includes("gpt-codex-workspace"));
+  assert.equal(context.repo.root, context.config.workspace_root);
   assert.equal(typeof context.repo.dirty, "boolean");
   assert.ok(context.config.tool_mode);
   assert.ok(context.project_files.some((file) => file.name === "README.md"));

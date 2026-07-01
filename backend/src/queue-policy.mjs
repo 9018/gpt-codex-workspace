@@ -101,6 +101,18 @@ export function resolveDependencyTarget(state, item) {
     const goal = Array.isArray(state.goals)
       ? state.goals.find((g) => g.id === item.depends_on_goal_id)
       : null;
+    const completedTask = Array.isArray(state.tasks)
+      ? [...state.tasks].reverse().find((t) => t.goal_id === item.depends_on_goal_id && isCompletedStatus(t.status))
+      : null;
+    if (goal && !isCompletedStatus(goal.status) && completedTask) {
+      return {
+        status: completedTask.status,
+        kind: "goal",
+        target_id: item.depends_on_goal_id,
+        actual_source: "completed_task",
+        task_id: completedTask.id,
+      };
+    }
     return {
       status: goal ? goal.status : null,
       kind: "goal",

@@ -66,7 +66,7 @@ function setupMockCodex() {
     "result_path=$(printf '%s\\n' \"$prompt\" | sed -n 's/.*Write result.json exactly to\\*\\*: //p' | head -n 1)",
     "if [ -n \"$result_path\" ]; then",
     "  mkdir -p \"$(dirname \"$result_path\")\"",
-    "  printf '%s\\n' '{\"status\":\"completed\",\"summary\":\"test\",\"changed_files\":[],\"tests\":\"passed 1/1\",\"verification\":{\"passed\":true,\"commands\":[{\"cmd\":\"mock\",\"exit_code\":0}]},\"subagents_used\":true,\"subagents\":[{\"role\":\"analyst\",\"status\":\"completed\",\"summary\":\"mock analysis\"},{\"role\":\"architect\",\"status\":\"completed\",\"summary\":\"mock arch\"},{\"role\":\"implementer\",\"status\":\"completed\",\"summary\":\"mock implementation\"},{\"role\":\"tester\",\"status\":\"completed\",\"summary\":\"mock testing\"},{\"role\":\"reviewer\",\"status\":\"completed\",\"summary\":\"mock review\"},{\"role\":\"escalation_judge\",\"status\":\"completed\",\"summary\":\"mock escalation\"}],\"gpt_questions_used\":0}' > \"$result_path\"",
+    "  printf '%s\\n' '{\"status\":\"completed\",\"summary\":\"test noop\",\"changed_files\":[],\"tests\":\"passed 1/1\",\"noop\":true,\"noop_reason\":\"test fixture requested no-op\",\"no_mutation\":true,\"repo_mutated\":false,\"operation_kind\":\"noop\",\"verification\":{\"passed\":true,\"commands\":[{\"cmd\":\"mock\",\"exit_code\":0}]},\"subagents_used\":true,\"subagents\":[{\"role\":\"analyst\",\"status\":\"completed\",\"summary\":\"mock analysis\"},{\"role\":\"architect\",\"status\":\"completed\",\"summary\":\"mock arch\"},{\"role\":\"implementer\",\"status\":\"completed\",\"summary\":\"mock implementation\"},{\"role\":\"tester\",\"status\":\"completed\",\"summary\":\"mock testing\"},{\"role\":\"reviewer\",\"status\":\"completed\",\"summary\":\"mock review\"},{\"role\":\"escalation_judge\",\"status\":\"completed\",\"summary\":\"mock escalation\"}],\"gpt_questions_used\":0}' > \"$result_path\"",
     "fi",
     "echo \"STATUS=completed\"",
     "echo \"SUMMARY=test\"",
@@ -627,16 +627,16 @@ test("two assigned tasks for same repo: second is waiting_for_lock, not waiting_
 
   // Create first task
   const t1 = await callTool(server, "create_task", {
-    title: "Task 1",
-    description: "First task for same repo",
+    title: "No-op task 1",
+    description: "No-op: first task for same repo is already done; do nothing",
     mode: "builder"
   });
   await callTool(server, "assign_task_to_codex", { task_id: t1.task.id });
 
   // Create second task (same project/workspace = same repo)
   const t2 = await callTool(server, "create_task", {
-    title: "Task 2",
-    description: "Second task for same repo — should be blocked",
+    title: "No-op task 2",
+    description: "No-op: second task for same repo is already done; do nothing",
     mode: "builder"
   });
   await callTool(server, "assign_task_to_codex", { task_id: t2.task.id });
@@ -713,7 +713,7 @@ test("blocked task with waiting_for_lock is retried after lock release", async (
   // Create a task that will be blocked
   const t1 = await callTool(server, "create_task", {
     title: "Blocked task",
-    description: "Should be blocked by lock, then retry after release",
+    description: "No-op: should be blocked by lock, then retry after release; do nothing",
     mode: "builder"
   });
   await callTool(server, "assign_task_to_codex", { task_id: t1.task.id });
