@@ -230,3 +230,105 @@ test('runAssignedCodexTasks batch-starts queued goals to fill available concurre
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('runAssignedCodexTasks does not auto-start manual-only queued goals', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-manual-only-'));
+  try {
+    const repo = join(tmpDir, 'repo');
+    initGitRepo(repo);
+    const store = makeStore(tmpDir);
+    await store.load();
+    store.state.goal_queue = [];
+    store.state.conversations = [];
+    const manualGoal = addGoal(store.state, { id: 'goal_manual_only_worker', title: 'Manual only worker' });
+    const autoGoal = addGoal(store.state, { id: 'goal_auto_worker', title: 'Auto worker' });
+    store.state.goal_queue.push({
+      queue_id: 'queue_manual_only_worker',
+      goal_id: manualGoal.id,
+      task_id: null,
+      workspace_id: 'hosted-default',
+      repo_id: '',
+      position: 1,
+      status: 'waiting',
+      depends_on_goal_id: null,
+      depends_on_task_id: null,
+      dependency_policy: 'completed_only',
+      blocked_reason: null,
+      auto_start: false,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    store.state.goal_queue.push({
+      queue_id: 'queue_auto_worker',
+      goal_id: autoGoal.id,
+      task_id: null,
+      workspace_id: 'hosted-default',
+      repo_id: '',
+      position: 2,
+      status: 'waiting',
+      depends_on_goal_id: null,
+      depends_on_task_id: null,
+      dependency_policy: 'completed_only',
+      blocked_reason: null,
+      auto_start: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await store.save();
+
+    const result = await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: repo,
+      enableTaskWorktrees: false,
+    }, {}, { limit: 10, concurrency: 2 }, undefined, {
+      processGeneralTask: async (_store, _config, task) => ({ task_id: task.id, status: 'completed', progressed: true }),
+    });
+
+    assert.equal(result.queue_autostart?.started_count, 1);
+    await store.load();
+    assert.equal(store.state.goal_queue.find((item) => item.queue_id === 'queue_manual_only_worker').status, 'waiting');
+    assert.equal(store.state.goal_queue.find((item) => item.queue_id === 'queue_auto_worker').status, 'running');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runAssignedCodexTasks recovers accepted verified review tasks without rerunning Codex', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-review-recovery-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addTask(store.state, {
+      id: 'review-recover-task',
+      status: 'waiting_for_review',
+      result: {
+        kind: 'codex_executed',
+        summary: 'Verified admin/noop result',
+        changed_files: [],
+        reviewer_decision: { status: 'accepted', passed: true },
+        verification: { passed: true, commands: [{ cmd: 'echo ok', exit_code: 0 }], findings: [] },
+        acceptance_findings: [],
+      },
+    });
+    await store.save();
+
+    let processorCalled = false;
+    const result = await runAssignedCodexTasks(store, {}, {}, { limit: 10, concurrency: 1 }, undefined, {
+      processGeneralTask: async () => {
+        processorCalled = true;
+        return { status: 'completed' };
+      },
+    });
+
+    assert.equal(processorCalled, false, 'review recovery must not rerun Codex/general processor');
+    assert.equal(result.review_recovery.recovered, 1);
+    await store.load();
+    const task = store.state.tasks.find((item) => item.id === 'review-recover-task');
+    assert.equal(task.status, 'completed');
+    assert.equal(task.result.requires_review, false);
+    assert.equal(task.result.contract_verification.blocking_passed, true);
+    assert.equal(task.result.closure_decision.status, 'auto_completed_clean');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});

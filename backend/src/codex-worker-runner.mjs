@@ -79,6 +79,158 @@ function normalizeWorkerResult(task, result, extra = {}) {
   };
 }
 
+function acceptedByReviewer(result = {}) {
+  const decision = result.reviewer_decision || {};
+  if (decision.passed === true) return true;
+  if (decision.status === "accepted" || decision.decision === "accepted") return true;
+  if (decision.decision?.passed === true) return true;
+  if (decision.decision?.status === "accepted" || decision.decision?.decision === "accepted") return true;
+  return false;
+}
+
+function unresolvedBlockingFindings(result = {}) {
+  const findings = [
+    ...(Array.isArray(result.acceptance_findings) ? result.acceptance_findings : []),
+    ...(Array.isArray(result.findings) ? result.findings : []),
+    ...(Array.isArray(result.verification?.findings) ? result.verification.findings : []),
+  ];
+  return findings.filter((finding) =>
+    (finding?.severity === "blocker" || finding?.severity === "major") && finding?.resolved !== true
+  );
+}
+
+function integrationSatisfied(result = {}) {
+  const integration = result.integration || {};
+  if (integration.satisfied === true || integration.merged === true || integration.auto_completed === true) return true;
+  return ["merged", "ff_only_merged", "skipped", "not_required"].includes(String(integration.status || "").toLowerCase());
+}
+
+function shouldRecoverAcceptedVerifiedReviewTask(task = {}) {
+  if (task.status !== TASK_STATUSES.WAITING_FOR_REVIEW) return false;
+  const result = task.result || {};
+  if (result.kind === "codex_failed" || result.kind === "codex_timeout" || result.kind === "no_first_output_timeout") return false;
+  if (acceptedByReviewer(result) !== true) return false;
+  if (result.verification?.passed !== true) return false;
+  if (unresolvedBlockingFindings(result).length > 0) return false;
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files.filter(Boolean) : [];
+  if (changedFiles.length > 0 && !result.commit) return false;
+  return true;
+}
+
+function buildRecoveredContractVerification(result = {}) {
+  return {
+    ...(result.contract_verification || {}),
+    contract_valid: result.contract_verification?.contract_valid !== false,
+    blocking_passed: true,
+    acceptance_status: "satisfied",
+    completion_eligible: true,
+    requires_review: false,
+    blockers: [],
+    non_blocking_followups: Array.isArray(result.contract_verification?.non_blocking_followups)
+      ? result.contract_verification.non_blocking_followups
+      : [],
+    quality_notes: Array.isArray(result.contract_verification?.quality_notes)
+      ? result.contract_verification.quality_notes
+      : [],
+    state_assertions: result.contract_verification?.state_assertions || { passed: true, failures: [] },
+    recovered_from_review: true,
+  };
+}
+
+function recoveryTargetStatus(result = {}) {
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files.filter(Boolean) : [];
+  const hasCodeChange = changedFiles.length > 0 && Boolean(result.commit);
+  const needsIntegration = result.needs_integration === true || result.closure_path === "integrate" || result.operation_kind === "code_change";
+  if ((hasCodeChange || needsIntegration) && !integrationSatisfied(result)) return TASK_STATUSES.WAITING_FOR_INTEGRATION;
+  return TASK_STATUSES.COMPLETED;
+}
+
+async function recoverAcceptedVerifiedReviewTasks(store, maxTasks = 10) {
+  const state = await store.load();
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const candidates = tasks
+    .filter(shouldRecoverAcceptedVerifiedReviewTask)
+    .slice(0, Math.max(0, Math.min(Number(maxTasks) || 10, 50)));
+  if (candidates.length === 0) return { recovered: 0, tasks: [] };
+
+  const recovered = [];
+  await store.mutate(async (mutState) => {
+    mutState.tasks ||= [];
+    mutState.activities ||= [];
+    for (const candidate of candidates) {
+      const item = mutState.tasks.find((task) => task.id === candidate.id);
+      if (!item || !shouldRecoverAcceptedVerifiedReviewTask(item)) continue;
+      const result = item.result || {};
+      const targetStatus = recoveryTargetStatus(result);
+      const contractVerification = buildRecoveredContractVerification(result);
+      const closureDecision = targetStatus === TASK_STATUSES.WAITING_FOR_INTEGRATION
+        ? {
+            status: "waiting_for_integration",
+            reason: "accepted_verified_review_recovered_waiting_for_integration",
+            blocking_passed: true,
+            auto_complete_allowed: false,
+            requires_human_decision: false,
+            task_status: TASK_STATUSES.WAITING_FOR_INTEGRATION,
+            blockers: [],
+            repairable_blockers: [],
+            non_blocking_followups: [],
+            quality_notes: [],
+          }
+        : {
+            status: "auto_completed_clean",
+            reason: "accepted_verified_review_recovered_clean",
+            blocking_passed: true,
+            auto_complete_allowed: true,
+            requires_human_decision: false,
+            task_status: TASK_STATUSES.COMPLETED,
+            blockers: [],
+            repairable_blockers: [],
+            non_blocking_followups: [],
+            quality_notes: [],
+          };
+
+      item.status = targetStatus;
+      item.result = {
+        ...result,
+        status: "completed",
+        requires_review: false,
+        contract_verification: contractVerification,
+        acceptance_gate: {
+          ...(result.acceptance_gate || {}),
+          status: "passed",
+          source: "accepted_verified_review_recovery",
+          contract_verification: contractVerification,
+          closure_decision: closureDecision,
+        },
+        closure_decision: closureDecision,
+        recovered_from_review: {
+          status: targetStatus,
+          reason: closureDecision.reason,
+          recovered_at: new Date().toISOString(),
+        },
+      };
+      item.logs ||= [];
+      item.logs.push({ time: new Date().toISOString(), message: `[worker] recovered accepted+verified review task to ${targetStatus}` });
+      item.updated_at = new Date().toISOString();
+
+      if (Array.isArray(mutState.goal_queue)) {
+        const queueItem = mutState.goal_queue.find((entry) => entry.task_id === item.id || (item.goal_id && entry.goal_id === item.goal_id));
+        if (queueItem) {
+          queueItem.status = targetStatus === TASK_STATUSES.COMPLETED ? "completed" : "running";
+          queueItem.completed_task_id = targetStatus === TASK_STATUSES.COMPLETED ? item.id : queueItem.completed_task_id || null;
+          queueItem.blocked_reason = null;
+          queueItem.updated_at = item.updated_at;
+        }
+      }
+
+      mutState.activities.push({ time: item.updated_at, type: "task.review_recovered", task_id: item.id, status: item.status });
+      recovered.push({ task_id: item.id, status: targetStatus, reason: closureDecision.reason });
+    }
+  });
+
+  return { recovered: recovered.length, tasks: recovered };
+}
+
 // ---------------------------------------------------------------------------
 // Integration retry handler — P0 fix for waiting_for_integration stuck tasks
 // ---------------------------------------------------------------------------
@@ -263,6 +415,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   const maxConcurrency = Math.max(1, Math.min(Number(concurrency) || 4, 16));
   const state = await store.load();
   await normalizeLegacyModes(store, state);
+  const reviewRecovery = await recoverAcceptedVerifiedReviewTasks(store, maxTasks);
 
   // Use indexed query from StateStore instead of full scan on state.tasks.
   // The query is fair across status buckets so large assigned backlogs do not
@@ -281,7 +434,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   const desiredActiveCandidates = Math.min(maxConcurrency, maxTasks);
   const availableQueueSlots = Math.max(0, desiredActiveCandidates - candidates.length);
   if (availableQueueSlots > 0) {
-    const batchAutostart = await startQueuedGoals(store, config, { max_start: availableQueueSlots }).catch((error) => ({
+    const batchAutostart = await startQueuedGoals(store, config, { max_start: availableQueueSlots, require_auto_start: true }).catch((error) => ({
       started_count: 0,
       any_started: false,
       results: [],
@@ -330,6 +483,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     inspected: candidates.length,
     concurrency: maxConcurrency,
     queue_autostart: queueAutostart,
+    review_recovery: reviewRecovery,
     completed,
     failed,
     skipped,

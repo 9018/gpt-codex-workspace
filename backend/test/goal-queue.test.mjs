@@ -1269,3 +1269,46 @@ test("goal-queue: startQueuedGoals returns blocked summary alongside started ite
   assert.ok(result.blocked.length >= 1, "should report blocked item in summary");
   assert.ok(result.blocked.some((b) => b.queue_id === "queue_blocked_a"), "blocked summary should include the bad item");
 });
+
+test("goal-queue: worker-style batch autostart skips auto_start=false items", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-autostart-false-batch-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_manual_only", "Manual only", "open");
+  addGoal(store, "goal_auto_allowed", "Auto allowed", "open");
+  addGoalToQueue(store, "queue_manual_only", "goal_manual_only", 1, "waiting", { auto_start: false });
+  addGoalToQueue(store, "queue_auto_allowed", "goal_auto_allowed", 2, "waiting", { auto_start: true });
+  await store.save();
+
+  const { startQueuedGoals } = await import("../src/goal-queue.mjs");
+  const result = await startQueuedGoals(store, { defaultWorkspaceRoot: dir, defaultRepoPath: repo }, { max_start: 2, require_auto_start: true });
+
+  assert.equal(result.started, 1);
+  assert.equal(result.results[0].item.queue_id, "queue_auto_allowed");
+
+  await store.load();
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_manual_only").status, "waiting");
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_auto_allowed").status, "running");
+});
+
+test("goal-queue: completion hook does not start auto_start=false queue items", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "gq-autostart-false-hook-"));
+  const repo = join(dir, "repo");
+  await initGitRepo(repo);
+  const store = await makeStore(dir);
+
+  addGoal(store, "goal_manual_hook", "Manual hook", "open");
+  addGoalToQueue(store, "queue_manual_hook", "goal_manual_hook", 1, "waiting", { auto_start: false });
+  addTask(store, "task_completed_hook", "completed", { goal_id: "goal_completed_hook" });
+  await store.save();
+
+  const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+  const result = await autoStartNextOnTaskCompleted(store, { defaultWorkspaceRoot: dir, defaultRepoPath: repo }, store.state.tasks[0]);
+
+  assert.equal(result.auto_started, false);
+  await store.load();
+  assert.equal(store.state.goal_queue.find((item) => item.queue_id === "queue_manual_hook").status, "waiting");
+  assert.equal(store.state.tasks.length, 1);
+});

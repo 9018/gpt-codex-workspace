@@ -313,6 +313,8 @@ async function recheckTransientBlockedItems(state, config, workspaceRoot) {
 
 export async function startNextQueuedGoal(store, config, opts = {}) {
   const dryRun = opts.dry_run === true;
+  const requireAutoStart = opts.require_auto_start === true || opts.requireAutoStart === true;
+  const targetQueueId = opts.queue_id || opts.queueId || null;
   const state = await store.load();
   const workspaceRoot = config.defaultWorkspaceRoot;
   // Re-check transiently blocked items before scanning eligible items
@@ -322,10 +324,20 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
   // Sort by position
   const sorted = [...items]
     .filter((item) => ELIGIBLE_STATUSES.has(item.status))
+    .filter((item) => !requireAutoStart || item.auto_start !== false)
+    .filter((item) => !targetQueueId || item.queue_id === targetQueueId)
     .sort((a, b) => (a.position || 0) - (b.position || 0));
 
  if (sorted.length === 0) {
-   return { started: false, item: null, task: null, reason: "No eligible queue items (status=waiting|ready)", checks: [] };
+   return {
+     started: false,
+     item: null,
+     task: null,
+     reason: requireAutoStart
+       ? "No eligible auto-start queue items (status=waiting|ready, auto_start=true)"
+       : "No eligible queue items (status=waiting|ready)",
+     checks: []
+   };
  }
 
   /** Collect items blocked during scanning so startQueuedGoals can report them. */
@@ -648,7 +660,7 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
 
   // If no direct dependents, try start_next anyway (next in line)
   if (dependents.length === 0) {
-    const result = await startNextQueuedGoal(store, config);
+    const result = await startNextQueuedGoal(store, config, { require_auto_start: true });
     details.push({
       type: "auto_start_next",
       started: result.started,
@@ -663,7 +675,7 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
     dep.status = QUEUE_STATUS_READY;
     await store.save();
 
-    const result = await startNextQueuedGoal(store, config);
+    const result = await startNextQueuedGoal(store, config, { queue_id: dep.queue_id, require_auto_start: true });
     details.push({
       type: "dependent_auto_start",
       queue_id: dep.queue_id,
