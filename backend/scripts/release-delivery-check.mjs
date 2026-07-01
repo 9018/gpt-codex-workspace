@@ -118,10 +118,15 @@ async function main() {
       "test/runtime-status-tools-group.test.mjs",
       "test/workflow-tools-group.test.mjs",
     ]},
-    { name: "delivery-contracts test", cmd: "node", args: [
+    { name: "G10 legacy compatibility tests", cmd: "node", args: [
       "--test", "--test-reporter=dot",
       "test/delivery-contracts.test.mjs",
       "test/delivery-spec-compat.test.mjs",
+    ]},
+    { name: "G10 GitHub adapter delivery E2E", cmd: "node", args: [
+      "--test", "--test-reporter=dot",
+      "test/task-intake-fallback.test.mjs",
+      "test/github-sync-tools-group.test.mjs",
     ]},
     { name: "worktree lifecycle tests", cmd: "node", args: [
       "--test", "--test-reporter=dot",
@@ -143,7 +148,7 @@ async function main() {
       "--input-type=module", "-e",
       "import { runAcceptanceAgent } from \"./src/acceptance-agent.mjs\"; const r=await runAcceptanceAgent({task:{id:\"t\"},result:{status:\"completed\",summary:\"ok\",changed_files:[],verification:{commands:[\"true\"],passed:true}},repoPath:process.cwd(),evidence:{result_json_valid:true,result_summary:\"ok\",changed_files:[],git_status:\"clean\",verification_log_exists:true,commit_exists:true}}); if(!r.passed)throw new Error(\"acceptance-agent runtime failed: \"+r.status); console.log(\"runtime PASS: findings=\"+r.findings.length);",
     ]},
-    { name: "E2E delivery test", cmd: "node", args: [
+    { name: "G10 no-GitHub delivery E2E", cmd: "node", args: [
       "--test", "--test-reporter=dot",
       "test/e2e-delivery.test.mjs",
     ]},

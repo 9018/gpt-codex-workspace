@@ -64,6 +64,15 @@ npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 ```
 
+发布候选版本需要运行完整交付门禁：
+
+```bash
+cd backend
+node scripts/release-delivery-check.mjs
+```
+
+完整门禁覆盖两种交付模式：无 GitHub 的本地 goal/task/worktree 执行，以及可选 GitHub Issues adapter 的导入/幂等/跳过原因链路；同时覆盖旧任务兼容层，保证历史 task 记录无需直接改写也能被验收、review 和队列状态展示消费。
+
 `health` 返回 200 只表示服务进程响应了请求，不表示当前运行的是期望 commit。确认部署是否生效时还要看 `runtime_status.running_commit`、重启 marker、进程启动时间和预期 commit。
 
 ## ChatGPT / Codex 连接
@@ -205,6 +214,16 @@ GPTWORK_CONTEXT_VECTOR_STORE=local
 4. GPTWork 用 `sync_to_github` 和 `sync_github_comments` 同步状态、结果和评论。
 
 GitHub token 只应通过运行环境或 workflow secret 注入。文档、Issue 正文和 goal payload 不应包含真实 token。
+
+### 双模式发布判据
+
+| 模式 | 入口 | 必须验证 |
+|---|---|---|
+| 无 GitHub | `create_goal` / `create_encoded_goal` / queue | goal 创建、Codex 执行、自动验收、repair/review、integration、队列推进。 |
+| 有 GitHub | `gptwork-task` / `gptwork-question` + intake marker / inbox handoff | dry-run 无副作用、apply 创建 task、重复导入幂等、question 无 intake 被跳过、skip reason 可见。 |
+| 旧任务兼容 | 历史 task/result 字段 | `goalId`、`done` / `open` / `in_progress` 等旧状态，以及 result 内的 tests/verification/reviewer_decision 可归一化为当前 delivery contract。 |
+
+完整发布门禁会运行 `G10 no-GitHub delivery E2E`、`G10 GitHub adapter delivery E2E` 和 `G10 legacy compatibility tests` 三组检查；任一失败都不应发布。
 
 ## 运维诊断
 

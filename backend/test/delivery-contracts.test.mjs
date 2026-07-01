@@ -6,6 +6,7 @@ import {
   ACTIVE_STATUSES,
   validateTaskStateTransition,
   validateDeliveryContract,
+  normalizeLegacyTaskForDelivery,
   taskStatusToQueueStatus,
   inferAcceptanceProfile,
   ACCEPTANCE_PROFILES,
@@ -149,6 +150,44 @@ describe('validateDeliveryContract', () => {
   it('should pass for minimal created task', () => {
     const result = validateDeliveryContract({ goal_id: 'g1', status: TASK_STATUS.CREATED });
     assert.ok(result.valid);
+  });
+});
+
+describe('normalizeLegacyTaskForDelivery', () => {
+  it('normalizes pre-delivery completed task records without mutating the original', () => {
+    const legacyTask = {
+      id: 'task_legacy_1',
+      goalId: 'goal_legacy_1',
+      status: 'done',
+      result: {
+        status: 'completed',
+        tests: 'legacy smoke: passed',
+        verification: { passed: true, commands: ['legacy smoke'] },
+        reviewer_decision: { passed: true },
+        acceptance_findings: [],
+        commit: 'abc123',
+        changed_files: ['README.md'],
+      },
+    };
+
+    const normalized = normalizeLegacyTaskForDelivery(legacyTask);
+
+    assert.equal(normalized.goal_id, 'goal_legacy_1');
+    assert.equal(normalized.status, TASK_STATUS.COMPLETED);
+    assert.equal(normalized.tests, 'legacy smoke: passed');
+    assert.deepEqual(normalized.verification, { passed: true, commands: ['legacy smoke'] });
+    assert.deepEqual(normalized.reviewer_decision, { passed: true });
+    assert.deepEqual(normalized.acceptance_findings, []);
+    assert.equal(normalized.commit, 'abc123');
+    assert.deepEqual(normalized.changed_files, ['README.md']);
+    assert.equal(legacyTask.goal_id, undefined, 'original task should not be mutated');
+    assert.ok(validateDeliveryContract(normalized).valid);
+  });
+
+  it('maps legacy in-progress statuses into queue-compatible delivery statuses', () => {
+    assert.equal(normalizeLegacyTaskForDelivery({ goal_id: 'g1', status: 'open' }).status, TASK_STATUS.QUEUED);
+    assert.equal(normalizeLegacyTaskForDelivery({ goal_id: 'g1', status: 'in_progress' }).status, TASK_STATUS.RUNNING);
+    assert.equal(normalizeLegacyTaskForDelivery({ goal_id: 'g1', status: 'blocked' }).status, TASK_STATUS.WAITING_FOR_REVIEW);
   });
 });
 

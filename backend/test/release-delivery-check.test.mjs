@@ -2,6 +2,7 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
@@ -20,4 +21,15 @@ test("release-delivery-check --fast completes within the short gate window", { t
   assert.match(result.stdout, /fast syntax core files/);
   assert.match(result.stdout, /=== ALL PASS ===/);
   assert.ok(elapsed < 40_000, `fast release gate took ${elapsed}ms`);
+});
+
+test("release-delivery-check full profile gates G10 dual-mode E2E and compatibility coverage", async () => {
+  const source = await readFile("scripts/release-delivery-check.mjs", "utf8");
+
+  assert.match(source, /G10 no-GitHub delivery E2E/);
+  assert.match(source, /G10 GitHub adapter delivery E2E/);
+  assert.match(source, /G10 legacy compatibility tests/);
+  assert.match(source, /test\/e2e-delivery\.test\.mjs/);
+  assert.match(source, /test\/task-intake-fallback\.test\.mjs/);
+  assert.match(source, /test\/delivery-contracts\.test\.mjs/);
 });

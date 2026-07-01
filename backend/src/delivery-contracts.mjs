@@ -204,6 +204,68 @@ export function validateDeliveryContract(task = {}) {
   };
 }
 
+const LEGACY_STATUS_MAP = {
+  open: TASK_STATUS.QUEUED,
+  pending: TASK_STATUS.QUEUED,
+  queued: TASK_STATUS.QUEUED,
+  assigned: TASK_STATUS.ASSIGNED,
+  in_progress: TASK_STATUS.RUNNING,
+  processing: TASK_STATUS.RUNNING,
+  running: TASK_STATUS.RUNNING,
+  blocked: TASK_STATUS.WAITING_FOR_REVIEW,
+  needs_review: TASK_STATUS.WAITING_FOR_REVIEW,
+  done: TASK_STATUS.COMPLETED,
+  success: TASK_STATUS.COMPLETED,
+  completed: TASK_STATUS.COMPLETED,
+  error: TASK_STATUS.FAILED,
+  failed: TASK_STATUS.FAILED,
+};
+
+/**
+ * Return a delivery-contract-shaped copy of a legacy task record.
+ *
+ * Older GPTWork tasks often stored lifecycle evidence under result.* and used
+ * goalId/status aliases. This adapter lets release checks and queue/status
+ * consumers validate old tasks without rewriting historical state in place.
+ *
+ * @param {object} task
+ * @returns {object}
+ */
+export function normalizeLegacyTaskForDelivery(task = {}) {
+  const result = task.result && typeof task.result === 'object' ? task.result : {};
+  const status = String(task.status || result.status || '').toLowerCase();
+  const normalized = {
+    ...task,
+    goal_id: task.goal_id || task.goalId || result.goal_id || result.goalId,
+    status: LEGACY_STATUS_MAP[status] || task.status || TASK_STATUS.CREATED,
+  };
+
+  for (const key of [
+    'tests',
+    'verification',
+    'reviewer_decision',
+    'acceptance_findings',
+    'commit',
+    'remote_head',
+    'changed_files',
+    'patch_evidence',
+  ]) {
+    if (normalized[key] === undefined && result[key] !== undefined) normalized[key] = result[key];
+  }
+
+  if (normalized.reviewer_decision === undefined && result.reviewerDecision !== undefined) {
+    normalized.reviewer_decision = result.reviewerDecision;
+  }
+  if (normalized.acceptance_findings === undefined && result.acceptanceFindings !== undefined) {
+    normalized.acceptance_findings = result.acceptanceFindings;
+  }
+  if (normalized.changed_files === undefined && result.changedFiles !== undefined) {
+    normalized.changed_files = result.changedFiles;
+  }
+
+  return normalized;
+}
+
 // ---------------------------------------------------------------------------
 // Queue status mapping (delivery states ↔ queue states)
 // ---------------------------------------------------------------------------

@@ -20,13 +20,31 @@ npm run release:delivery-check
 
 | Test Area | File | Status |
 |---|---|---|
-| Delivery contracts | `test/delivery-contracts.test.mjs` | ✅ |
+| G10 legacy compatibility | `test/delivery-contracts.test.mjs`, `test/delivery-spec-compat.test.mjs` | ✅ |
 | Worktree lifecycle | `test/task-worktree-manager.test.mjs` | ✅ |
 | Queue scheduling | `test/goal-queue.test.mjs` | ✅ |
 | Context retrieval | `test/context-index.test.mjs` | ✅ |
 | Acceptance policy | `test/acceptance-policy.test.mjs` | ✅ |
 | Repo locks | `test/repo-lock.test.mjs` | ✅ |
-| E2E delivery | `test/e2e-delivery.test.mjs` | ✅ |
+| G10 no-GitHub delivery E2E | `test/e2e-delivery.test.mjs` | ✅ |
+| G10 GitHub adapter delivery E2E | `test/task-intake-fallback.test.mjs`, `test/github-sync-tools-group.test.mjs` | ✅ |
+
+## G10 Release Contract
+
+The release gate must prove three release modes before publishing:
+
+| Contract | Evidence |
+|---|---|
+| No-GitHub delivery | `G10 no-GitHub delivery E2E` covers create goal, queue start, Codex execution injection, automatic acceptance, repair creation, integration completion, and queue advancement without GitHub credentials. |
+| Optional GitHub adapter | `G10 GitHub adapter delivery E2E` covers GitHub issue import, question/task-intake conversion, dry-run no-op behavior, apply behavior, idempotency, and skipped reasons without making live GitHub API calls. |
+| Legacy compatibility | `G10 legacy compatibility tests` cover old task status aliases and result-field normalization so existing task history remains readable without state rewrites. |
+
+Fast mode remains a developer smoke gate. Release candidates should use the full command:
+
+```bash
+cd backend
+node scripts/release-delivery-check.mjs
+```
 
 ## Codex TUI Provider Smoke Checklist
 

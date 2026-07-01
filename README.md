@@ -47,6 +47,18 @@ npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 ```
 
+For release candidates, run the full delivery gate:
+
+```bash
+cd backend
+node scripts/release-delivery-check.mjs
+```
+
+The full gate covers both supported delivery modes: local/no-GitHub task
+execution and optional GitHub Issues adapter intake. It also runs legacy task
+compatibility checks so older task records can still be reviewed without
+rewriting historical state.
+
 ## Main Docs
 
 - [中文主文档](README.zh-CN.md)
