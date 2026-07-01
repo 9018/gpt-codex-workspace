@@ -58,6 +58,8 @@ The recovery path also generates evidence for missing or incomplete task results
 
 The task processor still owns worktree setup, locking, prompt preparation, parsing, acceptance, and final writeback. Backend output is normalized into `cr`, `parsedResult`, and `summary`, and final task results include `execution_backend` and `execution_backend_role` for review and diagnostics.
 
+Repair reporting note: G3 backend results must report `changed_files` from the committed task diff, not from the post-commit worktree diff. A clean `git status --short` check is separate evidence for worktree cleanliness and must not erase the committed file list from `result.json`.
+
 ### Compact Review Packet
 
 `backend/src/review/task-acceptance-bundle.mjs` and `backend/src/review/review-packet-builder.mjs` provide the preferred review path:
