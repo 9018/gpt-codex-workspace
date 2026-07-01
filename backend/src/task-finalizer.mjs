@@ -1,3 +1,5 @@
+import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+
 const FINALIZER_STATUSES = new Set([
   "completed",
   "waiting_for_integration",
@@ -202,6 +204,11 @@ function integrationSatisfied(evidence = {}) {
   return TERMINAL_INTEGRATION_STATUSES.has(String(integration.status || "").toLowerCase());
 }
 
+function noChangeRepairCompletion(evidence = {}) {
+  const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+  return classifyNoChangeRepairOutcome({ task: evidence.task || {}, taskResult: result, result, integrationResult: evidence.integration || result.integration || {} });
+}
+
 function integrationNonTerminal(evidence = {}) {
   const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
   const integration = asObject(evidence.integration || result.integration);
@@ -335,6 +342,15 @@ export function decideTaskFinalState(evidence = {}) {
   }
 
   const unresolved = unresolvedFindings(evidence);
+  const noChangeRepair = noChangeRepairCompletion(evidence);
+  if (noChangeRepair.completion_eligible === true) {
+    return decision(evidence, {
+      status: "completed",
+      reason: "no_change_repair_evidence_satisfied",
+      safeToAutoAdvance: true,
+    });
+  }
+
   const terminalSatisfied = verificationPassed(evidence)
     && acceptancePassed(evidence)
     && contractBlockingPassed(evidence)

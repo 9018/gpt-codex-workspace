@@ -128,6 +128,71 @@ test('missing blocking evidence and state assertion failures require review', ()
   assert.ok(verification.blockers.some((blocker) => blocker.code === 'state_assertion_failed'));
 });
 
+test('no-change repair satisfies code-change contract when canonical target evidence is present', () => {
+  const verification = verifyAcceptanceContract({
+    contract: contract('code_change', {
+      requirements: { requires_commit: true, requires_integration: true },
+      blocking_requirements: [{ id: 'commit_present' }, { id: 'changed_files_reported' }, { id: 'diff_reported' }, { id: 'verification_report' }, { id: 'integration_completed' }],
+    }),
+    task: { id: 'task_repair_contract', repair_of_task_id: 'task_original', title: 'Repair: already integrated' },
+    result: {
+      status: 'completed',
+      summary: 'No code changes needed because the original target is already integrated in main.',
+      operation_kind: 'code_change',
+      changed_files: [],
+      repair_noop: true,
+      already_integrated: true,
+      no_change_repair_evidence: {
+        affected_files: ['backend/src/auto-integration-completion.mjs'],
+        files_match_canonical: true,
+        diff_empty: true,
+      },
+      verification: { passed: true, commands: ['npm --prefix backend run check:syntax'] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+      needs_integration: false,
+    },
+    verification: { passed: true, commands: ['npm --prefix backend run check:syntax'] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.blocking_passed, true);
+  assert.equal(verification.acceptance_status, 'satisfied');
+  assert.equal(verification.completion_eligible, true);
+  assert.equal(verification.requires_review, false);
+  assert.equal(verification.no_change_repair_completion.completion_eligible, true);
+  assert.deepEqual(verification.blockers, []);
+});
+
+test('no-change repair contract remains blocked when verification is missing', () => {
+  const verification = verifyAcceptanceContract({
+    contract: contract('code_change', {
+      requirements: { requires_commit: true, requires_integration: true },
+      blocking_requirements: [{ id: 'commit_present' }, { id: 'changed_files_reported' }, { id: 'verification_report' }, { id: 'integration_completed' }],
+    }),
+    task: { id: 'task_repair_missing_verification', repair_of_task_id: 'task_original', title: 'Repair: already integrated' },
+    result: {
+      status: 'completed',
+      summary: 'No code changes needed because the original target is already integrated in main.',
+      operation_kind: 'code_change',
+      changed_files: [],
+      repair_noop: true,
+      already_integrated: true,
+      no_change_repair_evidence: { affected_files: ['backend/src/x.mjs'], files_match_canonical: true },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+      needs_integration: false,
+    },
+    verification: { passed: null, commands: [] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.blocking_passed, false);
+  assert.equal(verification.requires_review, true);
+  assert.ok(verification.blockers.some((entry) => entry.code === 'changed_files_reported_missing'));
+  assert.ok(verification.blockers.some((entry) => entry.code === 'verification_report_missing'));
+});
+
 test('semantic ambiguity and legacy missing contract are indeterminate review cases', () => {
   const ambiguous = verifyAcceptanceContract({
     contract: contract('restart', { intent: { semantic_confidence: 'low' }, review_policy: { requires_review_when: ['semantic_ambiguity'] } }),

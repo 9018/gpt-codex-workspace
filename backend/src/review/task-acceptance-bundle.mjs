@@ -96,6 +96,25 @@ function compactIntegration(integration = null) {
   };
 }
 
+function compactNoChangeRepair(summary = null) {
+  if (!summary || typeof summary !== 'object') return null;
+  return {
+    kind: summary.kind || null,
+    completion_eligible: summary.completion_eligible === true,
+    reason: trimText(summary.reason || ''),
+    changed_files_empty_acceptable: summary.changed_files_empty_acceptable === true,
+    explanation: trimText(summary.explanation || '', 320),
+    affected_files: compactList(summary.evidence?.affected_files).map((item) => trimText(item, 240)),
+    files_match_canonical: summary.evidence?.files_match_canonical === true,
+    commit_reachable: summary.evidence?.commit_reachable === true,
+    diff_empty: summary.evidence?.diff_empty === true,
+    verification_passed: summary.evidence?.verification_passed === true,
+    acceptance_passed: summary.evidence?.acceptance_passed === true,
+    integration_satisfied: summary.evidence?.integration_satisfied === true,
+    blockers: compactList(summary.blockers).map(compactFinding),
+  };
+}
+
 function summarizeContract(contract = null) {
   if (!contract || typeof contract !== 'object') return null;
   return {
@@ -244,6 +263,7 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
     result_summary: summarizeResult(result),
     verification,
     contract_verification: contractVerification,
+    no_change_repair_completion_summary: compactNoChangeRepair(result?.no_change_repair_completion_summary || null),
     closure_decision: compactClosureDecision(result?.closure_decision || null),
     integration: compactIntegration(result?.integration || null),
     changed_files: compactList(result?.changed_files || task.changed_files).map((item) => trimText(item, 240)),

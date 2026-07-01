@@ -21,6 +21,7 @@ import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/t
 import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followup-task-planner.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
+import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
@@ -605,6 +606,7 @@ export async function finalizeCodexTaskRun({
   taskResult.closure_summary = _closureResult.summary;
   taskResult.needs_restart_check = _closureResult.needsRestartCheck;
   taskResult.needs_integration = _closureResult.needsIntegration;
+  taskResult = applyNoChangeRepairCompletionSummary({ task, taskResult });
   taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
 
   const finalizerDecision = decideTaskFinalState(collectTaskFinalizerEvidence({
@@ -759,6 +761,8 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     acceptance_result_path: taskResult.acceptance_result_path || null,
     closure_decision: taskResult.closure_decision || null,
     finalizer_decision: taskResult.finalizer_decision || null,
+    no_change_repair_completion_summary: taskResult.no_change_repair_completion_summary || null,
+    no_change_repair_completion: taskResult.no_change_repair_completion || null,
     failure_class: taskResult.failure_class || null,
     attempt: taskResult.attempt ?? null,
     repair_of_attempt: taskResult.repair_of_attempt ?? null,
@@ -870,6 +874,26 @@ function collectTaskFinalizerEvidence({ task = {}, goal = null, taskStatus, task
     queue_context: {
       auto_start: task.auto_start,
       goal_id: goal?.id || task.goal_id || null,
+    },
+  };
+}
+
+function applyNoChangeRepairCompletionSummary({ task = {}, taskResult = {} } = {}) {
+  const classification = classifyNoChangeRepairOutcome({ task, taskResult });
+  if (!classification.is_no_change_repair) return taskResult;
+  return {
+    ...taskResult,
+    no_change_repair_completion: classification,
+    no_change_repair_completion_summary: {
+      kind: classification.kind,
+      completion_eligible: classification.completion_eligible,
+      reason: classification.reason,
+      changed_files_empty_acceptable: classification.completion_eligible === true,
+      explanation: classification.completion_eligible === true
+        ? "changed_files=[] is acceptable for this repair because existing canonical state already satisfies the target, verification passed, acceptance passed, no unresolved blocker remains, and integration is not required or already satisfied."
+        : "changed_files=[] remains blocked until repair/noop, target-state, verification, acceptance, blocker, and integration evidence are all present.",
+      evidence: classification.evidence,
+      blockers: classification.blockers,
     },
   };
 }

@@ -4,6 +4,7 @@ import { validateContractSemantics } from './semantics.mjs';
 import { normalizeOperationEvidence } from '../evidence/evidence-normalizer.mjs';
 import { getRequirementCheck } from '../evidence/operation-evidence-profiles.mjs';
 import { commandFingerprint, commandSatisfiesRequirement } from '../verification-report.mjs';
+import { classifyNoChangeRepairOutcome } from '../no-change-repair-classifier.mjs';
 
 function blocker(code, message, evidence = {}, source = 'acceptance_contract_verifier') {
   return { severity: 'blocker', code, message, source, evidence };
@@ -47,11 +48,17 @@ function qualityNotes(result = {}, contract = {}) {
   ];
 }
 
-function requirementBlockers(contract, result) {
+function noChangeRepairSatisfiesRequirement(id, noChangeRepair) {
+  if (noChangeRepair?.completion_eligible !== true) return false;
+  return ['changed_files_reported', 'diff_reported', 'commit_present', 'integration_completed'].includes(String(id || ''));
+}
+
+function requirementBlockers(contract, result, noChangeRepair = null) {
   const blockers = [];
   for (const requirement of normalizeList(contract.blocking_requirements)) {
     const id = String(requirement?.id || '').trim();
     if (!id) continue;
+    if (noChangeRepairSatisfiesRequirement(id, noChangeRepair)) continue;
     const check = getRequirementCheck(id);
     if (!check) continue;
     if (check.satisfied(result, requirement)) continue;
@@ -120,21 +127,25 @@ export function verifyAcceptanceContract({
 
   const semantic = validateContractSemantics(hydrateContract(contract));
   const normalizedContract = semantic.normalized;
+  const noChangeRepair = classifyNoChangeRepairOutcome({ task, taskResult: result, result });
   const normalizedResult = normalizeOperationEvidence({ result, contract: normalizedContract });
   const blockers = [];
 
   if (!semantic.valid) {
     for (const error of semantic.errors) blockers.push(blocker(error.code, error.message, {}, 'acceptance_contract_semantics'));
   }
-  blockers.push(...normalizedResult.blockers);
-  blockers.push(...requirementBlockers(normalizedContract, normalizedResult));
+  const normalizedBlockers = noChangeRepair.completion_eligible === true
+    ? normalizedResult.blockers.filter((entry) => !['changed_files_missing', 'commit_missing', 'integration_missing'].includes(entry?.code))
+    : normalizedResult.blockers;
+  blockers.push(...normalizedBlockers);
+  blockers.push(...requirementBlockers(normalizedContract, normalizedResult, noChangeRepair));
   blockers.push(...verificationPlanBlockers(normalizedContract, verification, normalizedResult));
   if (stateAssertions.passed === false) blockers.push(...stateAssertionBlockers(stateAssertions));
 
-  if (normalizedContract.requirements?.requires_commit === true && !normalizedResult.commit) {
+  if (normalizedContract.requirements?.requires_commit === true && !normalizedResult.commit && noChangeRepair.completion_eligible !== true) {
     blockers.push(blocker('commit_present_missing', 'Contract requires commit evidence.', { requires_commit: true }));
   }
-  if (normalizedContract.requirements?.requires_integration === true && !getRequirementCheck('integration_completed')?.satisfied(normalizedResult)) {
+  if (normalizedContract.requirements?.requires_integration === true && !getRequirementCheck('integration_completed')?.satisfied(normalizedResult) && noChangeRepair.completion_eligible !== true) {
     blockers.push(blocker('integration_completed_missing', 'Contract requires integration evidence.', { requires_integration: true }));
   }
 
@@ -142,7 +153,9 @@ export function verifyAcceptanceContract({
   const semanticReview = reviewReasons.includes('semantic_ambiguity') || normalizedContract.intent?.semantic_confidence === 'low';
   const contractInvalidReview = reviewReasons.includes('contract_invalid') && !semantic.valid;
   const blockingPassed = blockers.length === 0;
-  const requiresReview = !blockingPassed || semanticReview || contractInvalidReview || normalizedResult.requires_review === true;
+  const normalizedRequiresReview = normalizedResult.requires_review === true
+    && !(noChangeRepair.completion_eligible === true && normalizedBlockers.length === 0);
+  const requiresReview = !blockingPassed || semanticReview || contractInvalidReview || normalizedRequiresReview;
   const policy = normalizedContract.completion_policy || {};
   const completionEligible = blockingPassed && !requiresReview && policy.auto_complete_when_blocking_requirements_pass !== false;
   const acceptanceStatus = blockingPassed && !requiresReview
@@ -159,6 +172,7 @@ export function verifyAcceptanceContract({
     non_blocking_followups: normalizeFollowups(normalizedResult, normalizedContract),
     quality_notes: qualityNotes(normalizedResult, normalizedContract),
     normalized_result: normalizedResult,
+    no_change_repair_completion: noChangeRepair.completion_eligible === true ? noChangeRepair : null,
     state_assertions: stateAssertions,
     semantic_validation: normalizedContract.semantic_validation,
     operation_kind: normalizedResult.operation_kind,
