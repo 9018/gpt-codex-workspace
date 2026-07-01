@@ -646,6 +646,8 @@ test("task-final-writeback: completed task triggers queue autostart hook", async
   assert.equal(result.status, "completed");
   assert.equal(autoStartedTask.id, "task_label_test");
   assert.equal(result.auto_start.auto_started, true);
+  assert.equal(autoStartedTask.result.finalizer_decision.status, "completed");
+  assert.equal(autoStartedTask.result.finalizer_decision.safe_to_auto_advance, true);
 });
 
 test("task-final-writeback: quality notes produce completed closure with next_tasks", async () => {
