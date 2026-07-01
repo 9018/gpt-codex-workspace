@@ -52,6 +52,7 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
         operation_kind: 'code_change',
         changed_files: ['backend/src/review/task-acceptance-bundle.mjs'],
         integration: { status: 'merged', commit: 'abc123' },
+        evidence_paths: { events_jsonl: '.gptwork/goals/goal_bundle/events.jsonl' },
         verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
         contract_verification: { acceptance_status: 'satisfied', blocking_passed: true, completion_eligible: true, blockers: [], non_blocking_followups: [], quality_notes: [] },
         closure_decision: { status: 'completed', reason: 'ok' },
@@ -68,7 +69,7 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
   assert.deepEqual(Object.keys(bundle), [
     'task_id', 'goal_id', 'title', 'status', 'operation_kind', 'acceptance_contract_summary',
     'result_summary', 'verification', 'contract_verification', 'closure_decision', 'integration',
-    'changed_files', 'report_paths', 'blockers', 'non_blocking_followups', 'quality_notes', 'missing_evidence',
+    'changed_files', 'report_paths', 'run_evidence', 'blockers', 'non_blocking_followups', 'quality_notes', 'missing_evidence',
   ]);
   assert.equal(bundle.operation_kind, 'code_change');
   assert.equal(bundle.acceptance_contract_summary.operation_kind, 'code_change');
@@ -76,6 +77,8 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
   assert.equal(bundle.verification.passed, true);
   assert.equal(bundle.contract_verification.acceptance_status, 'satisfied');
   assert.deepEqual(bundle.changed_files, ['backend/src/review/task-acceptance-bundle.mjs']);
+  assert.equal(bundle.run_evidence.events_jsonl, '.gptwork/goals/goal_bundle/events.jsonl');
+  assert.equal(bundle.report_paths.events_jsonl, '.gptwork/goals/goal_bundle/events.jsonl');
   assert.deepEqual(bundle.missing_evidence, []);
 
   const serialized = JSON.stringify(bundle);

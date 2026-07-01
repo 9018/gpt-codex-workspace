@@ -8,7 +8,7 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
@@ -35,10 +35,43 @@ test("collectVerificationEvidence with outputDir saves evidence files", async ()
     // Check that verification.log was created
     assert.ok(existsSync(join(tmpDir, "verification.log")), "verification.log should exist");
     assert.ok(existsSync(join(tmpDir, "acceptance.evidence.json")), "acceptance.evidence.json should exist");
+    assert.ok(existsSync(join(tmpDir, "events.jsonl")), "events.jsonl should exist");
 
     // Check evidence_paths
     assert.ok(evidence.evidence_paths.verification_log, "should have verification_log path");
     assert.ok(evidence.evidence_paths.acceptance_evidence_json, "should have acceptance_evidence_json path");
+    assert.ok(evidence.evidence_paths.events_jsonl, "should have events_jsonl path");
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("collectVerificationEvidence writes run events that point to artifacts", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-evidence-events-"));
+  try {
+    const evidence = await collectVerificationEvidence({
+      outputDir: tmpDir,
+      acceptanceFindings: [{ severity: "followup", code: "docs", message: "Document evidence" }],
+    });
+
+    const eventsPath = join(tmpDir, "events.jsonl");
+    const events = readFileSync(eventsPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+
+    assert.ok(events.length >= 6, "critical evidence steps should be logged");
+    assert.deepEqual(events.map((event) => event.type), [
+      "run_evidence.workflow",
+      "run_evidence.context",
+      "run_evidence.verification_log",
+      "run_evidence.acceptance_evidence",
+      "run_evidence.queue",
+      "run_evidence.card",
+    ]);
+    assert.equal(events[2].artifact.path, evidence.evidence_paths.verification_log);
+    assert.equal(events[3].artifact.path, evidence.evidence_paths.acceptance_evidence_json);
+    assert.equal(events[5].artifact.path, evidence.evidence_paths.events_jsonl);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

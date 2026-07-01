@@ -506,6 +506,41 @@ test("getTaskCard shows task fields", () => {
   assert.ok(card.includes("Test coverage low"), "warning content");
 });
 
+test("getTaskCard shows compact run evidence and raw evidence path", () => {
+  const data = {
+    task: {
+      id: "task_evidence",
+      title: "Evidence task",
+      status: "completed",
+      mode: "builder",
+      assignee: "codex",
+      logs: [
+        { time: "2026-06-20T11:00:00.000Z", message: "[worker] started" },
+        { time: "2026-06-20T11:10:00.000Z", message: "[worker] codex exec started" },
+        { time: "2026-06-20T11:20:00.000Z", message: "[worker] completed: done" },
+      ],
+      artifacts: [{ path: ".gptwork/goals/goal_evidence/events.jsonl", label: "events" }],
+      result: {
+        summary: "Evidence normalized",
+        changed_files: ["backend/src/verification-evidence.mjs"],
+        tests: "node --test backend/test/verification-evidence.test.mjs: pass",
+        verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
+        evidence_paths: {
+          events_jsonl: ".gptwork/goals/goal_evidence/events.jsonl",
+          verification_log: ".gptwork/goals/goal_evidence/verification.log",
+          acceptance_evidence_json: ".gptwork/goals/goal_evidence/acceptance.evidence.json",
+        },
+      },
+    },
+  };
+
+  const card = getTaskCard(data);
+  assert.ok(card.includes("Run evidence"), "run evidence section is visible by default");
+  assert.ok(card.includes("events.jsonl"), "raw event log path is readable");
+  assert.ok(card.includes("verification.log"), "verification artifact path is discoverable");
+  assert.ok(card.includes("acceptance.evidence.json"), "acceptance artifact path is discoverable");
+});
+
 test("getTaskCard handles task not found", () => {
   const data = { task: null };
   const card = getTaskCard(data);

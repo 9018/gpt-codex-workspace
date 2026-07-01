@@ -147,6 +147,21 @@ function reportPathsFromResult(result = {}, files = {}, config = {}) {
   return Object.fromEntries(Object.entries(paths).filter(([, value]) => typeof value === 'string' && value && !value.includes('transcript') && !value.includes('context.bundle')));
 }
 
+function summarizeRunEvidence(result = {}, reportPaths = {}) {
+  const evidencePaths = result?.evidence_paths && typeof result.evidence_paths === 'object' ? result.evidence_paths : {};
+  const eventsJsonl = evidencePaths.events_jsonl || reportPaths.events_jsonl || null;
+  const artifactKeys = Object.keys({ ...evidencePaths, ...reportPaths })
+    .filter((key) => !key.includes('transcript') && !key.includes('context.bundle'))
+    .sort();
+  const displays = ['workflow', 'context', 'verification', 'acceptance', 'queue', 'card'];
+  return {
+    events_jsonl: eventsJsonl,
+    artifact_keys: artifactKeys,
+    displays,
+    raw_evidence_readable: typeof eventsJsonl === 'string' && eventsJsonl.length > 0,
+  };
+}
+
 function resolveWorkspacePath(config = {}, relPath = '') {
   if (!relPath) return null;
   if (relPath.startsWith('/')) return relPath;
@@ -233,6 +248,7 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
     integration: compactIntegration(result?.integration || null),
     changed_files: compactList(result?.changed_files || task.changed_files).map((item) => trimText(item, 240)),
     report_paths: reportPaths,
+    run_evidence: summarizeRunEvidence(result || {}, reportPaths),
     blockers,
     non_blocking_followups: nonBlockingFollowups,
     quality_notes: compactList(contractVerification?.quality_notes || result?.quality_notes).map((note) => trimText(note, 240)),

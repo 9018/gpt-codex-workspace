@@ -23,6 +23,30 @@ function isExecutionSnapshotStatus(status) {
   return EXECUTION_SNAPSHOT_STATUSES.has(normalizeTaskStatus(status));
 }
 
+function compactEvidencePath(path) {
+  if (!path) return null;
+  const text = String(path);
+  if (text.length <= 96) return text;
+  return '...' + text.slice(-93);
+}
+
+function collectRunEvidencePaths(task = {}, result = {}) {
+  const paths = {};
+  if (result.evidence_paths && typeof result.evidence_paths === 'object') {
+    for (const [key, value] of Object.entries(result.evidence_paths)) {
+      if (typeof value === 'string' && value) paths[key] = value;
+    }
+  }
+  for (const artifact of Array.isArray(task.artifacts) ? task.artifacts : []) {
+    const path = typeof artifact === 'string' ? artifact : artifact?.path;
+    if (!path || typeof path !== 'string') continue;
+    if (path.endsWith('events.jsonl')) paths.events_jsonl = paths.events_jsonl || path;
+    if (path.endsWith('verification.log')) paths.verification_log = paths.verification_log || path;
+    if (path.endsWith('acceptance.evidence.json')) paths.acceptance_evidence_json = paths.acceptance_evidence_json || path;
+  }
+  return paths;
+}
+
 export function getTaskCard(data) {
   const task = data.task;
   if (!task) return formatToolCard('Task', { lines: ['  Task not found'] });
@@ -85,6 +109,17 @@ export function getTaskCard(data) {
   }
   if (result.commit) {
     lines.push(formatKeyValue('commit', result.commit.slice(0, 12)));
+  }
+
+  const runEvidencePaths = collectRunEvidencePaths(task, result);
+  if (Object.keys(runEvidencePaths).length > 0) {
+    lines.push('');
+    lines.push('  Run evidence:');
+    if (runEvidencePaths.events_jsonl) lines.push(formatKeyValue('events.jsonl', compactEvidencePath(runEvidencePaths.events_jsonl)));
+    if (runEvidencePaths.verification_log) lines.push(formatKeyValue('verification.log', compactEvidencePath(runEvidencePaths.verification_log)));
+    if (runEvidencePaths.acceptance_evidence_json) lines.push(formatKeyValue('acceptance.evidence.json', compactEvidencePath(runEvidencePaths.acceptance_evidence_json)));
+    const otherKeys = Object.keys(runEvidencePaths).filter((key) => !['events_jsonl', 'verification_log', 'acceptance_evidence_json'].includes(key));
+    if (otherKeys.length > 0) lines.push(formatKeyValue('other artifacts', otherKeys.length));
   }
 
   // Verification status

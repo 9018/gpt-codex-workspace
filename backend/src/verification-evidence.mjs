@@ -16,6 +16,93 @@ import { readFile, access, writeFile, mkdir } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join, dirname } from 'node:path';
 
+function artifactRef(kind, path) {
+  return path ? { kind, path } : null;
+}
+
+function makeRunEvidenceEvent({ type, stage, message, artifact = null, data = {}, createdAt = new Date().toISOString() }) {
+  return {
+    id: `${type}_${createdAt.replace(/[^0-9A-Za-z]/g, '').slice(0, 20)}_${Math.random().toString(16).slice(2, 8)}`,
+    type,
+    stage,
+    message,
+    artifact,
+    data,
+    created_at: createdAt,
+  };
+}
+
+function buildRunEvidenceEvents({ evidence = {}, outputDir, acceptanceFindings = [] } = {}) {
+  const paths = evidence.evidence_paths || {};
+  const createdAt = new Date().toISOString();
+  return [
+    makeRunEvidenceEvent({
+      type: 'run_evidence.workflow',
+      stage: 'workflow',
+      message: 'Captured git status, changed files, and diff summary for the run.',
+      artifact: artifactRef('verification_log', paths.verification_log),
+      data: {
+        output_dir: outputDir || null,
+        changed_files_count: Array.isArray(evidence.changed_files) ? evidence.changed_files.length : 0,
+        git_status_present: typeof evidence.git_status === 'string' && evidence.git_status.length > 0,
+      },
+      createdAt,
+    }),
+    makeRunEvidenceEvent({
+      type: 'run_evidence.context',
+      stage: 'context',
+      message: 'Linked run evidence to the goal output directory and result artifacts.',
+      artifact: artifactRef('acceptance_evidence_json', paths.acceptance_evidence_json),
+      data: { output_dir: outputDir || null, result_json_present: evidence.result_json !== null && evidence.result_json !== undefined },
+      createdAt,
+    }),
+    makeRunEvidenceEvent({
+      type: 'run_evidence.verification_log',
+      stage: 'verification',
+      message: 'Wrote verification evidence for command and git checks.',
+      artifact: artifactRef('verification_log', paths.verification_log),
+      data: { report_path: paths.verification_log || null },
+      createdAt,
+    }),
+    makeRunEvidenceEvent({
+      type: 'run_evidence.acceptance_evidence',
+      stage: 'acceptance',
+      message: 'Wrote acceptance evidence with result and finding references.',
+      artifact: artifactRef('acceptance_evidence_json', paths.acceptance_evidence_json),
+      data: { findings_count: Array.isArray(acceptanceFindings) ? acceptanceFindings.length : 0 },
+      createdAt,
+    }),
+    makeRunEvidenceEvent({
+      type: 'run_evidence.queue',
+      stage: 'queue',
+      message: 'Queued task status can reference the run evidence artifacts without reading raw logs.',
+      artifact: artifactRef('events_jsonl', paths.events_jsonl),
+      data: { changed_files_count: Array.isArray(evidence.changed_files) ? evidence.changed_files.length : 0 },
+      createdAt,
+    }),
+    makeRunEvidenceEvent({
+      type: 'run_evidence.card',
+      stage: 'card',
+      message: 'Run evidence log is available for compact cards and raw inspection.',
+      artifact: artifactRef('events_jsonl', paths.events_jsonl),
+      data: {
+        displays: ['workflow', 'context', 'verification', 'acceptance', 'queue', 'card'],
+        artifact_keys: Object.keys(paths).sort(),
+      },
+      createdAt,
+    }),
+  ];
+}
+
+async function writeRunEvidenceEvents({ outputDir, evidence, acceptanceFindings } = {}) {
+  if (!outputDir) return null;
+  const eventsPath = join(outputDir, 'events.jsonl');
+  evidence.evidence_paths.events_jsonl = eventsPath;
+  const events = buildRunEvidenceEvents({ evidence, outputDir, acceptanceFindings });
+  await writeFile(eventsPath, events.map((event) => JSON.stringify(event)).join('\n') + '\n', 'utf8');
+  return eventsPath;
+}
+
 /**
  * Collect verification evidence for a completed task.
  *
@@ -195,6 +282,9 @@ export async function collectVerificationEvidence({
     await writeFile(evidenceJsonPath, JSON.stringify(acceptanceEvidence, null, 2) + '\n', 'utf8');
     evidence.acceptance_evidence_json = evidenceJsonPath;
     evidence.evidence_paths.acceptance_evidence_json = evidenceJsonPath;
+
+    const eventsPath = await writeRunEvidenceEvents({ outputDir, evidence, acceptanceFindings });
+    if (eventsPath) evidence.evidence_paths.events_jsonl = eventsPath;
   }
 
   return evidence;

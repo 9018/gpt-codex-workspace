@@ -50,6 +50,7 @@ function keyEvidence(bundle = {}) {
     contract_verification: bundle.contract_verification,
     closure_decision: bundle.closure_decision,
     report_paths: bundle.report_paths,
+    run_evidence: bundle.run_evidence,
   };
 }
 
