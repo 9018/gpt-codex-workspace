@@ -23,7 +23,10 @@ export function classifyFailure(input = {}) {
     message.includes("429") ||
     message.includes("rate limit") ||
     message.includes("too many requests") ||
-    message.includes("quota exceeded")
+    message.includes("quota exceeded") || 
+    message.includes("insufficient_quota") || 
+    message.includes("billing_hard_limit") || 
+    message.includes("resource_exhausted")
   ) return "rate_limited";
 
   if (
@@ -105,6 +108,8 @@ const TASK_FAILURE_DEFINITIONS = {
   codex_timeout: { repairable: false, repair_strategy: "manual_review_timeout", reason: "Codex execution timed out." },
   merge_conflict: { repairable: false, repair_strategy: "conflict_resolver_or_review", reason: "A merge conflict requires conflict resolution or manual review." },
   unknown: { repairable: false, repair_strategy: "manual_review", reason: "Failure could not be classified." },
+  quota_exhausted: { repairable: false, repair_strategy: "quota_wait_or_capacity_check", reason: "API quota exhausted. This is an external capacity blocker, not a code defect. Wait for quota to recover or switch provider/model/key." },
+  rate_limited: { repairable: false, repair_strategy: "rate_limit_backoff", reason: "API rate limited. This is an external capacity blocker, not a code defect. Wait for the rate limit window to reset or reduce concurrency." },
 };
 
 function taskFailure(failureClass, overrides = {}) {
@@ -139,6 +144,20 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
     task.result?.failure_class,
     task.result?.summary,
   );
+
+
+  // ---- P0: Check quota/rate-limit signals first before code-level failures ----
+  // Ensures quota/rate-limit is never misclassified as repairable code defect.
+  if (codexResult.failure_class === "quota_exhausted_or_rate_limited" || codexResult.failure_class === "quota_exhausted" || codexResult.failure_class === "rate_limited") {
+    const fc = codexResult.failure_class === "quota_exhausted_or_rate_limited" ? "quota_exhausted" : codexResult.failure_class;
+    return taskFailure(fc, { reason: codexResult.summary || "API capacity error detected in codex result" });
+  }
+  if (/quota_exhausted|quota exceeded|insufficient_quota|billing_hard_limit|capacity_exceeded|resource_exhausted/.test(combined)) {
+    return taskFailure("quota_exhausted", { reason: codexResult.summary || "Quota/API capacity error detected" });
+  }
+  if (/rate_limited|rate limit|rate_limit_exceeded|429|too many requests/.test(combined)) {
+    return taskFailure("rate_limited", { reason: codexResult.summary || "Rate limit error detected" });
+  }
 
   if (codexResult.failure_class && TASK_FAILURE_DEFINITIONS[codexResult.failure_class]) {
     return taskFailure(codexResult.failure_class, { reason: codexResult.summary || undefined });
@@ -228,6 +247,7 @@ export function failureClassIsTerminalNonRepairable(failureClass) {
   return new Set([
     "rate_limited",
     "quota_exceeded",
+    "quota_exhausted",
     "gateway_error",
     "service_unavailable",
     "transient_network_error",

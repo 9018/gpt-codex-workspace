@@ -121,3 +121,42 @@ export function formatCreatedNotification(task) {
 
   return { title, body };
 }
+
+/**
+ * Format a quota/rate-limit notification for Bark.
+ *
+ * @param {object} options
+ * @param {string} options.taskId - Task ID
+ * @param {string} options.goalId - Goal ID (optional)
+ * @param {string} options.provider - Provider name (optional)
+ * @param {string} options.model - Model name (optional)
+ * @param {string} options.errorType - Error type: "quota_exhausted" or "rate_limited"
+ * @param {string} [options.detail] - Additional detail message
+ * @returns {{ title: string, body: string }}
+ */
+export function formatQuotaNotification({ taskId, goalId, provider, model, errorType, detail } = {}) {
+  const isQuota = errorType === "quota_exhausted" || !errorType || errorType.includes("quota");
+  const title = isQuota
+    ? "\u26A0\uFE0F GPTWork Codex \u989D\u5EA6\u4E0D\u8DB3"
+    : "\u26A0\uFE0F GPTWork Codex \u9650\u6D41\u6216\u989D\u5EA6\u4E0D\u8DB3";
+  const emojiPrefix = isQuota ? "\u26A0\uFE0F" : "\uD83D\uDD15";
+
+  let body = `${emojiPrefix} Codex/API ${isQuota ? "quota exhausted" : "rate limited"}`;
+  if (taskId) body += `\uFF0C\u4EFB\u52A1\u5DF2\u6682\u505C: ${taskId}`;
+  body += "\n\n";
+
+  if (taskId) body += `Task: ${taskId}\n`;
+  if (goalId) body += `Goal: ${goalId}\n`;
+  if (provider) body += `Provider: ${provider}\n`;
+  if (model) body += `Model: ${model}\n`;
+  body += `Error: ${errorType || "quota_exhausted"}\n`;
+  if (detail) body += `Detail: ${detail.slice(0, 200)}\n`;
+
+  body += "\n\u5EFA\u8BAE: \u5207\u6A21\u578B\u3001\u6362 key\u3001\u7B49\u5F85\u91CD\u7F6E\uFF0C\u6216\u964D\u4F4E\u5E76\u53D1\u3002\n";
+  body += "Suggested: switch model, change key, wait for reset, or reduce concurrency.\n";
+
+  // Truncate
+  if (body.length > 4000) body = body.slice(0, 3997) + "...";
+
+  return { title, body };
+}

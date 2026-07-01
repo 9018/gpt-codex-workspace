@@ -1459,3 +1459,207 @@ test("classifyNotification terminal events work when created is disabled", () =>
   );
   assert.equal(timeoutResult.should_notify, true);
 });
+
+// ================================================================
+// P0: Quota notification tests
+// ================================================================
+
+import { formatQuotaNotification } from '../src/bark-notification-formatters.mjs';
+
+test('formatQuotaNotification uses quota exhausted title for quota_exhausted error', () => {
+  const { title } = formatQuotaNotification({ errorType: 'quota_exhausted', taskId: 'task_123' });
+  assert.match(title, /Codex/);
+  assert.match(title, /\u26A0\uFE0F/);
+  assert.equal(title.includes('rate_limited'), false);
+});
+
+test('formatQuotaNotification includes taskId, goalId, provider, model in body', () => {
+  const { body } = formatQuotaNotification({
+    taskId: 'task_quota_1',
+    goalId: 'goal_quota_1',
+    provider: 'openai',
+    model: 'gpt-4o',
+    errorType: 'quota_exhausted',
+    detail: 'You have exceeded your current quota',
+  });
+  assert.match(body, /task_quota_1/);
+  assert.match(body, /goal_quota_1/);
+  assert.match(body, /openai/);
+  assert.match(body, /gpt-4o/);
+  assert.match(body, /quota_exhausted/);
+  assert.match(body, /You have exceeded/);
+});
+
+test('formatQuotaNotification includes suggested action in body', () => {
+  const { body } = formatQuotaNotification({ errorType: 'quota_exhausted' });
+  assert.match(body, /switch model|change key|wait for reset|reduce concurrency/i);
+});
+
+test('formatQuotaNotification truncates long detail', () => {
+  const { body } = formatQuotaNotification({
+    errorType: 'quota_exhausted',
+    detail: 'A'.repeat(1000),
+  });
+  assert.ok(body.length <= 4000);
+});
+
+test('formatQuotaNotification works for rate_limited error type', () => {
+  const { title } = formatQuotaNotification({ errorType: 'rate_limited', taskId: 'task_123' });
+  assert.ok(title);
+  assert.ok(title.length > 0);
+});
+
+// ================================================================
+// Dedup/throttle tests for quota notifications
+// ================================================================
+
+import { computeQuotaDedupKey, shouldSendQuotaNotification, recordQuotaNotificationSent, resetQuotaNotificationState, sendQuotaNotification, getQuotaNotificationState } from '../src/bark-quota-notifier.mjs';
+
+test('computeQuotaDedupKey creates consistent keys', () => {
+  const key1 = computeQuotaDedupKey({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  const key2 = computeQuotaDedupKey({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  assert.equal(key1, key2);
+  assert.equal(key1, 'openai:gpt-4:quota_exhausted');
+});
+
+test('computeQuotaDedupKey is case insensitive', () => {
+  const key1 = computeQuotaDedupKey({ provider: 'OpenAI', model: 'GPT-4', errorType: 'QUOTA_EXHAUSTED' });
+  assert.equal(key1, 'openai:gpt-4:quota_exhausted');
+});
+
+test('computeQuotaDedupKey defaults for missing fields', () => {
+  const key = computeQuotaDedupKey({});
+  assert.equal(key, 'unknown:unknown:quota_exhausted');
+});
+
+test('shouldSendQuotaNotification: first occurrence allows send', () => {
+  resetQuotaNotificationState();
+  const check = shouldSendQuotaNotification({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  assert.equal(check.suppress, false);
+  assert.match(check.reason, /first occurrence/);
+});
+
+test('shouldSendQuotaNotification: repeated call within window suppresses', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  const check = shouldSendQuotaNotification({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', cooldownMs: 60000 });
+  assert.equal(check.suppress, true);
+  assert.match(check.reason, /throttled/);
+});
+
+test('shouldSendQuotaNotification: different provider/model is not suppressed', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  const check = shouldSendQuotaNotification({ provider: 'anthropic', model: 'claude-3', errorType: 'quota_exhausted', cooldownMs: 60000 });
+  assert.equal(check.suppress, false);
+});
+
+test('shouldSendQuotaNotification: same task within window is suppressed', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', taskId: 'task_1' });
+  const check = shouldSendQuotaNotification({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', taskId: 'task_1', cooldownMs: 60000 });
+  assert.equal(check.suppress, true);
+});
+
+test('shouldSendQuotaNotification: different task with same provider is still throttled by time', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', taskId: 'task_1' });
+  const check = shouldSendQuotaNotification({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', taskId: 'task_2', cooldownMs: 60000 });
+  assert.equal(check.suppress, true); // throttled by time
+});
+
+test('recordQuotaNotificationSent and getQuotaNotificationState reflect state', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted', taskId: 'task_1' });
+  const state = getQuotaNotificationState();
+  assert.equal(state.entries.length, 1);
+  assert.equal(state.entries[0].key, 'openai:gpt-4:quota_exhausted');
+  assert.ok(state.entries[0].lastSentAt);
+  assert.deepEqual(state.entries[0].taskIds, ['task_1']);
+});
+
+test('resetQuotaNotificationState clears state', () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+  resetQuotaNotificationState();
+  const state = getQuotaNotificationState();
+  assert.equal(state.entries.length, 0);
+});
+
+test('sendQuotaNotification returns suppressed=true when throttled', async () => {
+  resetQuotaNotificationState();
+  recordQuotaNotificationSent({ provider: 'openai', model: 'gpt-4', errorType: 'quota_exhausted' });
+
+  const mockBark = {
+    isEnabled: () => true,
+    send: async () => ({ ok: true }),
+  };
+  const result = await sendQuotaNotification(mockBark, {
+    provider: 'openai',
+    model: 'gpt-4',
+    errorType: 'quota_exhausted',
+    cooldownMs: 60000,
+  });
+  assert.equal(result.sent, false);
+  assert.equal(result.suppress, true);
+});
+
+test('sendQuotaNotification sends when not throttled', async () => {
+  resetQuotaNotificationState();
+
+  const mockBark = {
+    isEnabled: () => true,
+    send: async (title, body, group) => {
+      assert.equal(group, 'quota');
+      return { ok: true };
+    },
+  };
+  const result = await sendQuotaNotification(mockBark, {
+    provider: 'openai',
+    model: 'gpt-4',
+    errorType: 'quota_exhausted',
+    taskId: 'task_1',
+  });
+  assert.equal(result.sent, true);
+  assert.equal(result.suppress, false);
+});
+
+test('sendQuotaNotification returns suppressed when bark is disabled', async () => {
+  resetQuotaNotificationState();
+
+  const mockBark = { isEnabled: () => false };
+  const result = await sendQuotaNotification(mockBark, {
+    provider: 'openai',
+    model: 'gpt-4',
+    errorType: 'quota_exhausted',
+  });
+  assert.equal(result.sent, false);
+  assert.equal(result.suppress, false);
+  assert.match(result.reason, /bark notifier not available/);
+});
+
+test('getQuotaNotificationState returns defaultWindowMs', () => {
+  resetQuotaNotificationState();
+  const state = getQuotaNotificationState();
+  assert.equal(state.defaultWindowMs, 300000); // 5 minutes
+});
+
+test('sendQuotaNotification records state after successful send', async () => {
+  resetQuotaNotificationState();
+
+  const mockBark = {
+    isEnabled: () => true,
+    send: async () => ({ ok: true }),
+  };
+  await sendQuotaNotification(mockBark, {
+    provider: 'openai',
+    model: 'gpt-4',
+    errorType: 'quota_exhausted',
+    taskId: 'task_1',
+  });
+
+  const state = getQuotaNotificationState();
+  assert.equal(state.entries.length, 1);
+  assert.equal(state.entries[0].key, 'openai:gpt-4:quota_exhausted');
+  assert.deepEqual(state.entries[0].taskIds, ['task_1']);
+});

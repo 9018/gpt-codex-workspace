@@ -386,6 +386,46 @@ export function createRecoveryToolsGroup({
         issues.push({ severity: sev, category: "api", detail: apiState.failure_count + " failures, last=" + apiState.last_status + ", cb=" + apiState.circuit_breaker });
       }
 
+      // Quota/rate-limit state: scan for tasks with quota_exhausted/rate_limited
+      // or queue items blocked with quota-related reason.
+      const quotaTasks = (state.tasks || []).filter(t =>
+        t.failure_class === "quota_exhausted" || t.failure_class === "rate_limited" ||
+        t.result?.failure_class === "quota_exhausted" || t.result?.failure_class === "rate_limited" ||
+        t.result?.failure_class === "quota_exhausted_or_rate_limited"
+      );
+      const quotaQueueItems = (state.goal_queue || []).filter(i =>
+        i.blocked_reason && (
+          i.blocked_reason.includes("quota") ||
+          i.blocked_reason.includes("rate_limit") ||
+          i.blocked_reason.includes("capacity") ||
+          i.blocked_reason.includes("429")
+        )
+      );
+      if (quotaTasks.length > 0 || quotaQueueItems.length > 0) {
+        const qTasks = quotaTasks.map(t => (t.id || "?") + "(" + (t.failure_class || t.result?.failure_class || "?") + ")").join(", ");
+        const qQueue = quotaQueueItems.map(i => (i.queue_id || "?") + "(" + (i.blocked_reason || "?") + ")").join(", ");
+        const parts = [];
+        if (quotaTasks.length > 0) parts.push(quotaTasks.length + " task(s): " + qTasks);
+        if (quotaQueueItems.length > 0) parts.push(quotaQueueItems.length + " queue item(s): " + qQueue);
+        issues.push({
+          severity: "high",
+          category: "quota",
+          detail: "External capacity blocker detected: " + parts.join("; "),
+          next_action: "Check provider/model quota status. Use recovery_api_failure_control to inspect/reset. Wait for quota recovery before retrying.",
+          root_cause: "external_capacity_blocker",
+          affected_tasks: quotaTasks.map(t => t.id).filter(Boolean),
+          affected_queue_items: quotaQueueItems.map(i => i.queue_id).filter(Boolean),
+        });
+      } else if (apiState && apiState.circuit_breaker === "backoff" && (apiState.by_status?.[429] || 0) > 0) {
+        issues.push({
+          severity: "medium",
+          category: "api",
+          detail: "Circuit breaker is backoff due to " + (apiState.by_status?.[429] || 0) + "x 429 responses. Next retry: " + (apiState.next_retry_at || "unknown") + ".",
+          next_action: "Use recovery_api_failure_control to inspect/reset. Check API provider for quota status.",
+        });
+      }
+
+
       const high = issues.filter(i => i.severity === "high");
       const med = issues.filter(i => i.severity === "medium");
       const overall = high.length > 0 ? "high" : med.length > 0 ? "medium" : "low";
@@ -407,6 +447,14 @@ export function createRecoveryToolsGroup({
         restart_markers: restartMarkersResult,
         runtime_env_loaded: runtimeEnvLoaded(),
         api_failure_state: apiState ? {
+        quota_state: (quotaTasks.length > 0 || quotaQueueItems.length > 0) ? {
+          tasks_affected: quotaTasks.length,
+          queue_items_affected: quotaQueueItems.length,
+          root_cause: "external_capacity_blocker",
+          next_action: "Check provider/model quota status. Use recovery_api_failure_control to inspect/reset. Wait for quota recovery before retrying.",
+          affected_tasks: quotaTasks.map(t => t.id).filter(Boolean),
+          affected_queue_items: quotaQueueItems.map(i => i.queue_id).filter(Boolean),
+        } : null,
           last_status: apiState.last_status, failure_count: apiState.failure_count,
           circuit_breaker: apiState.circuit_breaker || "closed", next_retry_at: apiState.next_retry_at,
         } : null,
@@ -549,24 +597,45 @@ export function createRecoveryToolsGroup({
   // ================================================================
   tools.recovery_api_failure_control = tool({
     name: "recovery_api_failure_control",
-    description: "Record/reset API failure circuit breaker. Classifies 401 (auth, no retry), 429 (rate limit, backoff), 503 (transient, bounded retry). Reset=true closes the circuit breaker. Use to prevent infinite retry loops.",
+    description: "Record/reset API failure circuit breaker. Classifies 401 (auth, no retry), 429 (rate limit, backoff), 503 (transient, bounded retry). Also supports quota_exhausted (sets circuit_breaker=quota_backoff, longer backoff). Reset=true closes the circuit breaker. Use to prevent infinite retry loops.",
     inputSchema: schema({
       record_status: { type: "integer", description: "HTTP status to record (401/429/503).", examples: [503] },
+      record_quota: { type: "string", description: "Record quota_exhausted event. Sets circuit_breaker=quota_backoff and longer backoff window.", examples: ["quota_exhausted", "rate_limited"] },
       reset: { type: "boolean", description: "Reset circuit breaker.", default: false },
       reason: { type: "string", description: "Reason for reset/record.", examples: [] },
     }, []),
     ...common,
-    handler: async ({ record_status, reset, reason }) => {
+    handler: async ({ record_status, record_quota, reset, reason }) => {
       const start = Date.now();
       const state = await store.load();
-      let f = state.recovery_api_failures || { failure_count: 0, last_status: null, last_failure_at: null, circuit_breaker: "closed", next_retry_at: null, by_status: {} };
+      let f = state.recovery_api_failures || { failure_count: 0, last_status: null, last_failure_at: null, circuit_breaker: "closed", next_retry_at: null, by_status: {}, last_quota_type: null };
 
       if (reset) {
-        f = { failure_count: 0, last_status: null, last_failure_at: null, circuit_breaker: "closed", next_retry_at: null, by_status: {} };
+        f = { failure_count: 0, last_status: null, last_failure_at: null, circuit_breaker: "closed", next_retry_at: null, by_status: {}, last_quota_type: null };
         state.recovery_api_failures = f; await store.save();
         await audit({ tool: "recovery_api_failure_control", action: "reset", result: "ok", summary: "CB reset" + (reason ? ": " + reason : ""), elapsed_ms: Date.now() - start });
         return { circuit_breaker: "closed", failure_count: 0, reset: true, message: "Circuit breaker reset." };
       }
+      if (record_quota) {
+        const qType = String(record_quota).trim().toLowerCase();
+        f.last_status = -1; f.last_failure_at = now(); f.failure_count = (f.failure_count || 0) + 1;
+        if (!f.by_status) f.by_status = {};
+        f.by_status[qType] = (f.by_status[qType] || 0) + 1;
+        f.last_quota_type = qType;
+        if (qType === "quota_exhausted") {
+          const b = Math.min(600, Math.pow(2, f.by_status[qType]) * 30);
+          f.circuit_breaker = "quota_backoff"; f.next_retry_at = new Date(Date.now() + b*1000).toISOString();
+        } else if (qType === "rate_limited") {
+          const b = Math.min(300, Math.pow(2, f.by_status[qType]) * 10);
+          f.circuit_breaker = "backoff"; f.next_retry_at = new Date(Date.now() + b*1000).toISOString();
+        } else {
+          const b = Math.min(120, f.by_status[qType] * 15);
+          f.circuit_breaker = "quota_backoff"; f.next_retry_at = new Date(Date.now() + b*1000).toISOString();
+        }
+        state.recovery_api_failures = f; await store.save();
+        await audit({ tool: "recovery_api_failure_control", action: "record_quota", result: "ok", summary: "quota_type=" + qType + " count=" + f.failure_count, elapsed_ms: Date.now() - start });
+      }
+
       if (record_status) {
         const s = Number(record_status);
         f.last_status = s; f.last_failure_at = now(); f.failure_count = (f.failure_count || 0) + 1;
@@ -579,7 +648,7 @@ export function createRecoveryToolsGroup({
         state.recovery_api_failures = f; await store.save();
         await audit({ tool: "recovery_api_failure_control", action: "record", result: "ok", summary: "status=" + s + " count=" + f.failure_count, elapsed_ms: Date.now() - start });
       }
-      return { circuit_breaker: f.circuit_breaker, failure_count: f.failure_count, last_status: f.last_status, last_failure_at: f.last_failure_at, next_retry_at: f.next_retry_at, by_status: f.by_status || {} };
+      return { circuit_breaker: f.circuit_breaker, failure_count: f.failure_count, last_status: f.last_status, last_failure_at: f.last_failure_at, next_retry_at: f.next_retry_at, by_status: f.by_status || {}, last_quota_type: f.last_quota_type || null };
     },
   });
 
