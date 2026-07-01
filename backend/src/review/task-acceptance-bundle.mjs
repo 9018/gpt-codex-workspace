@@ -227,6 +227,13 @@ function collectMissingEvidence({ task, result, verification, contractVerificati
   return missing;
 }
 
+function isResolvedOperationalFinding(finding = {}, result = {}) {
+  if (finding?.code !== 'auto_integration_completion_failed') return false;
+  const message = String(finding?.message || finding?.reason || '');
+  if (!message.includes('Canonical repo ' + 'is dirty')) return false;
+  return result?.verification?.passed === true && Boolean(result?.commit);
+}
+
 export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = {}) {
   if (!store) throw new Error('store is required');
   if (!task_id) throw new Error('task_id is required');
@@ -242,10 +249,11 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
   const verification = compactVerification(result?.verification || null);
   const contractVerification = compactContractVerification(result?.contract_verification || null);
   const reportPaths = reportPathsFromResult(result || {}, files, config);
-  const blockers = [
+  const rawBlockers = [
     ...compactList(contractVerification?.blockers).map(compactFinding),
     ...compactList(result?.acceptance_findings).filter((finding) => ['blocker', 'major'].includes(finding?.severity)).map(compactFinding),
   ];
+  const blockers = rawBlockers.filter((finding) => !isResolvedOperationalFinding(finding, result || {}));
   const nonBlockingFollowups = [
     ...compactList(contractVerification?.non_blocking_followups).map(compactFinding),
     ...compactList(result?.followups).map(compactFinding),
