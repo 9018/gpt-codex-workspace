@@ -334,16 +334,6 @@ export function decideTaskFinalState(evidence = {}) {
     return decision(evidence, { status: "waiting_for_review", reason: "manual_review_required", blockers: semanticOrUnsafeBlockers });
   }
 
-  const terminalFailedStatus = terminalFailedEvidence(evidence);
-  if (terminalFailedStatus) {
-    const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
-    return decision(evidence, {
-      status: terminalFailedStatus,
-      reason: terminalFailedStatus === "timed_out" ? "execution_timed_out" : "unrecoverable_execution_failure",
-      blockers: [blocker("unrecoverable_execution_failure", result.summary || "Execution failed without a repair path.", result, "codex_result")],
-    });
-  }
-
   const unresolved = unresolvedFindings(evidence);
   const terminalSatisfied = verificationPassed(evidence)
     && acceptancePassed(evidence)
@@ -376,6 +366,16 @@ export function decideTaskFinalState(evidence = {}) {
       status: "waiting_for_review",
       reason: "repair_budget_exhausted",
       blockers: repairableBlockers,
+    });
+  }
+
+  const terminalFailedStatus = terminalFailedEvidence(evidence);
+  if (terminalFailedStatus) {
+    const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+    return decision(evidence, {
+      status: terminalFailedStatus,
+      reason: terminalFailedStatus === "timed_out" ? "execution_timed_out" : "unrecoverable_execution_failure",
+      blockers: [blocker("unrecoverable_execution_failure", result.summary || "Execution failed without a repair path.", result, "codex_result")],
     });
   }
 

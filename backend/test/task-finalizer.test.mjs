@@ -78,6 +78,27 @@ test("task-finalizer: codex_failed with repair proposals and attempts remaining 
   assert.equal(decision.repairable_blockers.length, 1);
 });
 
+test("task-finalizer: result_missing codex_failed with follow-up evidence is repair before terminal failure", () => {
+  const decision = decideTaskFinalState({
+    current_status: "failed",
+    codex_result: {
+      status: "failed",
+      kind: "codex_failed",
+      failure_class: "result_missing",
+      summary: "Execution ended before result.json was produced",
+      stderr: "process exited 1",
+      repair_proposals: [{ title: "Repair missing result", proposed_action: "Re-run with output contract" }],
+      delivery_result_recovery: { status: "failed", reason: "no_changed_files" },
+    },
+    verification: { passed: false, failure_class: "result_missing" },
+    repair_budget: { attempts_remaining: 1 },
+  });
+
+  assert.equal(decision.status, "waiting_for_repair");
+  assert.equal(decision.reason, "codex_failed_repairable");
+  assert.equal(decision.repairable_blockers[0].code, "codex_failed");
+});
+
 test("task-finalizer: quota and rate-limit failures wait for capacity before repair or review", () => {
   const decision = decideTaskFinalState({
     current_status: "failed",
