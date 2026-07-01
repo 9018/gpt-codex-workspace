@@ -17,6 +17,14 @@
 
 import { randomUUID } from "node:crypto";
 import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
+import {
+  checkDependency as policyCheckDependency,
+  checkAcceptanceGate,
+  checkRepoConcurrency,
+  buildAdvancementChecks,
+  allAdvancementChecksPass,
+  isTerminalCompleted,
+} from "./queue-policy.mjs";
 import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
 
 // ---------------------------------------------------------------------------
@@ -113,24 +121,7 @@ function getTaskStatus(state, taskId) {
 }
 
 function isDependencySatisfied(state, item) {
-  const policy = item.dependency_policy || "completed_only";
-  if (item.depends_on_goal_id) {
-    const status = getGoalStatus(state, item.depends_on_goal_id);
-    if (status === "completed") return { satisfied: true };
-    if (policy === "terminal_any" && (status === "failed" || status === "timed_out")) {
-      return { satisfied: true, reason: `policy=${policy} allows ${item.depends_on_goal_id} status=${status}` };
-    }
-    return { satisfied: false, reason: `depends_on_goal ${item.depends_on_goal_id} status=${status || "not found"}` };
-  }
-  if (item.depends_on_task_id) {
-    const status = getTaskStatus(state, item.depends_on_task_id);
-    if (status === "completed") return { satisfied: true };
-    if (policy === "terminal_any" && (status === "failed" || status === "timed_out")) {
-      return { satisfied: true, reason: `policy=${policy} allows ${item.depends_on_task_id} status=${status}` };
-    }
-    return { satisfied: false, reason: `depends_on_task ${item.depends_on_task_id} status=${status || "not found"}` };
-  }
-  return { satisfied: true };
+  return policyCheckDependency(state, item);
 }
 
 // ---------------------------------------------------------------------------
@@ -343,7 +334,7 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
  for (const candidate of sorted) {
    const checks = [];
 
-    // 1. Dependency check
+    // 1. Dependency check (policy-driven: completed_only / terminal_any)
     const depResult = isDependencySatisfied(state, candidate);
     checks.push({ check: "dependency", passed: depResult.satisfied, detail: depResult.reason || "no dependency" });
     if (!depResult.satisfied) {
@@ -354,6 +345,58 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
         await store.save();
       }
       continue;
+    }
+
+    // 2. Acceptance gate check — failed/unaccepted prerequisite tasks
+    //    must NOT advance downstream queue items.
+    const acceptResult = checkAcceptanceGate(state, candidate);
+    checks.push({
+      check: "acceptance_gate",
+      passed: acceptResult.passed,
+      detail: acceptResult.reason || "no prerequisite task dependency",
+    });
+    if (!acceptResult.passed) {
+      if (!dryRun) {
+        candidate.status = QUEUE_STATUS_BLOCKED;
+        candidate.blocked_reason = acceptResult.reason;
+        candidate.updated_at = now();
+        await store.save();
+      }
+      continue;
+    }
+
+    // 3. Repo concurrency check — same repo stays serial.
+    //    If another queue item for the same repo is already running,
+    //    this item waits.
+    if (candidate.repo_id) {
+      const concurrencyResult = checkRepoConcurrency(state, candidate.repo_id, candidate.queue_id);
+      checks.push({
+        check: "repo_concurrency",
+        passed: !concurrencyResult.blocked,
+        repo_id: candidate.repo_id,
+        blocking_item_queue_id: concurrencyResult.runningItem?.queue_id || null,
+        blocking_item_goal_id: concurrencyResult.runningItem?.goal_id || null,
+        detail: concurrencyResult.blocked
+          ? `same-repo serialisation: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidate.repo_id}`
+          : "no concurrent repo task",
+      });
+      if (concurrencyResult.blocked) {
+        if (!dryRun) {
+          candidate.status = QUEUE_STATUS_BLOCKED;
+          candidate.blocked_reason = `repo concurrency: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidate.repo_id}`;
+          candidate.updated_at = now();
+          blockedItems.push({ queue_id: candidate.queue_id, goal_id: candidate.goal_id, reason: candidate.blocked_reason });
+          await store.save();
+        }
+        continue;
+      }
+    } else {
+      checks.push({
+        check: "repo_concurrency",
+        passed: true,
+        repo_id: null,
+        detail: "no repo_id — concurrency not checked",
+      });
     }
 
     const resolvedRepo = await resolveQueueItemRepository(candidate, config);
@@ -379,9 +422,8 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
       continue;
    }
 
-        // 2. No repo lock or worktree dirty checks at queue time.
+        // 4. Repo lock and worktree dirty checks deferred to execution.
     //    Locks are acquired during execution on per-task worktree paths.
-    //    The worktree does not exist yet, so dirty checks are irrelevant.
     checks.push({
       check: "execution_guards_deferred",
       passed: true,
@@ -550,10 +592,25 @@ export async function cancelGoalQueueItem(store, queueId) {
 /**
  * Called when a task completes. Checks for dependent queue items
  * and tries to auto-start the next eligible one.
+ *
+ * The decision to advance is acceptance-driven:
+ * - If the completed task is a dependency of a queued item AND the
+ *   task's status is terminal non-completed (failed, timed_out, etc.),
+ *   the dependent item is blocked and NOT auto-started.
+ * - If the completed task is terminal-completed, dependent items
+ *   are eligible for auto-start.
+ * - Items without a direct dependency relationship are evaluated
+ *   by startNextQueuedGoal which now includes acceptance gate and
+ *   repo concurrency checks.
  */
 export async function autoStartNextOnTaskCompleted(store, config, completedTask) {
   const state = await store.load();
   const details = [];
+
+  // Acceptance-aware auto-advance: if the completed task finished
+  // with a failed/unaccepted status, dependent queue items that
+  // directly depend on this task are blocked.
+  const taskPassedAcceptance = isTerminalCompleted(completedTask.status);
 
   // Find queue items that depend on this task or its goal
   const taskId = completedTask.id;
@@ -567,6 +624,26 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
         dependents.push(item);
       }
     }
+  }
+
+  // If the completed task did NOT pass acceptance, block all
+  // task-level dependents explicitly.
+  if (!taskPassedAcceptance && dependents.length > 0) {
+    for (const dep of dependents) {
+      if (dep.depends_on_task_id === taskId) {
+        dep.status = QUEUE_STATUS_BLOCKED;
+        dep.blocked_reason = `prerequisite task ${taskId} status=${completedTask.status} — failed/unaccepted tasks must not advance the queue`;
+        dep.updated_at = now();
+        details.push({
+          type: "dependent_blocked_on_acceptance",
+          queue_id: dep.queue_id,
+          goal_id: dep.goal_id,
+          reason: dep.blocked_reason,
+        });
+      }
+    }
+    await store.save();
+    return { auto_started: false, details };
   }
 
   // If no direct dependents, try start_next anyway (next in line)
@@ -599,3 +676,22 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
 
   return { auto_started: details.some((d) => d.started), details };
 }
+
+// ---------------------------------------------------------------------------
+// Re-export queue policy functions for convenience
+// ---------------------------------------------------------------------------
+
+export {
+  checkDependency,
+  checkAcceptanceGate,
+  checkRepoConcurrency,
+  buildAdvancementChecks,
+  allAdvancementChecksPass,
+  isTerminalCompleted,
+} from "./queue-policy.mjs";
+
+export {
+  TERMINAL_COMPLETED_STATUSES,
+  NON_COMPLETION_TERMINAL_STATUSES,
+  QUEUE_STATUS_RUNNING as QUEUE_POLICY_STATUS_RUNNING,
+} from "./queue-policy.mjs";
