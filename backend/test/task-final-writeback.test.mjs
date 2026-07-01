@@ -1062,7 +1062,104 @@ test("task-final-writeback: verification failure creates repair goal and records
   assert.equal(savedState.tasks[0].result.failure_class, "test_failed");
   assert.equal(savedState.tasks[0].result.repair_goal.attempt, 1);
   assert.equal(savedState.tasks[0].result.repair_goal.repair_of_attempt, 0);
+  assert.equal(savedState.tasks[0].result.followup_processing.kind, "unaccepted_task_followup");
+  assert.equal(savedState.tasks[0].result.followup_processing.source_task_id, "task_repair_writeback");
+  assert.equal(savedState.tasks[0].result.followup_processing.source_goal_id, args.goal.id);
+  assert.equal(savedState.tasks[0].result.followup_processing.handling_attempt, 1);
+  assert.equal(savedState.tasks[0].result.followup_processing.handling_result.status, "waiting_for_repair");
+  assert.equal(savedState.tasks[0].result.followup_processing.followup_goal_id, "goal_repair_created");
+  assert.equal(savedState.tasks[0].result.followup_processing.followup_task_id, "task_repair_created");
   assert.ok(savedState.tasks[0].logs.some((log) => /failure_class=test_failed attempt=0 repair_of_attempt=0/.test(log.message)));
+});
+
+test("task-final-writeback: repairable acceptance blockers create traceable follow-up task", async () => {
+  let savedState = null;
+  let createdPayload = null;
+  let fallbackJson = null;
+  const args = makeMinimalArgs("completed");
+  args.goal = {
+    id: "goal_acceptance_repair",
+    workspace_id: "hosted-default",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change", semantic_confidence: "high" },
+      requirements: { requires_commit: true },
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+  };
+  args.task = {
+    id: "task_acceptance_repair",
+    goal_id: args.goal.id,
+    title: "Acceptance repair task",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    logs: [],
+  };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ ...args.task, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_acceptance_repair", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "Verifier passed but required evidence is missing",
+    changed_files: ["src/app.mjs"],
+    commit: "abc123",
+    warnings: [],
+    followups: [],
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [{ cmd: "npm test", exit_code: 0 }],
+    changed_files: ["src/app.mjs"],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+    contract_verification: {
+      contract_valid: true,
+      blocking_passed: false,
+      acceptance_status: "unsatisfied",
+      completion_eligible: false,
+      blockers: [{ severity: "blocker", code: "diff_reported_missing", message: "Diff evidence missing", source: "contract_verifier" }],
+      non_blocking_followups: [],
+      quality_notes: [],
+      state_assertions: { passed: true, failures: [] },
+    },
+  });
+  args.createGoalFn = async (store, config, payload) => {
+    createdPayload = payload;
+    return { goal: { id: "goal_acceptance_followup" }, task: { id: "task_acceptance_followup" } };
+  };
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_repair");
+  assert.equal(savedState.tasks[0].status, "waiting_for_repair");
+  assert.equal(createdPayload.repair_of_goal_id, "goal_acceptance_repair");
+  assert.equal(createdPayload.repair_of_task_id, "task_acceptance_repair");
+  assert.equal(createdPayload.attempt, 1);
+  assert.equal(savedState.tasks[0].result.repair_goal_id, "goal_acceptance_followup");
+  assert.equal(savedState.tasks[0].result.repair_task_id, "task_acceptance_followup");
+  assert.equal(savedState.tasks[0].result.followup_processing.source_task_id, "task_acceptance_repair");
+  assert.equal(savedState.tasks[0].result.followup_processing.source_goal_id, "goal_acceptance_repair");
+  assert.equal(savedState.tasks[0].result.followup_processing.handling_attempt, 1);
+  assert.equal(savedState.tasks[0].result.followup_processing.handling_result.status, "waiting_for_repair");
+  assert.equal(savedState.tasks[0].result.followup_processing.blockers[0].code, "diff_reported_missing");
+  assert.equal(fallbackJson.followup_processing.source_task_id, "task_acceptance_repair");
+  assert.equal(fallbackJson.followup_processing.followup_task_id, "task_acceptance_followup");
 });
 
 test("task-final-writeback: repeat verification failure after max attempts waits for review", async () => {

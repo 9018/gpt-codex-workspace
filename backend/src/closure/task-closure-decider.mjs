@@ -150,6 +150,11 @@ export function applyClosureDecisionToTaskResult({ taskStatus, taskResult = {}, 
     nextTaskResult.reason = closureDecision.reason;
     return { taskStatus: mappedStatus, taskResult: nextTaskResult };
   }
+  if (closureDecision.status === CLOSURE_STATUSES.WAITING_FOR_REPAIR) {
+    nextTaskResult.requires_review = nextTaskResult.requires_review === true ? true : false;
+    nextTaskResult.reason = closureDecision.reason;
+    return { taskStatus: mappedStatus, taskResult: nextTaskResult };
+  }
   if (closureDecision.status === CLOSURE_STATUSES.FAILED) {
     nextTaskResult.reason = closureDecision.reason;
     return { taskStatus: mappedStatus, taskResult: nextTaskResult };

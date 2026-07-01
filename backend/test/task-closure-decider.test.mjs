@@ -183,3 +183,15 @@ test("applyClosureDecisionToTaskResult maps requires_review without creating blo
   assert.equal(applied.taskResult.reason, "semantic_ambiguity");
   assert.deepEqual(applied.taskResult.quality_notes, ["Later polish"]);
 });
+
+test("applyClosureDecisionToTaskResult maps waiting_for_repair decisions", () => {
+  const applied = applyClosureDecisionToTaskResult({
+    taskStatus: "completed",
+    taskResult: { summary: "Needs repair" },
+    closureDecision: { status: "waiting_for_repair", task_status: "waiting_for_repair", reason: "blocking_requirements_failed_repairable" },
+  });
+
+  assert.equal(applied.taskStatus, "waiting_for_repair");
+  assert.equal(applied.taskResult.requires_review, false);
+  assert.equal(applied.taskResult.reason, "blocking_requirements_failed_repairable");
+});

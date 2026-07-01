@@ -18,7 +18,7 @@ import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
 import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
-import { planFollowupTasks } from './closure/followup-task-planner.mjs';
+import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followup-task-planner.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 
 function applyRepairMetadata(args = {}, repairGoal = {}) {
@@ -35,6 +35,14 @@ function applyRepairMetadata(args = {}, repairGoal = {}) {
     if (repairGoal[key] !== undefined) args[key] = repairGoal[key];
   }
   return args;
+}
+
+function createdFollowupFromTaskResult(taskResult = {}) {
+  if (!taskResult.repair_goal_id && !taskResult.repair_task_id) return null;
+  return {
+    goal: taskResult.repair_goal_id ? { id: taskResult.repair_goal_id } : null,
+    task: taskResult.repair_task_id ? { id: taskResult.repair_task_id } : null,
+  };
 }
 
 function contractForClosure({ goal, taskResult } = {}) {
@@ -428,6 +436,55 @@ export async function finalizeCodexTaskRun({
           verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
         },
       });
+    if (closureDecision.status === "waiting_for_repair" && !taskResult.repair_goal_id && !taskResult.repair_task_id) {
+      const repairableBlockers = Array.isArray(closureDecision.repairable_blockers) ? closureDecision.repairable_blockers : [];
+      const repairCheck = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
+      if (repairableBlockers.length > 0 && repairCheck.should_repair) {
+        const failureClass = repairableBlockers[0]?.code || "acceptance_blocker";
+        const repairGoal = createRepairGoalFromFindingsFn({
+          task: taskWithRepairContext(task, resolvedRepo),
+          goal,
+          findings: repairableBlockers,
+          repairProposals: repairableBlockers.map((finding) => ({
+            title: `Repair ${finding.code || "acceptance blocker"}`,
+            proposed_action: finding.message || closureDecision.reason || "Fix the blocking acceptance finding and rerun verification.",
+          })),
+        });
+        try {
+          const created = await createGoalFn(store, config, applyRepairMetadata({
+            user_request: repairGoal.user_request,
+            goal_prompt: repairGoal.goal_prompt,
+            title: `Repair: ${task.title || task.id} (acceptance blocker)`,
+            project_id: task.project_id || goal?.project_id || "default",
+            workspace_id: repairGoal.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
+            mode: repairGoal.mode || task.mode || "builder",
+            assign_to_codex: true,
+            skip_created_notification: false,
+            attempt: repairGoal.attempt,
+            repair_of_attempt: repairGoal.repair_of_attempt,
+          }, repairGoal));
+          taskResult.repair_goal = repairGoal;
+          taskResult.repair_attempt = repairGoal.repair_attempt;
+          taskResult.attempt = repairGoal.attempt;
+          taskResult.repair_of_attempt = repairGoal.repair_of_attempt;
+          taskResult.repair_goal_id = created.goal?.id || null;
+          taskResult.repair_task_id = created.task?.id || null;
+          taskResult.failure_class = taskResult.failure_class || failureClass;
+        } catch (err) {
+          closureDecision.status = "requires_review";
+          closureDecision.task_status = "waiting_for_review";
+          closureDecision.reason = "acceptance_repair_creation_failed";
+          taskResult.repair_denied_reason = "Acceptance repair task creation failed: " + (err?.message || String(err));
+          taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+          taskResult.warnings.push(taskResult.repair_denied_reason);
+        }
+      } else if (repairableBlockers.length > 0 && !repairCheck.should_repair) {
+        closureDecision.status = "requires_review";
+        closureDecision.task_status = "waiting_for_review";
+        closureDecision.reason = "acceptance_repair_budget_exhausted";
+        taskResult.repair_denied_reason = repairCheck.reason;
+      }
+    }
     const plannedFollowups = planFollowupTasks({
       task,
       goal,
@@ -435,6 +492,15 @@ export async function finalizeCodexTaskRun({
       contractVerification: taskResult.contract_verification || verification.contract_verification || null,
       closureDecision,
     });
+    const unacceptedFollowup = planUnacceptedTaskFollowup({
+      task,
+      goal,
+      result: taskResult,
+      closureDecision,
+      acceptanceGate,
+      created: createdFollowupFromTaskResult(taskResult),
+    });
+    if (unacceptedFollowup) taskResult.followup_processing = unacceptedFollowup;
     const closureApplied = applyClosureDecisionToTaskResult({
       taskStatus,
       taskResult,
@@ -638,6 +704,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     warnings: Array.isArray(taskResult.warnings) ? taskResult.warnings : [],
     followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
     followup_findings: Array.isArray(taskResult.followup_findings) ? taskResult.followup_findings : [],
+    followup_processing: taskResult.followup_processing || null,
     quality_notes: Array.isArray(taskResult.quality_notes) ? taskResult.quality_notes : [],
     verification: taskResult.verification || null,
     contract_verification: taskResult.contract_verification || taskResult.verification?.contract_verification || taskResult.final_verification?.contract_verification || null,

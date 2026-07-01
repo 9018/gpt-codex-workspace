@@ -46,6 +46,27 @@ When acceptance fails with blocker or major findings:
 6. Repair attempts are bounded by `GPTWORK_MAX_REPAIR_ATTEMPTS` (default: 2).
 7. If repair budget is exceeded, the task enters `waiting_for_review` with full evidence.
 
+Repair can be triggered by verifier failure or by the acceptance gate returning a repairable `waiting_for_repair` closure decision. In both cases, the parent task result records the created repair goal and task ids and remains compatible with the existing `repair_goal`, `repair_goal_id`, `repair_task_id`, `repair_attempt`, and `repair_of_attempt` fields.
+
+### Follow-up Processing Attribution
+
+Every unaccepted task that is converted into a follow-up repair records `result.followup_processing` so the loop can be audited without reading the full transcript:
+
+| Field | Meaning |
+|---|---|
+| `kind` | Always `unaccepted_task_followup` for this record. |
+| `source_task_id` | The task that failed acceptance. |
+| `source_goal_id` | The goal linked to the source task. |
+| `root_task_id` | The root task for multi-attempt repair chains. |
+| `followup_goal_id` | The repair/follow-up goal created for the next handling pass. |
+| `followup_task_id` | The repair/follow-up Codex task created for the next handling pass. |
+| `handling_attempt` | One-based handling attempt for the repair loop. |
+| `handling_result` | Status, closure status, reason, failure class, acceptance status, and pass/fail result that caused the follow-up. |
+| `blockers` | Repairable blockers or review blockers attributed to this follow-up. |
+| `auto_enqueue` | `true` when a follow-up goal or task was created automatically. |
+
+The same record is included in fallback `result.json`, so source task, source goal, handling count, and handling result remain traceable from durable task state and goal artifacts.
+
 ### Special Self-Healing Repairs
 
 | Error | Recovery |
