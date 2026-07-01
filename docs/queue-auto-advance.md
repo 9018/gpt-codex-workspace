@@ -25,12 +25,23 @@ The queue is driven forward by:
    for dependent queue items and tries to start them if the completed task
    passed acceptance.
 
+Final task writeback is the durable handoff from acceptance to the queue. When
+a linked task reaches accepted auto-completion after verified integration,
+writeback marks the task, goal, and running queue item completed in one state
+mutation, reconciles blocked queue items that depend on the completed goal, and
+then calls the auto-start hook. This avoids requiring manual reconciliation for
+the normal accepted/integrated path.
+
 ## Queue policy rules
 
 ### 1. Dependency terminal-only
 
 A `depends_on_goal` or `depends_on_task` must reach a terminal *completed*
 state before the dependent can start.
+
+Goal dependencies use the durable goal status. A completed task for a still-open
+goal is not enough; final writeback must close the linked goal before queue
+policy treats `depends_on_goal` as satisfied.
 
 | Policy | Description |
 |--------|-------------|

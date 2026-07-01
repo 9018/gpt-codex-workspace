@@ -80,6 +80,40 @@ function shouldPreferAutoIntegrationEvidence(taskResult = {}) {
   return unresolvedBlockingFindings(taskResult.acceptance_findings).length === 0;
 }
 
+function closureAllowsQueuePropagation(taskResult = {}) {
+  const status = taskResult.closure_decision?.status;
+  return status === "auto_completed_clean" || status === "auto_completed_with_followups";
+}
+
+function integrationVerifiedForQueuePropagation(taskResult = {}) {
+  const integration = taskResult.integration || {};
+  const autoCompletion = taskResult.auto_integration_completion || {};
+  const merged = integration.merged === true || ["merged", "ff_only_merged", "skipped"].includes(String(integration.status || ""));
+  const report = autoCompletion.verification_report || {};
+  const autoCompleted = autoCompletion.completed === true
+    && report.passed !== false
+    && report.dirty !== true
+    && autoCompletion.canonical_clean_after !== false;
+  return merged && autoCompleted;
+}
+
+function shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult = {} } = {}) {
+  if (taskStatus !== "completed") return false;
+  if (taskResult.requires_review === true) return false;
+  if (!acceptedByAcceptanceAgent(taskResult)) return false;
+  if (!closureAllowsQueuePropagation(taskResult)) return false;
+  if (!integrationVerifiedForQueuePropagation(taskResult)) return false;
+  if (taskResult.contract_verification?.blocking_passed === false) return false;
+  if (taskResult.contract_verification?.completion_eligible === false) return false;
+  if (taskResult.contract_verification?.requires_review === true) return false;
+  return unresolvedBlockingFindings(taskResult.acceptance_findings).length === 0;
+}
+
+function isGoalDependencyReasonFor(goalId, reason = "") {
+  const text = String(reason || "");
+  return text.includes(`depends_on_goal ${goalId}`) || text.includes(`depends_on_goal_id ${goalId}`);
+}
+
 function autoIntegrationClosureVerification({ taskResult = {}, fallbackVerification = null } = {}) {
   const base = autoIntegrationVerificationFromReport(taskResult.auto_integration_completion);
   return {
@@ -969,10 +1003,11 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
     state.activities.push({ time: item.updated_at, type: "task.updated", task_id: task.id, status: item.status });
     await notifyTerminalTaskFn(item);
 
+    let goalStatus = null;
     if (goal) {
       const goalItem = state.goals.find((candidate) => candidate.id === goal.id);
       if (goalItem) {
-        const goalStatus = determineGoalStatus(goalItem, item, item.result || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
+        goalStatus = determineGoalStatus(goalItem, item, item.result || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
         goalItem.status = goalStatus;
         goalItem.updated_at = doneAt;
         state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });
@@ -993,6 +1028,45 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
         }
       }
     }
+    reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt });
     return { task: item };
   });
+}
+
+function reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt }) {
+  if (!Array.isArray(state.goal_queue)) return;
+  if (!goal || !shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult })) return;
+
+  const goalId = goal.id;
+  if (goalStatus !== "completed") {
+    const goalItem = Array.isArray(state.goals) ? state.goals.find((candidate) => candidate.id === goalId) : null;
+    if (!goalItem || goalItem.status !== "completed") return;
+  }
+
+  const current = state.goal_queue.find((candidate) => candidate.task_id === task.id || candidate.goal_id === goalId);
+  if (current && current.status !== "completed") {
+    current.status = "completed";
+    current.completed_task_id = task.id;
+    current.failure_class = null;
+    current.blocked_reason = null;
+    current.updated_at = doneAt;
+  }
+
+  for (const candidate of state.goal_queue) {
+    if (candidate.depends_on_goal_id !== goalId) continue;
+    if (candidate.status !== "blocked") continue;
+    if (!isGoalDependencyReasonFor(goalId, candidate.blocked_reason)) continue;
+    candidate.status = candidate.auto_start === false ? "waiting" : "ready";
+    candidate.blocked_reason = null;
+    candidate.updated_at = doneAt;
+    state.activities ||= [];
+    state.activities.push({
+      time: doneAt,
+      type: "queue.dependency_reconciled",
+      queue_id: candidate.queue_id,
+      goal_id: candidate.goal_id,
+      depends_on_goal_id: goalId,
+      completed_task_id: item.id,
+    });
+  }
 }

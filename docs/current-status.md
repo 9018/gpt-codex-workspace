@@ -125,6 +125,7 @@ Large finalization and task-processing responsibilities have been split into foc
 - Per-task worktrees isolate Codex execution.
 - ff-only integration completion can mark a task merged only after merge and verification evidence align.
 - `branch_pushed` and `pr_opened` are non-terminal integration states and must not be treated as merged or deployed.
+- Accepted auto-integration completion now propagates through final writeback: the linked goal and queue item are completed atomically, dependent blocked queue items are reconciled from the completed goal state, and the next eligible auto-start item is attempted. Manual `complete_task`, `recovery_queue_reconcile`, or `start_next_queued_goal` is not required for this normal path.
 
 ## Verification Commands
 

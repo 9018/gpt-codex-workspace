@@ -79,6 +79,138 @@ function captureWriteCalls(args) {
   return captured;
 }
 
+function makeAutoIntegrationQueuePropagationArgs(overrides = {}) {
+  const commit = overrides.commit || "aea9c3ff72a40ad9ca351bfb1ea77b88010d837c";
+  const prerequisiteGoal = {
+    id: overrides.goalId || "goal_7e9a6b9f-f243-4834-a26e-e75f263d0b57",
+    workspace_id: "hosted-default",
+    project_id: "default",
+    conversation_id: "conv_g9",
+    title: "G9 accepted integration",
+    status: overrides.goalStatus || "open",
+    mode: "builder",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change", semantic_confidence: "high" },
+      requirements: { requires_commit: true, requires_integration: true },
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+  };
+  const dependentGoal = {
+    id: "goal_g10_dependent",
+    workspace_id: "hosted-default",
+    project_id: "default",
+    conversation_id: "conv_g10",
+    title: "G10 dependent",
+    status: "open",
+    mode: "builder",
+  };
+  const task = { id: overrides.taskId || "task_a7752115-dc49-44f3-bd49-bf23cd93d430", goal_id: prerequisiteGoal.id, logs: [] };
+  const repoId = "github.com/9018/gpt-codex-workspace";
+  const state = {
+    tasks: [{ ...task, logs: [] }],
+    goals: [prerequisiteGoal, dependentGoal],
+    conversations: [
+      { id: "conv_g9", goal_id: prerequisiteGoal.id, messages: [] },
+      { id: "conv_g10", goal_id: dependentGoal.id, messages: [] },
+    ],
+    goal_queue: [
+      { queue_id: "queue_g9", goal_id: prerequisiteGoal.id, task_id: task.id, status: "running", repo_id: repoId, position: 9, auto_start: true },
+      {
+        queue_id: "queue_5b61e9e3f50",
+        goal_id: dependentGoal.id,
+        task_id: null,
+        status: "blocked",
+        repo_id: repoId,
+        position: 10,
+        depends_on_goal_id: prerequisiteGoal.id,
+        blocked_reason: `depends_on_goal ${prerequisiteGoal.id} status=open`,
+        auto_start: true,
+      },
+      ...(overrides.extraQueue || []),
+    ],
+    activities: [],
+  };
+  const contractVerification = {
+    contract_valid: true,
+    blocking_passed: true,
+    completion_eligible: true,
+    requires_review: false,
+    blockers: [],
+    non_blocking_followups: [],
+    quality_notes: [],
+    state_assertions: { passed: true, failures: [] },
+    ...(overrides.contractVerification || {}),
+  };
+  const args = makeMinimalArgs(overrides.taskStatus || "completed");
+  args.goal = prerequisiteGoal;
+  args.task = task;
+  args.store = {
+    state,
+    load: async () => state,
+    save: async () => {},
+    mutate: async (updater) => {
+      args.store.state = state;
+      return updater(state);
+    },
+  };
+  args.config = {
+    ...args.config,
+    defaultRepoPath: "/tmp/canonical",
+    defaultWorkspaceRoot: "/tmp",
+    repoResolver: async () => ({
+      repo_id: repoId,
+      canonical_repo_path: "/tmp/canonical",
+      lock_repo_path: "/tmp/canonical",
+      worktree_lifecycle: { ok: true, mode: "git_worktree" },
+    }),
+  };
+  args.resolvedRepo = {
+    repo_id: repoId,
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/g9" },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "G9 completed cleanly at integrated commit",
+    changed_files: ["backend/src/task-final-writeback.mjs"],
+    tests: "npm --prefix backend run check:syntax",
+    commit,
+    local_head: commit,
+    remote_head: commit,
+    repo_head: commit,
+    runtime: { repo_head: commit },
+    reviewer_decision: { status: "accepted", passed: true, should_enter_review: false, ...(overrides.reviewerDecision || {}) },
+    acceptance_findings: overrides.acceptanceFindings || [],
+    integration: { status: "merged", merged: true, pushed: true, commit, ...(overrides.integration || {}) },
+    auto_integration_completion: {
+      attempted: true,
+      completed: true,
+      commit,
+      canonical_clean_after: true,
+      verification_report: { passed: true, head: commit, dirty: false },
+      blockers: [],
+      ...(overrides.autoIntegrationCompletion || {}),
+    },
+    contract_verification: contractVerification,
+    ...(overrides.taskResult || {}),
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }],
+    changed_files: ["backend/src/task-final-writeback.mjs"],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+    contract_verification: contractVerification,
+    ...(overrides.verification || {}),
+  });
+  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/worktree" });
+  return { args, state, prerequisiteGoal, dependentGoal, task, commit };
+}
+
 // ===========================================================================
 // Test: statusLabel for completed
 // ===========================================================================
@@ -875,6 +1007,139 @@ test("task-final-writeback: accepted auto integration is not demoted by fallback
   assert.deepEqual(repairTask.result.changed_files, ["backend/src/task-final-writeback.mjs", "backend/src/task-acceptance.mjs"]);
   assert.equal(repairTask.result.final_verification.passed, false);
   assert.equal(repairTask.result.verification.passed, true);
+});
+
+test("task-final-writeback: accepted auto integration completes linked goal and starts blocked dependent queue item", async () => {
+  const { args, state, prerequisiteGoal, dependentGoal, task } = makeAutoIntegrationQueuePropagationArgs();
+  const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+  args.autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted;
+
+  const result = await finalizeCodexTaskRun(args);
+
+  const completedQueue = state.goal_queue.find((item) => item.queue_id === "queue_g9");
+  const dependentQueue = state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50");
+  const dependentTask = state.tasks.find((item) => item.goal_id === dependentGoal.id);
+  assert.equal(result.status, "completed");
+  assert.equal(state.goals.find((goal) => goal.id === prerequisiteGoal.id).status, "completed");
+  assert.equal(completedQueue.status, "completed");
+  assert.equal(completedQueue.completed_task_id, task.id);
+  assert.equal(dependentQueue.status, "running", JSON.stringify(result.auto_start));
+  assert.equal(dependentQueue.blocked_reason, null);
+  assert.ok(dependentTask, "dependent queue item should auto-start a task");
+  assert.equal(dependentQueue.task_id, dependentTask.id);
+  assert.equal(result.auto_start.auto_started, true);
+});
+
+test("task-final-writeback: accepted auto integration with non-blocking followups propagates queue", async () => {
+  const { args, state, prerequisiteGoal } = makeAutoIntegrationQueuePropagationArgs({
+    contractVerification: {
+      non_blocking_followups: [{ code: "docs_followup", message: "Update docs later" }],
+      quality_notes: [{ code: "coverage_note", message: "Broaden coverage later" }],
+    },
+    taskResult: {
+      followups: [{ code: "docs_followup", message: "Update docs later" }],
+    },
+  });
+  const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+  args.autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted;
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(state.goals.find((goal) => goal.id === prerequisiteGoal.id).status, "completed");
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_g9").status, "completed");
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").status, "running");
+  assert.equal(state.tasks[0].result.closure_decision.status, "auto_completed_with_followups");
+  assert.ok(state.tasks[0].result.next_tasks.length > 0);
+});
+
+test("task-final-writeback: failed or review-required acceptance does not unblock dependent queue", async () => {
+  for (const scenario of [
+    {
+      name: "failed acceptance",
+      overrides: {
+        reviewerDecision: { status: "rejected", passed: false },
+        contractVerification: { blocking_passed: false, completion_eligible: false, blockers: [{ severity: "blocker", code: "acceptance_failed" }] },
+      },
+      expectedStatuses: new Set(["waiting_for_review", "waiting_for_repair"]),
+    },
+    {
+      name: "requires review",
+      overrides: {
+        reviewerDecision: { status: "accepted", passed: true, should_enter_review: true },
+        contractVerification: { requires_review: true, semantic_ambiguity: true },
+      },
+      expectedStatuses: new Set(["waiting_for_review"]),
+    },
+  ]) {
+    const { args, state, prerequisiteGoal } = makeAutoIntegrationQueuePropagationArgs(scenario.overrides);
+    const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+    args.autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted;
+
+    const result = await finalizeCodexTaskRun(args);
+
+    assert.ok(scenario.expectedStatuses.has(result.status), scenario.name);
+    assert.ok(scenario.expectedStatuses.has(state.goals.find((goal) => goal.id === prerequisiteGoal.id).status), scenario.name);
+    assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").status, "blocked", scenario.name);
+    assert.match(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").blocked_reason, /depends_on_goal/, scenario.name);
+  }
+});
+
+test("task-final-writeback: dirty auto integration evidence does not unblock dependent queue", async () => {
+  const { args, state } = makeAutoIntegrationQueuePropagationArgs({
+    autoIntegrationCompletion: {
+      canonical_clean_after: false,
+      verification_report: { passed: true, head: "aea9c3ff72a40ad9ca351bfb1ea77b88010d837c", dirty: true },
+    },
+  });
+  args.autoStartNextOnTaskCompletedFn = async () => ({ auto_started: false, details: [] });
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_g9").status, "completed");
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").status, "blocked");
+  assert.match(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").blocked_reason, /depends_on_goal/);
+});
+
+test("task-final-writeback: repeated accepted final writeback remains idempotent for queue propagation", async () => {
+  const { args, state, dependentGoal, task } = makeAutoIntegrationQueuePropagationArgs();
+  const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+  args.autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted;
+
+  const first = await finalizeCodexTaskRun(args);
+  const firstDependentTaskId = state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").task_id;
+  const taskCountAfterFirst = state.tasks.length;
+
+  state.goal_queue.find((item) => item.queue_id === "queue_g9").status = "running";
+  await finalizeCodexTaskRun({ ...args, task: { ...task, logs: [] } });
+
+  const dependentTasks = state.tasks.filter((item) => item.goal_id === dependentGoal.id);
+  assert.equal(first.status, "completed");
+  assert.equal(state.tasks.length, taskCountAfterFirst);
+  assert.equal(dependentTasks.length, 1);
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50").task_id, firstDependentTaskId);
+  assert.equal(state.goal_queue.find((item) => item.queue_id === "queue_g9").status, "completed");
+});
+
+test("task-final-writeback: repo concurrency guard blocks auto-start after dependency reconciliation", async () => {
+  const { args, state } = makeAutoIntegrationQueuePropagationArgs({
+    extraQueue: [
+      { queue_id: "queue_same_repo_running", goal_id: "goal_other_running", task_id: "task_other_running", status: "running", repo_id: "github.com/9018/gpt-codex-workspace", position: 8, auto_start: true },
+    ],
+  });
+  state.goals.push({ id: "goal_other_running", workspace_id: "hosted-default", project_id: "default", conversation_id: "conv_other", title: "Other running", status: "running", mode: "builder" });
+  state.tasks.push({ id: "task_other_running", goal_id: "goal_other_running", status: "running", logs: [] });
+  const { autoStartNextOnTaskCompleted } = await import("../src/goal-queue.mjs");
+  args.autoStartNextOnTaskCompletedFn = autoStartNextOnTaskCompleted;
+
+  const result = await finalizeCodexTaskRun(args);
+
+  const dependentQueue = state.goal_queue.find((item) => item.queue_id === "queue_5b61e9e3f50");
+  assert.equal(result.status, "completed");
+  assert.equal(dependentQueue.status, "blocked");
+  assert.match(dependentQueue.blocked_reason, /repo concurrency/);
+  assert.equal(result.auto_start.auto_started, false);
 });
 
 test("task-final-writeback: waiting_for_integration merged -> completed", async () => {

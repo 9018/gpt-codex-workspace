@@ -107,16 +107,18 @@ gptwork queue enqueue goal_dependent --depends-on-goal goal_prereq
 
 ### Auto-Start on Task Completion
 
-When a task completes (via `complete_task`), the server automatically calls `autoStartNextOnTaskCompleted`. This checks for dependent queue items and attempts to advance the queue.
+When final task writeback records an accepted, verified auto-integration completion (`auto_completed_clean` or `auto_completed_with_followups`), the linked goal is completed in the same state mutation as the task and running queue item. Dependency-blocked queue items that were waiting on that goal are reconciled from `blocked` to `ready`, then `autoStartNextOnTaskCompleted` attempts to start the next eligible item.
+
+This is the normal path for accepted integrated Codex work; it does not require manual `complete_task`, `recovery_queue_reconcile`, or `start_next_queued_goal`. Failed, unaccepted, review-required, dirty, or unmerged tasks do not trigger this propagation.
 
 ## Repo Concurrency
 
 The queue prevents concurrent execution on the same repository:
 
-1. **Before** creating the task, `start_next_queued_goal` checks for active repo locks.
-2. If a lock exists (another task running on the same repo), the queue item is blocked.
-3. After the running task completes and releases the lock, the next queue run can advance.
-4. The worktree dirty check also prevents starting new tasks when there are uncommitted changes.
+1. **Before** creating the task, `start_next_queued_goal` checks for another running queue item with the same `repo_id`.
+2. If one exists, the candidate queue item is blocked with a repo concurrency reason.
+3. Repo locks and dirty-worktree checks are still enforced by task execution and integration guards; they are not bypassed by queue propagation.
+4. After the running item completes and guards are clear, the next queue run can advance.
 
 These checks work alongside the existing per-repository Codex execution lock (`repo_lock_status`/`list_repo_locks`).
 
