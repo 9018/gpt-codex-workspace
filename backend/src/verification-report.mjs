@@ -17,13 +17,69 @@ export function commandFingerprint(command) {
   return normalizeCommandParts(splitCommand(command));
 }
 
-function stepFingerprints(step) {
+const COMMAND_ALIASES = Object.freeze({
+  docs_check: [
+    'docs_check',
+    'docs-check',
+    'docs:check',
+    'check:docs',
+    'npm run docs_check',
+    'npm run docs:check',
+    'npm run check:docs',
+    'npm run check:syntax',
+    'npm run check:imports',
+    'npm --prefix backend run check:syntax',
+    'npm --prefix backend run check:imports',
+    'node scripts/release-delivery-check.mjs --profile docs',
+    'node scripts/release-delivery-check.mjs --profile changed',
+    'node scripts/release-delivery-check.mjs --fast',
+  ],
+  'check:syntax': ['check:syntax', 'npm run check:syntax', 'npm --prefix backend run check:syntax'],
+  'check:imports': ['check:imports', 'npm run check:imports', 'npm --prefix backend run check:imports'],
+});
+
+function aliasFingerprints(fingerprint) {
+  const aliases = COMMAND_ALIASES[fingerprint] || [];
+  return new Set([fingerprint, ...aliases.map((alias) => commandFingerprint(alias)).filter(Boolean)]);
+}
+
+function fingerprintMatches(actual, required) {
+  if (!actual || !required) return false;
+  if (actual === required) return true;
+  const requiredAliases = aliasFingerprints(required);
+  if (requiredAliases.has(actual)) return true;
+  for (const alias of requiredAliases) {
+    if (!alias) continue;
+    if (actual === alias || actual.startsWith(`${alias} `)) return true;
+  }
+  return false;
+}
+
+export function commandSatisfiesRequirement(actualCommand, requiredCommand) {
+  const required = commandFingerprint(requiredCommand);
+  const actualFingerprints = commandFingerprints(actualCommand);
+  for (const actual of actualFingerprints) {
+    if (fingerprintMatches(actual, required)) return true;
+  }
+  return false;
+}
+
+export function commandFingerprints(step) {
   const base = commandFingerprint(step);
   const fingerprints = new Set([base]);
+  const name = commandFingerprint(step?.name);
+  if (name) fingerprints.add(name);
+  for (const fingerprint of [...fingerprints]) {
+    for (const alias of aliasFingerprints(fingerprint)) fingerprints.add(alias);
+  }
   if (basename(String(step?.cwd || '')) === 'backend' && base.startsWith('npm run ')) {
     fingerprints.add(base.replace(/^npm run /, 'npm --prefix backend run '));
   }
   return fingerprints;
+}
+
+function stepFingerprints(step) {
+  return commandFingerprints(step);
 }
 
 function reportProfile(report) {
@@ -90,7 +146,12 @@ export function isVerificationReportReusable(report, {
   }
 
   const requiredFingerprints = requiredCommands.map(commandFingerprint).filter(Boolean);
-  const missing = requiredFingerprints.filter((fingerprint) => !passedStepFingerprints.has(fingerprint));
+  const missing = requiredFingerprints.filter((fingerprint) => {
+    for (const passed of passedStepFingerprints) {
+      if (fingerprintMatches(passed, fingerprint)) return false;
+    }
+    return true;
+  });
   if (missing.length > 0) {
     return { reusable: false, reason: 'missing_required_command', missing_commands: missing, profile: actualProfile, head: reportHead };
   }

@@ -48,6 +48,31 @@ test('code_change contract is satisfied when blocking evidence and assertions pa
   assert.equal(verification.non_blocking_followups[0].code, 'docs_followup');
 });
 
+test('docs_check required command is satisfied by concrete backend verification command evidence', () => {
+  const verification = verifyAcceptanceContract({
+    contract: contract('docs_only', {
+      requirements: { requires_commit: true, requires_integration: true },
+      blocking_requirements: [{ id: 'commit_present' }, { id: 'changed_files_reported' }, { id: 'verification_report' }, { id: 'integration_completed' }],
+      verification_plan: { required_commands: ['docs_check'] },
+    }),
+    result: {
+      status: 'completed',
+      summary: 'docs updated',
+      operation_kind: 'docs_only',
+      changed_files: ['docs/guide.md'],
+      commit: 'abc123',
+      verification: { passed: true, commands: [{ name: 'check:imports', cmd: 'npm', args: ['run', 'check:imports'], cwd: '/repo/backend', exit_code: 0 }] },
+      integration: { merged: true, status: 'merged' },
+    },
+    verification: { passed: true, commands: [{ name: 'check:imports', cmd: 'npm', args: ['run', 'check:imports'], cwd: '/repo/backend', exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.blocking_passed, true);
+  assert.equal(verification.acceptance_status, 'satisfied');
+  assert.deepEqual(verification.blockers, []);
+});
+
 test('operation-specific contracts accept file_write, restart, admin_command, diagnostic, and cleanup evidence', () => {
   const cases = [
     {

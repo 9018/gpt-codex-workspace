@@ -3,6 +3,7 @@ import { getDefaultAcceptanceContractProfile } from './contract-profiles.mjs';
 import { validateContractSemantics } from './semantics.mjs';
 import { normalizeOperationEvidence } from '../evidence/evidence-normalizer.mjs';
 import { getRequirementCheck } from '../evidence/operation-evidence-profiles.mjs';
+import { commandFingerprint, commandSatisfiesRequirement } from '../verification-report.mjs';
 
 function blocker(code, message, evidence = {}, source = 'acceptance_contract_verifier') {
   return { severity: 'blocker', code, message, source, evidence };
@@ -72,9 +73,16 @@ function verificationPlanBlockers(contract = {}, verification = {}, result = {})
   const blockers = [];
   const requiredCommands = normalizeList(contract.verification_plan?.required_commands).map(String).filter(Boolean);
   if (requiredCommands.length > 0) {
-    const commandText = JSON.stringify([verification.commands, result.verification?.commands, result.tests]);
+    const evidencedCommands = [
+      ...normalizeList(verification.commands),
+      ...normalizeList(result.verification?.commands),
+    ];
+    const testsText = String(result.tests || '');
     for (const command of requiredCommands) {
-      if (!commandText.includes(command)) {
+      const satisfied = evidencedCommands.some((evidenced) => commandSatisfiesRequirement(evidenced, command))
+        || testsText.includes(command)
+        || testsText.includes(commandFingerprint(command));
+      if (!satisfied) {
         blockers.push(blocker('verification_command_missing', `Required verification command was not evidenced: ${command}`, { command }));
       }
     }

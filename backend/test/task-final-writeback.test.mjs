@@ -744,6 +744,139 @@ test("task-final-writeback: waiting_for_integration branch_pushed auto completio
   assert.equal(removedWorktree, true);
 });
 
+test("task-final-writeback: accepted auto integration is not demoted by fallback verifier and advances queue", async () => {
+  let savedState = null;
+  let autoStartedTask = null;
+  const commit = "55b14a325aa9af561c67e233455c7c6d60f5d407";
+  const repairCommit = "a8ab00a267af8079a626be0c86f87392f3e2dc8c";
+  const args = makeMinimalArgs("completed");
+  args.goal = {
+    id: "goal_g3_auto_acceptance",
+    workspace_id: "hosted-default",
+    title: "G3 accepted auto integration",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change", semantic_confidence: "high" },
+      requirements: { requires_commit: true, requires_integration: true },
+      blocking_requirements: [
+        { id: "commit_present" },
+        { id: "changed_files_reported" },
+        { id: "verification_report" },
+        { id: "integration_completed" },
+      ],
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+  };
+  args.task = {
+    id: "task_g3_repair",
+    goal_id: args.goal.id,
+    parent_task_id: "task_g3_root",
+    repair_of_task_id: "task_g3_root",
+    logs: [],
+  };
+  const state = {
+    tasks: [
+      { id: "task_g3_root", goal_id: "goal_g3_root", status: "waiting_for_repair", logs: [], result: {} },
+      { id: args.task.id, goal_id: args.goal.id, parent_task_id: "task_g3_root", repair_of_task_id: "task_g3_root", logs: [] },
+    ],
+    goals: [args.goal, { id: "goal_g3_root", workspace_id: "hosted-default", status: "waiting_for_repair" }],
+    goal_queue: [
+      { queue_id: "queue_g3", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true },
+      { queue_id: "queue_g4", goal_id: "goal_g4", task_id: null, status: "ready", auto_start: true },
+    ],
+    activities: [],
+  };
+  args.store = {
+    mutate: async (updater) => {
+      const result = await updater(state);
+      savedState = state;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/g3", base_sha: "0".repeat(40) },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    status: "completed",
+    summary: "G3 accepted repair was integrated and verified",
+    changed_files: ["backend/src/task-final-writeback.mjs", "backend/src/task-acceptance.mjs"],
+    tests: "backend check:syntax, check:imports, workflow/acceptance/queue tests passed",
+    commit: repairCommit,
+    local_head: repairCommit,
+    remote_head: repairCommit,
+    warnings: [],
+    followups: [],
+    verification: { passed: true, commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }], findings: [] },
+    reviewer_decision: { status: "accepted", passed: true, decision: { status: "accepted", passed: true } },
+    acceptance_findings: [
+      { severity: "major", code: "changed_files_mismatch", message: "resolved by repair", resolved: true },
+    ],
+    integration: { status: "merged", merged: true, auto_completed: true, commit: repairCommit },
+    auto_integration_completion: {
+      attempted: true,
+      eligible: true,
+      completed: true,
+      reason: "already_integrated_and_verified",
+      base_sha: commit,
+      commit: repairCommit,
+      canonical_clean_after: true,
+      verification_report_path: "/tmp/g3-report.json",
+      verification_report: { passed: true, profile: "changed", head: repairCommit, dirty: false, steps: 3, failures: 0 },
+      commands: [{ cmd: "node scripts/release-delivery-check.mjs --profile changed", exit_code: 0 }],
+      blockers: [],
+      warnings: [],
+    },
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: false,
+    status: "waiting_for_review",
+    commands: [{ cmd: "git diff --check", exit_code: 0 }],
+    changed_files: [],
+    reason_no_tests: null,
+    failure_class: "verification_failed",
+    requires_review: true,
+    findings: [
+      { severity: "major", code: "changed_files_mismatch", message: "Result claims changed_files but git diff shows no changes", source: "acceptance_agent" },
+      { severity: "blocker", code: "verification_command_missing", message: "Required verification command was not evidenced: docs_check", source: "acceptance_contract_verifier" },
+    ],
+    contract_verification: {
+      contract_valid: true,
+      blocking_passed: false,
+      acceptance_status: "unsatisfied",
+      completion_eligible: false,
+      blockers: [{ severity: "blocker", code: "verification_command_missing", message: "docs_check", source: "acceptance_contract_verifier" }],
+      non_blocking_followups: [],
+      quality_notes: [],
+      state_assertions: { passed: true, failures: [] },
+    },
+  });
+  args.autoStartNextOnTaskCompletedFn = async (store, config, completedTask) => {
+    autoStartedTask = completedTask;
+    return { auto_started: true, details: [{ queue_id: "queue_g4", started: true }] };
+  };
+  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/worktree" });
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "completed");
+  const rootTask = savedState.tasks.find((item) => item.id === "task_g3_root");
+  const repairTask = savedState.tasks.find((item) => item.id === "task_g3_repair");
+  assert.equal(repairTask.status, "completed");
+  assert.equal(rootTask.status, "completed");
+  assert.equal(savedState.goals[0].status, "completed");
+  assert.equal(savedState.goal_queue[0].status, "completed");
+  assert.equal(autoStartedTask.id, "task_g3_repair");
+  assert.equal(result.auto_start.auto_started, true);
+  assert.equal(repairTask.result.closure_decision.status, "auto_completed_clean");
+  assert.equal(repairTask.result.requires_review, false);
+  assert.deepEqual(repairTask.result.changed_files, ["backend/src/task-final-writeback.mjs", "backend/src/task-acceptance.mjs"]);
+  assert.equal(repairTask.result.final_verification.passed, false);
+  assert.equal(repairTask.result.verification.passed, true);
+});
+
 test("task-final-writeback: waiting_for_integration merged -> completed", async () => {
   // P0: When finalizer runs integration and gets merged, task should complete
   let savedTask = null;

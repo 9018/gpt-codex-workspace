@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   commandFingerprint,
+  commandSatisfiesRequirement,
   isVerificationReportReusable,
   verificationReportToEvidence,
 } from '../src/verification-report.mjs';
@@ -55,6 +56,19 @@ test('isVerificationReportReusable accepts matching passed report with required 
     head: 'abc123',
     matched_commands: ['npm run check:imports'],
   });
+});
+
+test('isVerificationReportReusable accepts abstract docs_check from concrete backend verification commands', () => {
+  const reusable = isVerificationReportReusable(report({ profile: 'changed', mode: 'changed' }), {
+    repoHead: 'abc123',
+    profile: 'docs',
+    requiredCommands: ['docs_check'],
+    maxAgeMs: 60_000,
+    now: () => Date.parse('2026-06-30T00:00:30.000Z'),
+  });
+
+  assert.equal(reusable.reusable, true);
+  assert.equal(commandSatisfiesRequirement({ name: 'check:imports', cmd: 'npm', args: ['run', 'check:imports'], cwd: '/repo/backend' }, 'docs_check'), true);
 });
 
 test('isVerificationReportReusable rejects head mismatch', () => {
