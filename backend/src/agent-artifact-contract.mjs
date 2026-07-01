@@ -29,6 +29,7 @@ export const ARTIFACT_SCHEMA = Object.freeze({
   kinds: Object.freeze({
     context_bundle: Object.freeze({ extensions: Object.freeze([".md"]), legacy_paths: Object.freeze(["context.bundle.md"]) }),
     context_retrieval: Object.freeze({ extensions: Object.freeze([".json"]), legacy_paths: Object.freeze(["context.retrieval.json"]) }),
+    context_manifest: Object.freeze({ extensions: Object.freeze([".json"]), legacy_paths: Object.freeze(["context.manifest.json"]) }),
     plan: Object.freeze({ extensions: Object.freeze([".md", ".json"]) }),
     change_summary: Object.freeze({ extensions: Object.freeze([".md", ".json", ".diff", ".patch"]) }),
     verification: Object.freeze({ extensions: Object.freeze([".json", ".md", ".log", ".txt"]) }),
@@ -72,6 +73,7 @@ export function getRunArtifactPaths({ goalId, taskId, runId } = {}) {
     result_md: `${goalDir}/result.md`,
     context_bundle_md: `${goalDir}/context.bundle.md`,
     context_retrieval_json: `${goalDir}/context.retrieval.json`,
+    context_manifest_json: `${goalDir}/context.manifest.json`,
     reviewer_decision_json: `${goalDir}/reviewer_decision.json`,
     run_dir: runDir,
     run_json: `${runDir}/run.json`,
@@ -94,7 +96,7 @@ export function artifactRecord({ kind, role, path, required = false, legacy = fa
   };
 }
 
-export function mapLegacyArtifactsToContract({ goalId, taskId, runId, result, hasContextBundle = false, hasContextRetrieval = false } = {}) {
+export function mapLegacyArtifactsToContract({ goalId, taskId, runId, result, hasContextBundle = false, hasContextRetrieval = false, hasContextManifest = false } = {}) {
   const paths = getRunArtifactPaths({ goalId, taskId, runId });
   const artifacts = [];
 
@@ -104,6 +106,10 @@ export function mapLegacyArtifactsToContract({ goalId, taskId, runId, result, ha
 
   if (hasContextRetrieval) {
     artifacts.push(artifactRecord({ kind: "context_retrieval", role: "context_curator", path: paths.context_retrieval_json, legacy: true }));
+  }
+
+  if (hasContextManifest) {
+    artifacts.push(artifactRecord({ kind: "context_manifest", role: "context_curator", path: paths.context_manifest_json, legacy: true }));
   }
 
   if (result && typeof result === "object") {
@@ -143,6 +149,7 @@ function artifactKindForValue(value) {
   const lower = value.toLowerCase();
   if (lower.endsWith("context.bundle.md")) return "context_bundle";
   if (lower.endsWith("context.retrieval.json")) return "context_retrieval";
+  if (lower.endsWith("context.manifest.json")) return "context_manifest";
   if (lower.endsWith("result.json") || lower.endsWith("result.md")) return "result";
   if (lower.includes("reviewer_decision") || lower.includes("review-decision") || lower.includes("review_decision")) return "reviewer_decision";
   if (lower.includes("verification") || lower.includes("test") || lower.endsWith("verification.json")) return "verification";

@@ -41,6 +41,7 @@ test("run artifact paths preserve existing goal result and context bundle locati
   assert.equal(paths.result_md, ".gptwork/goals/goal_123/result.md");
   assert.equal(paths.context_bundle_md, ".gptwork/goals/goal_123/context.bundle.md");
   assert.equal(paths.context_retrieval_json, ".gptwork/goals/goal_123/context.retrieval.json");
+  assert.equal(paths.context_manifest_json, ".gptwork/goals/goal_123/context.manifest.json");
   assert.equal(paths.reviewer_decision_json, ".gptwork/goals/goal_123/reviewer_decision.json");
   assert.equal(paths.run_dir, ".gptwork/runs/task_456/run_789");
   assert.equal(paths.run_json, ".gptwork/runs/task_456/run_789/run.json");
@@ -55,6 +56,7 @@ test("legacy result/context artifacts map to standard artifact records", () => {
     result: { status: "completed", reviewer_decision: { status: "accepted", passed: true } },
     hasContextBundle: true,
     hasContextRetrieval: true,
+    hasContextManifest: true,
   });
 
   assert.deepEqual(
@@ -62,6 +64,7 @@ test("legacy result/context artifacts map to standard artifact records", () => {
     [
       ["context_bundle", "context_curator", ".gptwork/goals/goal_1/context.bundle.md"],
       ["context_retrieval", "context_curator", ".gptwork/goals/goal_1/context.retrieval.json"],
+      ["context_manifest", "context_curator", ".gptwork/goals/goal_1/context.manifest.json"],
       ["result", "finalizer", ".gptwork/goals/goal_1/result.json"],
       ["reviewer_decision", "reviewer", ".gptwork/goals/goal_1/reviewer_decision.json"],
     ],
@@ -96,5 +99,6 @@ test("validateAgentArtifactContract accepts existing result.json contract as fin
 test("artifact schema documents required artifact kinds by role", () => {
   assert.deepEqual(ARTIFACT_SCHEMA.required_by_role.finalizer, ["result"]);
   assert.deepEqual(ARTIFACT_SCHEMA.required_by_role.context_curator, ["context_bundle"]);
+  assert.ok(ARTIFACT_SCHEMA.kinds.context_manifest.extensions.includes(".json"));
   assert.ok(ARTIFACT_SCHEMA.kinds.result.extensions.includes(".json"));
 });

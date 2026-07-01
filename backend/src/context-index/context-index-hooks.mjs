@@ -21,6 +21,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { indexGoalContext, retrieveContext } from "./retriever.mjs";
 import { buildContextBundle } from "./context-bundle-builder.mjs";
+import { buildContextManifest } from "./context-curator.mjs";
 
 const DEFAULT_CROSS_GOAL_TOP_K = 4;
 const DEFAULT_PER_GOAL_TOP_K = 4;
@@ -358,6 +359,7 @@ export async function maybeBuildContextBundle(
         ok: true,
         bundle: bundleResult.bundle,
         tokenEstimate: bundleResult.tokenEstimate,
+        contextManifest: buildContextManifest({ goal, workspaceFiles, bundleResult }),
       };
     }
 
@@ -456,6 +458,7 @@ export async function maybeBuildContextBundle(
       bundle: bundleResult.bundle,
       tokenEstimate: bundleResult.tokenEstimate,
       retrievalJson,
+      contextManifest: buildContextManifest({ goal, workspaceFiles, bundleResult, retrievalJson }),
     };
   } catch (err) {
     const warning = `Context index/bundle generation failed for goal ${goal.id}: ${err.message}`;

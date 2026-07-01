@@ -23,7 +23,7 @@ GPTWork 不是部署平台，也不是 secrets 管理系统。它只协调执行
 
 - MCP 工具模式：`minimal`、`standard`、`operator`、`codex`、`full`，用于控制 ChatGPT/Codex/运维侧能看到的工具面。
 - 目标与任务：`create_encoded_goal`、`create_goal`、`create_task`、`assign_task_to_codex`、队列工具和兼容入口仍可用。
-- 有界上下文：新 goal 会写 `codex.entry.md`，存在检索结果时写 `context.bundle.md` 和 `context.retrieval.json`。
+- 有界上下文：新 goal 会写 `codex.entry.md`，存在检索结果时写 `context.bundle.md`、`context.retrieval.json` 和 `context.manifest.json`。
 - 小包化 review/context：`get_task_acceptance_bundle` 和 `get_task_review_packet` 返回最小证据包，不返回完整 transcript、memory、大段 diff 或完整 context bundle。
 - 自动验收模型：acceptance contract、operation-specific evidence、contract-aware verifier、state assertions、deterministic closure 已拆成独立模块。
 - Zvec context-index：可选使用 `@zvec/zvec` 做可重建上下文索引；不可用时可回退本地 JSON store。
@@ -102,9 +102,10 @@ Codex 通过插件或本地 MCP 连接后端。Codex 任务提示会要求先读
 
 1. `codex.entry.md`：本次任务的有界执行入口，必须先读。
 2. `context.bundle.md`：存在时优先作为支持上下文。
-3. `context.json`：只做元数据查找，不鼓励全文读取。
-4. `goal.md` / `transcript.md`：只有入口和 bundle 不足时才深读。
-5. payload 文件：仅在调试编码或字段缺失时读取。
+3. `context.manifest.json`：Context Curator 诊断和 artifact 映射；不是默认任务上下文。
+4. `context.json`：只做元数据查找，不鼓励全文读取。
+5. `goal.md` / `transcript.md`：只有入口和 bundle 不足时才深读。
+6. payload 文件：仅在调试编码或字段缺失时读取。
 
 ## 典型工作流
 

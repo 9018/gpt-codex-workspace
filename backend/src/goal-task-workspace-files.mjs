@@ -91,6 +91,14 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
           context
         );
       }
+      if (bundleResult.contextManifest) {
+        await writeWorkspaceTextInternal(
+          store, config, goal.workspace_id,
+          workspaceFiles.context_manifest_json,
+          JSON.stringify(bundleResult.contextManifest, null, 2),
+          context
+        );
+      }
     } else if (bundleResult.warning) {
       console.warn("[context-index] bundle build skipped:", bundleResult.warning);
     }

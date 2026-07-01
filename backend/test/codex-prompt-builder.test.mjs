@@ -379,6 +379,7 @@ test('buildCodexPrompt: context.bundle.md is preferred over transcript.md', () =
     workspaceFiles: {
       codex_entry_md: '.gptwork/goals/goal_bundle/codex.entry.md',
       context_bundle_md: '.gptwork/goals/goal_bundle/context.bundle.md',
+      context_manifest_json: '.gptwork/goals/goal_bundle/context.manifest.json',
       context_json: '.gptwork/goals/goal_bundle/context.json',
       goal_md: '.gptwork/goals/goal_bundle/goal.md',
       transcript_md: '.gptwork/goals/goal_bundle/transcript.md',
@@ -394,6 +395,7 @@ test('buildCodexPrompt: context.bundle.md is preferred over transcript.md', () =
   assert.ok(fullPrompt.includes('supporting context when present'), 'Should say "supporting context when present"');
   assert.ok(fullPrompt.includes('Use codex.entry.md plus context.bundle.md as the default execution context'),
     'Should explicitly define codex.entry.md + context.bundle.md as the default execution context');
+  assert.ok(fullPrompt.includes('context.manifest.json'), 'Should reference context manifest diagnostics');
   assert.ok(fullPrompt.includes('Do not read context.json, goal.md, or transcript.md wholesale by default'),
     'Should explicitly forbid default wholesale reads of deep lookup files');
 });

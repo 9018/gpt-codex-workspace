@@ -756,6 +756,50 @@ describe("context-bundle-builder — bundle generation", () => {
     assert.ok(result.tokenEstimate <= 512 || result.bundle.length < 3000);
     assert.ok(result.selectedChunks.length <= 8);
   });
+
+  it("buildContextManifest records the minimal context package artifacts and diagnostics", () => {
+    const goal = { id: "goal_manifest", title: "Manifest Goal", workspace_id: "ws-manifest" };
+    const workspaceFiles = {
+      codex_entry_md: ".gptwork/goals/goal_manifest/codex.entry.md",
+      context_bundle_md: ".gptwork/goals/goal_manifest/context.bundle.md",
+      context_retrieval_json: ".gptwork/goals/goal_manifest/context.retrieval.json",
+      context_manifest_json: ".gptwork/goals/goal_manifest/context.manifest.json",
+      context_json: ".gptwork/goals/goal_manifest/context.json",
+      goal_md: ".gptwork/goals/goal_manifest/goal.md",
+      transcript_md: ".gptwork/goals/goal_manifest/transcript.md",
+    };
+    const retrievalJson = {
+      goal_id: "goal_manifest",
+      store_name: "local-json-store",
+      retrieval_mode: "vector",
+      requested_retrieval_mode: "hybrid",
+      selected_bundle_chunks: 2,
+      merged_chunk_count: 3,
+      embedding_provider: { name: "fallback-hash-sha256", semantic: false },
+      budget: { bundle_max_tokens: 1024, merged_chunk_limit: 4 },
+      selection: { bucket_counts: { current_goal: 1, result: 1 } },
+    };
+
+    const manifest = bundleBuilder.buildContextManifest({
+      goal,
+      workspaceFiles,
+      bundleResult: { tokenEstimate: 512, selectedChunks: [{ id: "g" }, { id: "r" }] },
+      retrievalJson,
+    });
+
+    assert.equal(manifest.schema_version, "gptwork.context_manifest.v1");
+    assert.equal(manifest.curator.role, "context_curator");
+    assert.equal(manifest.curator.external_api_used, false);
+    assert.equal(manifest.entrypoint, workspaceFiles.codex_entry_md);
+    assert.deepEqual(manifest.default_context_package, [workspaceFiles.codex_entry_md, workspaceFiles.context_bundle_md]);
+    assert.equal(manifest.artifacts.context_bundle.path, workspaceFiles.context_bundle_md);
+    assert.equal(manifest.artifacts.context_retrieval.path, workspaceFiles.context_retrieval_json);
+    assert.equal(manifest.diagnostics.store_name, "local-json-store");
+    assert.equal(manifest.diagnostics.embedding_provider.name, "fallback-hash-sha256");
+    assert.equal(manifest.diagnostics.selected_bundle_chunks, 2);
+    assert.equal(manifest.lookup_policy.deep_lookup_files.context_json.default_read, false);
+    assert.equal(manifest.lookup_policy.deep_lookup_files.transcript_md.default_read, false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -802,6 +846,14 @@ describe("context-index-hooks — integration does not break workflow", () => {
       assert.strictEqual(result.retrievalJson.budget.bundle_max_tokens, 2048);
       assert.strictEqual(result.retrievalJson.budget.merged_chunk_limit, 8);
       assert.strictEqual(result.retrievalJson.budget.max_goals_scanned, 20);
+      assert.ok(result.contextManifest);
+      assert.strictEqual(result.contextManifest.curator.role, "context_curator");
+      assert.deepStrictEqual(result.contextManifest.default_context_package, [
+        ".gptwork/goals/goal_hook_test/codex.entry.md",
+        ".gptwork/goals/goal_hook_test/context.bundle.md",
+      ]);
+      assert.strictEqual(result.contextManifest.diagnostics.store_name, result.retrievalJson.store_name);
+      assert.strictEqual(result.contextManifest.diagnostics.selected_bundle_chunks, result.retrievalJson.selected_bundle_chunks);
       assert.strictEqual(result.retrievalJson.budget.filters.workspace_id, "ws-test");
       assert.strictEqual(result.retrievalJson.selected_bundle_chunks, result.retrievalJson.selection.results.length);
       assert.ok(result.retrievalJson.selection.quota);
@@ -918,14 +970,21 @@ describe("context-index-hooks — integration does not break workflow", () => {
 
       const bundlePath = join(tmpDir, files.context_bundle_md);
       const retrievalPath = join(tmpDir, files.context_retrieval_json);
+      const manifestPath = join(tmpDir, files.context_manifest_json);
       assert.ok(existsSync(bundlePath), "context.bundle.md should be written for a new goal");
       assert.ok(existsSync(retrievalPath), "context.retrieval.json should be written when retrieval data exists");
+      assert.ok(existsSync(manifestPath), "context.manifest.json should be written for the minimal context package");
       const retrieval = JSON.parse(readFileSync(retrievalPath, "utf8"));
+      const manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
       assert.strictEqual(retrieval.goal_id, goal.id);
       assert.strictEqual(retrieval.store_name, "local-json-store");
       assert.strictEqual(typeof retrieval.retrieval_mode, "string");
       assert.ok(retrieval.store_capabilities);
       assert.ok(retrieval.embedding_provider);
+      assert.strictEqual(manifest.schema_version, "gptwork.context_manifest.v1");
+      assert.deepStrictEqual(manifest.default_context_package, [files.codex_entry_md, files.context_bundle_md]);
+      assert.strictEqual(manifest.artifacts.context_retrieval.path, files.context_retrieval_json);
+      assert.strictEqual(manifest.diagnostics.store_name, retrieval.store_name);
     } finally {
       rmSync(tmpDir, { recursive: true, force: true });
     }

@@ -6,6 +6,8 @@
  * transcript available for explicit deep lookup.
  */
 
+export { buildContextManifest, CONTEXT_MANIFEST_SCHEMA_VERSION } from "./context-curator.mjs";
+
 // ---------------------------------------------------------------------------
 // Defaults
 // ---------------------------------------------------------------------------

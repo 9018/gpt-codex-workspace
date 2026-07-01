@@ -55,6 +55,7 @@ export function buildCodexPrompt({
     const dir = files.dir || _goalStateDir;
     const entryRef = files.codex_entry_md || `${dir}/codex.entry.md`;
     const bundleRef = files.context_bundle_md || `${dir}/context.bundle.md`;
+    const manifestRef = files.context_manifest_json || `${dir}/context.manifest.json`;
     const contextRef = files.context_json || `${dir}/context.json`;
     const goalRef = files.goal_md || `${dir}/goal.md`;
     const transcriptRef = files.transcript_md || `${dir}/transcript.md`;
@@ -66,6 +67,7 @@ export function buildCodexPrompt({
       `Context lookup policy:`,
       `- Use codex.entry.md plus context.bundle.md as the default execution context when the bundle exists.`,
       `- Prefer ${bundleRef} for supporting context when present.`,
+      `- Use ${manifestRef} only for context curator diagnostics and artifact mapping when needed.`,
       `- Do not read context.json, goal.md, or transcript.md wholesale by default; they are explicit deep-lookup files.`,
       `- Use ${contextRef} only for metadata lookup; do not read it wholesale before acting.`,
       `- Use ${goalRef} only for explicit deep lookup when the entry and bundle are insufficient.`,

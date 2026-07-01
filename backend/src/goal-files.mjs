@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 /**
  * Build the workspace file paths for a given goal.
  * @param {object} goal
- * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string, context_bundle_md: string, context_retrieval_json: string, acceptance_contract_json: string }}
+ * @returns {{ dir: string, goal_md: string, context_json: string, transcript_md: string, result_md: string, payload_json: string, payload_base64: string, bundle_zip: string, attachments_dir: string, context_bundle_md: string, context_retrieval_json: string, context_manifest_json: string, acceptance_contract_json: string }}
  */
 export function goalWorkspaceFiles(goal) {
   const dir = `.gptwork/goals/${goal.id}`;
@@ -22,6 +22,7 @@ export function goalWorkspaceFiles(goal) {
     attachments_dir: `${dir}/attachments`,
     context_bundle_md: `${dir}/context.bundle.md`,
     context_retrieval_json: `${dir}/context.retrieval.json`,
+    context_manifest_json: `${dir}/context.manifest.json`,
     acceptance_contract_json: `${dir}/acceptance.contract.json`,
     artifact_contract_json: `${dir}/artifact.contract.json`,
     reviewer_decision_json: `${dir}/reviewer_decision.json`,
@@ -62,6 +63,7 @@ export function internalGoalWorkspaceFiles(goal, payload = {}) {
     transcript_md: files.transcript_md,
     context_bundle_md: files.context_bundle_md,
     context_retrieval_json: files.context_retrieval_json,
+    context_manifest_json: files.context_manifest_json,
     acceptance_contract_json: files.acceptance_contract_json,
     artifact_contract_json: files.artifact_contract_json,
     reviewer_decision_json: files.reviewer_decision_json,
@@ -205,6 +207,7 @@ export function renderCodexEntryMarkdown(goal, conversation, memories, task, wor
     "## Context Lookup Policy",
     "",
     `- Preferred bounded context: ${workspaceFiles.context_bundle_md}`,
+    `- Context manifest: ${workspaceFiles.context_manifest_json} (diagnostics and artifact map; do not use as primary task context).`,
     `- Metadata-only lookup: ${workspaceFiles.context_json}`,
     `- Deep lookup only when needed: ${workspaceFiles.goal_md}`,
     `- Deep transcript lookup only when needed: ${workspaceFiles.transcript_md}`,

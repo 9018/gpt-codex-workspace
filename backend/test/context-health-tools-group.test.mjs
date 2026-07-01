@@ -189,6 +189,9 @@ test('project_context_status exposes safe context_index diagnostics', async () =
   assert.equal(result.context_index.zvec_optional_dependency, 'not_checked');
   assert.equal(result.context_index.bundle_max_tokens, 1536);
   assert.equal(result.context_index.bundle_max_chunks, 6);
+  assert.equal(result.context_index.manifest_enabled, true);
+  assert.equal(result.context_index.manifest_filename, 'context.manifest.json');
+  assert.equal(result.context_index.default_context_package.join(' + '), 'codex.entry.md + context.bundle.md');
   assert.equal(result.context_index.cross_goal_top_k, 3);
   assert.equal(result.context_index.per_goal_top_k, 5);
   assert.equal(result.context_index.max_goals_scanned, 9);

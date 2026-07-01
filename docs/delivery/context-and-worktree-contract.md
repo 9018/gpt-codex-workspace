@@ -57,6 +57,22 @@ It records:
 
 Zvec is optional and rebuildable. It is not the source of truth. Durable facts remain in goal/task/result state, conversation records, Git commits, and runtime diagnostics.
 
+## Context Manifest Contract
+
+When a bundle is generated, GPTWork also writes:
+
+```text
+.gptwork/goals/<goal_id>/context.manifest.json
+```
+
+The manifest is produced by the `context_curator` role. It records the minimal context package, artifact paths, lookup policy, and retrieval diagnostics. The default package is always:
+
+```text
+codex.entry.md + context.bundle.md
+```
+
+`context.manifest.json` is diagnostic metadata, not primary task context. Codex may read it when it needs to inspect the curator output, selected artifact paths, store mode, retrieval mode, embedding provider, budgets, or selected chunk counts. It must not replace `codex.entry.md` as the first file or make `goal.md`/`transcript.md` default reads.
+
 Runtime knobs:
 
 ```bash
