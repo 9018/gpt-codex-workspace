@@ -34,6 +34,7 @@ import {
   isCompletedStatus,
   isFailedTerminalStatus,
 } from "./task-status-taxonomy.mjs";
+import { normalizeRepoId, repoIdsEqual } from "./repo-identity.mjs";
 
 // ---------------------------------------------------------------------------
 // Exported helpers
@@ -259,8 +260,9 @@ export function checkAcceptanceGate(state, item) {
  * @param {string} [excludeQueueId]
  * @returns {{ blocked: boolean, runningItem: object|null }}
  */
-export function checkRepoConcurrency(state, repoId, excludeQueueId = null) {
-  if (!repoId) {
+export function checkRepoConcurrency(state, repoId, excludeQueueId = null, config = {}) {
+  const normalizedRepoId = normalizeRepoId(repoId, config);
+  if (!normalizedRepoId) {
     return { blocked: false, runningItem: null };
   }
 
@@ -270,8 +272,7 @@ export function checkRepoConcurrency(state, repoId, excludeQueueId = null) {
     if (excludeQueueId && item.queue_id === excludeQueueId) continue;
     if (item.status !== QUEUE_STATUS_RUNNING) continue;
 
-    // Repo match: both are non-empty and equal
-    if (item.repo_id && item.repo_id === repoId) {
+    if (repoIdsEqual(item.repo_id, normalizedRepoId, config)) {
       return {
         blocked: true,
         runningItem: item,
@@ -317,16 +318,17 @@ export async function buildAdvancementChecks(state, item, config = {}) {
   });
 
   // 3. Repo concurrency check
-  if (item.repo_id) {
-    const concurrencyResult = checkRepoConcurrency(state, item.repo_id, item.queue_id);
+  const normalizedItemRepoId = normalizeRepoId(item.repo_id, config);
+  if (normalizedItemRepoId) {
+    const concurrencyResult = checkRepoConcurrency(state, normalizedItemRepoId, item.queue_id, config);
     checks.push({
       check: "repo_concurrency",
       passed: !concurrencyResult.blocked,
-      repo_id: item.repo_id,
+      repo_id: normalizedItemRepoId,
       blocking_item_queue_id: concurrencyResult.runningItem?.queue_id || null,
       blocking_item_goal_id: concurrencyResult.runningItem?.goal_id || null,
       detail: concurrencyResult.blocked
-        ? `same-repo serialisation: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${item.repo_id}`
+        ? `same-repo serialisation: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${normalizedItemRepoId}`
         : "no concurrent repo task",
     });
   } else {

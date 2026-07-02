@@ -31,8 +31,20 @@ import { execFileSync } from 'node:child_process';
 import { acquireRepoLock, releaseRepoLock, forceReleaseRepoLock, safeRepoId, getLocksDir } from './repo-lock.mjs';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { normalizeRepoId } from './repo-identity.mjs';
 
 const INTEGRATION_LOCKS = new Map();
+
+export function integrationLockIdentity(repoId, targetBranch, config = {}) {
+  const normalizedRepoId = normalizeRepoId(repoId, config);
+  const branch = targetBranch || 'main';
+  return {
+    repoId: normalizedRepoId,
+    targetBranch: branch,
+    lockKey: `integration:${normalizedRepoId}:${branch}`,
+    lockPath: `integration:${safeRepoId(normalizedRepoId)}:${branch}`,
+  };
+}
 
 /**
  * Run the integration queue for a given repo and target branch.
@@ -51,11 +63,12 @@ const INTEGRATION_LOCKS = new Map();
 export async function runIntegrationQueue(options = {}) {
   const { repoId, targetBranch, worktreePath, canonicalRepoPath, taskBranch,
     integrationMode, checkCommands, locksBasePath, taskId } = options;
-  const lockKey = `integration:${repoId}:${targetBranch}`;
+  const identity = integrationLockIdentity(repoId, targetBranch, options);
+  const lockKey = identity.lockKey;
   // Default integration mode — push_branch is the default but is NOT equivalent to merged/deployed.
   // See status table above for the actual status returned.
   const mode = integrationMode || process.env.GPTWORK_INTEGRATION_MODE || 'push_branch';
-  const integrationLockPath = `integration:${safeRepoId(repoId)}:${targetBranch}`;
+  const integrationLockPath = identity.lockPath;
 
   // Acquire integration lock — file-based when locksBasePath provided, Map fallback
   const useFileLock = Boolean(locksBasePath);
@@ -193,8 +206,9 @@ function parseConflictFiles(stderr) {
  * @returns {boolean}
  */
 export async function isIntegrationLocked(repoId, targetBranch, { locksBasePath } = {}) {
+  const identity = integrationLockIdentity(repoId, targetBranch, arguments[2] || {});
   if (locksBasePath) {
-    const lockFilePath = join(getLocksDir(locksBasePath), safeRepoId(`integration:${repoId}:${targetBranch}`) + '.json');
+    const lockFilePath = join(getLocksDir(locksBasePath), safeRepoId(identity.lockPath) + '.json');
     try {
       const lock = JSON.parse(await readFile(lockFilePath, 'utf8'));
       return lock.status === 'held';
@@ -202,7 +216,7 @@ export async function isIntegrationLocked(repoId, targetBranch, { locksBasePath 
       return false;
     }
   }
-  return INTEGRATION_LOCKS.has(`integration:${repoId}:${targetBranch}`);
+  return INTEGRATION_LOCKS.has(identity.lockKey);
 }
 
 /**
@@ -212,13 +226,13 @@ export async function isIntegrationLocked(repoId, targetBranch, { locksBasePath 
  * @param {string} targetBranch
  */
 export async function releaseIntegrationLock(repoId, targetBranch, { locksBasePath } = {}) {
+  const identity = integrationLockIdentity(repoId, targetBranch, arguments[2] || {});
   if (locksBasePath) {
-    const integrationLockPath = `integration:${safeRepoId(repoId)}:${targetBranch}`;
     try {
-      await forceReleaseRepoLock(locksBasePath, integrationLockPath);
+      await forceReleaseRepoLock(locksBasePath, identity.lockPath);
     } catch {
       // Non-fatal
     }
   }
-  INTEGRATION_LOCKS.delete(`integration:${repoId}:${targetBranch}`);
+  INTEGRATION_LOCKS.delete(identity.lockKey);
 }

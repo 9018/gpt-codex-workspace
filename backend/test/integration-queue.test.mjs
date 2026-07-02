@@ -14,7 +14,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { isIntegrationLocked, releaseIntegrationLock, runIntegrationQueue } from "../src/integration-queue.mjs";
+import { isIntegrationLocked, releaseIntegrationLock, runIntegrationQueue, integrationLockIdentity } from "../src/integration-queue.mjs";
 
 function initRepoWithoutRemote() {
   const dir = mkdtempSync(join(tmpdir(), "gptwork-integration-no-remote-"));
@@ -54,6 +54,15 @@ test("releaseIntegrationLock: called on unknown key is a no-op", async () => {
   assert.equal(await isIntegrationLocked("nonexistent/repo", "dev"), false);
 });
 
+test("integration-queue: lock identity normalizes default, empty, and registered repo ids", async () => {
+  const registered = "github.com/9018/gpt-codex-workspace";
+  const config = { defaultRepoId: registered };
+
+  assert.deepEqual(integrationLockIdentity("default", "main", config), integrationLockIdentity(registered, "main", config));
+  assert.deepEqual(integrationLockIdentity("", "main", config), integrationLockIdentity(registered, "main", config));
+  assert.match(integrationLockIdentity("default", "main", config).lockKey, /github\.com\/9018\/gpt-codex-workspace/);
+});
+
 // ===========================================================================
 // Test: exports are present
 // ===========================================================================
@@ -63,6 +72,7 @@ test("integration-queue exports expected symbols", async () => {
   assert.equal(typeof mod.runIntegrationQueue, "function");
   assert.equal(typeof mod.isIntegrationLocked, "function");
   assert.equal(typeof mod.releaseIntegrationLock, "function");
+  assert.equal(typeof mod.integrationLockIdentity, "function");
 });
 
 test("runIntegrationQueue push_branch returns push_failed when git push fails", async () => {

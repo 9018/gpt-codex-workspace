@@ -715,6 +715,88 @@ test("task-final-writeback: quality notes produce completed closure with next_ta
   assert.equal(fallbackJson.next_tasks.length, 1);
 });
 
+test("task-final-writeback: accepted verified runtime-code result without result.status does not fall to review", async () => {
+  let savedTask = null;
+  let fallbackJson = null;
+  const commit = "4f23c4462c2a46d0bdc1237403274f4300000000";
+  const args = makeMinimalArgs("completed");
+  args.task = { id: "task_4f23c446", goal_id: "goal_runtime_verified", logs: [], title: "P0: verified runtime policy change" };
+  args.goal = {
+    id: "goal_runtime_verified",
+    workspace_id: "hosted-default",
+    title: "P0 verified runtime policy change",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change", semantic_confidence: "high" },
+      requirements: { requires_commit: true, requires_integration: false },
+      blocking_requirements: [{ id: "commit_present" }, { id: "changed_files_reported" }, { id: "verification_report" }],
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+  };
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: args.task.id, goal_id: args.goal.id, logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.taskResult = {
+    kind: "codex_executed",
+    summary: "Runtime-sensitive acceptance policy was updated and verified.",
+    changed_files: ["backend/src/acceptance/contract-builder.mjs", "backend/src/queue-policy.mjs"],
+    tests: "npm --prefix backend run check:syntax; npm --prefix backend run check:imports",
+    commit,
+    warnings: ["runtime_code_changed_without_safe_restart: backend/src/acceptance/contract-builder.mjs, backend/src/queue-policy.mjs"],
+    verification: { passed: true, commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }] },
+    reviewer_decision: { status: "accepted", passed: true, should_enter_review: false },
+    acceptance_findings: [],
+    integration: { status: "skipped", merged: false, pushed: false, pr_opened: false, satisfied: true },
+  };
+  args.verifyTaskCompletionFn = async ({ resultJson }) => {
+    assert.equal(resultJson.status, "completed");
+    return {
+      passed: true,
+      status: "completed",
+      commands: [{ cmd: "npm --prefix backend run check:syntax", exit_code: 0 }],
+      changed_files: ["backend/src/acceptance/contract-builder.mjs", "backend/src/queue-policy.mjs"],
+      reason_no_tests: null,
+      failure_class: null,
+      requires_review: false,
+      findings: [],
+      contract_verification: {
+        contract_valid: true,
+        blocking_passed: true,
+        acceptance_status: "satisfied",
+        completion_eligible: true,
+        requires_review: false,
+        blockers: [],
+        non_blocking_followups: [],
+        quality_notes: [],
+        state_assertions: { passed: true, failures: [] },
+      },
+    };
+  };
+  args.writeFileFn = async (path, content) => {
+    if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.notEqual(result.status, "waiting_for_review");
+  assert.equal(result.status, "completed");
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.status, "completed");
+  assert.equal(savedTask.result.requires_review, false);
+  assert.equal(savedTask.result.contract_verification.acceptance_status, "satisfied");
+  assert.equal(savedTask.result.acceptance_gate.status, "passed");
+  assert.equal(savedTask.result.closure_decision.status, "auto_completed_clean");
+  assert.equal(savedTask.result.integration.status, "skipped");
+  assert.equal(savedTask.result.finalizer_decision.safe_to_auto_advance, true);
+  assert.equal(fallbackJson.status, "completed");
+  assert.equal(fallbackJson.contract_verification.acceptance_status, "satisfied");
+  assert.equal(fallbackJson.closure_decision.status, "auto_completed_clean");
+});
+
 test("task-final-writeback: semantic ambiguity remains waiting_for_review", async () => {
   let savedTask = null;
   const args = makeMinimalArgs("completed");
