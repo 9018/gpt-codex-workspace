@@ -137,7 +137,19 @@ const GENERIC_REQUIREMENTS = Object.freeze({
   no_mutation_evidence: {
     code: 'no_mutation_evidence_missing',
     message: 'Blocking contract requires no-mutation evidence.',
-    satisfied: (result) => diagnosticEvidence(result).repo_mutated === false || result.repo_mutated === false || result.no_mutation === true,
+    satisfied: (result) => {
+      // Direct no-mutation flags take precedence (works for all profiles)
+      if (result.no_mutation === true) return true;
+      if (result.repo_mutated === false) return true;
+
+      // Operation-specific evidence field checks:
+      // diagnostic_evidence.repo_mutated, validation_evidence.repo_mutated,
+      // already_integrated_evidence.repo_mutated
+      if (result.diagnostic_evidence?.repo_mutated === false) return true;
+      if (result.validation_evidence?.repo_mutated === false) return true;
+      if (result.already_integrated_evidence?.repo_mutated === false) return true;
+      return false;
+    },
   },
   dry_run_evidence: {
     code: 'dry_run_evidence_missing',

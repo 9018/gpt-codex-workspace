@@ -6,10 +6,9 @@ export const CLOSURE_STATUSES = Object.freeze({
   WAITING_FOR_REPAIR: "waiting_for_repair",
   REQUIRES_REVIEW: "requires_review",
   FAILED: "failed",
-});
-  REQUIRES_REVIEW: "requires_review",
   WAITING_FOR_HUMAN_REVIEW: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
   HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED: REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
+});
 export function mapClosureStatusToTaskStatus(status, config = {}) {
   if (status === CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN) return "completed";
   if (status === CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS) return "completed";

@@ -22,6 +22,7 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.file_evidence) return 'file_write';
   if (result.validation_evidence || result.validation_summary) return 'readonly_validation';
   if (result.already_integrated_evidence || result.noop_integration_evidence) return 'already_integrated';
+  if (result.noop === true || result.kind === 'noop') return 'noop';
   if (result.integration_only || result.integration_evidence?.ff_only_merged) return 'integration';
   if (result.repair_evidence || result.repair_marker) return 'repair';
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
@@ -121,6 +122,30 @@ function normalizeFileEvidence(result = {}) {
   }));
 }
 
+function normalizeValidationEvidence(result = {}) {
+  const evidence = result.validation_evidence || result.blocking_evidence?.validation_evidence || {};
+  return {
+    ...evidence,
+    summary: evidence.summary || result.validation_summary || result.summary || null,
+    commands_run: normalizeCommands(evidence.commands_run || result.commands_run || result.verification?.commands),
+    report_path: evidence.report_path || result.report_path || result.verification?.report_path || result.verification_report_path || null,
+    repo_mutated: evidence.repo_mutated === true ? true : (evidence.repo_mutated === false ? false : null),
+  };
+}
+
+function normalizeAlreadyIntegratedEvidence(result = {}) {
+  const evidence = result.already_integrated_evidence || result.blocking_evidence?.already_integrated_evidence || {};
+  return {
+    ...evidence,
+    summary: evidence.summary || result.already_integrated_summary || result.summary || null,
+    commit_reachable: evidence.commit_reachable === true || evidence.already_reachable === true || false,
+    files_match_canonical: evidence.files_match_canonical === true || evidence.files_match_main === true || false,
+    diff_empty: evidence.diff_empty === true || evidence.intended_diff_empty === true || result.diff_empty === true || false,
+    repo_mutated: evidence.repo_mutated === true ? true : (evidence.repo_mutated === false ? false : null),
+    affected_files: normalizeList(evidence.affected_files || evidence.target_files || []).map(String),
+  };
+}
+
 function missingProfileEvidence(normalized) {
   const profile = operationEvidenceProfile(normalized.operation_kind);
   if (!profile || normalized.status !== 'completed') return [];
@@ -151,6 +176,8 @@ export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) 
     admin_evidence: normalizeAdminEvidence(result),
     diagnostic_evidence: normalizeDiagnosticEvidence(result),
     cleanup_evidence: normalizeCleanupEvidence(result),
+    validation_evidence: normalizeValidationEvidence(result),
+    already_integrated_evidence: normalizeAlreadyIntegratedEvidence(result),
     blocking_evidence: result.blocking_evidence && typeof result.blocking_evidence === 'object' ? result.blocking_evidence : {},
     followup_findings: normalizeList(result.followup_findings || result.followups),
     non_blocking_followups: normalizeList(result.non_blocking_followups || result.followup_findings || result.followups),
