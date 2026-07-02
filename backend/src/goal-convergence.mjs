@@ -1,3 +1,5 @@
+import { REVIEW_STATES, createReviewStateBlock } from './task-review-status-taxonomy.mjs';
+
 import { applyLegacyResolution, findLegacySuccessor, hasCompletionEvidence as hasLegacyCompletionEvidence } from "./legacy-reconciliation.mjs";
 import {
   TASK_STATUSES,
@@ -50,7 +52,7 @@ export function determineGoalStatus(goal, task, taskResult = {}) {
 
 function completedGoalStatus(task, taskResult) {
   const blockers = genuineBlockers(taskResult);
-  if (blockers.length > 0) return hasRepairableBlocker(blockers) ? "waiting_for_repair" : "waiting_for_review";
+  if (blockers.length > 0) return hasRepairableBlocker(blockers) ? "waiting_for_repair" : REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW;
 
   if (taskResult?.convergence?.nextStatus === "completed" && hasCompletionEvidence(taskResult)) {
     return "completed";
@@ -63,7 +65,7 @@ function completedGoalStatus(task, taskResult) {
     return "completed";
   }
 
-  return "waiting_for_review";
+  return REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW;
 }
 
 function failedGoalStatus(task, taskResult) {

@@ -25,6 +25,8 @@
 
 import { classifyFailureStructured, getFailureClassDefinition, failureClassIsTerminalNonRepairable } from "./failure-classifier.mjs";
 import { determineRetryStatus, isRetryBudgetExhausted, getRetryExhaustedStatus } from "./task-retry.mjs";
+import { createReviewStateBlock, REVIEW_STATES } from './task-review-status-taxonomy.mjs';
+
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -35,6 +37,13 @@ export const CONVERGENCE_STATUSES = {
   FAILED: "failed",
   BLOCKED: "blocked",
   WAITING_FOR_REVIEW: "waiting_for_review",
+  WAITING_FOR_HUMAN_REVIEW: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
+  WAITING_FOR_MISSING_EVIDENCE_REPAIR: REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
+  WAITING_FOR_INTEGRATION_RECOVERY: REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY,
+  WAITING_FOR_RESULT_CONTRACT_REPAIR: REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR,
+  WAITING_FOR_NOOP_EVIDENCE: REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE,
+  WAITING_FOR_MANUAL_TERMINAL_DECISION: REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION,
+  HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED: REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
   WAITING_FOR_REPAIR: "waiting_for_repair",
   WAITING_FOR_INTEGRATION: "waiting_for_integration",
   RETRY_WAIT: "retry_wait",
@@ -405,13 +414,13 @@ export function convergeTaskAfterRun({
   if (resultJsonMissing) {
     if (hasWorktreeDiff) {
       return {
-        nextStatus: CONVERGENCE_STATUSES.WAITING_FOR_REVIEW,
+      nextStatus: CONVERGENCE_STATUSES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
         reason: "Result.json missing but worktree has diff. Needs review/integration.",
         closureReason: CLOSURE_REASONS.RESULT_MISSING_WITH_DIFF,
         profile,
         findings: [{ severity: "major", code: "result_missing", message: "Result.json missing but worktree has changes", source: "task_convergence" }],
-        notifications: [{ event: "task_waiting_for_review", taskId: task.id, timestamp }],
-        githubWriteback: { action: "status", status: "waiting_for_review" },
+        notifications: [{ event: "task_waiting_for_missing_evidence_repair", taskId: task.id, timestamp }],
+        githubWriteback: { action: "status", status: CONVERGENCE_STATUSES.WAITING_FOR_MISSING_EVIDENCE_REPAIR },
         repairPlan: null,
         retryPlan: null,
         restartPlan: null,
@@ -434,13 +443,13 @@ export function convergeTaskAfterRun({
 
   // ---- Step 7: Default fallback: review ----
   return {
-    nextStatus: CONVERGENCE_STATUSES.WAITING_FOR_REVIEW,
+      nextStatus: CONVERGENCE_STATUSES.WAITING_FOR_HUMAN_REVIEW,
     reason: `Unhandled convergence case: profile=${profile}, fc=${fc.class}, acceptance=${acceptance?.status}, blockers=${blockerFindings.length}`,
     closureReason: CLOSURE_REASONS.UNKNOWN,
     profile,
     findings: blockerFindings,
-    notifications: [{ event: "task_waiting_for_review", taskId: task.id, timestamp }],
-    githubWriteback: { action: "status", status: "waiting_for_review" },
+        notifications: [{ event: "task_waiting_for_human_review", taskId: task.id, timestamp }],
+        githubWriteback: { action: "status", status: CONVERGENCE_STATUSES.WAITING_FOR_HUMAN_REVIEW },
     repairPlan: null,
     retryPlan: null,
     restartPlan: null,
@@ -547,7 +556,7 @@ export function consolidateBatchConvergence(decisions = []) {
   const recommendations = [];
 
   for (const d of decisions) {
-    if (d.nextStatus === "waiting_for_review") staleReviewCount++;
+    if (d.nextStatus === "waiting_for_review" || Object.values(REVIEW_STATES).includes(d.nextStatus)) staleReviewCount++;
     if (d.nextStatus === "waiting_for_repair") staleRepairCount++;
     if (d.nextStatus === "waiting_for_integration") staleIntegrationCount++;
   }

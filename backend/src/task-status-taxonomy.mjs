@@ -1,9 +1,24 @@
+import {
+  REVIEW_STATES,
+  TYPED_REVIEW_STATES,
+  isTypedReviewState,
+  isMachineRepairableReviewState,
+} from './task-review-status-taxonomy.mjs';
+
 export const TASK_STATUSES = Object.freeze({
   ASSIGNED: 'assigned',
   QUEUED: 'queued',
   RUNNING: 'running',
   WAITING_FOR_LOCK: 'waiting_for_lock',
   WAITING_FOR_REVIEW: 'waiting_for_review',
+  // Typed review/recovery states
+  WAITING_FOR_HUMAN_REVIEW: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
+  WAITING_FOR_MISSING_EVIDENCE_REPAIR: REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
+  WAITING_FOR_INTEGRATION_RECOVERY: REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY,
+  WAITING_FOR_RESULT_CONTRACT_REPAIR: REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR,
+  WAITING_FOR_NOOP_EVIDENCE: REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE,
+  WAITING_FOR_MANUAL_TERMINAL_DECISION: REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION,
+  HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED: REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
   WAITING_FOR_REPAIR: 'waiting_for_repair',
   WAITING_FOR_INTEGRATION: 'waiting_for_integration',
   COMPLETED: 'completed',
@@ -21,8 +36,18 @@ export const ACTIVE_EXECUTION_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
 ]));
 
+/** Human review statuses: includes both legacy waiting_for_review and typed states. */
 export const HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  ...Object.values(REVIEW_STATES),
+]));
+
+/** Human review statuses that exclude machine-repairable typed states. */
+export const TRUE_HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
+  TASK_STATUSES.WAITING_FOR_REVIEW,
+  REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
+  REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION,
+  REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
 ]));
 
 export const REPAIR_STATUSES = Object.freeze(new Set([
@@ -82,6 +107,18 @@ export function isHumanReviewStatus(status) {
   return HUMAN_REVIEW_STATUSES.has(normalizeTaskStatus(status));
 }
 
+export function isTrueHumanReviewStatus(status) {
+  return TRUE_HUMAN_REVIEW_STATUSES.has(normalizeTaskStatus(status));
+}
+
+export function isTypedReviewStatus(status) {
+  return isTypedReviewState(normalizeTaskStatus(status));
+}
+
+export function isMachineRepairableReviewStatus(status) {
+  return isMachineRepairableReviewState(normalizeTaskStatus(status));
+}
+
 export function isRepairStatus(status) {
   return REPAIR_STATUSES.has(normalizeTaskStatus(status));
 }
@@ -90,6 +127,11 @@ export function isReviewOrRepairStatus(status) {
   return isHumanReviewStatus(status) || isRepairStatus(status);
 }
 
-export function isNonTerminalWaitStatus(status) {
-  return NON_TERMINAL_WAIT_STATUSES.has(normalizeTaskStatus(status));
+export function isNonTerminalWaitStatus(status, { includeTypedReview = true } = {}) {
+  const normalized = normalizeTaskStatus(status);
+  if (NON_TERMINAL_WAIT_STATUSES.has(normalized)) return true;
+  if (includeTypedReview && isTypedReviewState(normalized)) return true;
+  return false;
 }
+
+export { REVIEW_STATES, TYPED_REVIEW_STATES, isTypedReviewState, isMachineRepairableReviewState } from './task-review-status-taxonomy.mjs';

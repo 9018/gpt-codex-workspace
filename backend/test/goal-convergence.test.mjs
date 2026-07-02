@@ -10,7 +10,7 @@ test("determineGoalStatus does not complete a completed task that lacks acceptan
     { status: "completed", summary: "done", changed_files: ["backend/src/app.mjs"] },
   );
 
-  assert.equal(status, "waiting_for_review");
+  assert.equal(status, "waiting_for_human_review");
 });
 
 test("determineGoalStatus completes a verified accepted code-change task", () => {
@@ -89,7 +89,7 @@ test("determineGoalStatus keeps admin restart without verification in review", (
     },
   );
 
-  assert.equal(status, "waiting_for_review");
+  assert.equal(status, "waiting_for_human_review");
 });
 
 test("determineGoalStatus treats changed_files_mismatch as blocker for code_change", () => {

@@ -15,6 +15,9 @@ import {
   isHumanReviewStatus,
   isKnownTaskStatus,
   isNonTerminalWaitStatus,
+  isTrueHumanReviewStatus,
+  isTypedReviewStatus,
+  isMachineRepairableReviewStatus,
   isReviewOrRepairStatus,
   isRepairStatus,
   isTerminalStatus,
@@ -22,6 +25,13 @@ import {
 } from '../src/task-status-taxonomy.mjs';
 
 const expectedStatuses = [
+  'human_interrupted_for_repair_budget_exhausted',
+  'waiting_for_human_review',
+  'waiting_for_integration_recovery',
+  'waiting_for_manual_terminal_decision',
+  'waiting_for_missing_evidence_repair',
+  'waiting_for_noop_evidence',
+  'waiting_for_result_contract_repair',
   'assigned',
   'queued',
   'running',
@@ -64,7 +74,7 @@ test('active execution statuses classify correctly', () => {
 });
 
 test('review, repair, and wait statuses classify correctly', () => {
-  assert.deepEqual([...HUMAN_REVIEW_STATUSES], ['waiting_for_review']);
+  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'waiting_for_review',  'waiting_for_human_review',  'waiting_for_missing_evidence_repair',  'waiting_for_integration_recovery',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
   assert.deepEqual([...REPAIR_STATUSES], ['waiting_for_repair']);
   assert.deepEqual([...NON_TERMINAL_WAIT_STATUSES].sort(), [
     'waiting_for_integration',
@@ -110,4 +120,76 @@ test('unknown statuses return false for every classifier', () => {
     assert.equal(isRepairStatus(status), false);
     assert.equal(isNonTerminalWaitStatus(status), false);
   }
+});
+
+// ===========================================================================
+// Typed review states (P0-C2)
+// ===========================================================================
+
+test('TASK_STATUSES includes all typed review states', () => {
+  assert.equal(TASK_STATUSES.WAITING_FOR_HUMAN_REVIEW, 'waiting_for_human_review');
+  assert.equal(TASK_STATUSES.WAITING_FOR_MISSING_EVIDENCE_REPAIR, 'waiting_for_missing_evidence_repair');
+  assert.equal(TASK_STATUSES.WAITING_FOR_INTEGRATION_RECOVERY, 'waiting_for_integration_recovery');
+  assert.equal(TASK_STATUSES.WAITING_FOR_RESULT_CONTRACT_REPAIR, 'waiting_for_result_contract_repair');
+  assert.equal(TASK_STATUSES.WAITING_FOR_NOOP_EVIDENCE, 'waiting_for_noop_evidence');
+  assert.equal(TASK_STATUSES.WAITING_FOR_MANUAL_TERMINAL_DECISION, 'waiting_for_manual_terminal_decision');
+  assert.equal(TASK_STATUSES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED, 'human_interrupted_for_repair_budget_exhausted');
+});
+
+test('HUMAN_REVIEW_STATUSES includes both legacy and typed states', () => {
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_review'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_human_review'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_missing_evidence_repair'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_integration_recovery'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_result_contract_repair'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_noop_evidence'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_manual_terminal_decision'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('human_interrupted_for_repair_budget_exhausted'), true);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('completed'), false);
+  assert.equal(HUMAN_REVIEW_STATUSES.has('waiting_for_repair'), false);
+});
+
+test('TRUE_HUMAN_REVIEW_STATUSES excludes machine-repairable typed states', () => {
+  assert.equal(isTrueHumanReviewStatus('waiting_for_review'), true);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_human_review'), true);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_manual_terminal_decision'), true);
+  assert.equal(isTrueHumanReviewStatus('human_interrupted_for_repair_budget_exhausted'), true);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_missing_evidence_repair'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_integration_recovery'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_result_contract_repair'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_noop_evidence'), false);
+  assert.equal(isTrueHumanReviewStatus('completed'), false);
+});
+
+test('isTypedReviewStatus identifies typed review states', () => {
+  assert.equal(isTypedReviewStatus('waiting_for_human_review'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_missing_evidence_repair'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_review'), false);
+  assert.equal(isTypedReviewStatus('completed'), false);
+});
+
+test('isMachineRepairableReviewStatus correctly identifies machine-repairable states', () => {
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_missing_evidence_repair'), true);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_integration_recovery'), true);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_result_contract_repair'), true);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_noop_evidence'), true);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_human_review'), false);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_manual_terminal_decision'), false);
+  assert.equal(isMachineRepairableReviewStatus('human_interrupted_for_repair_budget_exhausted'), false);
+  assert.equal(isMachineRepairableReviewStatus('waiting_for_review'), false);
+});
+
+test('isNonTerminalWaitStatus includes typed review states', () => {
+  assert.equal(isNonTerminalWaitStatus('waiting_for_human_review'), true);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_missing_evidence_repair'), true);
+  assert.equal(isNonTerminalWaitStatus('human_interrupted_for_repair_budget_exhausted'), true);
+  assert.equal(isNonTerminalWaitStatus('completed'), false);
+});
+
+test('isNonTerminalWaitStatus excludes typed review states when includeTypedReview=false', () => {
+  assert.equal(isNonTerminalWaitStatus('waiting_for_human_review', { includeTypedReview: false }), false);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_missing_evidence_repair', { includeTypedReview: false }), false);
+  // Legacy waiting_for_review is always included in NON_TERMINAL_WAIT_STATUSES
+  assert.equal(isNonTerminalWaitStatus('waiting_for_review', { includeTypedReview: false }), true);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_lock', { includeTypedReview: false }), true);
 });

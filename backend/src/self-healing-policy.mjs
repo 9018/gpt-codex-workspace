@@ -1,3 +1,5 @@
+import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
+
 /**
  * self-healing-policy.mjs — Task execution self-healing strategies.
  *
@@ -115,8 +117,8 @@ export function determineHealingAction({ error, task = {}, retryCount = 0 } = {}
 
   if (!classified.recoverable || retryCount >= budget) {
     return {
-      action: 'waiting_for_review',
-      next_status: 'waiting_for_review',
+      action: 'waiting_for_human_review',
+      next_status: 'waiting_for_human_review',
       compact_context: false,
       cleanup_tmp: false,
       reason: `Error not recoverable or budget exceeded: ${classified.category} (attempt ${retryCount + 1}/${budget})`,
@@ -191,8 +193,8 @@ export function determineHealingAction({ error, task = {}, retryCount = 0 } = {}
 
     default:
       return {
-        action: 'waiting_for_review',
-        next_status: 'waiting_for_review',
+        action: 'waiting_for_human_review',
+        next_status: 'waiting_for_human_review',
         compact_context: false,
         cleanup_tmp: false,
         reason: `Unknown error: ${classified.category} — requires review`,

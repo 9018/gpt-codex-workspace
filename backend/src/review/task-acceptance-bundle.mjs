@@ -1,3 +1,5 @@
+import { REVIEW_STATES } from '../task-review-status-taxonomy.mjs';
+
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -7,7 +9,7 @@ import { ensureGoalState } from '../task-lifecycle.mjs';
 
 const MAX_ITEMS = 50;
 const MAX_TEXT = 500;
-const TERMINAL_OR_REVIEW = new Set(['completed', 'failed', 'timed_out', 'waiting_for_review', 'waiting_for_integration']);
+const TERMINAL_OR_REVIEW = new Set(['completed', 'failed', 'timed_out', 'waiting_for_review', 'waiting_for_integration', ...Object.values(REVIEW_STATES)]);
 
 function trimText(value, max = MAX_TEXT) {
   if (value === null || value === undefined) return value ?? null;

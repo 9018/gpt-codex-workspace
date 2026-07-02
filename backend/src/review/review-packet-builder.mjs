@@ -1,3 +1,5 @@
+import { REVIEW_STATES, isTypedReviewState } from '../task-review-status-taxonomy.mjs';
+
 import { getTaskAcceptanceBundle } from './task-acceptance-bundle.mjs';
 
 function compactGitSummary(bundle = {}, taskResult = {}) {
@@ -17,7 +19,7 @@ function reasonForReview(bundle = {}) {
   if (bundle.closure_decision?.reason) return bundle.closure_decision.reason;
   if (bundle.blockers?.length) return 'Blocking findings require review.';
   if (bundle.missing_evidence?.length) return 'Required result or verification evidence is missing.';
-  if (bundle.status === 'waiting_for_review') return 'Task is waiting for human review.';
+  if (bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) return 'Task is waiting for review: ' + bundle.status + '.';
   if (bundle.status === 'failed') return 'Task failed and needs triage.';
   if (bundle.status === 'running' || bundle.status === 'assigned') return 'Task is still running or not finalized.';
   return 'Review packet requested.';
@@ -33,7 +35,7 @@ function recommendedNextAction(bundle = {}) {
   if (bundle.blockers?.length) {
     return { action: 'review_blockers', reason: 'Blocking findings are present in the compact evidence.' };
   }
-  if (bundle.closure_decision?.status === 'requires_review' || bundle.status === 'waiting_for_review') {
+  if (bundle.closure_decision?.status === 'requires_review' || bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) {
     return { action: 'manual_review', reason: 'Closure decision requires human review.' };
   }
   if (bundle.status === 'completed' && bundle.verification?.passed === true) {

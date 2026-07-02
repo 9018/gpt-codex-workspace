@@ -1,4 +1,6 @@
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
+
 
 const FINALIZER_STATUSES = new Set([
   "completed",
@@ -6,6 +8,13 @@ const FINALIZER_STATUSES = new Set([
   "waiting_for_repair",
   "waiting_for_capacity",
   "waiting_for_review",
+  "waiting_for_human_review",
+  "waiting_for_missing_evidence_repair",
+  "waiting_for_integration_recovery",
+  "waiting_for_result_contract_repair",
+  "waiting_for_noop_evidence",
+  "waiting_for_manual_terminal_decision",
+  "human_interrupted_for_repair_budget_exhausted",
   "timed_out",
   "failed",
 ]);
@@ -314,12 +323,14 @@ function integrationEffect(evidence = {}, status) {
 
 function decision(evidence, { status, reason, blockers = [], repairableBlockers = [], safeToAutoAdvance = false } = {}) {
   const normalizedStatus = FINALIZER_STATUSES.has(status) ? status : "waiting_for_review";
+  const reviewStateBlock = createReviewStateBlock({ reason, blockers, repairBudgetExhausted: reason === "repair_budget_exhausted" });
   return {
     status: normalizedStatus,
     reason: reason || "finalizer_decision",
     blockers,
     repairable_blockers: repairableBlockers,
     non_blocking_followups: followupsFrom(evidence),
+    ...reviewStateBlock,
     integration_effect: integrationEffect(evidence, normalizedStatus),
     goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
     queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
@@ -431,7 +442,7 @@ export function applyTaskFinalStateDecision({ taskStatus, taskResult = {}, final
       ...taskResult,
       status,
       finalizer_decision: finalizerDecision,
-      requires_review: status === "waiting_for_review" ? true : (status === "completed" ? false : taskResult.requires_review === true),
+      requires_review: finalizerDecision.review_state ? !finalizerDecision.machine_repairable : (status === "waiting_for_review" ? true : (status === "completed" ? false : taskResult.requires_review === true)),
       reason: finalizerDecision.reason || taskResult.reason,
     },
   };

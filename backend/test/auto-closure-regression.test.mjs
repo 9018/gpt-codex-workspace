@@ -274,12 +274,12 @@ test('self-healing: determineHealingAction returns retry_with_backoff for networ
   assert.ok(result.reason.includes('Network error'));
 });
 
-test('self-healing: determineHealingAction returns waiting_for_review when budget exceeded', () => {
+test('self-healing: determineHealingAction returns waiting_for_human_review when budget exceeded', () => {
   const result = determineHealingAction({
     error: new Error('429 Too Many Requests'),
     retryCount: 5, // exceeds budget of 3
   });
-  assert.equal(result.action, 'waiting_for_review');
+  assert.equal(result.action, 'waiting_for_human_review');
 });
 
 // ===========================================================================
@@ -600,7 +600,7 @@ test('self-healing: retry budget works for network errors', () => {
 
   // Fourth attempt (exceeds budget of 3): review
   const r4 = determineHealingAction({ error, retryCount: 3 });
-  assert.equal(r4.action, 'waiting_for_review');
+  assert.equal(r4.action, 'waiting_for_human_review');
 });
 
 // ===========================================================================

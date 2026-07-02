@@ -87,14 +87,14 @@ test("determineHealingAction: timeout returns compact_and_retry", () => {
   assert.equal(action.action, "compact_and_retry");
 });
 
-test("determineHealingAction: unknown error returns waiting_for_review", () => {
+test("determineHealingAction: unknown error returns waiting_for_human_review", () => {
   const action = determineHealingAction({ error: new Error("random failure") });
-  assert.equal(action.action, "waiting_for_review");
+  assert.equal(action.action, "waiting_for_human_review");
 });
 
-test("determineHealingAction: restart interrupted is not recoverable", () => {
+test("determineHealingAction: restart interrupted — human review", () => {
   const action = determineHealingAction({ error: new Error("safe restart interrupted") });
-  assert.equal(action.action, "waiting_for_review");
+  assert.equal(action.action, "waiting_for_human_review");
 });
 
 // ================================================================
@@ -107,18 +107,18 @@ test("determineHealingAction: retry within budget returns retry action", () => {
     error: new Error("ENOSPC: no space"),
     retryCount: 0,
   });
-  assert.notEqual(action.action, "waiting_for_review");
+  assert.notEqual(action.action, "waiting_for_human_review");
   assert.equal(action.next_status, "repairing");
 });
 
-test("determineHealingAction: retry exceeds budget returns waiting_for_review", () => {
+test("determineHealingAction: retry exceeds budget returns waiting_for_human_review", () => {
   // ENOSPC has budget 1, retryCount 1 → budget exceeded → waiting_for_review
   const action = determineHealingAction({
     error: new Error("ENOSPC: no space"),
     retryCount: 1,
   });
-  assert.equal(action.action, "waiting_for_review");
-  assert.equal(action.next_status, "waiting_for_review");
+  assert.equal(action.action, "waiting_for_human_review");
+  assert.equal(action.next_status, "waiting_for_human_review");
 });
 
 test("determineHealingAction: stale lock with retryCount=1 still retries (budget 2)", () => {
@@ -134,7 +134,7 @@ test("determineHealingAction: stale lock with retryCount=2 exceeds budget", () =
     error: new Error("stale lock"),
     retryCount: 2,
   });
-  assert.equal(action.action, "waiting_for_review");
+  assert.equal(action.action, "waiting_for_human_review");
 });
 
 test("determineHealingAction: timeout with retryCount=0 retries", () => {
@@ -150,7 +150,7 @@ test("determineHealingAction: timeout with retryCount=1 exceeds budget", () => {
     error: new Error("timed out"),
     retryCount: 1,
   });
-  assert.equal(action.action, "waiting_for_review");
+  assert.equal(action.action, "waiting_for_human_review");
 });
 
 test("determineHealingAction: default retryCount=0", () => {
@@ -234,13 +234,13 @@ test('determineHealingAction: result_missing within budget retries', () => {
   assert.notEqual(action.reason, '');
 });
 
-test('determineHealingAction: result_missing budget exceeded goes to waiting_for_review', () => {
+test('determineHealingAction: result_missing budget exceeded goes to waiting_for_human_review', () => {
   const action = determineHealingAction({
     error: new Error('result.json missing'),
     retryCount: 1,
   });
-  assert.equal(action.action, 'waiting_for_review');
-  assert.equal(action.next_status, 'waiting_for_review');
+  assert.equal(action.action, 'waiting_for_human_review');
+  assert.equal(action.next_status, 'waiting_for_human_review');
 });
 
 test('determineHealingAction: no first output within budget retries', () => {
@@ -252,13 +252,13 @@ test('determineHealingAction: no first output within budget retries', () => {
   assert.equal(action.next_status, 'repairing');
 });
 
-test('determineHealingAction: no first output budget exceeded goes to waiting_for_review', () => {
+test('determineHealingAction: no first output budget exceeded goes to waiting_for_human_review', () => {
   const action = determineHealingAction({
     error: new Error('no first output timeout'),
     retryCount: 1,
   });
-  assert.equal(action.action, 'waiting_for_review');
-  assert.equal(action.next_status, 'waiting_for_review');
+  assert.equal(action.action, 'waiting_for_human_review');
+  assert.equal(action.next_status, 'waiting_for_human_review');
 });
 
 test('determineHealingAction: no active lock leak after budget exceeded', () => {
@@ -268,21 +268,21 @@ test('determineHealingAction: no active lock leak after budget exceeded', () => 
     error: new Error('result.json missing'),
     retryCount: 1,
   });
-  assert.equal(action.action, 'waiting_for_review');
-  assert.equal(action.next_status, 'waiting_for_review');
+  assert.equal(action.action, 'waiting_for_human_review');
+  assert.equal(action.next_status, 'waiting_for_human_review');
   assert.equal(action.compact_context, false);
   assert.equal(action.cleanup_tmp, false);
   // The caller must not re-acquire or leak locks when going to review
 });
 
-test('determineHealingAction: repeated network failures converge to waiting_for_review', () => {
+test('determineHealingAction: repeated network failures converge to waiting_for_human_review', () => {
   // Rate limited has budget 3, so retryCount 3 should trigger review
   const action = determineHealingAction({
     error: new Error('429 rate limit exceeded'),
     retryCount: 3,
   });
-  assert.equal(action.action, 'waiting_for_review');
-  assert.equal(action.next_status, 'waiting_for_review');
+  assert.equal(action.action, 'waiting_for_human_review');
+  assert.equal(action.next_status, 'waiting_for_human_review');
 });
 
 test('determineHealingAction: network error within budget does NOT create code repair', () => {
