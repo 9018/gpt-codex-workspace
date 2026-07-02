@@ -2,6 +2,8 @@ import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { runLocalShell } from "./local-shell-runner.mjs";
 
+import { classifyCanonicalDirty, classifyFFOnlyFailure, recoverCanonicalDirty, recoverFFOnlyMerge } from './canonical-recovery.mjs';
+
 const RECOVERY_FINDING_CODES = new Set([
   "commit_missing",
   "dirty_worktree_after_codex",
@@ -273,9 +275,27 @@ export async function runDeliveryRecovery({
     evidence.remote_head = safeGit(canonicalRepoPath, ["rev-parse", `origin/${config.defaultBranch || "main"}`]);
     evidence.canonical_clean_before = isClean(canonicalRepoPath);
     if (!evidence.canonical_clean_before) {
-      addBlocker(evidence, "canonical_dirty", "Canonical repository is dirty before recovery.");
-      evidence.eligible = false;
-      return finishEvidence(evidence);
+      // Classify canonical dirtiness and attempt safe recovery
+      const dirtyClassification = classifyCanonicalDirty(canonicalRepoPath);
+      evidence.canonical_dirty_classification = dirtyClassification;
+
+      if (dirtyClassification.is_safe_to_clean) {
+        const recoveryResult = recoverCanonicalDirty(canonicalRepoPath, dirtyClassification);
+        evidence.canonical_dirty_recovery = recoveryResult;
+
+        if (!recoveryResult.clean_after) {
+          addBlocker(evidence, "canonical_dirty", recoveryResult.reason || "Canonical repository could not be cleaned.");
+          evidence.eligible = false;
+          return finishEvidence(evidence);
+        }
+        // Recovery cleaned safe files — proceed
+      } else {
+        addBlocker(evidence, "canonical_dirty", dirtyClassification.recommendation === "human_interrupt_required"
+          ? "Canonical repository has unexpected source mutations. Human interrupt required. Evidence: " + JSON.stringify(dirtyClassification.by_source)
+          : "Canonical repository is dirty before recovery.");
+        evidence.eligible = false;
+        return finishEvidence(evidence);
+      }
     }
 
     evidence.changed_files = collectChangedFiles(worktreePath, evidence.changed_files);
@@ -329,8 +349,38 @@ export async function runDeliveryRecovery({
       evidence.integration = { mode: "ff_only", merged: true, status: "merged", commit: evidence.commit };
     } catch (error) {
       evidence.integration = { mode: "ff_only", merged: false, status: "ff_only_failed", error: tail(error.stderr?.toString?.() || error.message, 1000) };
-      addBlocker(evidence, "ff_only_merge_failed", "Canonical repository could not fast-forward to recovered commit.");
-      return finishEvidence(evidence);
+
+      // Classify ff-only failure and attempt recovery
+      const ffClassification = classifyFFOnlyFailure(canonicalRepoPath, worktreePath, evidence.commit);
+      evidence.ff_only_failure_classification = ffClassification;
+
+      if (ffClassification.is_recoverable) {
+        const recoveryResult = await recoverFFOnlyMerge({
+          canonicalRepoPath,
+          worktreePath,
+          failureClassification: ffClassification,
+          defaultBranch: config.defaultBranch || "main",
+        });
+        evidence.ff_only_recovery_result = recoveryResult;
+
+        if (recoveryResult.outcome && recoveryResult.outcome.startsWith("recovered")) {
+          evidence.integration = {
+            mode: "ff_only",
+            merged: true,
+            status: recoveryResult.outcome,
+            commit: recoveryResult.recovered_commit || evidence.commit,
+          };
+          evidence.remote_head = recoveryResult.head_after;
+        } else {
+          addBlocker(evidence, "ff_only_merge_failed", "Recovery failed: " + (recoveryResult.reason || "Could not fast-forward merge."));
+          evidence.ff_only_failure_evidence = recoveryResult.evidence || {};
+          return finishEvidence(evidence);
+        }
+      } else {
+        addBlocker(evidence, "ff_only_merge_failed", ffClassification.divergence_detail || "Could not fast-forward merge.");
+        evidence.ff_only_failure_evidence = { canonical_head: ffClassification.canonical_head, target_commit: ffClassification.target_commit, merge_base: ffClassification.merge_base, failure_reason: ffClassification.failure_reason };
+        return finishEvidence(evidence);
+      }
     }
 
     evidence.canonical_clean_after = isClean(canonicalRepoPath);

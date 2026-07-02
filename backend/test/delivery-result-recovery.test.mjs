@@ -104,10 +104,11 @@ test("runDeliveryRecovery blocks when verification command fails before commit",
   assert.equal(git(canonical, ["rev-parse", "HEAD"]), before);
 });
 
-test("runDeliveryRecovery blocks when canonical repo is dirty", async () => {
+test("runDeliveryRecovery recovers canonical dirty temp files", async () => {
   const { canonical, worktree } = await makeRepo();
   await writeFile(join(worktree, "README.md"), "base\nworktree\n", "utf8");
   await writeFile(join(canonical, "canonical.tmp"), "dirty\n", "utf8");
+  await writeFile(join(canonical, "debug.log"), "log\n", "utf8");
   const before = git(worktree, ["rev-parse", "HEAD"]);
 
   const recovery = await runDeliveryRecovery({
@@ -118,12 +119,35 @@ test("runDeliveryRecovery blocks when canonical repo is dirty", async () => {
     verificationCommands: ["true"],
   });
 
-  assert.equal(recovery.recovered, false);
-  assert.ok(recovery.blockers.some((blocker) => blocker.code === "canonical_dirty"));
-  assert.equal(git(worktree, ["rev-parse", "HEAD"]), before);
+  assert.equal(recovery.attempted, true);
+  assert.notEqual(recovery.canonical_dirty_classification, undefined, "should have dirty classification");
+  assert.equal(recovery.canonical_dirty_classification.overall_classification, "generated/temp");
+  assert.equal(git(canonical, ["status", "--porcelain"]), "", "canonical should be clean");
 });
 
-test("runDeliveryRecovery blocks when ff-only merge cannot integrate task commit", async () => {
+test("runDeliveryRecovery blocks when canonical has unexpected source mutations", async () => {
+  const { canonical, worktree } = await makeRepo();
+  await writeFile(join(worktree, "README.md"), "base\nworktree\n", "utf8");
+  await (await import("node:fs/promises")).mkdir(join(canonical, "src"), { recursive: true });
+  await writeFile(join(canonical, "src/main.js"), "modified\n", "utf8");
+  const before = git(worktree, ["rev-parse", "HEAD"]);
+
+  const recovery = await runDeliveryRecovery({
+    task: { id: "task_3b", title: "P0: canonical source dirty" },
+    config: { defaultBranch: "main" },
+    resolvedRepo: resolvedRepo(canonical, worktree),
+    taskResult: { changed_files: ["README.md"], commit: null, acceptance_findings: [{ code: "commit_missing" }] },
+    verificationCommands: ["true"],
+  });
+
+  assert.equal(recovery.recovered, false);
+  assert.ok(recovery.blockers.some((b) => b.code === "canonical_dirty"), "should have canonical_dirty blocker");
+  assert.equal(git(worktree, ["rev-parse", "HEAD"]), before);
+  assert.notEqual(recovery.canonical_dirty_classification, undefined, "should have classification evidence");
+  assert.equal(recovery.canonical_dirty_classification.overall_classification, "unexpected_source_mutation");
+});
+
+test("runDeliveryRecovery recovers ff-only failure when canonical advanced", async () => {
   const { canonical, worktree } = await makeRepo();
   await writeFile(join(worktree, "README.md"), "base\nworktree\n", "utf8");
   await writeFile(join(canonical, "canonical.txt"), "advance\n", "utf8");
@@ -138,9 +162,13 @@ test("runDeliveryRecovery blocks when ff-only merge cannot integrate task commit
     verificationCommands: ["true"],
   });
 
-  assert.equal(recovery.recovered, false);
-  assert.equal(recovery.integration.mode, "ff_only");
-  assert.equal(recovery.integration.merged, false);
-  assert.ok(recovery.blockers.some((blocker) => blocker.code === "ff_only_merge_failed"));
-  assert.doesNotMatch(git(canonical, ["log", "--oneline", "-1"]), /Merge/);
+  assert.equal(recovery.recovered, true);
+  assert.equal(recovery.integration.merged, true);
+  assert.notEqual(recovery.ff_only_failure_classification, undefined, "should have ff-only classification");
+  // Both sides diverged; should be classified as worktree_diverged (recoverable=True)
+  assert.ok(["canonical_advanced", "worktree_diverged"].includes(recovery.ff_only_failure_classification.failure_reason), "failure_reason should be canonical_advanced or worktree_diverged, got: " + recovery.ff_only_failure_classification.failure_reason);
+  assert.notEqual(recovery.ff_only_recovery_result, undefined, "should have recovery result");
+  assert.ok(recovery.integration.status === "recovered_via_rebase" || recovery.integration.status === "recovered_via_cherry_pick", "should have recovered via rebase or cherry-pick");
+  assert.match(git(canonical, ["log", "--oneline", "-1"]), /fix.*recover/i);
+  assert.equal(git(canonical, ["status", "--porcelain"]), "");
 });
