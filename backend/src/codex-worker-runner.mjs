@@ -10,7 +10,7 @@ import { completeCodexSessionInventoryTask } from "./tool-groups/session-invento
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
 import { startQueuedGoals } from "./goal-queue.mjs";
 import { runIntegrationQueue } from "./integration-queue.mjs";
-import { runAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, applyFailedAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
+import { runAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, applyFailedAutoIntegrationCompletion, classifyIntegrationQueueResult } from "./auto-integration-completion.mjs";
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion } from "./repair-loop.mjs";
 import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
@@ -107,9 +107,75 @@ function integrationSatisfied(result = {}) {
   return ["merged", "ff_only_merged", "skipped", "not_required"].includes(String(integration.status || "").toLowerCase());
 }
 
+function integrationTerminalization(result = {}) {
+  const terminalization = result.integration_terminalization || {};
+  if (terminalization.status === "waiting_for_external_integration") return terminalization;
+  if (terminalization.status === "already_integrated_and_verified") return terminalization;
+  if (terminalization.status === "ff_only_merged_and_verified") return terminalization;
+  return null;
+}
+
+function isStableExternalIntegrationWait(result = {}) {
+  return integrationTerminalization(result)?.status === "waiting_for_external_integration";
+}
+
+function integrationCommitForRetry(task = {}, integrationResult = {}) {
+  return integrationResult.commit || task.result?.commit || task.result?.local_head || task.result?.repo_head || null;
+}
+
+function buildIntegrationRetryState({ task = {}, integrationResult = {}, stable = false } = {}) {
+  const previous = task.result?.integration_retry_state || {};
+  const status = integrationResult.status || null;
+  const commit = integrationCommitForRetry(task, integrationResult);
+  const sameResult = previous.last_status === status && previous.last_commit === commit;
+  const repeatCount = sameResult ? (Number(previous.repeat_count) || 0) + 1 : 1;
+  const retryDelayMs = stable ? 60 * 60 * 1000 : Math.min(5 * 60 * 1000, 30_000 * repeatCount);
+  return {
+    last_status: status,
+    last_commit: commit,
+    repeat_count: repeatCount,
+    next_retry_after: new Date(Date.now() + retryDelayMs).toISOString(),
+    stable_wait_reason: stable ? "branch_pushed_requires_external_integration" : previous.stable_wait_reason || null,
+  };
+}
+
+function buildStableExternalIntegrationResult({ task = {}, integrationResult = {}, autoCompletion = null, reason = "branch_pushed_requires_external_integration" } = {}) {
+  const status = integrationResult.status || task.result?.integration?.status || "branch_pushed";
+  const retryState = buildIntegrationRetryState({ task, integrationResult: { ...integrationResult, status }, stable: true });
+  return {
+    integration: { ...integrationResult, status, merged: integrationResult.merged === true, ok: integrationResult.ok !== false },
+    integration_retried: true,
+    integration_retry_state: retryState,
+    auto_integration_completion: autoCompletion || task.result?.auto_integration_completion || null,
+    integration_terminalization: {
+      status: "waiting_for_external_integration",
+      last_status: status,
+      last_commit: retryState.last_commit,
+      repeat_count: retryState.repeat_count,
+      stable_wait_reason: reason,
+      reason,
+      next_action: status === "pr_opened"
+        ? "Wait for PR merge completion before retrying integration."
+        : "Wait for external merge or PR completion before retrying integration.",
+      next_retry_after: retryState.next_retry_after,
+      decided_at: new Date().toISOString(),
+    },
+    requires_review: false,
+  };
+}
+
+function stableWaitRetryNotDue(result = {}) {
+  if (!isStableExternalIntegrationWait(result)) return false;
+  const nextRetryAfter = result.integration_retry_state?.next_retry_after || result.integration_terminalization?.next_retry_after || null;
+  if (!nextRetryAfter) return true;
+  const ts = new Date(nextRetryAfter).getTime();
+  return Number.isFinite(ts) && ts > Date.now();
+}
+
 function shouldRecoverAcceptedVerifiedReviewTask(task = {}) {
   if (task.status !== TASK_STATUSES.WAITING_FOR_REVIEW) return false;
   const result = task.result || {};
+  if (isStableExternalIntegrationWait(result)) return false;
   if (result.kind === "codex_failed" || result.kind === "codex_timeout" || result.kind === "no_first_output_timeout") return false;
   if (acceptedByReviewer(result) !== true) return false;
   if (result.verification?.passed !== true) return false;
@@ -288,6 +354,45 @@ async function recoverAcceptedVerifiedReviewTasks(store, maxTasks = 10) {
   return { recovered: recovered.length, tasks: recovered };
 }
 
+function queueStatusForTaskStatus(taskStatus) {
+  if (isCompletedStatus(taskStatus)) return "completed";
+  if (taskStatus === TASK_STATUSES.FAILED || taskStatus === TASK_STATUSES.TIMED_OUT) return "failed";
+  if ([TASK_STATUSES.WAITING_FOR_REVIEW, TASK_STATUSES.WAITING_FOR_REPAIR, TASK_STATUSES.WAITING_FOR_INTEGRATION, "waiting_for_capacity"].includes(taskStatus)) return "blocked";
+  return null;
+}
+
+async function reconcileRunningQueueItems(store) {
+  const state = await store.load();
+  const queue = Array.isArray(state.goal_queue) ? state.goal_queue : [];
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const stale = queue.filter((item) => {
+    if (item.status !== "running" || !item.task_id) return false;
+    const linkedTask = tasks.find((task) => task.id === item.task_id);
+    if (!linkedTask) return false;
+    return queueStatusForTaskStatus(linkedTask.status) !== null;
+  });
+  if (stale.length === 0) return { updated: 0, items: [] };
+
+  const updated = [];
+  await store.mutate(async (mutState) => {
+    mutState.goal_queue ||= [];
+    mutState.tasks ||= [];
+    for (const candidate of stale) {
+      const item = mutState.goal_queue.find((entry) => entry.queue_id === candidate.queue_id);
+      const linkedTask = mutState.tasks.find((entry) => entry.id === candidate.task_id);
+      const nextStatus = queueStatusForTaskStatus(linkedTask?.status);
+      if (!item || !linkedTask || !nextStatus || item.status !== "running") continue;
+      item.status = nextStatus;
+      item.completed_task_id = nextStatus === "completed" ? linkedTask.id : item.completed_task_id || null;
+      item.blocked_reason = nextStatus === "blocked" ? `linked task ${linkedTask.id} status=${linkedTask.status}` : null;
+      item.updated_at = new Date().toISOString();
+      updated.push({ queue_id: item.queue_id, task_id: linkedTask.id, status: item.status, task_status: linkedTask.status });
+    }
+  });
+
+  return { updated: updated.length, items: updated };
+}
+
 // ---------------------------------------------------------------------------
 // Integration retry handler — P0 fix for waiting_for_integration stuck tasks
 // ---------------------------------------------------------------------------
@@ -296,6 +401,10 @@ async function recoverAcceptedVerifiedReviewTasks(store, maxTasks = 10) {
 // repair task, or escalates to review.  Non-terminal lock states preserve
 // the waiting_for_integration status for a future retry.
 async function retryIntegrationForTask(store, config, task) {
+  if (stableWaitRetryNotDue(task.result || {})) {
+    return { task_id: task.id, status: TASK_STATUSES.WAITING_FOR_INTEGRATION, progressed: false, transitioned: false, reason: "waiting_for_external_integration" };
+  }
+
   const repoResolution = task.result?.repo_resolution || task.result?.worktree_lifecycle || null;
   if (!repoResolution) {
     return markTaskWaitingForReview(store, task, "integration retry: no repo resolution in task result");
@@ -311,7 +420,9 @@ async function retryIntegrationForTask(store, config, task) {
     || null;
 
   try {
-    const integrationResult = await runIntegrationQueue({
+    const runIntegrationQueueFn = typeof config.runIntegrationQueueFn === "function" ? config.runIntegrationQueueFn : runIntegrationQueue;
+    const runAutoIntegrationCompletionFn = typeof config.runAutoIntegrationCompletionFn === "function" ? config.runAutoIntegrationCompletionFn : runAutoIntegrationCompletion;
+    const integrationResult = await runIntegrationQueueFn({
       repoId: repoResolution.repo_id || task.repo_id || "default",
       targetBranch: config.defaultBranch || "main",
       worktreePath: gitPath,
@@ -323,25 +434,47 @@ async function retryIntegrationForTask(store, config, task) {
       taskId: task.id,
     });
 
+    const integrationDecision = classifyIntegrationQueueResult(integrationResult);
+
     if (integrationResult.ok) {
-      // Integration completion semantics:
-      // - merged === true or status === 'merged': actually merged to target branch (terminal)
-      // - status === 'skipped': integration explicitly skipped (terminal)
-      // - branch_pushed / pr_opened: NOT merged — not terminal
-      if (integrationResult.merged === true || integrationResult.status === 'merged' || integrationResult.status === 'skipped') {
+      if (integrationDecision.kind === 'terminal_completed') {
         await transitionTaskForWorker(
           store, task, "completed",
           "[worker] integration retry succeeded",
-          { result: { integration: { ...integrationResult }, integration_retried: true } }
+          { result: { integration: { ...integrationResult }, integration_retried: true, integration_retry_state: buildIntegrationRetryState({ task, integrationResult }) } }
         );
+      } else if (integrationDecision.should_attempt_auto_completion) {
+        const autoCompletion = await runAutoIntegrationCompletionFn({
+          task,
+          goal: { id: task.goal_id, mode: task.mode },
+          taskResult: task.result || {},
+          resolvedRepo: repoResolution,
+          integrationResult,
+          config,
+        });
+        if (autoCompletion.completed === true) {
+          const completedResult = applySuccessfulAutoIntegrationCompletion({ taskResult: task.result || {}, integrationResult, autoCompletion });
+          await transitionTaskForWorker(
+            store, task, "completed",
+            `[worker] integration retry auto-completed: ${autoCompletion.reason || "verified"}`,
+            { result: { ...completedResult, auto_integration_completion: autoCompletion, integration_terminalization: { status: autoCompletion.reason || "ff_only_merged_and_verified", reason: autoCompletion.reason || "ff_only_merged_and_verified", decided_at: new Date().toISOString() }, integration_retry_state: buildIntegrationRetryState({ task, integrationResult }) } }
+          );
+        } else {
+          const stableResult = buildStableExternalIntegrationResult({ task, integrationResult, autoCompletion });
+          await transitionTaskForWorker(
+            store, task, TASK_STATUSES.WAITING_FOR_INTEGRATION,
+            `[worker] integration retry stable external integration wait: ${integrationResult.status}`,
+            { result: stableResult }
+          );
+          return { task_id: task.id, status: TASK_STATUSES.WAITING_FOR_INTEGRATION, progressed: false, transitioned: true, reason: stableResult.integration_terminalization.reason };
+        }
       } else {
-        // branch_pushed, pr_opened — not a terminal integration state
         await transitionTaskForWorker(
-          store, task, "waiting_for_integration",
-          "[worker] integration retry: " + (integrationResult.status || "pushed") + " (not merged)",
-          { result: { integration: { ...integrationResult }, integration_retried: true } }
+          store, task, TASK_STATUSES.WAITING_FOR_REVIEW,
+          "[worker] integration retry requires review: " + (integrationResult.status || "unknown"),
+          { result: { integration: { ...integrationResult }, integration_retried: true, integration_retry_state: buildIntegrationRetryState({ task, integrationResult }), requires_review: true } }
         );
-        return { task_id: task.id, status: "waiting_for_integration", progressed: false, transitioned: true };
+        return { task_id: task.id, status: TASK_STATUSES.WAITING_FOR_REVIEW, progressed: true, transitioned: true };
       }
 
       // P0: Repair parent-child loop — propagate completion to parent/root task
@@ -357,7 +490,7 @@ async function retryIntegrationForTask(store, config, task) {
           // Non-fatal: parent update failure should not fail integration
         }
       }
-      return { task_id: task.id, status: "completed", progressed: true, transitioned: true };
+      return { task_id: task.id, status: TASK_STATUSES.COMPLETED, progressed: true, transitioned: true };
     }
 
     if (integrationResult.status === "locked") {
@@ -479,6 +612,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   const state = await store.load();
   await normalizeLegacyModes(store, state);
   const reviewRecovery = await recoverAcceptedVerifiedReviewTasks(store, maxTasks);
+  const queueReconciliation = await reconcileRunningQueueItems(store);
 
   // Use indexed query from StateStore instead of full scan on state.tasks.
   // The query is fair across status buckets so large assigned backlogs do not
@@ -547,6 +681,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     concurrency: maxConcurrency,
     queue_autostart: queueAutostart,
     review_recovery: reviewRecovery,
+    queue_reconciliation: queueReconciliation,
     completed,
     failed,
     skipped,

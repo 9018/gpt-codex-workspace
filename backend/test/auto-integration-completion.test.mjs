@@ -122,6 +122,40 @@ test('runAutoIntegrationCompletion ff-only merges branch_pushed task and validat
   }
 });
 
+test('runAutoIntegrationCompletion completes already reachable commit with verification evidence', async () => {
+  const fixture = createGitFixture('already-integrated');
+  try {
+    const taskCommit = commit(fixture.worktree, 'src/app.mjs', 'export const value = 10;\n', 'task change');
+    git(fixture.canonical, ['merge', '--ff-only', taskCommit]);
+    let mergeCommands = 0;
+
+    const result = await runAutoIntegrationCompletion({
+      task: { id: 'task_already_integrated' },
+      goal: { id: 'goal_already_integrated' },
+      taskResult: baseTaskResult(taskCommit),
+      resolvedRepo: resolvedRepo(fixture),
+      integrationResult: { ok: true, status: 'branch_pushed', merged: false, pushed: true },
+      config: { defaultBranch: 'main' },
+      runCommandFn: async (cmd) => {
+        const reportPath = cmd.match(/--json-report\s+(\S+)/)?.[1];
+        writeFileSync(reportPath, JSON.stringify(passedReport({ head: taskCommit }), null, 2), 'utf8');
+        return { returncode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+
+    mergeCommands = result.commands.filter((entry) => String(entry.cmd || '').includes('git merge --ff-only')).length;
+    assert.equal(result.completed, true);
+    assert.equal(result.reason, 'already_integrated_and_verified');
+    assert.equal(result.merge.skipped, true);
+    assert.equal(result.merge.already_integrated, true);
+    assert.equal(mergeCommands, 0);
+    assert.equal(result.verification_report.passed, true);
+    assert.equal(result.verification_report.head, taskCommit);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('runAutoIntegrationCompletion refuses dirty canonical repo without merging', async () => {
   const fixture = createGitFixture('dirty');
   try {
