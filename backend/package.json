@@ -17,7 +17,9 @@
     "test:e2e-acceptance": "node --test --test-reporter=dot test/e2e-product-acceptance.test.mjs",
     "release:check": "npm run check:syntax && npm run check:imports && npm run test:e2e-acceptance",
     "test:e2e-delivery": "node --test --test-reporter=dot test/e2e-delivery.test.mjs",
-    "release:delivery-check": "node scripts/release-delivery-check.mjs"
+    "release:delivery-check": "node scripts/release-delivery-check.mjs",
+    "release:gate": "node scripts/release-gate.mjs",
+    "release:gate:report": "node scripts/release-gate.mjs --json-report .gptwork/releases/release-gate-report.json"
   },
   "optionalDependencies": {
     "@zvec/zvec": "^0.5.0"
