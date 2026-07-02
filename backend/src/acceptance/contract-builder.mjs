@@ -23,13 +23,19 @@ const OPERATION_PATTERNS = [
   ["docs_only", /\b(docs?|documentation|readme|changelog|guide|manual)\b|文档|说明/iu],
   ["config_change", /\b(config|configuration|env var|\.env|settings|yaml|toml|reload config)\b|配置/iu],
   ["noop", /\b(noop|no-op|do nothing|no action|already done)\b|无需操作|无需改动/iu],
-  ["code_change", /\b(fix|implement|modify|refactor|add tests?|bug|feature|code|backend|frontend|api|module)\b|修复|实现|代码|改造/iu]
+  ["code_change", /\b(fix|implement|modify|refactor|add tests?|bug|feature|code|backend|frontend|api|module)\b|修复|实现|代码|改造/iu],
+  ["readonly_validation", /\b(validat(e|ion)|check status|inspect|read.?only|verify state|analy[sz]e only|summari[sz]e)\b|只读验证|检查状态/iu],
+  ["already_integrated", /\b(already (integrated|merged)|previously (integrated|applied)|already exist|nothing to integrate)\b|已经集成|已完成|无需集成/iu],
+  ["integration", /\b(integrat(e|ion|ing)|merge|ff.?only|fast.?forward|land change|push branch|merge queue|ff-only merge)\b|集成|合并/iu],
+  ["repair", /\b(repair|fix issue|correct|remediate|recover|resolve bug|patch|hotfix|fix failing|auto.?repair)\b|修复|更正|补救/iu],
+  ["queue_admin", /\b(queue admin|manage queue|queue operation|reorder queue|queue recovery|advance queue|clear queue|pause queue)\b|队列管理|队列操作/iu],
 ];
 
 function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } = {}) {
   const text = `${mode}\n${user_request}\n${goal_prompt}`;
   const normalizedMode = String(mode || "").toLowerCase();
   if (normalizedMode === "deploy") return { operation_kind: "deploy", semantic_confidence: "high" };
+  if (normalizedMode === "readonly" && /validat(e|ion)|检查|验证/iu.test(text)) return { operation_kind: "readonly_validation", semantic_confidence: "medium" };
   if (normalizedMode === "readonly") return { operation_kind: "diagnostic", semantic_confidence: "medium" };
   if (normalizedMode === "admin" && /restart|重启/iu.test(text)) return { operation_kind: "restart", semantic_confidence: "high" };
   if (normalizedMode === "admin" && /cleanup|clean ?up|清理|delete old|prune/iu.test(text)) return { operation_kind: "cleanup", semantic_confidence: "high" };

@@ -58,6 +58,10 @@ function statusForHealingAction(action) {
 }
 
 function isVerifiedNoChangeResult(result = {}) {
+  const nonMutatingOps = ['readonly_validation', 'noop', 'already_integrated', 'diagnostic'];
+  if (nonMutatingOps.includes(result.operation_kind)) {
+    return result?.status === "completed";
+  }
   return result?.status === "completed"
     && Array.isArray(result.changed_files)
     && result.changed_files.length === 0
@@ -67,6 +71,13 @@ function isVerifiedNoChangeResult(result = {}) {
 
 function applyLegacyNoChangeCompatibility(result = {}) {
   if (!isVerifiedNoChangeResult(result)) return result;
+  const nonMutatingOps = ['readonly_validation', 'noop', 'already_integrated', 'diagnostic'];
+  if (nonMutatingOps.includes(result.operation_kind)) {
+    // Already correctly typed as non-mutating; just set evidence defaults
+    result.no_mutation = result.no_mutation === true ? true : true;
+    result.repo_mutated = result.repo_mutated === false ? false : false;
+    return result;
+  }
   result.noop = result.noop === true ? true : true;
   result.noop_reason = result.noop_reason || "No changed files were reported and verification passed.";
   result.operation_kind = result.operation_kind || "noop";

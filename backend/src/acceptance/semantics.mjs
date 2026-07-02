@@ -96,6 +96,27 @@ export function validateContractSemantics(contract = {}) {
     }
   }
 
+
+  if (operationKind === "readonly_validation" || operationKind === "already_integrated") {
+    if (normalized.requirements.requires_commit === true) errors.push(err("readonly_requires_commit_conflict", "readonly_validation/already_integrated contracts must not require commit evidence."));
+    if (normalized.requirements.requires_integration === true) errors.push(err("readonly_requires_integration_conflict", "readonly_validation/already_integrated contracts must not require integration evidence."));
+    if (mutationScope !== "none" || executionMode !== "readonly") {
+      errors.push(err("readonly_scope_conflict", "readonly_validation/already_integrated contracts must be readonly with mutation_scope none."));
+    }
+  }
+  if (operationKind === "integration") {
+    if (normalized.requirements.requires_commit !== true) errors.push(err("integration_requires_commit", "integration contracts must require commit evidence."));
+    if (normalized.requirements.requires_integration === true) errors.push(err("integration_requires_integration_conflict", "integration contracts must not require integration evidence (they are the integration)."));
+  }
+  if (operationKind === "repair") {
+    if (normalized.requirements.requires_commit !== true) errors.push(err("repair_requires_commit", "repair contracts must require commit evidence."));
+    if (normalized.requirements.requires_integration !== true) errors.push(err("repair_requires_integration", "repair contracts must require integration evidence."));
+  }
+  if (operationKind === "queue_admin") {
+    if (normalized.requirements.requires_commit === true) errors.push(err("queue_admin_requires_commit_conflict", "queue_admin contracts must not require commit evidence."));
+    if (normalized.requirements.requires_integration === true) errors.push(err("queue_admin_requires_integration_conflict", "queue_admin contracts must not require integration evidence."));
+  }
+
   if (operationKind === "cleanup") {
     const assertions = assertionIds(normalized);
     if (!hasRequirement(normalized, "dry_run_evidence") && !assertions.has("dry_run_not_needed_reason")) {

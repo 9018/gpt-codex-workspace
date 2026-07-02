@@ -20,6 +20,11 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.diagnostic_evidence || result.repo_mutated === false) return 'diagnostic';
   if (result.cleanup_evidence || result.dry_run_summary || result.apply_summary) return 'cleanup';
   if (result.file_evidence) return 'file_write';
+  if (result.validation_evidence || result.validation_summary) return 'readonly_validation';
+  if (result.already_integrated_evidence || result.noop_integration_evidence) return 'already_integrated';
+  if (result.integration_only || result.integration_evidence?.ff_only_merged) return 'integration';
+  if (result.repair_evidence || result.repair_marker) return 'repair';
+  if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
   if (normalizeList(result.changed_files).length > 0 || hasValue(result.commit)) return 'code_change';
   return 'unknown';
 }

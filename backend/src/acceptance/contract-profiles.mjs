@@ -167,7 +167,60 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
       req("no_mutation_evidence", "No mutation evidence is reported.", ["no_mutation"])
     ],
     state_assertions: [assertion("no_mutation", "No repository, runtime, filesystem, or external state mutation occurred.")]
-  })
+  }),
+  readonly_validation: profile({
+    intent: { operation_kind: "readonly_validation", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+    verification_plan: { profile: "diagnostic", fallback_profile: "readonly", required_reports: ["validation_report", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
+    blocking_requirements: [
+      req("validation_report", "A validation report with findings and evidence is produced.", ["report"]),
+      req("no_mutation_evidence", "The result states no mutation was performed or identifies any accidental mutation.", ["no_mutation"])
+    ]
+  }),
+  already_integrated: profile({
+    intent: { operation_kind: "already_integrated", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+    verification_plan: { profile: "noop", fallback_profile: "diagnostic", required_reports: ["integration_evidence", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
+    blocking_requirements: [
+      req("integration_evidence", "Evidence that the change was already integrated is reported.", ["already_integrated_evidence"]),
+      req("no_mutation_evidence", "No mutation evidence is reported.", ["no_mutation"])
+    ],
+    state_assertions: [assertion("no_mutation", "No repository, runtime, filesystem, or external state mutation occurred.")]
+  }),
+  integration: profile({
+    intent: { operation_kind: "integration", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    requirements: { requires_commit: true, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+    verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["commit", "changed_files", "verification_report"] },
+    blocking_requirements: [
+      req("commit_present", "A commit hash for the integrated increment is reported.", ["commit"]),
+      req("changed_files_reported", "Changed files are reported and attributable to the integration.", ["changed_files"]),
+      req("verification_report", "Integration verification commands are provided.", ["verification.commands", "tests"])
+    ]
+  }),
+  repair: profile({
+    intent: { operation_kind: "repair", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
+    verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["verification_report", "changed_files", "repair_evidence"] },
+    blocking_requirements: [
+      req("repair_evidence", "The repair outcome or rationale is reported.", ["repair_marker"]),
+      req("commit_present", "A commit hash for the repair increment is reported.", ["commit"]),
+      req("changed_files_reported", "Changed files are reported and attributable to the repair.", ["changed_files"]),
+      req("verification_report", "Verification commands for the repair are provided.", ["verification.commands", "tests"]),
+      req("integration_completed", "Required local integration or ff-only handoff is completed when applicable.", ["integration", "remote_head"])
+    ]
+  }),
+  queue_admin: profile({
+    intent: { operation_kind: "queue_admin", mutation_scope: "runtime", execution_mode: "admin", semantic_confidence: "high" },
+    requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+    verification_plan: { profile: "admin", fallback_profile: "diagnostic", required_reports: ["pre_state_snapshot", "queue_operation", "post_state_snapshot", "audit_evidence"], report_must_match_head: false, report_must_be_clean: false },
+    blocking_requirements: [
+      req("pre_state_snapshot", "Pre-queue-admin state is captured.", ["pre_state"]),
+      req("queue_operation_result", "Queue operation and exit/result evidence are reported.", ["command", "exit_code"]),
+      req("post_state_snapshot", "Post-queue-admin state is captured.", ["post_state"]),
+      req("audit_evidence", "Queue admin audit evidence is reported.", ["audit"])
+    ]
+  }),
+
 });
 
 export function getDefaultAcceptanceContractProfile(operationKind) {

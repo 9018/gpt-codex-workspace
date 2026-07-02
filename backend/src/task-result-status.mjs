@@ -17,8 +17,8 @@ export const DIAGNOSIS_CODES = {
 };
 
 const NON_BLOCKING_CONTRACT_CODES_BY_PROFILE = {
-  tests_missing: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry"]),
-  changed_files_mismatch: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop"]),
+  tests_missing: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry", "readonly_validation", "already_integrated", "diagnostic"]),
+  changed_files_mismatch: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "readonly_validation", "already_integrated", "diagnostic"]),
 };
 
 export function isNonBlockingResultContractCode(code, profile) {
@@ -69,7 +69,7 @@ export function validateResultContract(result, options = {}) {
   }
 
   const isCompleted = result.status === "completed";
-  const isNoop = result.noop === true || result.kind === "noop";
+  const isNoop = result.noop === true || result.kind === "noop" || ["noop", "readonly_validation", "already_integrated", "diagnostic"].includes(result.operation_kind);
   const hasChangedFiles = Array.isArray(result.changed_files) && result.changed_files.length > 0;
   const hasCommit = result.commit && result.commit !== "none";
   const hasTests = result.tests && result.tests !== "none" && result.tests !== null;
@@ -119,8 +119,9 @@ export function validateResultContract(result, options = {}) {
 export function deriveTaskStatusFromTaskResult(taskResult) {
   if (taskResult?.kind === "codex_executed") return "completed";
   if (taskResult?.kind === "codex_timeout" || taskResult?.kind === "no_first_output_timeout") return "timed_out";
-  // P0: noop is a normal completion path, not a review trigger
+  // P0: non-mutating operations are normal completion paths, not review triggers
   if (taskResult?.kind === "noop") return "completed";
+  if (["readonly_validation", "already_integrated"].includes(taskResult?.operation_kind)) return "completed";
   return "failed";
 }
 

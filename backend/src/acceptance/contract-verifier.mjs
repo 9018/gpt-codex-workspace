@@ -10,6 +10,16 @@ function blocker(code, message, evidence = {}, source = 'acceptance_contract_ver
   return { severity: 'blocker', code, message, source, evidence };
 }
 
+/**
+ * Non-mutating operation kinds do not produce changed_files or commit evidence
+ * and should not be blocked by commit_missing or changed_files_missing findings.
+ */
+const NON_MUTATING_OPERATIONS = new Set(['readonly_validation', 'noop', 'already_integrated', 'diagnostic']);
+
+function isNoMutationOperationKind(operationKind) {
+  return NON_MUTATING_OPERATIONS.has(String(operationKind || ''));
+}
+
 function hasContract(contract) {
   return contract && typeof contract === 'object' && !Array.isArray(contract) && Object.keys(contract).length > 0;
 }
@@ -134,7 +144,7 @@ export function verifyAcceptanceContract({
   if (!semantic.valid) {
     for (const error of semantic.errors) blockers.push(blocker(error.code, error.message, {}, 'acceptance_contract_semantics'));
   }
-  const normalizedBlockers = noChangeRepair.completion_eligible === true
+  const normalizedBlockers = (noChangeRepair.completion_eligible === true || isNoMutationOperationKind(normalizedResult.operation_kind))
     ? normalizedResult.blockers.filter((entry) => !['changed_files_missing', 'commit_missing', 'integration_missing'].includes(entry?.code))
     : normalizedResult.blockers;
   blockers.push(...normalizedBlockers);

@@ -186,6 +186,26 @@ export const OPERATION_EVIDENCE_PROFILES = Object.freeze({
     evidence_fields: ['cleanup_evidence'],
     required_when_completed: ['cleanup_evidence'],
   },
+  readonly_validation: {
+    evidence_fields: ['validation_evidence'],
+    required_when_completed: ['validation_evidence'],
+  },
+  already_integrated: {
+    evidence_fields: ['already_integrated_evidence'],
+    required_when_completed: ['already_integrated_evidence'],
+  },
+  integration: {
+    evidence_fields: ['changed_files', 'commit', 'verification'],
+    required_when_completed: ['changed_files', 'commit', 'verification'],
+  },
+  repair: {
+    evidence_fields: ['changed_files', 'commit', 'verification', 'integration', 'repair_evidence'],
+    required_when_completed: ['changed_files', 'commit', 'verification', 'integration'],
+  },
+  queue_admin: {
+    evidence_fields: ['queue_admin_evidence'],
+    required_when_completed: ['queue_admin_evidence'],
+  },
 });
 
 export function getRequirementCheck(id) {

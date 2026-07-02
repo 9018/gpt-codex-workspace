@@ -12,7 +12,12 @@ export const OPERATION_KINDS = Object.freeze([
   "cleanup",
   "external_sync",
   "data_migration",
-  "noop"
+  "noop",
+  "readonly_validation",
+  "already_integrated",
+  "integration",
+  "repair",
+  "queue_admin"
 ]);
 
 export const MUTATION_SCOPES = Object.freeze(["repo", "runtime", "filesystem", "external_system", "none"]);

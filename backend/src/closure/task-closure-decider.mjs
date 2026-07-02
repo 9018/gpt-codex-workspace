@@ -99,9 +99,14 @@ function operationSafetyBlockers({ contract = {}, result = {} } = {}) {
       blockers.push(blocker('deployment_health_unsatisfied', 'Runtime health and version evidence did not satisfy restart completion.', { operation_kind: operationKind }));
     }
   }
-  if (operationKind === 'diagnostic' && contractRequires(contract, 'requires_no_mutation')) {
-    const noMutation = result.no_mutation === true || result.repo_mutated === false || result.diagnostic_evidence?.repo_mutated === false;
-    if (!noMutation) blockers.push(blocker('no_mutation_evidence_missing', 'Diagnostic completion requires no-mutation evidence.', { operation_kind: operationKind }));
+  if ((operationKind === 'diagnostic' || operationKind === 'readonly_validation' || operationKind === 'already_integrated') && contractRequires(contract, 'requires_no_mutation')) {
+    const evidenceKey = operationKind === 'diagnostic' ? 'diagnostic_evidence' : operationKind === 'readonly_validation' ? 'validation_evidence' : 'already_integrated_evidence';
+    const noMutation = result.no_mutation === true || result.repo_mutated === false || (result[evidenceKey]?.repo_mutated === false);
+    if (!noMutation) blockers.push(blocker('no_mutation_evidence_missing', operationKind + ' completion requires no-mutation evidence.', { operation_kind: operationKind }));
+  }
+  if (operationKind === 'queue_admin' && contractRequires(contract, 'requires_audit')) {
+    const audit = result.audit_log_written === true || result.queue_admin_evidence?.audit_log_written === true || hasValue(result.audit_id);
+    if (!audit) blockers.push(blocker('audit_evidence_missing', 'Queue admin completion requires audit evidence.', { operation_kind: operationKind }));
   }
   if (operationKind === 'admin_command' && contractRequires(contract, 'requires_audit')) {
     const audit = result.audit_log_written === true || result.admin_evidence?.audit_log_written === true || hasValue(result.audit_id);
