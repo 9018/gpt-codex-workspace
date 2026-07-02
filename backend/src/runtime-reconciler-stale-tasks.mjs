@@ -96,9 +96,10 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
       }
       if (!recovered) {
         const prevStatus = task.status;
-        task.status = "waiting_for_review";
+        const canRetryRepair = releasedLock && releasedLock.stale_reason && task.parent_task_id && task.repair_attempt && Number(task.repair_attempt) < Number(task.max_attempts || task.repair_attempt + 1);
+        task.status = canRetryRepair ? "assigned" : "waiting_for_review";
         task.result = task.result || {};
-        task.result.kind = releasedLock ? "stale_running_released_lock" : "codex_stalled";
+        task.result.kind = canRetryRepair ? "repair_requeued" : (releasedLock ? "stale_running_released_lock" : "codex_stalled");
         task.result.reconciliation_message = message;
         if (releasedLock) task.result.released_lock = releasedLock;
         task.result.reconciled_at = new Date().toISOString();
