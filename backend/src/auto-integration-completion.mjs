@@ -1,7 +1,8 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
-import { dirname, join } from 'node:path';
+import { dirname, join, relative, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { readVerificationReport, isVerificationReportReusable } from './verification-report.mjs';
 import { runLocalShell } from './workspace-service.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
@@ -243,9 +244,16 @@ function reportSummary(report) {
   };
 }
 
-function buildReportPath({ config = {}, taskId, profile }) {
-  const root = config.autoIntegrationReportDir
-    || (config.defaultWorkspaceRoot ? join(config.defaultWorkspaceRoot, '.gptwork', 'reports') : join(process.cwd(), '.gptwork', 'reports'));
+function isPathInside(parentPath, childPath) {
+  if (!parentPath || !childPath) return false;
+  const rel = relative(resolve(parentPath), resolve(childPath));
+  return rel === '' || (!rel.startsWith('..') && !rel.startsWith('/'));
+}
+
+function buildReportPath({ config = {}, taskId, profile, canonicalRepoPath = null }) {
+  const configuredRoot = config.autoIntegrationReportDir || null;
+  const defaultRoot = config.defaultWorkspaceRoot ? join(config.defaultWorkspaceRoot, '.gptwork', 'reports') : join(process.cwd(), '.gptwork', 'reports');
+  const root = configuredRoot || (isPathInside(canonicalRepoPath, defaultRoot) ? join(tmpdir(), 'gptwork', 'auto-integration-reports') : defaultRoot);
   return join(root, `auto-integration-${taskId || 'task'}-${profile}.json`);
 }
 
@@ -281,7 +289,7 @@ async function verifyPostMerge({ config, taskId, baseSha, canonicalRepoPath, exp
   const maxOutputBytes = config.maxShellOutputBytes || 1_000_000;
   const attempts = [];
 
-  const changedReportPath = buildReportPath({ config, taskId, profile: 'changed' });
+  const changedReportPath = buildReportPath({ config, taskId, profile: 'changed', canonicalRepoPath });
   await mkdir(dirname(changedReportPath), { recursive: true }).catch(() => {});
   const changedCommand = `node scripts/release-delivery-check.mjs --profile changed --base ${baseSha || expectedHead} --json-report ${changedReportPath}`;
   const changedCommandResult = await runVerificationCommand({ command: changedCommand, cwd: backendCwd, timeoutMs, maxOutputBytes, runCommandFn });
@@ -294,7 +302,7 @@ async function verifyPostMerge({ config, taskId, baseSha, canonicalRepoPath, exp
   }
 
   evidence.warnings.push('changed_profile_verification_failed; fell back to fast profile');
-  const fastReportPath = buildReportPath({ config, taskId, profile: 'fast' });
+  const fastReportPath = buildReportPath({ config, taskId, profile: 'fast', canonicalRepoPath });
   await mkdir(dirname(fastReportPath), { recursive: true }).catch(() => {});
   const fastCommand = `node scripts/release-delivery-check.mjs --fast --json-report ${fastReportPath}`;
   const fastCommandResult = await runVerificationCommand({ command: fastCommand, cwd: backendCwd, timeoutMs, maxOutputBytes, runCommandFn });

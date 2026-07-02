@@ -113,6 +113,13 @@ goal-queue.mjs            (queue operations, calls policy checks)
 goal-queue-tools-group.mjs (MCP tool wrappers)
 ```
 
+Auto-integration verification is part of the accepted/integrated handoff. Its
+JSON reports are generated outside the canonical repository by default whenever
+the default workspace root points at that repository. This keeps the canonical
+repo clean for the dirty-repo guard that protects queue auto-advance from
+integrating on top of untracked runtime artifacts. Deployments that need a
+specific report location can set `autoIntegrationReportDir` explicitly.
+
 ## Testing
 
 ```bash

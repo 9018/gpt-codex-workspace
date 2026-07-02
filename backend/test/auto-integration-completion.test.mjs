@@ -391,6 +391,34 @@ test('runAutoIntegrationCompletion records fallback when changed-profile verific
   }
 });
 
+test('runAutoIntegrationCompletion keeps generated reports outside canonical repo by default', async () => {
+  const fixture = createGitFixture('report-outside-canonical');
+  try {
+    const taskCommit = commit(fixture.worktree, 'src/app.mjs', 'export const value = 8;\n', 'task change');
+    let reportPath = null;
+    const result = await runAutoIntegrationCompletion({
+      task: { id: 'task_report_outside' },
+      goal: { id: 'goal_report_outside' },
+      taskResult: baseTaskResult(taskCommit),
+      resolvedRepo: resolvedRepo(fixture),
+      integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+      config: { defaultWorkspaceRoot: fixture.canonical },
+      runCommandFn: async (cmd) => {
+        reportPath = cmd.match(/--json-report\s+(\S+)/)?.[1] || null;
+        writeFileSync(reportPath, JSON.stringify(passedReport({ head: taskCommit }), null, 2), 'utf8');
+        return { returncode: 0, stdout: 'ok', stderr: '' };
+      },
+    });
+
+    assert.equal(result.completed, true);
+    assert.ok(reportPath, 'report path should be generated');
+    assert.equal(reportPath.startsWith(fixture.canonical + '/'), false, 'report path must not be inside canonical repo');
+    assert.equal(git(fixture.canonical, ['status', '--porcelain']), '', 'canonical repo should remain clean after report generation');
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('runAutoIntegrationCompletion fails if report head does not match canonical HEAD after merge', async () => {
   const fixture = createGitFixture('head-mismatch');
   try {
