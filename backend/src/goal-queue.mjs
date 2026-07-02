@@ -26,6 +26,7 @@ import {
   isTerminalCompleted,
 } from "./queue-policy.mjs";
 import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
+import { normalizeRepoId, repoIdsEqual } from "./repo-identity.mjs";
 
 // ---------------------------------------------------------------------------
 // Queue item status constants
@@ -169,7 +170,7 @@ export async function enqueueGoal(store, goalId, opts = {}) {
     goal_id: goalId,
     task_id: null,
     workspace_id: opts.workspace_id || goal.workspace_id || "hosted-default",
-    repo_id: opts.repo_id || "",
+    repo_id: normalizeRepoId(opts.repo_id || goal.repo_id || "", opts),
     position,
     status: QUEUE_STATUS_WAITING,
     depends_on_goal_id: opts.depends_on_goal_id || null,
@@ -201,7 +202,7 @@ export async function listGoalQueue(store, opts = {}) {
     items = items.filter((item) => item.workspace_id === opts.workspace_id);
   }
   if (opts.repo_id) {
-    items = items.filter((item) => item.repo_id === opts.repo_id);
+    items = items.filter((item) => repoIdsEqual(item.repo_id, opts.repo_id, opts));
   }
 
   // Sort by position ascending
@@ -261,10 +262,10 @@ async function resolveQueueItemRepository(item, config) {
       id: item.task_id || item.goal_id,
       task_id: item.task_id,
       goal_id: item.goal_id,
-      repo_id: item.repo_id || "",
+      repo_id: normalizeRepoId(item.repo_id || "", config),
     });
     return {
-      repo_id: resolved.repo_id || item.repo_id || "default",
+      repo_id: normalizeRepoId(resolved.repo_id || item.repo_id || "default", config),
       canonical_repo_path: resolved.canonical_repo_path || resolved.lock_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot,
       lock_repo_path: resolved.lock_repo_path || resolved.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot,
       task_worktree_path: resolved.task_worktree_path || null,
@@ -273,8 +274,8 @@ async function resolveQueueItemRepository(item, config) {
     };
   }
   return resolveTaskRepositoryPlan({
-    task: { id: item.task_id || item.goal_id, repo_id: item.repo_id || "" },
-    goal: { id: item.goal_id, repo_id: item.repo_id || "" },
+    task: { id: item.task_id || item.goal_id, repo_id: normalizeRepoId(item.repo_id || "", config) },
+    goal: { id: item.goal_id, repo_id: normalizeRepoId(item.repo_id || "", config) },
     config,
     registry: config.registry || null,
   });
@@ -380,22 +381,24 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
     // 3. Repo concurrency check — same repo stays serial.
     //    If another queue item for the same repo is already running,
     //    this item waits.
-    if (candidate.repo_id) {
-      const concurrencyResult = checkRepoConcurrency(state, candidate.repo_id, candidate.queue_id);
+    const candidateRepoId = normalizeRepoId(candidate.repo_id, config);
+    if (candidateRepoId) {
+      candidate.repo_id = candidateRepoId;
+      const concurrencyResult = checkRepoConcurrency(state, candidateRepoId, candidate.queue_id, config);
       checks.push({
         check: "repo_concurrency",
         passed: !concurrencyResult.blocked,
-        repo_id: candidate.repo_id,
+        repo_id: candidateRepoId,
         blocking_item_queue_id: concurrencyResult.runningItem?.queue_id || null,
         blocking_item_goal_id: concurrencyResult.runningItem?.goal_id || null,
         detail: concurrencyResult.blocked
-          ? `same-repo serialisation: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidate.repo_id}`
+          ? `same-repo serialisation: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidateRepoId}`
           : "no concurrent repo task",
       });
       if (concurrencyResult.blocked) {
         if (!dryRun) {
           candidate.status = QUEUE_STATUS_BLOCKED;
-          candidate.blocked_reason = `repo concurrency: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidate.repo_id}`;
+          candidate.blocked_reason = `repo concurrency: ${concurrencyResult.runningItem?.goal_id || "another task"} already running for repo ${candidateRepoId}`;
           candidate.updated_at = now();
           blockedItems.push({ queue_id: candidate.queue_id, goal_id: candidate.goal_id, reason: candidate.blocked_reason });
           await store.save();

@@ -7,6 +7,7 @@
  */
 
 import { getTaskWorktreePath, ensureTaskWorktree, sanitizeTaskBranchName } from './task-worktree-manager.mjs';
+import { normalizeRepoId } from './repo-identity.mjs';
 
 export function deriveTaskRepoId(task = {}, goal = {}) {
   return task.repo_id || goal.repo_id || task.repository_id || goal.repository_id || '';
@@ -28,14 +29,14 @@ export async function resolveTaskRepositoryPlan({ task = {}, goal = {}, config =
   }
 
   let record = null;
-  if (explicitRepoId && registry && typeof registry.get === 'function') {
+  if (explicitRepoId && explicitRepoId !== 'default' && registry && typeof registry.get === 'function') {
     record = registry.get(explicitRepoId);
   }
-  if (!record && !explicitRepoId && registry && typeof registry.getDefaultRepo === 'function') {
+  if (!record && (!explicitRepoId || explicitRepoId === 'default') && registry && typeof registry.getDefaultRepo === 'function') {
     record = registry.getDefaultRepo();
   }
 
-  const repoId = record?.repo_id || explicitRepoId || 'default';
+  const repoId = normalizeRepoId(record?.repo_id || explicitRepoId || 'default', { ...config, registry });
   const canonicalRepoPath = record?.canonical_path || config.defaultRepoPath || config.defaultWorkspaceRoot || workspaceRoot;
   const targetBranch = record?.default_branch || config.defaultBranch || 'HEAD';
   const taskId = task.id || goal.task_id || goal.id || 'unknown-task';

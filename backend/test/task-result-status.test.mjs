@@ -149,6 +149,39 @@ test('P0 task with runtime changes and no restart marker is moved to review', as
   assert.ok(taskResult.warnings[0].includes('backend/src/server-tools.mjs'));
 });
 
+test('accepted verified runtime-code result records restart requirement without forcing review', async () => {
+  const taskResult = {
+    kind: 'codex_executed',
+    commit: '1234567890abcdef1234567890abcdef12345678',
+    verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }] },
+    reviewer_decision: { status: 'accepted', passed: true },
+    acceptance_findings: [],
+  };
+  const parsedResult = {
+    changed_files: ['backend/src/acceptance/contract-builder.mjs', 'backend/src/queue-policy.mjs'],
+    commit: taskResult.commit,
+    verification: { passed: true },
+  };
+
+  const status = await applyRuntimeCodeChangeGuard({
+    taskStatus: 'completed',
+    taskResult,
+    mode: 'builder',
+    parsedResult,
+    workspaceRoot: '/tmp/workspace',
+    taskId: 'task_4f23c446',
+    isP0Task: true,
+    loadRestartMarkerFn: async () => null,
+  });
+
+  assert.equal(status, 'completed');
+  assert.equal(taskResult.restart_required, true);
+  assert.equal(taskResult.requires_restart_check, true);
+  assert.equal(taskResult.runtime_restart_guard.status, 'restart_required');
+  assert.equal(taskResult.runtime_restart_guard.requires_review, false);
+  assert.ok(taskResult.warnings[0].includes('runtime_code_changed_without_safe_restart'));
+});
+
 test('P0 task with runtime changes and active restart marker stays completed', async () => {
   const taskResult = {};
   const parsedResult = { changed_files: ['backend/src/server-tools.mjs'] };

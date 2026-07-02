@@ -208,6 +208,32 @@ test("queue-policy: checkDependency unknown policy returns unsatisfied", async (
   assert.match(r.reason, /unknown dependency_policy/);
 });
 
+test("queue-policy: repo concurrency normalizes default, empty, and registered repo ids", async () => {
+  const { checkRepoConcurrency, buildAdvancementChecks } = await loadPolicy();
+  const registered = "github.com/9018/gpt-codex-workspace";
+  const config = { defaultRepoId: registered };
+  const state = makeState({
+    goal_queue: [
+      { queue_id: "running_default", goal_id: "goal_running", status: "running", repo_id: "default" },
+      { queue_id: "candidate_empty", goal_id: "goal_empty", status: "waiting", repo_id: "" },
+      { queue_id: "candidate_registered", goal_id: "goal_registered", status: "waiting", repo_id: registered },
+    ],
+  });
+
+  const emptyResult = checkRepoConcurrency(state, "", "candidate_empty", config);
+  const registeredResult = checkRepoConcurrency(state, registered, "candidate_registered", config);
+  const checks = await buildAdvancementChecks(state, state.goal_queue[2], config);
+  const repoCheck = checks.find((check) => check.check === "repo_concurrency");
+
+  assert.equal(emptyResult.blocked, true);
+  assert.equal(emptyResult.runningItem.queue_id, "running_default");
+  assert.equal(registeredResult.blocked, true);
+  assert.equal(registeredResult.runningItem.queue_id, "running_default");
+  assert.equal(repoCheck.passed, false);
+  assert.equal(repoCheck.repo_id, registered);
+  assert.equal(repoCheck.blocking_item_queue_id, "running_default");
+});
+
 // ===========================================================================
 // Test 5: checkAcceptanceGate
 // ===========================================================================
