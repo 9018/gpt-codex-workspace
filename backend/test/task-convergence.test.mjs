@@ -281,7 +281,7 @@ test("converge: exhausted result_missing repair/no-result chain → failed witho
 // 8. result missing + diff → waiting_for_review
 // ---------------------------------------------------------------------------
 
-test("converge: result missing + diff → waiting_for_review", () => {
+test("converge: result missing + diff → waiting_for_missing_evidence_repair", () => {
   const result = convergeTaskAfterRun({
     task: { id: "t8", status: "running" },
     taskResult: { summary: "No result produced" },
@@ -289,7 +289,7 @@ test("converge: result missing + diff → waiting_for_review", () => {
     attempt: 0,
   });
 
-  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.WAITING_FOR_REVIEW);
+  assert.equal(result.nextStatus, CONVERGENCE_STATUSES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
 });
 
 test("converge: result_missing_but_verified_commit → completed", () => {
