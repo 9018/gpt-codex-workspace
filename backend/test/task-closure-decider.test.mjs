@@ -195,3 +195,83 @@ test("applyClosureDecisionToTaskResult maps waiting_for_repair decisions", () =>
   assert.equal(applied.taskResult.requires_review, false);
   assert.equal(applied.taskResult.reason, "blocking_requirements_failed_repairable");
 });
+// ================================================================
+// P0-C5: Integration Node Explicit Independence — integration
+// terminal evidence tests
+// ================================================================
+
+test('P0-C5: decideTaskClosure accepts integration status merged as terminal evidence', () => {
+  const decision = decideTaskClosure({
+    contract: baseContract({ requirements: { requires_commit: true, requires_integration: true } }),
+    contractVerification: baseContractVerification(),
+    verification: baseVerification(),
+    integration: { status: 'merged', satisfied: true, merged: true, post_merge_verification: { passed: true } },
+    result: { status: 'completed', commit: 'abc123', changed_files: ['src/app.mjs'] },
+    task: { id: 'task_integrated' },
+  });
+
+  assert.equal(decision.status, 'auto_completed_clean');
+  assert.equal(decision.blocking_passed, true);
+  assert.equal(decision.blockers.length, 0);
+});
+
+test('P0-C5: decideTaskClosure accepts integration_not_required as terminal evidence when operation kind does not require integration', () => {
+  const decision = decideTaskClosure({
+    contract: baseContract({ requirements: { requires_commit: false, requires_integration: true } }),
+    contractVerification: baseContractVerification(),
+    verification: baseVerification(),
+    integration: { status: 'not_required', required: false, terminal: true },
+    result: { status: 'completed', changed_files: [] },
+    task: { id: 'task_noop_integration' },
+  });
+
+  assert.equal(decision.status, 'auto_completed_clean');
+  assert.equal(decision.blocking_passed, true);
+});
+
+test('P0-C5: decideTaskClosure sends integration_completed_missing to waiting_for_repair with integration_completed_missing blocker', () => {
+  const decision = decideTaskClosure({
+    contract: baseContract({ requirements: { requires_commit: true, requires_integration: true } }),
+    contractVerification: baseContractVerification(),
+    verification: baseVerification(),
+    integration: { status: '', satisfied: false, merged: false },
+    result: { status: 'completed', commit: 'abc123', changed_files: ['src/app.mjs'] },
+    task: { id: 'task_missing_integration' },
+  });
+
+  assert.equal(decision.status, 'waiting_for_repair');
+  assert.equal(decision.requires_human_decision, false);
+  assert.ok(decision.repairable_blockers.length > 0, 'should have repairable blockers');
+  assert.ok(decision.repairable_blockers.some((b) => b.code === 'integration_completed_missing'),
+    'should produce integration_completed_missing blocker code');
+});
+
+test('P0-C5: decideTaskClosure sends integration_failed to waiting_for_repair with integration_unsatisfied blocker', () => {
+  const decision = decideTaskClosure({
+    contract: baseContract({ requirements: { requires_commit: true, requires_integration: true } }),
+    contractVerification: baseContractVerification(),
+    verification: baseVerification(),
+    integration: { status: 'conflict', ok: false, merged: false, error: 'Rebase conflict' },
+    result: { status: 'completed', commit: 'abc123', changed_files: ['src/app.mjs'] },
+    task: { id: 'task_conflict' },
+  });
+
+  assert.equal(decision.status, 'waiting_for_repair');
+  assert.equal(decision.requires_human_decision, false);
+  assert.ok(decision.repairable_blockers.some((b) => b.code === 'integration_unsatisfied'),
+    'should produce integration_unsatisfied blocker code');
+});
+
+test('P0-C5: decideTaskClosure auto-closes with not_required integration when requires_integration is false', () => {
+  const decision = decideTaskClosure({
+    contract: baseContract({ requirements: { requires_commit: false, requires_integration: false } }),
+    contractVerification: baseContractVerification(),
+    verification: baseVerification(),
+    integration: { status: 'not_required', required: false },
+    result: { status: 'completed' },
+    task: { id: 'task_no_int_required' },
+  });
+
+  assert.equal(decision.status, 'auto_completed_clean');
+  assert.equal(decision.blocking_passed, true);
+});

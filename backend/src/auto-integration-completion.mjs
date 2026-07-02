@@ -345,6 +345,8 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
     task_branch: candidate.task_branch,
     task_worktree_path: candidate.task_worktree_path,
     canonical_repo_path: candidate.canonical_repo_path,
+    canonical_head_before: null,
+    canonical_head_after: null,
     canonical_clean_before: null,
     canonical_clean_after: null,
     merge: { mode: 'ff_only', attempted: false, merged: false, commit: candidate.commit || null },
@@ -435,6 +437,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
 
     const canonicalHeadBefore = currentHead(candidate.canonical_repo_path);
     evidence.base_sha = evidence.base_sha || canonicalHeadBefore;
+    evidence.canonical_head_before = evidence.base_sha;
     const alreadyIntegrated = candidate.commit === canonicalHeadBefore
       || gitOk(candidate.canonical_repo_path, ['merge-base', '--is-ancestor', candidate.commit, canonicalHeadBefore]);
 
@@ -500,6 +503,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
 
     const canonicalHeadAfterMerge = currentHead(candidate.canonical_repo_path);
     evidence.commit = canonicalHeadAfterMerge;
+    evidence.canonical_head_after = canonicalHeadAfterMerge;
     evidence.merge.commit = canonicalHeadAfterMerge;
 
     const verification = await verifyPostMerge({

@@ -1008,10 +1008,23 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           // Integration locked or other non-terminal state
           taskStatus = integrationDecision.task_status || 'waiting_for_integration';
         }
+      } else {
+        // P0-C5: Explicit integration_not_required terminal evidence.
+        // When acceptance passes but there are no code/config/runtime changes,
+        // set integration to not_required as terminal evidence.
+        taskResult.integration = {
+          status: 'not_required',
+          required: false,
+          terminal: true,
+          evidence: {
+            reason: 'no_code_or_config_or_runtime_changes',
+            profile: acceptanceResult.profile,
+            operation_kind: taskResult.operation_kind || task.mode || 'unknown',
+          },
+        };
       }
       // NOTE: For multi-process integration, replace INTEGRATION_LOCKS Map with
       // persistent repo-lock-lifecycle locks.
-      // else: no changes (noop/docs-only) — keep completed status
     }
   }
 

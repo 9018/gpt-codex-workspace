@@ -263,10 +263,20 @@ export function decideTaskClosure({
 
   if (contractRequires(contractObject, 'requires_integration')) {
     if (!integrationIsSatisfied(integration, taskResult) || !postMergeVerificationPassed(integration, taskResult, verifier)) {
+      // P0-C5: Differentiate integration_completed_missing from integration_unsatisfied.
+      // When no integration status is set or it's explicitly unknown/pending, classify
+      // as integration_completed_missing (a deterministic recovery path) rather than
+      // a generic integration failure.
+      const integrationStatus = String((integration || taskResult.integration || {}).status || '');
+      const isMissingEvidence = integrationStatus === '' || integrationStatus === 'pending' || integrationStatus === 'queued' || integrationStatus === 'waiting';
+      const blockerCode = isMissingEvidence ? 'integration_completed_missing' : 'integration_unsatisfied';
+      const blockerMessage = isMissingEvidence
+        ? 'Integration requirement is not satisfied because integration was never completed or attempted. Evidence is missing.'
+        : 'Integration requirement is not satisfied by merged/post-merge verification evidence.';
       return statusDecision({
         status: CLOSURE_STATUSES.WAITING_FOR_REPAIR,
         reason: 'integration_unsatisfied',
-        repairableBlockers: [blocker('integration_unsatisfied', 'Integration requirement is not satisfied by merged/post-merge verification evidence.', { integration: integration || taskResult.integration || null })],
+        repairableBlockers: [blocker(blockerCode, blockerMessage, { integration: integration || taskResult.integration || null })],
         followups,
         qualityNotes,
         config,
