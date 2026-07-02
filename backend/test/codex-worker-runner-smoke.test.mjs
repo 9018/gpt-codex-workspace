@@ -382,3 +382,173 @@ test('runAssignedCodexTasks recovers accepted verified review tasks without reru
     rmSync(tmpDir, { recursive: true, force: true });
   }
 });
+
+test('runAssignedCodexTasks terminalizes repeated branch_pushed integration retry as stable external wait', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-integration-stable-wait-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addGoal(store.state, { id: 'goal_branch_retry', title: 'Branch retry goal' });
+    addTask(store.state, {
+      id: 'task_branch_retry',
+      goal_id: 'goal_branch_retry',
+      status: 'waiting_for_integration',
+      result: {
+        kind: 'codex_executed',
+        summary: 'Accepted code change',
+        changed_files: ['src/app.mjs'],
+        commit: 'abc123',
+        repo_resolution: {
+          repo_id: 'github.com/acme/repo',
+          canonical_repo_path: tmpDir,
+          task_worktree_path: tmpDir,
+          worktree_lifecycle: { mode: 'git_worktree', ok: true, branch_name: 'gptwork/task/task_branch_retry' },
+        },
+        reviewer_decision: { status: 'accepted', passed: true },
+        verification: { passed: true, findings: [] },
+        acceptance_findings: [],
+        integration_retry_state: {
+          last_status: 'branch_pushed',
+          last_commit: 'abc123',
+          repeat_count: 1,
+        },
+      },
+    });
+    await store.save();
+
+    const result = await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      integrationMode: 'push_branch',
+      runIntegrationQueueFn: async () => ({ ok: true, status: 'branch_pushed', merged: false, pushed: true, pr_opened: false }),
+      runAutoIntegrationCompletionFn: async () => ({ attempted: true, eligible: false, completed: false, reason: 'canonical_dirty', blockers: [{ severity: 'blocker', code: 'canonical_dirty', message: 'dirty', source: 'test' }] }),
+    }, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(result.inspected, 1);
+    assert.equal(result.tasks[0].status, 'waiting_for_integration');
+    await store.load();
+    const task = store.state.tasks.find((item) => item.id === 'task_branch_retry');
+    assert.equal(task.status, 'waiting_for_integration');
+    assert.equal(task.result.integration.status, 'branch_pushed');
+    assert.equal(task.result.integration_terminalization.status, 'waiting_for_external_integration');
+    assert.equal(task.result.integration_terminalization.stable_wait_reason, 'branch_pushed_requires_external_integration');
+    assert.equal(task.result.integration_retry_state.last_status, 'branch_pushed');
+    assert.equal(task.result.integration_retry_state.last_commit, 'abc123');
+    assert.equal(task.result.integration_retry_state.repeat_count, 2);
+    assert.match(task.logs.at(-1).message, /stable external integration wait/);
+
+    const logsAfterFirst = task.logs.length;
+    const second = await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      integrationMode: 'push_branch',
+      runIntegrationQueueFn: async () => ({ ok: true, status: 'branch_pushed', merged: false, pushed: true, pr_opened: false }),
+      runAutoIntegrationCompletionFn: async () => ({ attempted: true, eligible: false, completed: false, reason: 'canonical_dirty', blockers: [{ severity: 'blocker', code: 'canonical_dirty', message: 'dirty', source: 'test' }] }),
+    }, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(second.inspected, 1);
+    await store.load();
+    const taskAfterSecond = store.state.tasks.find((item) => item.id === 'task_branch_retry');
+    assert.equal(taskAfterSecond.status, 'waiting_for_integration');
+    assert.equal(taskAfterSecond.result.integration_retry_state.repeat_count, 2);
+    assert.equal(taskAfterSecond.logs.length, logsAfterFirst, 'stable branch_pushed wait must not append retry logs every tick');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runAssignedCodexTasks review recovery does not overwrite stable external integration wait', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-review-recovery-stable-wait-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addTask(store.state, {
+      id: 'task_review_stable_wait',
+      status: 'waiting_for_review',
+      result: {
+        kind: 'codex_executed',
+        summary: 'Accepted code change waiting externally',
+        changed_files: ['src/app.mjs'],
+        commit: 'def456',
+        reviewer_decision: { status: 'accepted', passed: true },
+        verification: { passed: true, findings: [] },
+        acceptance_findings: [],
+        integration: { ok: true, status: 'branch_pushed', merged: false, pushed: true },
+        integration_terminalization: {
+          status: 'waiting_for_external_integration',
+          stable_wait_reason: 'branch_pushed_requires_external_integration',
+          next_action: 'Wait for external merge or PR completion before retrying integration.',
+        },
+      },
+    });
+    await store.save();
+
+    const result = await runAssignedCodexTasks(store, {}, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(result.review_recovery.recovered, 0);
+    assert.equal(result.inspected, 0);
+    await store.load();
+    const task = store.state.tasks.find((item) => item.id === 'task_review_stable_wait');
+    assert.equal(task.status, 'waiting_for_review');
+    assert.equal(task.result.integration_terminalization.status, 'waiting_for_external_integration');
+    assert.equal(task.logs.length, 0);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runAssignedCodexTasks reconciles running queue item linked to completed task before autostart', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-stale-running-queue-'));
+  try {
+    const repo = join(tmpDir, 'repo');
+    initGitRepo(repo);
+    const store = makeStore(tmpDir);
+    await store.load();
+    store.state.goal_queue = [];
+    store.state.conversations = [];
+    addTask(store.state, { id: 'task_done_queue', status: 'completed', goal_id: 'goal_done_queue' });
+    addGoal(store.state, { id: 'goal_after_queue', title: 'After stale queue' });
+    store.state.goal_queue.push({
+      queue_id: 'queue_stale_running',
+      goal_id: 'goal_done_queue',
+      task_id: 'task_done_queue',
+      workspace_id: 'hosted-default',
+      repo_id: 'github.com/acme/repo',
+      position: 1,
+      status: 'running',
+      auto_start: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    store.state.goal_queue.push({
+      queue_id: 'queue_after_stale',
+      goal_id: 'goal_after_queue',
+      task_id: null,
+      workspace_id: 'hosted-default',
+      repo_id: 'github.com/acme/repo',
+      position: 2,
+      status: 'waiting',
+      depends_on_task_id: 'task_done_queue',
+      dependency_policy: 'completed_only',
+      blocked_reason: null,
+      auto_start: true,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    });
+    await store.save();
+
+    const result = await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: repo,
+      enableTaskWorktrees: false,
+    }, {}, { limit: 10, concurrency: 1 }, undefined, {
+      processGeneralTask: async (_store, _config, task) => ({ task_id: task.id, status: 'completed', progressed: true }),
+    });
+
+    assert.equal(result.queue_reconciliation.updated, 1);
+    assert.equal(result.queue_autostart.started_count, 1);
+    await store.load();
+    assert.equal(store.state.goal_queue.find((item) => item.queue_id === 'queue_stale_running').status, 'completed');
+    assert.equal(store.state.goal_queue.find((item) => item.queue_id === 'queue_after_stale').status, 'running');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
