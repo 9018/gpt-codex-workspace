@@ -174,6 +174,29 @@ test("P0: runIntegrationQueue with mode=local_merge returns status=merged", asyn
   }
 });
 
+
+
+test("P0: runIntegrationQueue with mode=ff_only returns status=merged", async () => {
+  const { dir, repo } = initRepoWithoutRemote();
+  try {
+    const result = await runIntegrationQueue({
+      repoId: "repo-ff-only-mode",
+      targetBranch: "main",
+      worktreePath: repo,
+      canonicalRepoPath: repo,
+      taskBranch: "task_branch",
+      integrationMode: "ff_only",
+    });
+    assert.equal(result.ok, true);
+    assert.equal(result.status, "merged");
+    assert.equal(result.merged, true);
+    assert.equal(result.pushed, false);
+    assert.equal(result.pr_opened, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("P0: runIntegrationQueue with mode=push_branch returns status=branch_pushed (not merged/deployed)", async () => {
   const { dir, repo } = initRepoWithoutRemote();
   try {

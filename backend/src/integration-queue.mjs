@@ -44,7 +44,7 @@ const INTEGRATION_LOCKS = new Map();
  * @param {string} options.worktreePath - Path to the task worktree
  * @param {string} options.canonicalRepoPath - Path to canonical repo
  * @param {string} options.taskBranch - Task branch name
- * @param {string} [options.integrationMode] - Integration mode: local_merge|push_branch|open_pr|none
+ * @param {string} [options.integrationMode] - Integration mode: local_merge|ff_only|push_branch|open_pr|none
  * @param {Array} [options.checkCommands] - Integration check commands
  * @returns {Promise<{ ok: boolean, status: string, merged: boolean, pushed: boolean, pr_opened: boolean, error?: string, conflict_files?: string[] }>}
  */
@@ -122,7 +122,7 @@ export async function runIntegrationQueue(options = {}) {
       };
     }
 
-    if (mode === 'local_merge') {
+    if (mode === 'local_merge' || mode === 'ff_only') {
       return { ok: true, status: 'merged', merged: true, pushed: false, pr_opened: false };
     }
 
@@ -163,7 +163,7 @@ export async function runIntegrationQueue(options = {}) {
       return { ok: true, status: 'branch_pushed', merged: false, pushed, pr_opened: false };
     }
     // open_pr mode: status=pr_opened (branch pushed + PR created)
-    return { ok: true, status: 'pr_opened', merged: false, pushed, pr_opened };
+    return { ok: true, status: 'pr_opened', merged: false, pushed, pr_opened: prOpened };
   } catch (err) {
     return { ok: false, status: 'failed', merged: false, pushed: false, pr_opened: false, error: err.message };
   } finally {
