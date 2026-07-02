@@ -19,6 +19,7 @@ import { ACTIVE_EXECUTION_STATUSES, TASK_STATUSES, isCompletedStatus } from "./t
 
 const CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES = [
   ...ACTIVE_EXECUTION_STATUSES,
+  TASK_STATUSES.WAITING_FOR_REPAIR,
 ].filter((status) => status !== TASK_STATUSES.RUNNING);
 
 function errorMessage(error) {

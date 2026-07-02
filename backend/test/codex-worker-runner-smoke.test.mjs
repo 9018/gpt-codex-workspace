@@ -128,6 +128,56 @@ test('runAssignedCodexTasks parks unsupported modes for review instead of hot-lo
   }
 });
 
+test('runAssignedCodexTasks creates one repair child for parked repair parent idempotently', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-repair-parked-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addGoal(store.state, {
+      id: 'goal_repair_parent',
+      title: 'Repair parent goal',
+      goal_prompt: 'Original goal prompt',
+    });
+    addTask(store.state, {
+      id: 'repair-parent-task',
+      goal_id: 'goal_repair_parent',
+      status: 'waiting_for_repair',
+      title: 'Repair parent task',
+      result: {
+        summary: 'Previous attempt failed',
+        acceptance_findings: [
+          { severity: 'blocker', code: 'smoke_failure', message: 'Smoke failure', source: 'test' },
+        ],
+      },
+    });
+    await store.save();
+
+    const first = await runAssignedCodexTasks(store, { maxRepairAttempts: 2 }, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(first.ok, true);
+    assert.equal(first.inspected, 1);
+    assert.equal(first.progressed, 1);
+    await store.load();
+    const parentAfterFirst = store.state.tasks.find((item) => item.id === 'repair-parent-task');
+    const repairChildrenAfterFirst = store.state.tasks.filter((item) => item.parent_task_id === 'repair-parent-task');
+    assert.equal(parentAfterFirst.status, 'waiting_for_repair');
+    assert.equal(repairChildrenAfterFirst.length, 1);
+    assert.equal(parentAfterFirst.result.repair_task_id, repairChildrenAfterFirst[0].id);
+    assert.equal(repairChildrenAfterFirst[0].status, 'assigned');
+
+    const second = await runAssignedCodexTasks(store, { maxRepairAttempts: 2 }, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(second.ok, true);
+    await store.load();
+    const parentAfterSecond = store.state.tasks.find((item) => item.id === 'repair-parent-task');
+    const repairChildrenAfterSecond = store.state.tasks.filter((item) => item.parent_task_id === 'repair-parent-task');
+    assert.equal(repairChildrenAfterSecond.length, 1);
+    assert.equal(parentAfterSecond.result.repair_task_id, repairChildrenAfterFirst[0].id);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('runAssignedCodexTasks auto-starts dependency-satisfied waiting queue item when worker tick is otherwise idle', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'worker-queue-autostart-'));
   try {
