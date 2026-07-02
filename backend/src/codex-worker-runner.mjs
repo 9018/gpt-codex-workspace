@@ -316,7 +316,7 @@ async function retryIntegrationForTask(store, config, task) {
       worktreePath: gitPath,
       canonicalRepoPath: repoResolution.canonical_repo_path || gitPath,
       taskBranch: branchName || sanitizeTaskBranchName(task.id),
-      integrationMode: config.integrationMode || "push_branch",
+      integrationMode: config.integrationMode || "ff_only",
       checkCommands: config.integrationCheckCommands,
       locksBasePath: config.defaultWorkspaceRoot,
       taskId: task.id,
