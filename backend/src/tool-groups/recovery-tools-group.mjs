@@ -547,10 +547,29 @@ export function createRecoveryToolsGroup({
       const state = await store.load();
       const results = [];
       let cleared = 0;
-      const targets = lock_id ? allLocks.filter(l => l.safe_repo_id === lock_id) : allLocks.filter(l => l.status !== "released");
+      const tasks = state.tasks || [];
+      const targets = lock_id
+        ? allLocks.filter(l => l.safe_repo_id === lock_id)
+        : allLocks.filter(l => {
+            if (l.status !== "released") return true;
+            const t = l.task_id ? tasks.find(task => task.id === l.task_id) : null;
+            return l.stale_reason && t && normalizeTaskStatus(t.status) === TASK_STATUSES.RUNNING;
+          });
 
       for (const lock of targets) {
-        const task = lock.task_id ? (state.tasks||[]).find(t => t.id === lock.task_id) : null;
+        const task = lock.task_id ? tasks.find(t => t.id === lock.task_id) : null;
+        if (lock.status === "released" && lock.stale_reason && task && normalizeTaskStatus(task.status) === TASK_STATUSES.RUNNING) {
+          if (isApply) {
+            task.status = TASK_STATUSES.ASSIGNED;
+            task.assignee ||= "codex";
+            task.updated_at = now();
+            task.logs ||= [];
+            task.logs.push({ time: task.updated_at, message: "[recovery] reset orphan running task to assigned" });
+            await store.save();
+          }
+          results.push({ safe_repo_id: lock.safe_repo_id, task_id: lock.task_id, status_before: lock.status, task_status_before: TASK_STATUSES.RUNNING, task_status_after: isApply ? TASK_STATUSES.ASSIGNED : TASK_STATUSES.RUNNING, cleared: false, skipped: false, requeued: isApply, reason: lock.stale_reason });
+          continue;
+        }
         const guard = checkLockClearGuard(lock, task);
         if (!guard.ok) {
           results.push({ safe_repo_id: lock.safe_repo_id, task_id: lock.task_id, status_before: lock.status, cleared: false, skipped: true, reason: guard.reason });
