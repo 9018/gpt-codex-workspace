@@ -283,3 +283,56 @@ test("repository root does not include extracted productization goal bundle", ()
 
   assert.equal(files, "");
 });
+
+test("MA10 production init script validates required files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-init-"));
+  track(root);
+  const backendRoot = resolve(TEST_DIR, "..");
+  const projectRoot = resolve(backendRoot, "..");
+
+  // Run init script in check-only mode from project root
+  const result = execFileSync("node", ["scripts/init-production.mjs", "--check-only"], {
+    cwd: backendRoot,
+    encoding: "utf8",
+    timeout: 15_000,
+  });
+
+  assert.match(result, /package\.json/);
+  assert.match(result, /CLI entry/);
+  assert.match(result, /systemd unit/);
+  assert.match(result, /runtime env template/);
+  assert.match(result, /Production baseline is ready/);
+});
+
+test("MA10 launch initialization document exists and has required sections", async () => {
+  const repoRoot = resolve(TEST_DIR, "../..");
+  const doc = await readFile(join(repoRoot, "docs", "launch-initialization.md"), "utf8");
+
+  assert.match(doc, /Productization Baseline/);
+  assert.match(doc, /Startup \/ Default Configuration/);
+  assert.match(doc, /One-Shot Production Initialization/);
+  assert.match(doc, /3502bc99c93abf83805761dfdb0f3793cd4d0a81/);
+  assert.ok(doc.length > 2000, "Document should be substantial");
+});
+
+test("MA10 closure acceptance documentation exists and has required sections", async () => {
+  const repoRoot = resolve(TEST_DIR, "../..");
+  const doc = await readFile(join(repoRoot, "docs", "closure-acceptance.md"), "utf8");
+
+  assert.match(doc, /MA1-MA9 Release-Gate Evidence/);
+  assert.match(doc, /Remaining Non-Security Risks/);
+  assert.match(doc, /Operator-Facing Acceptance Procedure/);
+  assert.match(doc, /Closure Criteria/);
+  assert.match(doc, /3502bc99c93abf83805761dfdb0f3793cd4d0a81/);
+  assert.ok(doc.length > 2000, "Document should be substantial");
+});
+
+test("MA10 no further MA task was started", () => {
+  // Verify the scope boundary: no MA11 task directory or reference exists
+  const repoRoot = resolve(TEST_DIR, "../..");
+  const lsFiles = execFileSync("git", ["ls-files", "--", "docs/ma11*", "docs/MA11*", "backend/scripts/ma11*"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+  }).trim();
+  assert.equal(lsFiles, "", "No MA11 files should exist");
+});
