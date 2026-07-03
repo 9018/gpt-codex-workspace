@@ -27,7 +27,14 @@ import {
 } from "./queue-policy.mjs";
 import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
 import { normalizeRepoId, repoIdsEqual } from "./repo-identity.mjs";
-import { reconcileQueue, diagnoseQueueItems, propagateRepairSuccess, explainQueueDecision, detectStaleBlockers } from "./queue-reconciler.mjs";
+import {
+  reconcileQueue,
+  diagnoseQueueItems,
+  propagateRepairSuccess,
+  explainQueueDecision,
+  detectStaleBlockers,
+  resolveQueueDependencyState,
+} from "./queue-reconciler.mjs";
 
 
 // ---------------------------------------------------------------------------
@@ -41,6 +48,29 @@ export const QUEUE_STATUS_BLOCKED = "blocked";
 export const QUEUE_STATUS_COMPLETED = "completed";
 export const QUEUE_STATUS_FAILED = "failed";
 export const QUEUE_STATUS_CANCELLED = "cancelled";
+// ---------------------------------------------------------------------------
+// Typed blocked reason types (P0-MA8)
+// ---------------------------------------------------------------------------
+
+/**
+ * Typed reasons that can block a queue item from advancing.
+ * These are used by queueAutoAdvanceTick to produce granular, actionable
+ * blocked_reason values.  No admin override or skip is allowed for any
+ * of these gates.
+ */
+export const BLOCKED_REASON_TYPES = Object.freeze({
+  DEPENDENCY_NOT_TERMINAL: "dependency_not_terminal",
+  ACTIVE_REPO_LOCK: "active_repo_lock",
+  DIRTY_WORKTREE: "dirty_worktree",
+  WAITING_FOR_REVIEW: "waiting_for_review",
+  WAITING_FOR_REPAIR: "waiting_for_repair",
+  WAITING_FOR_INTEGRATION: "waiting_for_integration",
+  ACCEPTANCE_NOT_SATISFIED: "acceptance_not_satisfied",
+  INTEGRATION_NOT_SATISFIED: "integration_not_satisfied",
+  FINALIZER_NOT_TERMINAL: "finalizer_not_terminal",
+});
+
+const TYPED_BLOCKED_REASONS = new Set(Object.values(BLOCKED_REASON_TYPES));
 
 /** Ordered set of statuses that are eligible for start-next. */
 const ELIGIBLE_STATUSES = new Set([QUEUE_STATUS_WAITING, QUEUE_STATUS_READY]);
@@ -627,7 +657,7 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
   // Acceptance-aware auto-advance: if the completed task finished
   // with a failed/unaccepted status, dependent queue items that
   // directly depend on this task are blocked.
-  const taskPassedAcceptance = isTerminalCompleted(completedTask.status);
+ const taskPassedAcceptance = isTerminalCompleted(completedTask.status);
 
   // Find queue items that depend on this task or its goal
   const taskId = completedTask.id;
@@ -649,7 +679,7 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
     for (const dep of dependents) {
       if (dep.depends_on_task_id === taskId) {
         dep.status = QUEUE_STATUS_BLOCKED;
-        dep.blocked_reason = `prerequisite task ${taskId} status=${completedTask.status} — failed/unaccepted tasks must not advance the queue`;
+        dep.blocked_reason = BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED;
         dep.updated_at = now();
         details.push({
           type: "dependent_blocked_on_acceptance",
@@ -663,38 +693,314 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
     return { auto_started: false, details };
   }
 
-  // If no direct dependents, try start_next anyway (next in line)
-  if (dependents.length === 0) {
-    const result = await startNextQueuedGoal(store, config, { require_auto_start: true });
-    details.push({
-      type: "auto_start_next",
-      started: result.started,
-      reason: result.reason,
-      queue_id: result.item?.queue_id || null,
-    });
-    return { auto_started: result.started, details };
-  }
-
-  // Try to start each dependent
-  for (const dep of dependents) {
-    dep.status = QUEUE_STATUS_READY;
-    await store.save();
-
-    const result = await startNextQueuedGoal(store, config, { queue_id: dep.queue_id, require_auto_start: true });
-    details.push({
-      type: "dependent_auto_start",
-      queue_id: dep.queue_id,
-      goal_id: dep.goal_id,
-      started: result.started,
-      started_task_id: result.task?.id || null,
-      reason: result.reason,
-    });
-  }
-
-  return { auto_started: details.some((d) => d.started), details };
+  // Route through the integrated queueAutoAdvanceTick (P0-MA8)
+  // This handles reconciler integration, typed eligibility gates,
+  // and auto-start of the next eligible item.
+  const tickResult = await queueAutoAdvanceTick(store, config, { dryRun: false });
+  details.push({
+    type: "auto_advance_tick",
+    advanced: tickResult.advanced,
+    summary: tickResult.summary,
+    blocked_items: tickResult.blocked_items,
+    started_task_id: tickResult.task?.id || null,
+  });
+  return { auto_started: tickResult.advanced, details };
 }
 
 // ---------------------------------------------------------------------------
+
+/**
+ * Default canonical-worktree-clean check.
+ * Runs git status --porcelain in the canonical repo path.
+ * Tests can inject a mock via opts.
+ */
+async function _defaultCheckRepoLocks(workspaceRoot) {
+  if (!workspaceRoot) return { active: 0, stale: 0 };
+  try {
+    const { getRepoLockSummary } = await import('./repo-lock-diagnostics.mjs');
+    const summary = await getRepoLockSummary(workspaceRoot);
+    return { active: summary.active_repo_locks, stale: summary.stale_repo_locks };
+  } catch {
+    return { active: 0, stale: 0 };
+  }
+}
+
+/**
+ * Default worktree-clean check.
+ * Tests can inject a mock via opts.
+ */
+async function _defaultCheckWorktreeClean(canonicalRepoPath) {
+  if (!canonicalRepoPath) return { clean: true };
+  const { execSync } = await import('node:child_process');
+  try {
+    const out = execSync('git status --porcelain', {
+      cwd: canonicalRepoPath,
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    return { clean: out.trim().length === 0 };
+  } catch (err) {
+    return { clean: false, error: err?.message || 'git status failed' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// P0-MA8: Typed eligibility check for queue auto-advance
+// ---------------------------------------------------------------------------
+
+/**
+ * Run all typed eligibility gates for a single queue item.
+ * Pure-policy check: does not mutate state.
+ *
+ * @param {object} state  - Full state (goals[], tasks[], goal_queue[])
+ * @param {object} item   - Queue item being evaluated
+ * @param {object} config - Config
+ * @param {object} [opts]
+ * @returns {Promise<object>} { eligible, blocked_reason, gates }
+ */
+export async function checkTypedEligibility(state, item, config = {}, opts = {}) {
+  const gates = [];
+
+  // 1. Dependency terminal check via reconciler (includes integration/readonly/repair awareness)
+  if (item.depends_on_goal_id || item.depends_on_task_id) {
+    const depState = resolveQueueDependencyState(state, item);
+    gates.push({ gate: 'dependency', passed: depState.effective_completed, detail: depState.detail });
+
+    // FIRST: Per-status terminal checks on prerequisite task
+    // These typed blockers (waiting_for_review, repair, integration, acceptance, finalizer)
+    // must be checked before the generic dependency check because non-terminal statuses
+    // like "waiting_for_review" would be caught by the generic "not effective_completed".
+    const prerequisiteTask = item.depends_on_task_id
+      ? (Array.isArray(state.tasks) ? state.tasks.find(t => t.id === item.depends_on_task_id) : null)
+      : null;
+
+    if (prerequisiteTask) {
+      const prStatus = prerequisiteTask.status;
+
+      // Non-terminal hold states get typed blockers
+      if (prStatus === 'waiting_for_review' || prStatus === 'waiting_for_human_review') {
+        gates.push({ gate: 'prerequisite_terminals', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' status=' + prStatus });
+        return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.WAITING_FOR_REVIEW, gates };
+      }
+      if (prStatus === 'waiting_for_repair') {
+        gates.push({ gate: 'prerequisite_terminals', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' status=' + prStatus });
+        return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.WAITING_FOR_REPAIR, gates };
+      }
+      if (prStatus === 'waiting_for_integration') {
+        gates.push({ gate: 'prerequisite_terminals', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' status=' + prStatus });
+        return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.WAITING_FOR_INTEGRATION, gates };
+      }
+
+      // Acceptance gate check for completed prerequisites
+      // Only block on acceptance when there's explicit evidence of failure,
+      // not when data is simply absent (e.g., task result only has commit+needs_integration).
+      if (prStatus === 'completed') {
+        const prResult = prerequisiteTask.result || {};
+        const accExplicitlyFailed = prResult.acceptance_gate?.passed === false
+          || (prResult.verification?.passed === false && !prResult.auto_integration_completion?.completed)
+          || prResult.requires_review === true
+          || (prResult.acceptance_findings && Array.isArray(prResult.acceptance_findings) && prResult.acceptance_findings.some(f => f.severity === 'blocker' || f.severity === 'major'));
+        if (accExplicitlyFailed) {
+          gates.push({ gate: 'acceptance_gate', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' completed but acceptance not satisfied' });
+          return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED, gates };
+        }
+      }
+    }
+
+    // THEN: Generic dependency check after per-status checks
+    // effective_failed means the dependency failed terminally
+    if (depState.effective_failed) {
+      return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.DEPENDENCY_NOT_TERMINAL, gates };
+    }
+    // effective_completed means the dependency is finished and integrated/accepted
+    if (!depState.effective_completed) {
+      if (depState.integration_required_and_missing) {
+        return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.INTEGRATION_NOT_SATISFIED, gates };
+      }
+      // For completed prerequisites, also check finalizer terminal state
+      if (prerequisiteTask && prerequisiteTask.status === 'completed') {
+        const prResult = prerequisiteTask.result || {};
+        const fd = prResult.finalizer_decision || {};
+        const isTermFinalized = fd.safe_to_auto_advance === true
+          || fd.queue_effect?.unblock_dependents === true
+          || (prResult.closure_decision?.status && String(prResult.closure_decision.status).startsWith('auto_completed'));
+        if (!isTermFinalized) {
+          gates.push({ gate: 'finalizer_terminal', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' finalizer safe_to_auto_advance not set' });
+          return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.FINALIZER_NOT_TERMINAL, gates };
+        }
+      }
+      return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.DEPENDENCY_NOT_TERMINAL, gates };
+    }
+  }
+
+  // 2. Acceptance gate (via queue-policy)
+  const acceptResult = checkAcceptanceGate(state, item);
+  gates.push({ gate: 'acceptance_gate', passed: acceptResult.passed, detail: acceptResult.reason || 'no prerequisite task dependency' });
+  if (!acceptResult.passed) {
+    return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED, gates };
+  }
+
+  // 3. Dependency policy check (from queue-policy)
+  const depResult = policyCheckDependency(state, item);
+  gates.push({ gate: 'dependency_policy', passed: depResult.satisfied, detail: depResult.reason || 'no dependency' });
+  if (!depResult.satisfied) {
+    return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.DEPENDENCY_NOT_TERMINAL, gates };
+  }
+
+  // 4. Repo concurrency check
+  const candidateRepoId = normalizeRepoId(item.repo_id, config);
+  if (candidateRepoId) {
+    const concurrencyResult = checkRepoConcurrency(state, candidateRepoId, item.queue_id, config);
+    gates.push({
+      gate: 'repo_concurrency',
+      passed: !concurrencyResult.blocked,
+      detail: concurrencyResult.blocked
+        ? 'same-repo serialisation: ' + (concurrencyResult.runningItem?.goal_id || 'another task') + ' already running for repo ' + candidateRepoId
+        : 'no concurrent repo task',
+    });
+  }
+
+  // 5. Active repo locks check
+  const workspaceRoot = config.defaultWorkspaceRoot;
+  const checkRepoLocksFn = opts.checkRepoLocksFn || _defaultCheckRepoLocks;
+  const lockSummary = await checkRepoLocksFn(workspaceRoot);
+  const hasActiveLock = item.repo_id && lockSummary.active > 0;
+  gates.push({
+    gate: 'active_repo_lock',
+    passed: !hasActiveLock,
+    detail: hasActiveLock ? 'active repo lock: ' + lockSummary.active + ' active lock(s)' : 'no active repo lock',
+  });
+  if (hasActiveLock) {
+    return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACTIVE_REPO_LOCK, gates };
+  }
+
+  // 6. Worktree cleanliness check
+  const canonicalPath = config.defaultRepoPath || config.defaultWorkspaceRoot;
+  const checkWorktreeFn = opts.checkWorktreeCleanFn || _defaultCheckWorktreeClean;
+  const worktreeResult = await checkWorktreeFn(canonicalPath);
+  const isDirty = worktreeResult.clean === false;
+  gates.push({
+    gate: 'dirty_worktree',
+    passed: !isDirty,
+    detail: isDirty ? 'dirty worktree: canonical repo ' + canonicalPath + ' is not clean' : 'canonical worktree clean',
+  });
+  if (isDirty) {
+    return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.DIRTY_WORKTREE, gates };
+  }
+
+  return { eligible: true, blocked_reason: null, gates };
+}
+
+// ---------------------------------------------------------------------------
+// P0-MA8: Queue Auto-Advance Tick
+// ---------------------------------------------------------------------------
+
+/**
+ * P0-MA8: Queue auto-advance tick.
+ *
+ * 1. Runs reconcileQueue with fixStaleBlockers=true (MA7 integration)
+ * 2. Scans all waiting/ready items with typed eligibility gates
+ * 3. Sets typed blocked_reason on ineligible items
+ * 4. Advances the first fully-eligible item via startNextQueuedGoal
+ *
+ * @param {object} store  - State store
+ * @param {object} config - Config
+ * @param {object} [opts]
+ * @returns {Promise<object>} { advanced, item, task, gates, blocked_items, summary }
+ */
+export async function queueAutoAdvanceTick(store, config, opts = {}) {
+  const dryRun = opts.dryRun === true;
+  const state = await store.load();
+  const items = Array.isArray(state.goal_queue) ? state.goal_queue : [];
+  const blockedItems = [];
+
+  // Step 1: Run MA7 reconciler to fix stale blockers before scanning
+  if (!dryRun) {
+    await reconcileQueue(state, config, { dryRun: false, fixStaleBlockers: true });
+    // Reload state after reconciler mutations
+    await store.save();
+    const freshState = await store.load();
+    const freshItems = Array.isArray(freshState.goal_queue) ? freshState.goal_queue : [];
+
+    // Step 2: Scan eligible items in position order
+    const eligible = freshItems
+      .filter(item => ELIGIBLE_STATUSES.has(item.status) && item.auto_start !== false)
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+    for (const candidate of eligible) {
+      const eligibility = await checkTypedEligibility(freshState, candidate, config, opts);
+
+      if (eligibility.eligible) {
+        const result = await startNextQueuedGoal(store, config, { dry_run: false, queue_id: candidate.queue_id });
+        return {
+          advanced: result.started,
+          item: result.item,
+          task: result.task,
+          gates: eligibility.gates,
+          blocked_items: blockedItems,
+          summary: result.started
+            ? 'Advanced queue item ' + candidate.queue_id + ' for goal ' + candidate.goal_id
+            : 'Queue item ' + candidate.queue_id + ' failed to start: ' + result.reason,
+        };
+      }
+
+      // Item is blocked by typed gate
+      candidate.status = QUEUE_STATUS_BLOCKED;
+      candidate.blocked_reason = eligibility.blocked_reason;
+      candidate.updated_at = new Date().toISOString();
+      blockedItems.push({
+        queue_id: candidate.queue_id,
+        goal_id: candidate.goal_id,
+        blocked_reason: eligibility.blocked_reason,
+        gates: eligibility.gates,
+      });
+
+      // Stop at first blocked item (respect queue order)
+      break;
+    }
+
+    await store.save();
+  } else {
+    // Dry run: scan without mutation
+    const eligible = items
+      .filter(item => ELIGIBLE_STATUSES.has(item.status) && item.auto_start !== false)
+      .sort((a, b) => (a.position || 0) - (b.position || 0));
+
+    for (const candidate of eligible) {
+      const eligibility = await checkTypedEligibility(state, candidate, config, opts);
+      if (eligibility.eligible) {
+        return {
+          advanced: false,
+          item: candidate,
+          task: null,
+          gates: eligibility.gates,
+          blocked_items: [],
+          summary: 'Dry run: would advance queue item ' + candidate.queue_id + ' for goal ' + candidate.goal_id,
+        };
+      }
+
+      blockedItems.push({
+        queue_id: candidate.queue_id,
+        goal_id: candidate.goal_id,
+        blocked_reason: eligibility.blocked_reason,
+        gates: eligibility.gates,
+      });
+    }
+  }
+
+  return {
+    advanced: false,
+    item: null,
+    task: null,
+    gates: [],
+    blocked_items: blockedItems,
+    summary: blockedItems.length > 0
+      ? 'No eligible items: ' + blockedItems[0].blocked_reason + ' (and ' + (blockedItems.length - 1) + ' more)'
+      : 'No eligible queue items',
+  };
+}
+
 // Re-export queue policy functions for convenience
 // ---------------------------------------------------------------------------
 
