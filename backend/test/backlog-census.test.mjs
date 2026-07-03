@@ -23,6 +23,7 @@ import {
   classifyBlocker,
   classifyLegacyWaitingForReviewMigration,
   scanBacklogCensus,
+  runBacklogCensus,
   generateBacklogConvergenceReport,
 } from '../src/backlog-census.mjs';
 
@@ -793,3 +794,39 @@ test('classifyBlocker: timed_out task with implicit successor → RESOLVED_LEGAC
 });
 
 console.log('backlog-census tests loaded');
+
+// =========================================================================
+// 9. runBacklogCensus convenience runner
+// =========================================================================
+
+test('runBacklogCensus: empty tasks returns valid census', async () => {
+  const census = await runBacklogCensus([]);
+  assert.ok(census.scanned_at);
+  assert.equal(census.total_tasks, 0);
+  assert.equal(census.backlog_tasks, 0);
+  assert.deepEqual(census.classification_summary, {});
+  assert.ok(census.convergence_report);
+  assert.equal(census.convergence_report.total_blockers, 0);
+});
+
+test('runBacklogCensus: mixed tasks produces correct classification counts', async () => {
+  const tasks = [
+    { id: 't1', status: 'waiting_for_repair', assignee: 'codex', goal_id: 'g1', result: { verification: { passed: false }, changed_files: [] } },
+    { id: 't2', status: 'completed', assignee: 'codex', goal_id: 'g1', result: { verification: { passed: true }, commit: 'abc' } },
+    { id: 't3', status: 'failed', assignee: 'codex', goal_id: 'g2', result: { verification: { passed: false }, changed_files: ['x'] } },
+  ];
+  const census = await runBacklogCensus(tasks);
+  assert.equal(census.total_tasks, 3);
+  assert.ok(census.backlog_tasks >= 2); // waiting_for_repair + failed
+  assert.ok(census.classification_summary);
+});
+
+test('runBacklogCensus: non-codex tasks are excluded', async () => {
+  const tasks = [
+    { id: 't1', status: 'failed', assignee: 'human', goal_id: 'g1' },
+    { id: 't2', status: 'completed', assignee: 'codex', goal_id: 'g2', result: { verification: { passed: true }, commit: 'abc' } },
+  ];
+  const census = await runBacklogCensus(tasks);
+  assert.equal(census.total_tasks, 2);
+  assert.equal(census.backlog_tasks, 0); // human-assigned failed is not codex backlog
+});

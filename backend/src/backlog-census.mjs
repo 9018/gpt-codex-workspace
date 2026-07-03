@@ -732,6 +732,39 @@ export function generateBacklogConvergenceReport(classifiedTasks, classification
 }
 
 // ---------------------------------------------------------------------------
+// Convenience runner
+// ---------------------------------------------------------------------------
+
+/**
+ * Run scanBacklogCensus against a flat array of tasks without requiring a
+ * full StateStore instance.  Creates a minimal store-like adapter internally.
+ *
+ * This is the primary entrypoint for CLI / ad-hoc census scans.  It always
+ * creates a fresh store wrapper so callers never need to know about the
+ * StateStore interface.
+ *
+ * @param {Array} tasks - Array of task objects
+ * @returns {Promise<object>} Complete census result from scanBacklogCensus
+ */
+export async function runBacklogCensus(tasks) {
+  const adapterStore = {
+    async load() {
+      return { tasks: tasks || [] };
+    },
+    getCodexTasksByStatus() {
+      const filtered = (tasks || []).filter(t => t.assignee === 'codex');
+      const byStatus = {};
+      for (const task of filtered) {
+        const s = task.status;
+        byStatus[s] = (byStatus[s] || 0) + 1;
+      }
+      return filtered; // legacy path: return array; collector handles counts
+    },
+  };
+  return scanBacklogCensus(adapterStore);
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
