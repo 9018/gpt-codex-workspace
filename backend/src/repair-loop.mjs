@@ -347,10 +347,10 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
   // Only process repair tasks (those with a parent_task_id or repair_of_task_id)
   const parentTaskId = completedTask.parent_task_id || completedTask.repair_of_task_id || null;
   if (!parentTaskId) {
+    // Write skipped_no_parent agent run before returning
+    await writeRepairerAgentRun(store, { task_id: completedTask.id, goal_id: completedTask.goal_id, repairOutcome: { passed: false, repair_outcome: "skipped_no_parent", reason: "Not a repair task — no parent_task_id" } }, {}).catch(() => {});
     return { parent_updated: false, parent_task_id: null, parent_status: null, reason: "Not a repair task — no parent_task_id" };
   }
-
-    await writeRepairerAgentRun(store, { task_id: completedTask.id, goal_id: completedTask.goal_id, repairOutcome: { passed: false, repair_outcome: "skipped_no_parent", reason: "Not a repair task — no parent_task_id" } }, {}).catch(() => {});
 
   try {
     const result = await store.mutate((state) => {
@@ -390,7 +390,6 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
           }
         }
         return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "failed", repair_outcome: "failed" };
-    await writeRepairerAgentRun(store, { task_id: completedTask.id, goal_id: completedTask.goal_id, repairOutcome: { passed: false, repair_outcome: "failed", reason: "Repair task failed" } }, {}).catch(() => {});
 
       }
 
