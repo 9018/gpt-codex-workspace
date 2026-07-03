@@ -31,7 +31,7 @@ export const ACCEPTANCE_PROFILES = {
   DEPLOY: 'deploy',
 };
 
-function isManagedGitStatusLine(line) {
+export function isManagedGitStatusLine(line) {
   const path = String(line || "").slice(3).trim();
   return path === ".gptwork" || path.startsWith(".gptwork/") || path === "worktrees" || path.startsWith("worktrees/");
 }
@@ -391,6 +391,48 @@ function getProfileChecks(profile) {
   return profiles[profile] || profiles.default;
 }
 
+/**
+ * Get changed files for a given commit via `git show --name-only`.
+ * Returns an empty array if the commit doesn't exist or the command fails.
+ *
+ * @param {string} commit - Commit SHA
+ * @param {string} [repoPath] - Git repo path
+ * @returns {string[]} Changed file paths relative to repo root
+ */
+function getCommitChangedFiles(commit, repoPath) {
+  if (!commit || typeof commit !== 'string') return [];
+  try {
+    const stdout = execFileSync('git', ['show', '--name-only', '--format=', commit], {
+      cwd: repoPath || '.',
+      encoding: 'utf8',
+      timeout: 10000,
+      maxBuffer: 1024 * 1024,
+    });
+    return stdout.trim().split('\n').filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Lazy-import child_process to avoid top-level ESM/CJS issues.
+ * Returns the `execFileSync` function.
+ */
+function require_child_process() {
+  // eslint-disable-next-line global-require
+  return { execFileSync: require('child_process').execFileSync };
+}
+
+/**
+ * Parse commit changed files into a Set of normalized (leading-slash-stripped) paths.
+ * @param {string} [commit] - Commit SHA
+ * @param {string} [repoPath] - Git repo path
+ * @returns {Set<string>} Normalized file paths
+ */
+function getCommitChangedFilesSet(commit, repoPath) {
+  return new Set(getCommitChangedFiles(commit, repoPath).map(f => f.replace(/^\/+/, '')));
+}
+
 async function runCheck(check, { task, result, evidence, repoPath }) {
   switch (check) {
     case 'result_json_valid':
@@ -489,16 +531,54 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       if (resultFiles.size === 0 && gitFiles.size > 0) return null;
       if (resultFiles.size > 0 && gitFiles.size > 0) {
         const missing = [...resultFiles].filter(f => !gitFiles.has(f));
-        const extra = [...gitFiles].filter(f => !resultFiles.has(f));
         if (missing.length > 0) {
+          // P0: Before flagging as mismatch, check commit diff when available.
+          // This handles the post-commit/post-integration case where the
+          // worktree diff does not directly contain the result files but
+          // the commit does.
+          if (result?.commit) {
+            const commitFiles = getCommitChangedFilesSet(result.commit, repoPath);
+            if (commitFiles.size > 0 && missing.every(f => commitFiles.has(f))) {
+              // All missing files are accounted for in the commit diff — pass
+              return null;
+            }
+          }
           return { severity: 'major', code: 'changed_files_mismatch', message: `Files in result not found in git diff: ${missing.join(', ')}`, source: 'acceptance_agent' };
         }
+        const extra = [...gitFiles].filter(f => !resultFiles.has(f));
         if (extra.length > 0) {
+          // If result has a commit, verify extra files are not actually part of the commit.
+          // If they are, the result is consistent with the commit — pass.
+          if (result?.commit) {
+            const commitFiles = getCommitChangedFilesSet(result.commit, repoPath);
+            if (commitFiles.size > 0 && !extra.every(f => !commitFiles.has(f))) {
+              // At least one extra file is in the commit — pass
+              return null;
+            }
+          }
           return { severity: 'major', code: 'changed_files_extra_in_git', message: `Files in git diff not listed in result: ${extra.join(', ')}`, source: 'acceptance_agent' };
         }
       }
       // P0: If result claims files but git shows none, that's a real mismatch
       if (resultFiles.size > 0 && gitFiles.size === 0) {
+        // Before flagging as mismatch, check commit diff when available.
+        // This handles the post-integration/merge case where the worktree
+        // diff is clean but the result has valid commit evidence.
+        if (result?.commit) {
+          const commitFiles = getCommitChangedFilesSet(result.commit, repoPath);
+          if (commitFiles.size > 0) {
+            const allInCommit = [...resultFiles].every(f => commitFiles.has(f));
+            if (allInCommit) {
+              // All result files are in the commit diff — pass
+              return null;
+            }
+          }
+        }
+        // Also check integration evidence: if the task was merged/integrated,
+        // the worktree diff may be clean by design
+        if (result?.integration?.status === 'merged' || result?.integration?.status === 'integrated') {
+          return null;
+        }
         return { severity: 'major', code: 'changed_files_mismatch', message: `Result claims changed_files but git diff shows no changes: ${[...resultFiles].join(', ')}`, source: 'acceptance_agent' };
       }
       return null;

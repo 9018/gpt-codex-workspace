@@ -723,3 +723,107 @@ test("buildEvidence: result_changed_files is empty when result.json has no chang
 
   rmSync(dir, { recursive: true, force: true });
 });
+
+
+// ===========================================================================
+// P0: Post-integration changed_files acceptance (clean-diff after merge)
+// When a task is committed/merged, the worktree diff may be clean. The
+// acceptance agent should verify against the commit diff, not reject.
+// ===========================================================================
+
+test("changed_files_match_git: passes when result has commit and all files match commit diff (post-merge clean diff)", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  // Simulate post-integration: git diff is clean but result has commit
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_postmerge_clean" },
+    result: {
+      status: "completed",
+      summary: "Post-merge task with clean diff",
+      changed_files: ["backend/src/subagent-policy.mjs", "backend/src/pipeline-orchestration.mjs",
+                       "backend/src/task-general-processor.mjs", "backend/src/diagnostics-service.mjs",
+                       "backend/test/pipeline-orchestration.test.mjs"],
+      verification: { commands: ["true"], passed: true },
+      tests: "none",
+      commit: "87e5d99b37179ba46889dff42010532f95467036",
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Post-merge task with clean diff",
+      changed_files: [],       // git shows no uncommitted files
+      git_changed_files: [],   // current worktree diff is clean
+      result_changed_files: ["backend/src/subagent-policy.mjs", "backend/src/pipeline-orchestration.mjs",
+                              "backend/src/task-general-processor.mjs", "backend/src/diagnostics-service.mjs",
+                              "backend/test/pipeline-orchestration.test.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  // Should pass because all result files are in commit 87e5d99
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch");
+  assert.equal(mismatchFindings.length, 0,
+    "Should NOT produce changed_files_mismatch when result files match commit diff");
+  assert.equal(result.passed, true,
+    "Acceptance should pass for post-merge task with clean diff");
+});
+
+test("changed_files_match_git: still blocks when result claims files but no commit and no integration evidence", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_nocommit_mismatch" },
+    result: {
+      status: "completed",
+      summary: "Task with changed_files but no commit evidence",
+      changed_files: ["src/claimed.mjs", "src/not-in-diff.mjs"],
+      verification: { commands: ["true"], passed: true },
+      // No commit and no integration evidence
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with changed_files but no commit evidence",
+      changed_files: [],
+      git_changed_files: [],
+      result_changed_files: ["src/claimed.mjs", "src/not-in-diff.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: false,
+    },
+  });
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch");
+  assert.ok(mismatchFindings.length > 0,
+    "Should STILL produce changed_files_mismatch when no commit/integration evidence");
+});
+
+test("getCommitChangedFiles: returns files for existing commit", async () => {
+  const mod = await import("../src/acceptance-agent.mjs");
+  // Use getCommitChangedFilesSet via the exports - it's not exported, so test via buildEvidence
+  // Instead, test by calling runAcceptanceAgent with a known commit
+  const result = await mod.runAcceptanceAgent({
+    task: { id: "t_commitfiles_known" },
+    result: {
+      status: "completed",
+      summary: "Task with known commit",
+      changed_files: ["backend/src/subagent-policy.mjs"],
+      verification: { commands: ["true"], passed: true },
+      commit: "87e5d99b37179ba46889dff42010532f95467036",
+    },
+    repoPath: process.cwd(),
+    evidence: {
+      result_json_valid: true,
+      result_summary: "Task with known commit",
+      changed_files: [],
+      git_changed_files: [],
+      result_changed_files: ["backend/src/subagent-policy.mjs"],
+      git_status: "clean",
+      verification_log_exists: true,
+      commit_exists: true,
+    },
+  });
+  // Should pass because "backend/src/subagent-policy.mjs" is in commit 87e5d99
+  const mismatchFindings = result.findings.filter(f => f.code === "changed_files_mismatch");
+  assert.equal(mismatchFindings.length, 0,
+    "Should pass for known commit with matched files");
+  assert.equal(result.passed, true);
+});
