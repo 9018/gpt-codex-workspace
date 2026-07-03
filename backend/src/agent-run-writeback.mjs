@@ -131,12 +131,13 @@ export async function writeIdempotentAgentRun(store, args = {}, context = {}) {
 export async function writeBuilderAgentRun(store, { task_id, goal_id, taskResult = {}, summary = "" } = {}, context = {}) {
   const outputArtifacts = [];
   const changedFiles = list(taskResult.changed_files || taskResult.changedFiles);
-  if (changedFiles.length > 0) {
-    outputArtifacts.push({ kind: "change_summary", path: null, changed_count: changedFiles.length });
-  }
-  if (taskResult.commit) {
-    outputArtifacts.push({ kind: "change_summary", path: null, commit: taskResult.commit });
-  }
+  // P0-MA11: Always include change_summary artifact for contract validation
+  outputArtifacts.push({
+    kind: "change_summary",
+    path: null,
+    changed_count: changedFiles.length,
+    commit: taskResult.commit || null,
+  });
   const builderStatus = taskResult.status === "completed" || summary ? "completed" : "failed";
   return writeIdempotentAgentRun(store, {
     task_id, goal_id, role: "builder",
@@ -159,10 +160,13 @@ export async function writeBuilderAgentRun(store, { task_id, goal_id, taskResult
  */
 export async function writeVerifierAgentRun(store, { task_id, goal_id, verification = {} } = {}, context = {}) {
   const outputArtifacts = [];
-  const commands = list(verification.commands);
-  if (commands.length > 0) {
-    outputArtifacts.push({ kind: "verification", path: null, commands_count: commands.length, passed: verification.passed === true });
-  }
+  // P0-MA11: Always include verification artifact for contract validation
+  outputArtifacts.push({
+    kind: "verification",
+    path: null,
+    commands_count: list(verification.commands).length,
+    passed: verification.passed === true,
+  });
   const verifierStatus = verification.passed === true ? "completed" : "failed";
   return writeIdempotentAgentRun(store, {
     task_id, goal_id, role: "verifier",
@@ -184,9 +188,20 @@ export async function writeVerifierAgentRun(store, { task_id, goal_id, verificat
  * @returns {Promise<object>}
  */
 export async function writeReviewerAgentRun(store, { task_id, goal_id, reviewer_decision = {} } = {}, context = {}) {
-  const decision = object(reviewer_decision.decision || reviewer_decision);
-  const accepted = decision.passed === true || decision.status === "accepted" || decision.decision === "accepted";
-  const outputArtifacts = [{ kind: "reviewer_decision", path: null, passed: accepted, status: decision.status || "unknown" }];
+  // P0-MA11: Check all decision formats
+  const raw = object(reviewer_decision.decision || reviewer_decision);
+  // Handle string decision values like "accepted"
+  const decision = typeof raw === "string" ? {} : raw;
+  const accepted = reviewer_decision.passed === true
+    || reviewer_decision.status === "accepted"
+    || reviewer_decision.decision === "accepted"
+    || reviewer_decision.decision?.passed === true
+    || reviewer_decision.decision?.status === "accepted"
+    || decision.passed === true
+    || decision.status === "accepted"
+    || decision.decision === "accepted";
+  const decisionStatus = typeof reviewer_decision.status === "string" ? reviewer_decision.status : (decision.status || "unknown");
+  const outputArtifacts = [{ kind: "reviewer_decision", path: null, passed: accepted, status: decisionStatus }];
   return writeIdempotentAgentRun(store, {
     task_id, goal_id, role: "reviewer",
     status: accepted ? "completed" : "failed",

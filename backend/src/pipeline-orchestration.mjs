@@ -268,18 +268,26 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
     return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: true };
   }
 
+  // P0-MA11: Only check BLOCKING_GATE_ROLES (verifier, reviewer, finalizer, integrator)
+  // context_curator and planner are informational, not blocking
+  // If no agent runs exist and allowMissingGates=false, always block
+  const blockingUnsatisfied = (gateResult.gates || []).filter(
+    g => BLOCKING_GATE_ROLES.includes(g.contract_role) && !g.satisfied
+  );
+  const gatesSatisfied = blockingUnsatisfied.length === 0 && !gateResult.has_legacy_task;
+
   // Gates satisfied: pass through
-  if (gateResult.gates_satisfied) {
+  if (gatesSatisfied) {
     return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: true };
   }
 
   // Gates NOT satisfied: only downgrade if task would be completed
   if (taskStatus === "completed") {
     const downgradedStatus = "waiting_for_review";
-    const gateFindings = (gateResult.blocking_reasons || []).map(reason => ({
+    const gateFindings = blockingUnsatisfied.map(g => ({
       severity: "blocker",
       code: "pipeline_gate_blocking",
-      message: `Pipeline gate blocking: ${reason}`,
+      message: `Pipeline gate blocking: ${g.contract_role} - ${g.summary || g.missing_fields?.join(', ') || 'gate not satisfied'}`,
       source: "pipeline_orchestration",
     }));
 
@@ -289,7 +297,9 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
       ...gateFindings,
     ];
     taskResult.pipeline_gate_blocked = true;
-    taskResult.pipeline_gate_reasons = gateResult.blocking_reasons;
+    taskResult.pipeline_gate_reasons = (gateResult.blocking_reasons || []).filter(
+      r => blockingUnsatisfied.some(g => r.startsWith(g.contract_role))
+    );
     taskResult.pipeline_gate_legacy = gateResult.has_legacy_task;
 
     return {
@@ -301,12 +311,14 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
   }
 
   // Task already not completed, just annotate
-  if (gateResult.blocking_reasons.length > 0) {
+  if (blockingUnsatisfied.length > 0) {
     taskResult.pipeline_gate_blocked = true;
-    taskResult.pipeline_gate_reasons = gateResult.blocking_reasons;
+    taskResult.pipeline_gate_reasons = gateResult.blocking_reasons.filter(
+      r => blockingUnsatisfied.some(g => r.startsWith(g.contract_role))
+    );
   }
 
-  return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: false };
+  return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: blockingUnsatisfied.length === 0 };
 }
 
 // ---------------------------------------------------------------------------
@@ -482,4 +494,184 @@ export async function getPipelineDiagnostics(store, { task_id } = {}) {
   }
 
   return diagnostics;
+}
+
+/**
+ * convergeBacklog — Scan the current store state and classify/converge
+ * all backlogged tasks into typed states.
+ *
+ * P0-MA11: This function ONLY produces typed convergence decisions.
+ * It does NOT mutate task state.  The results can be consumed by a
+ * convergence agent or runtime reconciler for actual state transitions.
+ *
+ * @param {object} store - State store
+ * @param {object} [config] - Config object
+ * @returns {Promise<{
+ *   scanned_at: string,
+ *   total_backlog: number,
+ *   convergence: Array<{ task_id: string, status: string, classification: string, proposed_action: string, evidence: object }>,
+ *   typing_summary: object,
+ * }>}
+ */
+export async function convergeBacklog(store, config = {}) {
+  const { getTaskAcceptanceBundle } = await import('./review/task-acceptance-bundle.mjs');
+  const { reconcileBundle, RECONCILIATION_TYPES } = await import('./review/review-backlog-reconciler.mjs');
+  const { classifyIntegrationState, INTEGRATION_RECONCILIATION_TYPES } = await import('./integration-backlog-reconciler.mjs');
+  const { classifyBlocker, BLOCKER_CLASSIFICATIONS, BACKLOG_CATEGORIES } = await import('./backlog-census.mjs');
+  const { normalizeTaskStatus, TASK_STATUSES, isFailedTerminalStatus } = await import('./task-status-taxonomy.mjs');
+  const { REVIEW_STATES } = await import('./task-review-status-taxonomy.mjs');
+
+  const state = await store.load();
+  const tasks = state.tasks || [];
+  const scanned_at = new Date().toISOString();
+
+  const BACKLOG_STATUSES = new Set([
+    TASK_STATUSES.WAITING_FOR_REVIEW,
+    TASK_STATUSES.WAITING_FOR_REPAIR,
+    TASK_STATUSES.WAITING_FOR_INTEGRATION,
+    ...Object.values(REVIEW_STATES),
+  ]);
+  for (const s of Object.values(TASK_STATUSES)) {
+    if (isFailedTerminalStatus(s)) BACKLOG_STATUSES.add(s);
+  }
+
+  const convergence = [];
+  const typingCounts = {};
+
+  for (const task of tasks) {
+    const ns = normalizeTaskStatus(task.status);
+    if (!BACKLOG_STATUSES.has(ns)) continue;
+
+    const taskObj = { task_id: task.id, status: ns, classification: 'unknown', proposed_action: 'manual_review', evidence: {} };
+
+    if (ns === TASK_STATUSES.WAITING_FOR_REVIEW) {
+      // Use review-backlog-reconciler
+      try {
+        const bundle = await getTaskAcceptanceBundle({ store, config, task_id: task.id });
+        const reconciled = reconcileBundle({ task, bundle, state, store });
+        const integrated = reconciled.is_integrated || Boolean(task.result?.integration?.merged === true || task.result?.integration?.status === 'ff_only_merged' || task.result?.integration?.status === 'merged');
+        const verified = bundle.verification?.passed === true || task.result?.verification?.passed === true;
+        const accepted = reconciled.bundle_status === 'completed' || task.status === 'completed' || (
+          task.result?.reviewer_decision?.passed === true ||
+          task.result?.reviewer_decision?.decision === 'accepted' ||
+          task.result?.acceptance_gate?.passed === true
+        );
+
+        if (accepted && verified && integrated) {
+          taskObj.classification = 'accepted_verified_integrated';
+          taskObj.proposed_action = 'auto_complete';
+        } else if (accepted && verified) {
+          taskObj.classification = 'accepted_verified_needs_integration';
+          taskObj.proposed_action = 'auto_integrate';
+        } else if (bundle.blockers?.length === 0 && !bundle.missing_evidence?.length) {
+          taskObj.classification = 'noop_evidence_missing';
+          taskObj.proposed_action = 'auto_repair_evidence';
+        } else if (bundle.blockers?.some(b => b.code?.includes('contract'))) {
+          taskObj.classification = 'invalid_contract';
+          taskObj.proposed_action = 'contract_repair';
+        } else if (reconciled.reconciled) {
+          taskObj.classification = 'reconciled_by_evidence';
+          taskObj.proposed_action = 'auto_accept';
+        } else if (reconciled.still_blocking?.length > 0) {
+          taskObj.classification = 'still_blocking';
+          taskObj.proposed_action = 'manual_review';
+        } else {
+          taskObj.classification = 'true_human_review';
+          taskObj.proposed_action = 'human_review';
+        }
+        taskObj.evidence = { bundle_status: bundle.status, integrated, verified, accepted, reconciled: reconciled.reconciled, still_blocking: reconciled.still_blocking?.length };
+      } catch (err) {
+        taskObj.classification = 'bundle_error';
+        taskObj.proposed_action = 'manual_review';
+        taskObj.evidence = { error: err.message };
+      }
+    } else if (ns === TASK_STATUSES.WAITING_FOR_REPAIR) {
+      // Check for completed/accepted repair successor or repair budget
+      const result = task.result || {};
+      const hasSuccessor = result.repair_goal_id || result.repair_task_id;
+      const successors = state.tasks?.filter(t => t.repair_of_task_id === task.id || t.parent_task_id === task.id) || [];
+      const completedAcceptedSuccessor = successors.some(t => t.status === 'completed' && (t.result?.reviewer_decision?.passed === true || t.result?.verification?.passed === true));
+      const repairBudgetExhausted = result.repair_budget_exhausted === true || (task.attempt >= (task.max_attempts || 3));
+      const repairTaskMissing = !hasSuccessor && successors.length === 0;
+
+      if (completedAcceptedSuccessor) {
+        taskObj.classification = 'repair_successor_completed_accepted';
+        taskObj.proposed_action = 'inherit_repair_and_complete';
+      } else if (repairTaskMissing) {
+        taskObj.classification = 'repair_task_missing';
+        taskObj.proposed_action = 'create_repair_task';
+      } else if (repairBudgetExhausted) {
+        taskObj.classification = 'repair_budget_exhausted';
+        taskObj.proposed_action = 'human_terminal_decision';
+      } else {
+        taskObj.classification = 'repair_pending';
+        taskObj.proposed_action = 'queue_next_repair';
+      }
+      taskObj.evidence = { has_successor: !!hasSuccessor, successors_count: successors.length, completed_accepted_successor: completedAcceptedSuccessor, budget_exhausted: repairBudgetExhausted };
+    } else if (ns === TASK_STATUSES.WAITING_FOR_INTEGRATION) {
+      // Use integration-backlog-reconciler
+      try {
+        const result = task.result || {};
+        const classification = classifyIntegrationState({ task, result, canonicalRepoPath: config.defaultRepoPath || config.defaultWorkspaceRoot || null });
+        taskObj.classification = classification.classification;
+        taskObj.evidence = classification.evidence;
+
+        if (classification.classification === INTEGRATION_RECONCILIATION_TYPES.ALREADY_INTEGRATED_AND_ACCEPTED) {
+          taskObj.proposed_action = 'auto_complete';
+        } else if (classification.classification === INTEGRATION_RECONCILIATION_TYPES.WAITING_FOR_EXTERNAL_INTEGRATION) {
+          taskObj.proposed_action = 'wait_for_external'; // Not a current blocker
+        } else if (classification.classification === INTEGRATION_RECONCILIATION_TYPES.REPAIRABLE_INTEGRATION_FAILURE) {
+          taskObj.proposed_action = 'auto_repair';
+        } else if (classification.classification === INTEGRATION_RECONCILIATION_TYPES.INTEGRATION_NOT_NEEDED) {
+          taskObj.proposed_action = 'auto_complete';
+        } else if (classification.classification === INTEGRATION_RECONCILIATION_TYPES.COMMIT_NOT_ON_MAIN) {
+          taskObj.proposed_action = 'wait_for_external';
+        } else {
+          taskObj.proposed_action = 'manual_review';
+        }
+      } catch (err) {
+        taskObj.classification = 'classification_error';
+        taskObj.proposed_action = 'manual_review';
+        taskObj.evidence = { error: err.message };
+      }
+    } else if (isFailedTerminalStatus(ns)) {
+      try {
+        const classification = classifyBlocker(task);
+        taskObj.classification = classification.classification;
+        taskObj.proposed_action = classification.recommended_next_action;
+        taskObj.evidence = classification.evidence;
+      } catch (err) {
+        taskObj.classification = 'classification_error';
+        taskObj.proposed_action = 'manual_review';
+        taskObj.evidence = { error: err.message };
+      }
+    }
+
+    typingCounts[taskObj.classification] = (typingCounts[taskObj.classification] || 0) + 1;
+    convergence.push(taskObj);
+  }
+
+  const typingSummary = {};
+  for (const [key, count] of Object.entries(typingCounts)) {
+    const category = key.includes('auto_') || key.includes('repair_') ? 'machine_actionable' :
+                     key === 'true_human_review' ? 'true_human_review' :
+                     key === 'wait_for_external' ? 'external_wait' :
+                     'needs_manual_review';
+    if (!typingSummary[category]) typingSummary[category] = { count: 0, types: {} };
+    typingSummary[category].count += count;
+    typingSummary[category].types[key] = count;
+  }
+
+  return {
+    scanned_at,
+    total_backlog: convergence.length,
+    convergence,
+    typing_summary: typingSummary,
+    diagnostics: {
+      machine_actionable: typingSummary.machine_actionable?.count || 0,
+      true_human_review: typingSummary.true_human_review?.count || 0,
+      external_wait: typingSummary.external_wait?.count || 0,
+      needs_manual_review: typingSummary.needs_manual_review?.count || 0,
+    },
+  };
 }

@@ -26,7 +26,7 @@ import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./deliver
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
 import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun } from "./agent-run-writeback.mjs";
-import { applyPipelineGateBeforeClosure } from "./pipeline-orchestration.mjs";
+import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -322,6 +322,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         context_manifest: { path: workspaceFiles.context_manifest_json, required: true },
       },
     }, context).catch(() => {});
+  }
+
+  // P0-MA11: Force agent-run pipeline initialization for new non-legacy tasks
+  if (!isLegacyTask(task)) {
+    ensurePipelineRunsForTask(store, { task_id: task.id, goal_id: goal?.id || "" }, context).catch(() => {});
   }
 
   // Resolve repo plan first (no git mutation) — safe for queue/dry-run
@@ -1089,7 +1094,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
   // P0-MA4: Pipeline gate check before closure
   {
-    const gateResult = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, { allowMissingGates: true }).catch(() => null);
+    const allowMissingGates = !!isLegacyTask(task);
+    const gateResult = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, { allowMissingGates }).catch(() => null);
+    // P0-MA11: Add legacy_pipeline_bypass marker when legacy bypass is used
+    if (gateResult && allowMissingGates && gateResult.gatesSatisfied !== false) {
+      taskResult.legacy_pipeline_bypass = true;
+    }
     if (gateResult) {
       taskStatus = gateResult.taskStatus;
       taskResult = gateResult.taskResult;

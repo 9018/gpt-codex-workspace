@@ -23,7 +23,7 @@ import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
-import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun } from "./agent-run-writeback.mjs";
+import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
     "root_task_id",
@@ -548,8 +548,19 @@ export async function finalizeCodexTaskRun({
     taskStatus = closureApplied.taskStatus;
     taskResult = closureApplied.taskResult;
   }
-  // Agent run writebacks: verifier, reviewer, finalizer (non-blocking)
+  // Agent run writebacks: builder, integrator, verifier, reviewer, finalizer (non-blocking)
   const _writebackCtx = { eventLogger: context?.eventLogger, hookBus: context?.hookBus };
+  await writeBuilderAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    taskResult,
+    summary: taskResult.summary || '',
+  }, _writebackCtx).catch(() => {});
+  await writeIntegratorAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    integrationResult: taskResult.integration || {},
+  }, _writebackCtx).catch(() => {});
   await writeVerifierAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,

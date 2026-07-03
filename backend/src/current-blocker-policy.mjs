@@ -28,6 +28,18 @@ const PROVIDER_EMPTY_RESULT_SHAPES = Object.freeze(new Set([
   RESULT_SHAPE_TYPES.PROVIDER_NO_EVIDENCE,
 ]));
 
+// P0-MA11: Normalize verification - if canonical verification.passed=true
+// and contract_verification.blocking_passed=true, final_verification is stale
+// and should not produce current blockers.
+export function isVerificationNormalized(result) {
+  if (!result || typeof result !== 'object') return false;
+  const verification = result.verification || {};
+  const contractV = result.contract_verification || {};
+  if (verification.passed === true && contractV.blocking_passed === true) return true;
+  if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
+  return false;
+}
+
 export function classifyCurrentBlockerTask(task) {
   const record = normalizeTaskRecord(task);
   const status = normalizeTaskStatus(record?.status);
@@ -36,8 +48,13 @@ export function classifyCurrentBlockerTask(task) {
 
   if (!isKnownTaskStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS, status, resultShape, false);
   if (isResolvedByOptions(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
+  
+  // P0-MA11: If canonical verification is normalized, stale review states are not blockers
+  const verificationNormalized = isVerificationNormalized(result);
+  
   if (status === TASK_STATUSES.WAITING_FOR_REVIEW) {
-    return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, hasActionableReviewEvidence(result, resultShape));
+    return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, 
+      verificationNormalized ? false : hasActionableReviewEvidence(result, resultShape));
   }
   if (status === TASK_STATUSES.WAITING_FOR_REPAIR) {
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, true);
