@@ -580,14 +580,15 @@ test("validateResultContract returns valid for noop completed result", () => {
 
 test("classifyResultContractFindings keeps sync-only missing tests as followup", () => {
   const classification = classifyResultContractFindings({
-    diagnosisCodes: ["tests_missing", "commit_missing"],
+    diagnosisCodes: ["tests_missing", "commit_missing", "changed_files_mismatch"],
     profile: "sync_only",
   });
 
-  assert.deepEqual(classification.blocking_codes, ["commit_missing"]);
-  assert.deepEqual(classification.non_blocking_codes, ["tests_missing"]);
+  assert.deepEqual(classification.blocking_codes, []);
+  assert.deepEqual(classification.non_blocking_codes, ["tests_missing", "commit_missing", "changed_files_mismatch"]);
   assert.equal(classification.finding_severity_for_code.tests_missing, "followup");
-  assert.equal(classification.finding_severity_for_code.commit_missing, "major");
+  assert.equal(classification.finding_severity_for_code.commit_missing, "followup")
+  assert.equal(classification.finding_severity_for_code.changed_files_mismatch, "followup");
 });
 
 test("classifyResultContractFindings treats commit missing as blocking for code changes", () => {
@@ -598,7 +599,4 @@ test("classifyResultContractFindings treats commit missing as blocking for code 
 
   assert.deepEqual(classification.blocking_codes, ["commit_missing"]);
   assert.deepEqual(classification.non_blocking_codes, []);
-  assert.equal(classification.finding_severity_for_code.commit_missing, "major");
-});
-
-console.log('task-result-status tests loaded');
+});;

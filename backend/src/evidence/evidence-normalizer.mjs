@@ -158,18 +158,134 @@ function missingProfileEvidence(normalized) {
   return blockers;
 }
 
+// ---------------------------------------------------------------------------
+// P0-MA2: New helper functions for evidence normalization
+// ---------------------------------------------------------------------------
+
+function normalizeBranch(result = {}) {
+  return result.branch || result.git_branch || result.head_branch || result.remote_branch || null;
+}
+
+function normalizeHead(result = {}) {
+  return result.head || result.remote_head || result.commit || result.remote_head_sha || null;
+}
+
+function deriveAvailableTests(verification, result = {}) {
+  const tests = result.tests && result.tests !== 'null' && result.tests !== 'none'
+    ? String(result.tests)
+    : null;
+  if (tests) return { tests, derived: false };
+
+  const commands = normalizeCommands(verification?.commands || result.verification?.commands);
+  if (commands.length > 0) {
+    const derived = commands.map((c) => {
+      if (typeof c === 'string') return c;
+      return c.cmd || c.command || String(c);
+    }).filter(Boolean).join('; ');
+    return { tests: derived || null, derived: derived !== null };
+  }
+
+  const reportPath = verification?.report_path || result.verification?.report_path || result.verification_report_path;
+  if (reportPath) return { tests: `verification report: ${reportPath}`, derived: true };
+
+  return { tests: null, derived: false };
+}
+
+function deriveAcceptanceStatus(result = {}) {
+  const contract = result.contract_verification || result.verification?.contract_verification || {};
+  if (contract.acceptance_status) return contract.acceptance_status;
+  if (contract.contract_valid === false) return 'invalid';
+  if (contract.blocking_passed === false) return 'blocked';
+  if (contract.blocking_passed === true) return contract.completion_eligible === false ? 'completion_ineligible' : 'satisfied';
+  return null;
+}
+
+function deriveIntegrationStatus(result = {}) {
+  const integration = result.integration || {};
+  if (integration.status) return integration.status;
+  if (integration.merged === true) return 'merged';
+  if (integration.auto_completed === true) return 'auto_completed';
+  if (result.auto_integration_completion?.completed === true) return 'auto_completed';
+  return null;
+}
+
+function deriveClosureTerminalReason(result = {}) {
+  const closure = result.closure_decision || {};
+  if (closure.reason) return closure.reason;
+  if (closure.status) return closure.status;
+  const finalizer = result.finalizer_decision || {};
+  if (finalizer.reason) return finalizer.reason;
+  return null;
+}
+
+function isNoopLikeOperation(operationKind) {
+  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'sync'].includes(operationKind);
+}
+
+function deriveTypedRecoveryReason({ operationKind, changedFiles, commit, tests, verification, testsDerived }) {
+  const hasChangedFiles = Array.isArray(changedFiles) && changedFiles.length > 0;
+  const hasCommit = hasValue(commit);
+  const hasTests = hasValue(tests);
+  const hasVerificationCommands = normalizeCommands(verification?.commands || []).length > 0;
+
+  if (operationKind === 'code_change' && !hasChangedFiles && !isNoopLikeOperation(operationKind)) {
+    return { code: 'changed_files_missing_recovery', message: 'Code change type requires changed_files evidence.', needs_repair: true, needs_review: false };
+  }
+  if (operationKind === 'code_change' && !hasCommit && !isNoopLikeOperation(operationKind)) {
+    return { code: 'commit_missing_recovery', message: 'Code change type requires a commit.', needs_repair: true, needs_review: false };
+  }
+  if (testsDerived === true && hasVerificationCommands) {
+    return { code: 'tests_derived_from_verification_commands', message: 'tests null but verification.commands present.', needs_repair: false, needs_review: false };
+  }
+  if (!isNoopLikeOperation(operationKind) && !hasTests && !hasVerificationCommands) {
+    return { code: 'tests_verification_both_missing', message: 'Both tests and verification.commands are missing.', needs_repair: true, needs_review: true };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Main normalization function
+// ---------------------------------------------------------------------------
+
 export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) {
   const operationKind = inferOperationKind({ result, contract });
   const contractKind = contract?.intent?.operation_kind ? String(contract.intent.operation_kind) : null;
+  const verification = normalizeVerification(result);
+
+  // Derive tests from verification.commands when result.tests is null
+  const { tests: derivedTests, derived: testsDerived } = deriveAvailableTests(verification, result);
+
   const normalized = {
     ...result,
     status: result.status || null,
     summary: result.summary || '',
     operation_kind: operationKind,
+    // P0-MA2: Typed evidence booleans
+    noop_result: result.noop === true || result.kind === 'noop' || operationKind === 'noop',
+    readonly_result: operationKind === 'readonly_validation',
+    already_integrated_result: operationKind === 'already_integrated',
+    integration_not_required: operationKind === 'already_integrated' || operationKind === 'readonly_validation' || operationKind === 'diagnostic' || operationKind === 'noop' || operationKind === 'sync',
+    // VCS evidence
     acceptance_contract_id: result.acceptance_contract_id || result.acceptanceContractId || contract?.id || contract?.contract_id || null,
     changed_files: normalizeList(result.changed_files || result.changedFiles).map(String),
     commit: result.commit || null,
-    verification: normalizeVerification(result),
+    head: normalizeHead(result),
+    branch: normalizeBranch(result),
+    // P0-MA2: Tests derived from verification.commands when missing
+    tests: derivedTests,
+    tests_derived_from_verification: testsDerived,
+    has_verification_commands: normalizeCommands(verification.commands).length > 0,
+    has_changed_files: normalizeList(result.changed_files || result.changedFiles).length > 0,
+    has_commit: hasValue(result.commit),
+    // P0-MA2: Status fields from downstream processing
+    acceptance_status: deriveAcceptanceStatus(result),
+    integration_status: deriveIntegrationStatus(result),
+    closure_terminal_reason: deriveClosureTerminalReason(result),
+    // P0-MA2: Typed recovery reason
+    typed_recovery_reason: null,
+    needs_repair: false,
+    needs_review: false,
+    verification,
     integration: normalizeIntegration(result),
     file_evidence: normalizeFileEvidence(result),
     restart_evidence: normalizeRestartEvidence(result),
@@ -196,6 +312,21 @@ export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) 
   }
 
   normalized.blockers.push(...missingProfileEvidence(normalized));
-  if (normalized.blockers.length > 0) normalized.requires_review = true;
+
+  // P0-MA2: Derive typed recovery reason
+  if (normalized.blockers.length > 0 || !hasValue(derivedTests) || !normalized.has_changed_files || !normalized.has_commit || testsDerived === true) {
+    const recovery = deriveTypedRecoveryReason({
+      operationKind,
+      changedFiles: normalized.changed_files,
+      commit: normalized.commit,
+    tests: derivedTests,
+      testsDerived: testsDerived,
+      verification: normalized.verification,
+    });
+    normalized.typed_recovery_reason = recovery;
+    if (recovery && recovery.needs_repair) normalized.needs_repair = true;
+    if (recovery && recovery.needs_review) normalized.needs_review = true;
+  }
+  if (normalized.blockers.length > 0 || normalized.needs_review) normalized.requires_review = true;
   return normalized;
 }

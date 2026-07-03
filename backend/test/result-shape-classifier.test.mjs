@@ -128,3 +128,74 @@ test('resultEvidenceSummary returns zeroed counts for missing result shape', () 
     total: 0,
   });
 });
+
+// ===========================================================================
+// P0-MA2: verification.commands as tests evidence
+// ===========================================================================
+
+test('P0-MA2: resultEvidenceSummary counts verification.commands as tests evidence', () => {
+  const evidence = resultEvidenceSummary({
+    changed_files: [],
+    tests: null,
+    verification: { commands: ['npm test'] },
+  });
+
+  assert.equal(evidence.tests, 1);
+  assert.equal(evidence.code_evidence, 1);
+});
+
+test('P0-MA2: resultEvidenceSummary counts tests_derived_from_verification flag as tests evidence', () => {
+  const evidence = resultEvidenceSummary({
+    changed_files: [],
+    tests: 'npm test',
+    tests_derived_from_verification: true,
+    verification: { commands: ['npm test'] },
+  });
+
+  assert.equal(evidence.tests, 1);
+  assert.equal(evidence.code_evidence, 1);
+});
+
+test('P0-MA2: classifyResultShape with verification.commands but no changed_files is CODE_EVIDENCE', () => {
+  assert.equal(
+    classifyResultShape({
+      changed_files: [],
+      verification: { commands: ['npm test'] },
+    }),
+    RESULT_SHAPE_TYPES.CODE_EVIDENCE
+  );
+});
+
+// ===========================================================================
+// P0-MA2: Readonly and already_integrated as PROVIDER_NOOP
+// ===========================================================================
+
+test('P0-MA2: classifyResultShape with readonly_result is PROVIDER_NOOP', () => {
+  assert.equal(
+    classifyResultShape({
+      readonly_result: true,
+      operation_kind: 'readonly_validation',
+    }),
+    RESULT_SHAPE_TYPES.PROVIDER_NOOP
+  );
+});
+
+test('P0-MA2: classifyResultShape with already_integrated_result is PROVIDER_NOOP', () => {
+  assert.equal(
+    classifyResultShape({
+      already_integrated_result: true,
+      operation_kind: 'already_integrated',
+    }),
+    RESULT_SHAPE_TYPES.PROVIDER_NOOP
+  );
+});
+
+test('P0-MA2: classifyResultShape with noop_result is PROVIDER_NOOP', () => {
+  assert.equal(
+    classifyResultShape({
+      noop_result: true,
+      operation_kind: 'noop',
+    }),
+    RESULT_SHAPE_TYPES.PROVIDER_NOOP
+  );
+});

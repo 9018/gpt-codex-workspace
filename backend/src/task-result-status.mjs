@@ -19,6 +19,7 @@ export const DIAGNOSIS_CODES = {
 const NON_BLOCKING_CONTRACT_CODES_BY_PROFILE = {
   tests_missing: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "network_retry", "readonly_validation", "already_integrated", "diagnostic"]),
   changed_files_mismatch: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "readonly_validation", "already_integrated", "diagnostic"]),
+  commit_missing: new Set(["sync_only", "github_sync_only", "verification_only", "noop", "repair_noop", "readonly_validation", "already_integrated", "diagnostic"]),
 };
 
 export function isNonBlockingResultContractCode(code, profile) {
@@ -45,12 +46,62 @@ export function classifyResultContractFindings({ diagnosisCodes = [], profile = 
   };
 }
 
+// ---------------------------------------------------------------------------
+// Helpers for noop-like detection
+// ---------------------------------------------------------------------------
+
+const NOOP_LIKE_KINDS = new Set(["noop", "readonly_validation", "already_integrated", "diagnostic"]);
+
+function isNoopLikeResult(result) {
+  if (result.noop === true || result.kind === "noop") return true;
+  if (result.noop_result === true || result.readonly_result === true || result.already_integrated_result === true) return true;
+  if (result.integration_not_required === true) return true;
+  if (NOOP_LIKE_KINDS.has(result.operation_kind)) return true;
+  return false;
+}
+
+function hasTestsEvidence(result) {
+  // Normalized: tests was derived from verification.commands
+  if (result.tests_derived_from_verification === true && result.tests) return true;
+
+  // Raw tests field
+  if (result.tests && result.tests !== "none" && result.tests !== null) return true;
+
+  // Check verification.commands as test evidence
+  const verification = result.verification || {};
+  if (Array.isArray(verification.commands) && verification.commands.length > 0) return true;
+
+  // Check verification.report_path
+  if (verification.report_path || result.verification_report_path) return true;
+
+  return false;
+}
+
+function hasChangedFiles(result) {
+  // Normalized has_changed_files field
+  if (result.has_changed_files === true) return true;
+  return Array.isArray(result.changed_files) && result.changed_files.length > 0;
+}
+
+function hasCommit(result) {
+  // Normalized has_commit field
+  if (result.has_commit === true) return true;
+  return result.commit && result.commit !== "none";
+}
+
 /**
  * Validate a result JSON against the P0 contract.
  *
+ * P0-MA2: Handles `tests = null` with `verification.commands` present —
+ * tests evidence is considered present when verification.commands exist.
+ * Noop-like operations (readonly_validation, already_integrated, diagnostic)
+ * are excluded from tests and commit requirements.
+ *
  * Checks:
  * 1. tests field MUST be non-null for non-noop completed results
+ *    (waived if verification.commands exist)
  * 2. commit MUST be present when changed_files > 0
+ *    (waived for noop-like operations)
  * 3. Worktree MUST be clean after completed execution
  * 4. summary must not conflict with structured fields
  *
@@ -69,20 +120,22 @@ export function validateResultContract(result, options = {}) {
   }
 
   const isCompleted = result.status === "completed";
-  const isNoop = result.noop === true || result.kind === "noop" || ["noop", "readonly_validation", "already_integrated", "diagnostic"].includes(result.operation_kind);
-  const hasChangedFiles = Array.isArray(result.changed_files) && result.changed_files.length > 0;
-  const hasCommit = result.commit && result.commit !== "none";
-  const hasTests = result.tests && result.tests !== "none" && result.tests !== null;
+  const isNoop = isNoopLikeResult(result);
+  const hasChangedFilesEvidence = hasChangedFiles(result);
+  const hasCommitEvidence = hasCommit(result);
+  const hasTestsEvidenceResult = hasTestsEvidence(result);
   const hasSummary = typeof result.summary === "string" && result.summary.length > 0;
 
   // 1. tests field MUST be non-null for non-noop completed results
-  if (isCompleted && !isNoop && !hasTests) {
+  //    P0-MA2: Waived when verification.commands exist as test evidence
+  if (isCompleted && !isNoop && !hasTestsEvidenceResult) {
     diagnosis_codes.push(DIAGNOSIS_CODES.TESTS_MISSING);
     warnings.push("tests is missing for a non-noop completed result");
   }
 
   // 2. commit must be present when changed_files > 0
-  if (isCompleted && hasChangedFiles && !hasCommit) {
+  //    P0-MA2: Waived for noop-like operations
+  if (isCompleted && !isNoop && hasChangedFilesEvidence && !hasCommitEvidence) {
     diagnosis_codes.push(DIAGNOSIS_CODES.COMMIT_MISSING);
     warnings.push("commit is missing but changed_files has entries");
   }
@@ -108,7 +161,7 @@ export function validateResultContract(result, options = {}) {
   }
 
   // 4. summary field conflicts: says task completed but no evidence
-  if (hasSummary && !isNoop && !hasChangedFiles && !hasCommit && !hasTests) {
+  if (hasSummary && !isNoop && !hasChangedFilesEvidence && !hasCommitEvidence && !hasTestsEvidenceResult) {
     diagnosis_codes.push(DIAGNOSIS_CODES.SUMMARY_FIELD_CONFLICT);
     warnings.push("summary says task completed but no changed_files, commit, or tests evidence");
   }
@@ -122,6 +175,8 @@ export function deriveTaskStatusFromTaskResult(taskResult) {
   // P0: non-mutating operations are normal completion paths, not review triggers
   if (taskResult?.kind === "noop") return "completed";
   if (["readonly_validation", "already_integrated"].includes(taskResult?.operation_kind)) return "completed";
+  // P0-MA2: normalized evidence booleans
+  if (taskResult?.noop_result === true || taskResult?.readonly_result === true || taskResult?.already_integrated_result === true) return "completed";
   return "failed";
 }
 

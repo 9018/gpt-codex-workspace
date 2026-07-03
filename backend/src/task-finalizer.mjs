@@ -199,7 +199,13 @@ function integrationRequired(evidence = {}) {
   const contract = asObject(evidence.contract_verification || result.contract_verification || result.verification?.contract_verification);
   if (integration.required === true || result.needs_integration === true) return true;
   if (contract.requires_integration === true || result.acceptance_contract?.requirements?.requires_integration === true) return true;
-  if (Array.isArray(result.changed_files) && result.changed_files.length > 0 && result.commit) return true;
+  // P0-MA2: noop-like operations (readonly, already_integrated, noop) do not require integration
+  if (result.integration_not_required === true || result.noop_result === true || result.readonly_result === true || result.already_integrated_result === true) return false;
+  if (Array.isArray(result.changed_files) && result.changed_files.length > 0 && result.commit) {
+    // Check operation_kind to avoid false positives
+    const noopLikeKinds = new Set(["noop", "readonly_validation", "already_integrated", "diagnostic"]);
+    if (!noopLikeKinds.has(result.operation_kind)) return true;
+  }
   return false;
 }
 

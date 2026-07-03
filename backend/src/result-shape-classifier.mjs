@@ -23,6 +23,9 @@ const ZERO_EVIDENCE_SUMMARY = Object.freeze({
   total: 0,
 });
 
+// P0-MA2: Noop-like operation kinds
+const NOOP_LIKE_KINDS = new Set(['noop', 'readonly_validation', 'already_integrated', 'diagnostic']);
+
 export function normalizeResultObject(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
   return result;
@@ -33,7 +36,7 @@ export function resultEvidenceSummary(result) {
   if (!normalized) return { ...ZERO_EVIDENCE_SUMMARY };
 
   const changedFiles = countStringArrayEvidence(normalized.changed_files);
-  const tests = countTestsEvidence(normalized.tests);
+  const tests = countTestsEvidence(normalized);
   const commits = hasStringEvidence(normalized.commit) ? 1 : 0;
   const verificationPassed = hasPassedEvidence(normalized.verification) ? 1 : 0;
   const reviewerPassed = hasPassedEvidence(normalized.reviewer) ? 1 : 0;
@@ -62,6 +65,12 @@ export function classifyResultShape(result) {
   if (!normalized) return RESULT_SHAPE_TYPES.NO_RESULT;
 
   const evidence = resultEvidenceSummary(normalized);
+
+  // P0-MA2: Normalized noop-like booleans
+  if (normalized.noop_result === true || normalized.readonly_result === true || normalized.already_integrated_result === true) {
+    return RESULT_SHAPE_TYPES.PROVIDER_NOOP;
+  }
+
   if (normalized.noop === true || normalized.failure_class === 'result_missing') return RESULT_SHAPE_TYPES.PROVIDER_NOOP;
   if (evidence.completion_evidence > 0) return RESULT_SHAPE_TYPES.COMPLETION_EVIDENCE;
   if (evidence.failure_evidence > 0) return RESULT_SHAPE_TYPES.FAILURE_EVIDENCE;
@@ -76,9 +85,18 @@ function countStringArrayEvidence(value) {
   return value.filter(hasStringEvidence).length;
 }
 
-function countTestsEvidence(value) {
-  if (Array.isArray(value)) return countStringArrayEvidence(value);
-  return hasStringEvidence(value) ? 1 : 0;
+function countTestsEvidence(result) {
+  // P0-MA2: Check normalized tests_derived_from_verification flag
+  if (result.tests_derived_from_verification === true && hasStringEvidence(result.tests)) return 1;
+
+  // P0-MA2: Check verification.commands as test evidence
+  const verification = result.verification || {};
+  if (Array.isArray(verification.commands) && verification.commands.length > 0) return 1;
+
+  // Check raw tests field
+  if (Array.isArray(result.tests)) return countStringArrayEvidence(result.tests);
+  if (hasStringEvidence(result.tests)) return 1;
+  return 0;
 }
 
 function hasStringEvidence(value) {

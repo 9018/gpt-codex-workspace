@@ -634,3 +634,130 @@ test('checkNotificationConsistency: mixed channel results', () => {
 });
 
 console.log('auto-closure-regression tests loaded');
+
+// ===========================================================================
+// P0-MA2: readonly_validation and already_integrated as noop-like
+// ===========================================================================
+
+test('P0-MA2: readonly_validation result is classified as noop type', () => {
+  const result = classifyTaskType({
+    operation_kind: 'readonly_validation',
+    readonly_result: true,
+    changed_files: [],
+    validation_evidence: { summary: 'ok' },
+  });
+  assert.equal(result.type, TASK_TYPES.NOOP);
+  assert.equal(result.typeLabel, 'readonly validation');
+});
+
+test('P0-MA2: already_integrated result is classified as noop type', () => {
+  const result = classifyTaskType({
+    operation_kind: 'already_integrated',
+    already_integrated_result: true,
+    changed_files: [],
+    already_integrated_evidence: { already_integrated: true },
+  });
+  assert.equal(result.type, TASK_TYPES.NOOP);
+  assert.equal(result.typeLabel, 'already integrated');
+});
+
+test('P0-MA2: readonly_validation closure path is COMPLETE', () => {
+  const result = determineClosurePath({
+    operation_kind: 'readonly_validation',
+    readonly_result: true,
+    integration_not_required: true,
+    changed_files: [],
+    status: 'completed',
+  });
+  assert.equal(result.path, CLOSURE_PATHS.COMPLETE);
+  assert.equal(result.needsIntegration, false);
+  assert.equal(result.needsRestartCheck, false);
+});
+
+test('P0-MA2: already_integrated closure path is COMPLETE', () => {
+  const result = determineClosurePath({
+    operation_kind: 'already_integrated',
+    already_integrated_result: true,
+    integration_not_required: true,
+    changed_files: [],
+    status: 'completed',
+  });
+  assert.equal(result.path, CLOSURE_PATHS.COMPLETE);
+  assert.equal(result.needsIntegration, false);
+  assert.equal(result.needsRestartCheck, false);
+});
+
+// ===========================================================================
+// P0-MA2: tests derived from verification.commands
+// ===========================================================================
+
+test('P0-MA2: tests_derived_from_verification is detected as tests evidence', () => {
+  const result = classifyTaskType({
+    changed_files: [],
+    tests_derived_from_verification: true,
+    tests: 'npm test',
+    verification: { commands: ['npm test'] },
+  });
+  assert.equal(result.type, TASK_TYPES.VERIFICATION);
+  assert.equal(result.typeLabel, 'verification');
+});
+
+test('P0-MA2: verification.commands alone is tests evidence even without tests_derived_from_verification flag', () => {
+  const result = classifyTaskType({
+    changed_files: [],
+    tests: null,
+    verification: { commands: ['npm test'] },
+  });
+  assert.equal(result.type, TASK_TYPES.VERIFICATION);
+  assert.equal(result.typeLabel, 'verification');
+});
+
+test('P0-MA2: noop-like with verification.commands is still NOOP not VERIFICATION', () => {
+  const result = classifyTaskType({
+    operation_kind: 'readonly_validation',
+    readonly_result: true,
+    changed_files: [],
+    tests: null,
+    verification: { commands: ['npm test'] },
+  });
+  // readonly_validation takes precedence over verification type
+  assert.equal(result.type, TASK_TYPES.NOOP);
+});
+
+// ===========================================================================
+// P0-MA2: Normalized evidence booleans with classifyClosure
+// ===========================================================================
+
+test('P0-MA2: classifyClosure with readonly_result completes correctly', () => {
+  const result = classifyClosure(
+    {
+      readonly_result: true,
+      operation_kind: 'readonly_validation',
+      integration_not_required: true,
+      changed_files: [],
+      validation_evidence: { summary: 'ok' },
+      status: 'completed',
+    },
+    { status: 'completed', notifications: [] },
+    { ok: true }
+  );
+  assert.equal(result.closurePath.path, CLOSURE_PATHS.COMPLETE);
+  assert.equal(result.needsIntegration, false);
+  assert.equal(result.needsRestartCheck, false);
+});
+
+test('P0-MA2: classifyClosure with already_integrated_result completes correctly', () => {
+  const result = classifyClosure(
+    {
+      already_integrated_result: true,
+      operation_kind: 'already_integrated',
+      integration_not_required: true,
+      changed_files: [],
+      status: 'completed',
+    },
+    { status: 'completed', notifications: [] },
+    { ok: true }
+  );
+  assert.equal(result.closurePath.path, CLOSURE_PATHS.COMPLETE);
+  assert.equal(result.needsIntegration, false);
+});
