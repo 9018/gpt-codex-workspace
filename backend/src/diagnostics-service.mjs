@@ -7,3 +7,5 @@ export { resolveRepoDir, determineBarkConfigSource, collectRuntimeGitInfo, colle
 export { collectRestartMarkerStatus, reconcilePendingRestartMarkers } from "./diagnostics-restart-markers.mjs";
 export { queryContextStatus, collectContextIndexStatus } from "./diagnostics-context-status.mjs";
 export { classifyRunFailure, QUOTA_PATTERNS, PROMPT_LENGTH_THRESHOLD } from "./codex-run-diagnostics.mjs";
+export { getPipelineDiagnostics } from "./pipeline-orchestration.mjs";
+

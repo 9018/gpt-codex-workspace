@@ -25,7 +25,8 @@ import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
-import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun } from "./agent-run-writeback.mjs";
+import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun } from "./agent-run-writeback.mjs";
+import { applyPipelineGateBeforeClosure } from "./pipeline-orchestration.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -1061,11 +1062,46 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   }
 
 
+
+
+  // Agent run writeback: verifier (non-blocking)
+  await writeVerifierAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    verification: taskResult.verification || {},
+  }, context).catch(() => {});
+
+  // Agent run writeback: reviewer (non-blocking)
+  await writeReviewerAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    reviewer_decision: taskResult.reviewer_decision || {},
+  }, context).catch(() => {});
+
   // Agent run writeback: integrator
   await writeIntegratorAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     integrationResult: taskResult.integration || {},
+  }, context).catch(() => {});
+
+
+
+  // P0-MA4: Pipeline gate check before closure
+  {
+    const gateResult = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, { allowMissingGates: true }).catch(() => null);
+    if (gateResult) {
+      taskStatus = gateResult.taskStatus;
+      taskResult = gateResult.taskResult;
+    }
+  }
+
+  // Agent run writeback: finalizer
+  await writeFinalizerAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    taskResult,
+    taskStatus,
   }, context).catch(() => {});
 
   return finalizeCodexTaskRunFn({
