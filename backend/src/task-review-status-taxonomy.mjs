@@ -170,10 +170,34 @@ export function classifyReviewState({ reason = '', blockers = [], repairBudgetEx
     };
   }
 
-  // --- Codex-failed / repair-proposal blockers (but budget not exhausted) ---
-  // These should normally route to waiting_for_repair, but if they ended up in
-  // the review classifier (e.g. repair denied), classify as human review.
-  if (codes.has('codex_failed') || codes.has('unrecoverable_execution_failure')) {
+  // --- Codex-failed / execution-failed / repair-proposal blockers ---
+  // P0-C7: Route execution_failed and codex_failed to auto-repair (missing evidence repair)
+  // rather than human review. These are machine-repairable in the productized repair loop.
+  if (codes.has('execution_failed') || codes.has('codex_failed') || codes.has('unrecoverable_execution_failure')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR],
+    };
+  }
+
+  // --- P0-C7: Acceptance failed → result contract repair ---
+  if (codes.has('acceptance_failed')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR],
+    };
+  }
+
+  // --- P0-C7: Context missing → missing evidence repair ---
+  if (codes.has('context_missing')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR],
+    };
+  }
+
+  // --- P0-C7: Deployment failed → human review (non-repairable) ---
+  if (codes.has('deployment_failed')) {
     return {
       reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
       metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW],

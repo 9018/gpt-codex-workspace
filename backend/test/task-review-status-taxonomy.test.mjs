@@ -123,9 +123,10 @@ test('classifyReviewState: integration-related reason triggers integration recov
   assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY);
 });
 
-test('classifyReviewState: codex_failed defaults to human review when no repair path', () => {
+test('classifyReviewState: codex_failed routes to missing evidence repair (not human review) per P0-C7', () => {
   const result = classifyReviewState({ blockers: [{ code: 'codex_failed' }] });
-  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  // P0-C7: codex_failed is now auto-repaired via missing_evidence_repair, not human review
+  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
 });
 
 test('classifyReviewState: insufficient_terminal_evidence defaults to human review', () => {
@@ -147,10 +148,12 @@ test('classifyReviewState: no blockers at all defaults to human review', () => {
 // Tests covering required failure classes (acceptance)
 // ===========================================================================
 
-test('ACCEPTANCE: codex_failed blocker maps correctly', () => {
+test('ACCEPTANCE P0-C7: codex_failed blocker maps to missing evidence repair (auto-repair)', () => {
   const r = classifyReviewState({ blockers: [{ code: 'codex_failed' }] });
-  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  // P0-C7: codex_failed is machine-repairable via missing_evidence_repair
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
   assert.ok(r.metadata);
+  assert.equal(r.metadata.machine_repairable, true);
 });
 
 test('ACCEPTANCE: missing integration evidence maps correctly', () => {

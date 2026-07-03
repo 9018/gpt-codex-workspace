@@ -110,6 +110,15 @@ const TASK_FAILURE_DEFINITIONS = {
   unknown: { repairable: false, repair_strategy: "manual_review", reason: "Failure could not be classified." },
   quota_exhausted: { repairable: false, repair_strategy: "quota_wait_or_capacity_check", reason: "API quota exhausted. This is an external capacity blocker, not a code defect. Wait for quota to recover or switch provider/model/key." },
   rate_limited: { repairable: false, repair_strategy: "rate_limit_backoff", reason: "API rate limited. This is an external capacity blocker, not a code defect. Wait for the rate limit window to reset or reduce concurrency." },
+  // ---- P0-C7: Explicit failure classes for productized repair loop ----
+  execution_failed: { repairable: true, repair_strategy: "repair_execution", reason: "Codex execution failed during task completion. Can be auto-repaired by re-running with adjusted parameters." },
+  result_contract_invalid: { repairable: true, repair_strategy: "repair_result_contract", reason: "Result contract is invalid or missing. Repair finalizer or result output." },
+  verification_failed: { repairable: true, repair_strategy: "repair_failed_command", reason: "Verification check failed. Fix failing commands and rerun." },
+  acceptance_failed: { repairable: true, repair_strategy: "repair_acceptance", reason: "Acceptance criteria not met. Re-run verification after fixing acceptance gaps." },
+  integration_failed: { repairable: true, repair_strategy: "repair_integration", reason: "Integration step failed (conflict, push failed, PR failure). Can be auto-retried." },
+  deployment_failed: { repairable: false, repair_strategy: "human_interrupt_deployment", reason: "Deployment failed. Requires human intervention — not auto-repairable." },
+  context_missing: { repairable: true, repair_strategy: "repair_context", reason: "Required context is missing. Re-run with enriched context." },
+  repair_budget_exhausted: { repairable: false, repair_strategy: "human_interrupt_budget_exhausted", reason: "Repair budget exhausted. Human must decide next action (extend budget, override status, or escalate)." },
 };
 
 function taskFailure(failureClass, overrides = {}) {
@@ -159,6 +168,11 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
     return taskFailure("rate_limited", { reason: codexResult.summary || "Rate limit error detected" });
   }
 
+  // ---- P0-C7: Repair budget exhausted (highest priority for non-capacity) ----
+  if (codexResult.failure_class === "repair_budget_exhausted" || task.failure_class === "repair_budget_exhausted" || task.result?.failure_class === "repair_budget_exhausted" || /repair_budget_exhausted|repair budget exhausted/.test(combined)) {
+    return taskFailure("repair_budget_exhausted", { reason: codexResult.summary || "Repair budget exhausted." });
+  }
+
   if (codexResult.failure_class && TASK_FAILURE_DEFINITIONS[codexResult.failure_class]) {
     return taskFailure(codexResult.failure_class, { reason: codexResult.summary || undefined });
   }
@@ -172,14 +186,32 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
   if (/result_json_invalid|invalid_result_json|invalid result\.json|json[^\n]*(parse|invalid|unexpected token)/.test(combined)) {
     return taskFailure("invalid_result_json");
   }
+  // ---- P0-C7: Unified result_contract_invalid detection ----
+  if (/contract_invalid|result_contract_invalid/.test(combined)) {
+    return taskFailure("result_contract_invalid", { reason: "Result contract validation failed." });
+  }
   if (codexResult.no_first_output_timeout === true || /no_first_output_timeout|first[- ]output timeout|no stdout\/stderr before/.test(combined)) {
     return taskFailure("no_first_output_timeout");
   }
   if (codexResult.timed_out === true || codexResult.kind === "codex_timeout" || /codex_timeout|codex timeout|execution timed out/.test(combined)) {
     return taskFailure("codex_timeout");
   }
-  if (/merge_conflict|merge conflict|\bconflict\b|^conflict/.test(combined)) {
+
+  // ---- P0-C7: Execution failed detection ----
+  if (codexResult.kind === "codex_failed" || codexResult.kind === "execution_failed" || /^execution_failed$|codex_failed|execution failed|data_loss/.test(combined)) {
+    return taskFailure("execution_failed", { reason: codexResult.summary || "Codex execution failed." });
+  }
+
+  if (/merge_conflict/.test(combined)) {
     return taskFailure("merge_conflict");
+  }
+
+  // ---- P0-C7: Integration and deployment failures ----
+  if (/integration_conflict|integration_failed|integration_push_failed|integration_pr_failed|integration_check_failed/.test(combined)) {
+    return taskFailure("integration_failed", { reason: "Integration step failed." });
+  }
+  if (/deployment_failed|deploy_failed|deployment error/.test(combined)) {
+    return taskFailure("deployment_failed", { reason: "Deployment step failed." });
   }
 
   const failed = failedCommands(verification);
@@ -192,6 +224,14 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
 
   if (verification.passed === false || /verification_command_failed|verification_failed|test failed|tests failed/.test(combined)) {
     return taskFailure("test_failed");
+  }
+
+  // ---- P0-C7: Context and acceptance failures ----
+  if (/context_missing|context required|missing context/.test(combined)) {
+    return taskFailure("context_missing", { reason: "Required context is missing." });
+  }
+  if (/acceptance_failed|acceptance criteria|acceptance findings/.test(combined)) {
+    return taskFailure("acceptance_failed", { reason: "Acceptance criteria not met." });
   }
 
   return taskFailure("unknown");
@@ -222,16 +262,22 @@ export function canRetryTask(task = {}, failure = {}) {
 export function failureClassRequiresRepair(failureClass) {
   // Network and terminal failures are not repairable
   if (failureClassIsTerminalNonRepairable(failureClass)) return false;
-  // Only code-level failures that can be addressed by re-running repairs
+  // Code-level failures that can be addressed by re-running repairs
   return new Set([
     "missing_result_json",
     "invalid_result_json",
     "test_failed",
     "first_output_timeout",
     "merge_conflict",
+    // ---- P0-C7: New repairable failure classes ----
+    "execution_failed",
+    "result_contract_invalid",
+    "verification_failed",
+    "acceptance_failed",
+    "integration_failed",
+    "context_missing",
   ]).has(failureClass);
 }
-
 /**
  * Check whether a failure class is terminal-but-non-repairable.
  *
@@ -258,6 +304,9 @@ export function failureClassIsTerminalNonRepairable(failureClass) {
     "codex_timeout",
     "stale_running_task",
     "task_failed",
+    // ---- P0-C7: New terminal non-repairable failure classes ----
+    "deployment_failed",
+    "repair_budget_exhausted",
   ]).has(failureClass);
 }
 
@@ -372,6 +421,62 @@ const FAILURE_CLASS_STRUCTURED = {
     nextStatusHint: "failed",
     confidence: "low",
     description: "Unclassified failure",
+  },
+  execution_failed: {
+    class: "execution_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Codex execution failed during task completion",
+  },
+  result_contract_invalid: {
+    class: "result_contract_invalid",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Result contract is invalid or missing",
+  },
+  acceptance_failed: {
+    class: "acceptance_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Acceptance criteria not met",
+  },
+  integration_failed: {
+    class: "integration_failed",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "high",
+    description: "Integration step failed",
+  },
+  deployment_failed: {
+    class: "deployment_failed",
+    retryable: false,
+    repairable: false,
+    nextStatusHint: "failed",
+    confidence: "high",
+    description: "Deployment failed. Requires human intervention.",
+  },
+  context_missing: {
+    class: "context_missing",
+    retryable: false,
+    repairable: true,
+    nextStatusHint: "waiting_for_repair",
+    confidence: "medium",
+    description: "Required context is missing",
+  },
+  repair_budget_exhausted: {
+    class: "repair_budget_exhausted",
+    retryable: false,
+    repairable: false,
+    nextStatusHint: "failed",
+    confidence: "high",
+    description: "Repair budget exhausted. Human must decide next action.",
   },
 };
 

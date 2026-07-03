@@ -47,6 +47,22 @@ function repairInstructionsForFailure(failure = {}) {
       return ['Fix the failing verification command using the smallest goal-aligned change, then rerun the failed command and any related checks.'];
     case 'no_first_output_timeout':
       return ['Repair the finalization/reporting path so the task can make first progress and produce result.json safely.'];
+    // ---- P0-C7: Repair instructions for new failure classes ----
+    case 'execution_failed':
+      return ['Codex execution failed. Re-run with adjusted parameters, enriched context, and corrective hints from the previous execution output.'];
+    case 'result_contract_invalid':
+      return ['Repair the result contract. Inspect why the result.json/result.md fails contract validation, then produce a valid result using the required contract format. Do not rewrite unrelated business code.'];
+    case 'verification_failed':
+      return ['Fix the verification failure using the smallest goal-aligned change, then rerun all verification commands.'];
+    case 'acceptance_failed':
+      return ['Acceptance criteria not met. Review the acceptance findings and fix the gaps. Keep changes scoped to the original goal. Re-run verification after fixing.'];
+    case 'integration_failed':
+      return ['Integration step failed (conflict, push, or PR failure). Resolve the integration issue and retry. If this is a merge conflict, resolve it manually.'];
+    case 'context_missing':
+      return ['Required context is missing. Re-run with enriched context from the original task evidence chain. Preserve all original evidence in the repair prompt.'];
+    case 'deployment_failed':
+    case 'repair_budget_exhausted':
+      return ['This failure is non-repairable. Route to human interrupt for terminal decision.'];
     default:
       return ['Investigate the classified failure and make the smallest goal-aligned repair.'];
   }
@@ -168,6 +184,10 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     mode: task.mode || 'builder',
     workspace_id: task.workspace_id || goal?.workspace_id,
     repo_id: task.repo_id || goal?.repo_id,
+    // ---- P0-C7: Repair tracking fields ----
+    repair_budget: task.repair_budget ?? task.max_attempts ?? task.maxAttempts ?? maxAttempts,
+    superseded_by_task_id: task.superseded_by_task_id || null,
+    resolved_by_task_id: task.resolved_by_task_id || null,
   };
 }
 
@@ -218,6 +238,10 @@ export async function scheduleRepairAttempt({ store, task = {}, goal = {}, failu
     attempt,
     repair_of_attempt: previousAttempt,
     failure_class: repairGoal.failure_class,
+    // ---- P0-C7: Repair tracking fields in payload ----
+    repair_budget: repairGoal.repair_budget,
+    superseded_by_task_id: repairGoal.superseded_by_task_id || null,
+    resolved_by_task_id: repairGoal.resolved_by_task_id || null,
   };
 
   const createGoalFn = config.createGoalFn || createGoal;
