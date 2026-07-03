@@ -25,7 +25,7 @@ import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
-import { writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
+import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun } from "./agent-run-writeback.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -310,6 +310,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const linked = await ensureTaskGoalFn(store, config, task.id, context, { assign_to_codex: true });
   const goal = linked.goal;
   const workspaceFiles = linked.workspace_files || (goal ? goalWorkspaceFiles(goal) : { dir: '.gptwork/goals/unknown' });
+  // Agent run writeback: context_curator (non-blocking)
+  if (goal && workspaceFiles) {
+    await writeContextCuratorAgentRun(store, {
+      task_id: task.id,
+      goal_id: goal.id,
+      artifacts: {
+        codex_entry: { path: workspaceFiles.codex_entry_md, required: true },
+        context_bundle: { path: workspaceFiles.context_bundle_md, required: true },
+        context_manifest: { path: workspaceFiles.context_manifest_json, required: true },
+      },
+    }, context).catch(() => {});
+  }
 
   // Resolve repo plan first (no git mutation) — safe for queue/dry-run
   const resolvedRepoPlan = await resolveTaskRepositoryPlanFn({ task, goal, config, registry: config.registry || null });
