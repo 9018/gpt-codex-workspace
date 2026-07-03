@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { requireScope } from "./auth-context.mjs";
 import { findTask } from "./task-lifecycle.mjs";
 import { formatSize, loadProjectEnv, loadProjectMd } from "./codex-context-builder.mjs";
+import { runContextContractDiagnostics } from "./context-contract-diagnostics.mjs";
 
 const DEFAULT_CONTEXT_INDEX = Object.freeze({
   vectorStore: "auto",
@@ -151,6 +152,7 @@ export async function queryContextStatus(task_id, context, { config, registry, s
 
   // 5. Task-specific diagnostics (optional)
   let taskInfo = null;
+  let contextContract = null;
   if (task_id) {
     try {
       const task = await findTask(store, task_id);
@@ -215,6 +217,22 @@ export async function queryContextStatus(task_id, context, { config, registry, s
         memory_count: memoryCount,
         approximate_context_bytes: approximateContextBytes,
       };
+
+      // Context contract diagnostics (P0-C9: stress test and fallbacks)
+      if (goal) {
+        try {
+          const ws = state.workspaces.find(function(w) { return w.id === task.workspace_id; });
+          const goalDir = ws ? join(ws.root, ".gptwork/goals/" + goal.id) : null;
+          contextContract = await runContextContractDiagnostics({
+            task, goal, config,
+            goalDir,
+            workspaceRoot,
+            contextIndexStatus: contextIndex,
+          });
+        } catch (_e) {
+          // Non-fatal: diagnostics errors must not block context status
+        }
+      }
     } catch (e) {
       // task not found or error resolving — still return base diagnostics
     }
@@ -239,5 +257,6 @@ export async function queryContextStatus(task_id, context, { config, registry, s
     warnings: warnings,
   };
   if (taskInfo) result.task = taskInfo;
+  if (contextContract) result.context_contract = contextContract;
   return result;
 }
