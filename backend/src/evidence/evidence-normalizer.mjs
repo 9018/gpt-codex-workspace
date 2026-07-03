@@ -219,7 +219,7 @@ function deriveClosureTerminalReason(result = {}) {
 }
 
 function isNoopLikeOperation(operationKind) {
-  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'sync'].includes(operationKind);
+  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'restart', 'admin_command', 'cleanup', 'file_write', 'queue_admin', 'sync'].includes(operationKind);
 }
 
 function deriveTypedRecoveryReason({ operationKind, changedFiles, commit, tests, verification, testsDerived }) {
