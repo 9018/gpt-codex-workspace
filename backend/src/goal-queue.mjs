@@ -27,6 +27,8 @@ import {
 } from "./queue-policy.mjs";
 import { resolveTaskRepositoryPlan } from "./task-repo-resolution.mjs";
 import { normalizeRepoId, repoIdsEqual } from "./repo-identity.mjs";
+import { reconcileQueue, diagnoseQueueItems, propagateRepairSuccess, explainQueueDecision, detectStaleBlockers } from "./queue-reconciler.mjs";
+
 
 // ---------------------------------------------------------------------------
 // Queue item status constants
@@ -710,3 +712,11 @@ export {
   NON_COMPLETION_TERMINAL_STATUSES,
   QUEUE_STATUS_RUNNING as QUEUE_POLICY_STATUS_RUNNING,
 } from "./queue-policy.mjs";
+
+export {
+  reconcileQueue,
+  diagnoseQueueItems,
+  propagateRepairSuccess,
+  explainQueueDecision,
+  detectStaleBlockers,
+} from "./queue-reconciler.mjs";

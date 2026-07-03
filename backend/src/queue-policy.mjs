@@ -65,6 +65,77 @@ export const NON_COMPLETION_TERMINAL_STATUSES = Object.freeze(
 );
 
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// P0-C8: Extended terminal completion states for queue auto-advance
+//
+// These statuses are NOT native task-status-taxonomy states; they are
+// queue-reconciler classifications used to express that an upstream
+// dependency has reached a semantically terminal-completed state even
+// when the raw status is "completed" with additional metadata.
+// ---------------------------------------------------------------------------
+
+/**
+ * Extended terminal-completed statuses that unblock dependents.
+ *
+ * - readonly_closed: upstream readonly/validation task completed cleanly
+ * - integration_not_required: upstream completed and integration not needed
+ * - integrated: upstream completed AND commit merged/integrated
+ * - superseded: task superseded by a successor
+ * - resolved_by_successor: task resolved by repair successor
+ */
+export const QUEUE_EXTENDED_COMPLETED_STATUSES = Object.freeze(
+  new Set([
+    "readonly_closed",
+    "integration_not_required",
+    "integrated",
+    "superseded",
+    "resolved_by_successor",
+  ])
+);
+
+/**
+ * Combined set of all terminal-completed statuses for queue advancement.
+ */
+export const ALL_QUEUE_TERMINAL_COMPLETED = Object.freeze(
+  new Set([...TERMINAL_COMPLETED_STATUSES, ...QUEUE_EXTENDED_COMPLETED_STATUSES])
+);
+
+/**
+ * Returns true when `status` is a terminal-completed state for queue
+ * auto-advance purposes, including extended states.
+ */
+export function isExtendedTerminalCompleted(status) {
+  return ALL_QUEUE_TERMINAL_COMPLETED.has(status);
+}
+
+/**
+ * Returns true when the task result indicates integration is not required
+ * (readonly/non-mutating operations, already integrated, or contract says no).
+ */
+export function isIntegrationNotRequired(taskResult) {
+  if (!taskResult || typeof taskResult !== "object") return false;
+  if (["readonly_validation", "diagnostic", "already_integrated"].includes(taskResult.operation_kind)) return true;
+  if (taskResult.kind === "noop") return true;
+  if (taskResult.integration?.status === "skipped" || taskResult.integration?.status === "not_required") return true;
+  if (taskResult.needs_integration === false) return true;
+  return false;
+}
+
+/**
+ * Returns true when the task result indicates integration was completed
+ * (commit merged, auto-integration completed, etc.).
+ */
+export function isIntegrationSatisfied(taskResult) {
+  if (!taskResult || typeof taskResult !== "object") return false;
+  if (taskResult.integration?.merged === true) return true;
+  if (["merged", "ff_only_merged", "skipped"].includes(taskResult.integration?.status)) return true;
+  if (taskResult.auto_integration_completion?.completed === true) return true;
+  if (taskResult.delivery_result_recovery?.commit_integrated === true) return true;
+  if (taskResult.commit && taskResult.verification?.passed === true && taskResult.delivery_state_normalized === true) return true;
+  return false;
+}
+
 // Check helpers
 // ---------------------------------------------------------------------------
 
