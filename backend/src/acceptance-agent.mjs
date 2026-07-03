@@ -499,7 +499,12 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
       return null;
 
     case 'tests_present':
-      if (!result?.tests && (!evidence.verification_log_exists)) {
+      // Accept as test evidence: explicit tests string, a verification log file,
+      // or verification commands that passed (derived test evidence from normalized flow).
+      const hasTestEvidence = result?.tests
+        || evidence.verification_log_exists
+        || (result?.verification?.commands?.length > 0 && result?.verification?.passed === true);
+      if (!hasTestEvidence) {
         return { severity: 'major', code: 'tests_missing', message: 'No test evidence found for code change task', source: 'acceptance_agent' };
       }
       return null;
