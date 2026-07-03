@@ -1,6 +1,7 @@
 import { REVIEW_STATES, isTypedReviewState } from '../task-review-status-taxonomy.mjs';
 
 import { getTaskAcceptanceBundle } from './task-acceptance-bundle.mjs';
+import { reconcileBundle } from './review-backlog-reconciler.mjs';
 
 function compactGitSummary(bundle = {}, taskResult = {}) {
   const summary = taskResult.compact_git_summary || taskResult.git_summary || {};
@@ -65,18 +66,37 @@ export async function getTaskReviewPacket({ store, config = {}, task_id } = {}) 
     : state.tasks?.find((item) => item.id === task_id) || null;
   const taskResult = task?.result && typeof task.result === 'object' ? task.result : {};
 
-  return {
+  const packet = {
     task_id: bundle.task_id,
     goal_id: bundle.goal_id,
     title: bundle.title,
     status: bundle.status,
+    task_status: task?.status || bundle.status,
     reason_for_review: reasonForReview(bundle),
     compact_git_summary: compactGitSummary(bundle, taskResult),
     changed_files: bundle.changed_files,
+    reconciliation: null,
+    reconciled_evidence: null,
     key_evidence: keyEvidence(bundle),
     blocking_findings: bundle.blockers,
     non_blocking_followups: bundle.non_blocking_followups,
     recommended_next_action: recommendedNextAction(bundle),
     missing_evidence: bundle.missing_evidence,
   };
+
+  // Run reconciliation against the bundle to detect stale state
+  try {
+    const reconciliation = reconcileBundle({ task, bundle });
+    packet.reconciliation = {
+      reconciled: reconciliation.reconciled,
+      reconciled_count: reconciliation.reconciled_count,
+      still_blocking_count: reconciliation.still_blocking_count,
+      reconciled_findings: reconciliation.reconciled_findings,
+    };
+    packet.reconciled_evidence = reconciliation.evidence;
+  } catch {
+    // Reconciliation is best-effort; packet still returns without it
+  }
+
+  return packet;
 }

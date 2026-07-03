@@ -43,8 +43,8 @@ test('getTaskReviewPacket returns safe minimal review fields and recommended act
   const packet = await getTaskReviewPacket({ store: makeStore(state), config: {}, task_id: 'task_review' });
 
   assert.deepEqual(Object.keys(packet), [
-    'task_id', 'goal_id', 'title', 'status', 'reason_for_review', 'compact_git_summary',
-    'changed_files', 'key_evidence', 'blocking_findings', 'non_blocking_followups',
+    'task_id', 'goal_id', 'title', 'status', 'task_status', 'reason_for_review', 'compact_git_summary',
+    'changed_files', 'reconciliation', 'reconciled_evidence', 'key_evidence', 'blocking_findings', 'non_blocking_followups',
     'recommended_next_action', 'missing_evidence',
   ]);
   assert.equal(packet.reason_for_review, 'Contract verifier requested review');
