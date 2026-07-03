@@ -54,6 +54,7 @@ export async function listAgentRuns(store, args = {}) {
   let runs = ensureAgentRuns(state);
   if (args.goal_id) runs = runs.filter((run) => run.goal_id === args.goal_id);
   if (args.task_id) runs = runs.filter((run) => run.task_id === args.task_id);
+  if (args.role) runs = runs.filter((run) => run.role === args.role || run.contract_role === args.role);
   if (args.status) runs = runs.filter((run) => run.status === args.status);
   return { agent_runs: runs.slice(-(Number(args.limit) || 50)).reverse() };
 }

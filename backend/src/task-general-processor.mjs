@@ -25,6 +25,7 @@ import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
+import { writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -623,6 +624,14 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   if (parsedResult) applyLegacyNoChangeCompatibility(parsedResult);
   applyLegacyNoChangeCompatibility(taskResult);
 
+  // Agent run writeback: builder
+  await writeBuilderAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    taskResult,
+    summary,
+  }, context).catch(() => {});
+
 
   // ---- P0: Network failure retry gate ----
   // If Codex CLI failed with a network-class error (rate_limited, gateway_error,
@@ -1039,6 +1048,13 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }
   }
 
+
+  // Agent run writeback: integrator
+  await writeIntegratorAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    integrationResult: taskResult.integration || {},
+  }, context).catch(() => {});
 
   return finalizeCodexTaskRunFn({
     store,

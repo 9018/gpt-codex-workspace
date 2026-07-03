@@ -23,6 +23,7 @@ import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
+import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun } from "./agent-run-writeback.mjs";
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
     "root_task_id",
@@ -547,6 +548,25 @@ export async function finalizeCodexTaskRun({
     taskStatus = closureApplied.taskStatus;
     taskResult = closureApplied.taskResult;
   }
+  // Agent run writebacks: verifier, reviewer, finalizer (non-blocking)
+  const _writebackCtx = { eventLogger: context?.eventLogger, hookBus: context?.hookBus };
+  await writeVerifierAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    verification: taskResult.verification || {},
+  }, _writebackCtx).catch(() => {});
+  await writeReviewerAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    reviewer_decision: taskResult.reviewer_decision || { decision: { status: taskStatus } },
+  }, _writebackCtx).catch(() => {});
+  await writeFinalizerAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    taskResult,
+    taskStatus,
+  }, _writebackCtx).catch(() => {});
+
 
   // Cleanup policy: remove_on_success_retain_on_failure.
   // Only remove worktree when task completed successfully.

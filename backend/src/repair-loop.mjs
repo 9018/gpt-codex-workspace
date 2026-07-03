@@ -1,5 +1,6 @@
 /**
  * repair-loop.mjs — Automatic repair loop for failed acceptance tasks.
+import { writeRepairerAgentRun } from "./agent-run-writeback.mjs";
  *
  * Creates repair tasks from acceptance findings, tracks repair attempts,
  * and manages the repair lifecycle.
@@ -349,6 +350,8 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
     return { parent_updated: false, parent_task_id: null, parent_status: null, reason: "Not a repair task — no parent_task_id" };
   }
 
+    await writeRepairerAgentRun(store, { task_id: completedTask.id, goal_id: completedTask.goal_id, repairOutcome: { passed: false, repair_outcome: "skipped_no_parent", reason: "Not a repair task — no parent_task_id" } }, {}).catch(() => {});
+
   try {
     const result = await store.mutate((state) => {
       state.tasks ||= [];
@@ -387,6 +390,8 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
           }
         }
         return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "failed", repair_outcome: "failed" };
+    await writeRepairerAgentRun(store, { task_id: completedTask.id, goal_id: completedTask.goal_id, repairOutcome: { passed: false, repair_outcome: "failed", reason: "Repair task failed" } }, {}).catch(() => {});
+
       }
 
       // Repair task passed — re-verify parent
@@ -460,6 +465,19 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
 
       return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "completed", repair_outcome: "repaired" };
     });
+
+
+    // Agent run writeback: repairer (non-blocking)
+    const _repairOutcome = result || {};
+    await writeRepairerAgentRun(store, {
+      task_id: completedTask.id,
+      goal_id: completedTask.goal_id,
+      repairOutcome: {
+        passed: _repairOutcome.repair_outcome === "repaired",
+        repair_outcome: _repairOutcome.repair_outcome || "unknown",
+        reason: _repairOutcome.error || _repairOutcome.reason || null,
+      },
+    }, {}).catch(() => {});
 
     return result;
   } catch (error) {
