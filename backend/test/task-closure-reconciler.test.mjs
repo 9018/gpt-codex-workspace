@@ -257,6 +257,35 @@ test('R8: task.status completed + finalizer agrees, closure stale', () => {
   assert.match(result.reason, /closure_decision normalized/);
 });
 
+
+
+test('MA12-G3: retained audit worktree warning does not block proven closure', () => {
+  const taskResult = buildFullEvidence({
+    warnings: ['Worktree retained: /tmp/task_x (status=waiting_for_review)'],
+    closure_decision: buildCompletedClosure(),
+    finalizer_decision: buildStaleReviewFinalizer(),
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'waiting_for_review', taskResult });
+
+  assert.equal(result.reconciled, true);
+  assert.equal(result.taskStatus, 'completed');
+  assert.equal(result.taskResult.finalizer_decision.status, 'completed');
+});
+
+test('MA12-G3: explicit canonical dirty evidence still blocks closure', () => {
+  const taskResult = buildFullEvidence({
+    canonical_dirty: true,
+    closure_decision: buildCompletedClosure(),
+    finalizer_decision: buildStaleReviewFinalizer(),
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'waiting_for_review', taskResult });
+
+  assert.equal(result.reconciled, false);
+  assert.equal(result.taskStatus, 'waiting_for_review');
+});
+
 // ===========================================================================
 // Test 9: Missing verification blocks reconciliation
 // ===========================================================================
@@ -338,7 +367,7 @@ test('R13: worktree retained blocks reconciliation', () => {
 
   const result = reconcileTaskClosure({ taskStatus: 'waiting_for_review', taskResult });
 
-  assert.equal(result.reconciled, false, 'should not reconcile when worktree retained');
+  assert.equal(result.reconciled, true);
 });
 
 // ---------------------------------------------------------------------------

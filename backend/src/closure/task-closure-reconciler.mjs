@@ -44,8 +44,12 @@ function verificationPassed(verification = {}) {
 }
 
 function worktreeClean(taskResult = {}) {
-  const warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-  return !warnings.some((w) => typeof w === 'string' && w.includes('Worktree retained'));
+  const dirty = taskResult.canonical_dirty === true
+    || taskResult.worktree_dirty === true
+    || taskResult.verification?.dirty === true
+    || taskResult.delivery_result_recovery?.canonical_dirty === true
+    || taskResult.delivery_result_recovery?.canonical_clean_after === false;
+  return !dirty;
 }
 
 // ---------------------------------------------------------------------------
