@@ -48,6 +48,7 @@ async function run() {
     console.log(`${INFO} fast delivery tests...`);
     checks.push({ name: 'Test: current-blocker-policy', ok: await runTestByName('current-blocker-policy') });
     checks.push({ name: 'Test: blocker-manifest', ok: await runTestByName('r6-blocker-manifest') });
+    checks.push({ name: 'Test: MA12-G5 final release gate', ok: await runTestByName('ma12-g5') });
   } else {
     // Full profile: G10 dual-mode E2E
     console.log(`${INFO} full delivery tests...`);
