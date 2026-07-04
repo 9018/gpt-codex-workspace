@@ -77,6 +77,8 @@ export function classifyCurrentBlockerTask(task) {
 
   if (!isKnownTaskStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS, status, resultShape, false);
   if (isResolvedByOptions(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
+  if (isRecoveredResultMissingVerifiedCommit(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
+  if (isNoMutationProviderNoise(result)) return decision(CURRENT_WORK_DECISION_LABELS.PROVIDER_EMPTY, status, resultShape, false);
 
   // P0-MA11-R2/MA12-G3: Populate delivery_result_recovery from reachable
   // commit evidence so downstream consumers do not block on stale review state.
@@ -160,6 +162,38 @@ function getVerifiedIntegratedCommitCandidate(result) {
     if (isCommitAncestorOfHead(candidate, repoPath)) return candidate.trim();
   }
   return null;
+}
+
+function isRecoveredResultMissingVerifiedCommit(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const deliveryRecovery = result.delivery_result_recovery || result.delivery_recovery || {};
+  if (deliveryRecovery.reason !== 'result_missing_but_verified_commit') return false;
+  const candidates = [deliveryRecovery.commit, deliveryRecovery.local_head];
+  const repoPath = result.execution_cwd || deliveryRecovery.worktree_path || deliveryRecovery.canonical_repo_path || process.cwd();
+  return candidates.some((candidate) => isValidCommitCandidate(candidate) && isCommitAncestorOfHead(candidate, repoPath));
+}
+
+function isNoMutationProviderNoise(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files : [];
+  const deliveryRecovery = result.delivery_result_recovery || result.delivery_recovery || {};
+  const deliveryChangedFiles = Array.isArray(deliveryRecovery.changed_files) ? deliveryRecovery.changed_files : [];
+  if (changedFiles.length > 0 || deliveryChangedFiles.length > 0) return false;
+  if (hasVerificationEvidence(result)) return false;
+  if (isValidCommitCandidate(result.commit) || isValidCommitCandidate(deliveryRecovery.commit)) return false;
+  const findings = Array.isArray(result.acceptance_findings) ? result.acceptance_findings : [];
+  const codes = findings.map((finding) => String(finding?.code || '').trim()).filter(Boolean);
+  const allowedCodes = new Set([
+    'codex_failed',
+    'delivery_result_recovery_failed',
+    'git_worktree_lifecycle_metadata_only',
+  ]);
+  if (codes.length > 0 && !codes.every((code) => allowedCodes.has(code))) return false;
+  const reason = String(deliveryRecovery.reason || '').trim();
+  const allowedReasons = new Set(['', 'no_changed_files', 'canonical_dirty']);
+  if (!allowedReasons.has(reason)) return false;
+  const summary = String(result.summary || result.kind || result.failure_class || '').toLowerCase();
+  return summary.includes('codex') || summary.includes('no-op') || codes.length > 0 || reason.length > 0;
 }
 
 function isVerifiedReadOnlyResult(result) {

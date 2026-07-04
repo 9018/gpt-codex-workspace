@@ -246,3 +246,97 @@ test('verified review with unreachable delivery local_head remains blocking', ()
     }
   }
 });
+
+test('no-mutation provider failure noise is excluded', () => {
+  const decision = classifyCurrentBlockerTask({
+    status: 'failed',
+    result: {
+      summary: 'Codex execution failed (non-zero exit)',
+      changed_files: [],
+      acceptance_findings: [
+        { code: 'codex_failed' },
+        { code: 'delivery_result_recovery_failed' },
+      ],
+      delivery_result_recovery: { reason: 'no_changed_files', changed_files: [] },
+    },
+  });
+  assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.PROVIDER_EMPTY);
+  assert.equal(decision.blocks_current_work, false);
+});
+
+test('provider failure with mutation evidence remains blocking', () => {
+  const decision = classifyCurrentBlockerTask({
+    status: 'failed',
+    result: {
+      summary: 'Codex execution failed after producing changes',
+      changed_files: ['backend/src/example.mjs'],
+      acceptance_findings: [{ code: 'codex_failed' }],
+      delivery_result_recovery: { reason: 'no_changed_files', changed_files: [] },
+    },
+  });
+  assert.equal(decision.blocks_current_work, true);
+});
+
+test('recovered result-missing verified commit is excluded when reachable', () => {
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-result-missing-verified-'));
+  const repo = join(root, 'repo');
+  const other = join(root, 'other');
+  mkdirSync(repo);
+  mkdirSync(other);
+  execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['add', 'a.txt'], { cwd: repo });
+  execFileSync('git', ['commit', '-m', 'a'], { cwd: repo, stdio: 'ignore' });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  execFileSync('git', ['init'], { cwd: other, stdio: 'ignore' });
+  const previousDefaultRepoPath = process.env.GPTWORK_DEFAULT_REPO_PATH;
+  try {
+    process.env.GPTWORK_DEFAULT_REPO_PATH = repo;
+    const decision = classifyCurrentBlockerTask({
+      status: 'failed',
+      result: {
+        summary: 'Codex execution failed (non-zero exit)',
+        acceptance_findings: [{ code: 'codex_failed' }],
+        delivery_result_recovery: {
+          reason: 'result_missing_but_verified_commit',
+          commit: commit.slice(0, 12),
+          worktree_path: other,
+        },
+      },
+    });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS);
+    assert.equal(decision.blocks_current_work, false);
+  } finally {
+    if (previousDefaultRepoPath === undefined) {
+      delete process.env.GPTWORK_DEFAULT_REPO_PATH;
+    } else {
+      process.env.GPTWORK_DEFAULT_REPO_PATH = previousDefaultRepoPath;
+    }
+  }
+});
+
+test('unreachable result-missing verified commit remains blocking', () => {
+  const previousDefaultRepoPath = process.env.GPTWORK_DEFAULT_REPO_PATH;
+  try {
+    delete process.env.GPTWORK_DEFAULT_REPO_PATH;
+    const decision = classifyCurrentBlockerTask({
+      status: 'failed',
+      result: {
+        summary: 'Codex execution failed (non-zero exit)',
+        changed_files: ['backend/src/example.mjs'],
+        acceptance_findings: [{ code: 'codex_failed' }],
+        delivery_result_recovery: {
+          reason: 'result_missing_but_verified_commit',
+          commit: 'deadbee',
+        },
+      },
+    });
+    assert.equal(decision.blocks_current_work, true);
+  } finally {
+    if (previousDefaultRepoPath !== undefined) {
+      process.env.GPTWORK_DEFAULT_REPO_PATH = previousDefaultRepoPath;
+    }
+  }
+});
