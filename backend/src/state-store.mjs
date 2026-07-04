@@ -38,6 +38,7 @@ export class StateStore {
     this._stateVersion = 0;
     this._derivedCache = new Map();
     this._stateMtime = 0;
+    this._stateSize = null;
     this._clearIndexes();
   }
 
@@ -108,10 +109,16 @@ export class StateStore {
   async _tryReloadOnExternalChange() {
     try {
       const st = await stat(this.statePath);
-      if (Number.isFinite(st.mtimeMs) && st.mtimeMs > this._stateMtime) {
+      const mtimeMs = Number.isFinite(st.mtimeMs) ? st.mtimeMs : 0;
+      const size = Number.isFinite(st.size) ? st.size : null;
+      // File mtimes are not guaranteed to be strictly monotonic across
+      // external writers, atomic renames, or coarse filesystems.  Treat any
+      // fingerprint difference as a potential external state mutation.
+      if (mtimeMs !== this._stateMtime || size !== this._stateSize) {
         const raw = await readFile(this.statePath, "utf8");
         this.state = JSON.parse(raw);
-        this._stateMtime = st.mtimeMs;
+        this._stateMtime = mtimeMs;
+        this._stateSize = size;
         this._buildIndexes();
         this._stateVersion += 1;
         this.clearDerivedCache();
@@ -130,6 +137,7 @@ export class StateStore {
         try {
           const st = await stat(this.statePath);
           if (Number.isFinite(st.mtimeMs)) this._stateMtime = st.mtimeMs;
+          if (Number.isFinite(st.size)) this._stateSize = st.size;
         } catch {
           // stat non-fatal
         }
@@ -302,6 +310,7 @@ export class StateStore {
       try {
         const st = await stat(this.statePath);
         if (Number.isFinite(st.mtimeMs)) this._stateMtime = st.mtimeMs;
+        if (Number.isFinite(st.size)) this._stateSize = st.size;
       } catch {}
     });
     // Reset on failure so subsequent saves still execute

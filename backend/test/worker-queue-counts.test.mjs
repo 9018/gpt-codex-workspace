@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { readFile } from 'node:fs/promises';
+import { readFile, stat } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 
 import { collectWorkerQueueCounts, computePolicyQueueCounts } from '../src/worker-queue-counts.mjs';
@@ -677,6 +677,46 @@ test('P0-MA11-R8: runtime_status queue counts reflect externally-mutated state f
   // Verify the state file was reloaded (store.state has the updated task)
   const loadedTask = store.state.tasks.find(t => t.id === 'task_r8_review');
   assert.equal(loadedTask?.status, 'completed', 'in-memory state should match file after external mutation');
+});
+
+
+
+test('P0-MA11-R8: external reload uses file fingerprint, not strict mtime increase', async () => {
+  const store = await makeStateStore('r8-fingerprint-mutate-');
+  await store.load();
+  await store.mutate((state) => {
+    state.tasks.push({
+      assignee: 'codex',
+      status: 'waiting_for_review',
+      id: 'task_r8_fingerprint_review',
+      result: { summary: 'Needs review' },
+      created_at: new Date(Date.now() - 30_000).toISOString(),
+    });
+  });
+  const before = await collectWorkerQueueCounts(store);
+  assert.equal(before.current_blockers, 1);
+
+  const externalState = JSON.parse(JSON.stringify(store.state));
+  const task = externalState.tasks.find(t => t.id === 'task_r8_fingerprint_review');
+  task.status = 'completed';
+  task.result.verification = { passed: true };
+  task.updated_at = new Date().toISOString();
+
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(store.statePath, JSON.stringify(externalState, null, 2), 'utf8');
+  const writtenStat = await stat(store.statePath);
+
+  // Simulate a runtime cache whose recorded mtime is not lower than the new
+  // file mtime.  The old `mtime > cachedMtime` check missed this; the fixed
+  // code reloads when the file fingerprint differs at all.
+  store._stateMtime = writtenStat.mtimeMs + 60_000;
+  store._stateSize = writtenStat.size;
+
+  const after = await collectWorkerQueueCounts(store);
+  assert.equal(after.completed, 1);
+  assert.equal(after.waiting_for_review, 0);
+  assert.equal(after.current_blockers, 0);
+  assert.equal(store.state.tasks.find(t => t.id === 'task_r8_fingerprint_review')?.status, 'completed');
 });
 
 test('P0-MA11-R8: runtime_status queue counts stay current after in-process mutate', async () => {
