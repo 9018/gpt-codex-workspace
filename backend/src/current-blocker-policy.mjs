@@ -96,6 +96,7 @@ export function classifyCurrentBlockerTask(task) {
   const verificationNormalized = isVerificationNormalized(result);
   
   if (status === TASK_STATUSES.WAITING_FOR_REVIEW) {
+    if (isVerifiedReadOnlyResult(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, 
       verificationNormalized ? false : hasActionableReviewEvidence(result, resultShape));
   }
@@ -138,6 +139,17 @@ function isResolvedByOptions(result) {
 
 function hasStringEvidence(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function isVerifiedReadOnlyResult(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
+  if (!Array.isArray(result.changed_files) || result.changed_files.length !== 0) return false;
+  if (!(result.verification?.passed === true || hasStringEvidence(result.tests))) return false;
+  const text = [result.summary, result.tests, result.status, result.kind]
+    .filter((value) => typeof value === 'string')
+    .join(' ')
+    .toLowerCase();
+  return /readonly|read-only/.test(text);
 }
 
 function hasActionableReviewEvidence(result, resultShape) {
