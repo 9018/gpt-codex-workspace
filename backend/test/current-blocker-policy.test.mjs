@@ -179,3 +179,14 @@ test('isCommitAncestorOfHead falls back from stale worktree to canonical repo pa
     }
   }
 });
+
+
+test('verified readonly review is excluded', () => {
+  const d = classifyCurrentBlockerTask({ status: 'waiting_for_review', result: { summary: 'readonly validation ok', changed_files: [], verification: { passed: true } } });
+  assert.equal(d.blocks_current_work, false);
+});
+
+test('changed review is retained', () => {
+  const d = classifyCurrentBlockerTask({ status: 'waiting_for_review', result: { summary: 'changed code and tests passed', changed_files: ['backend/src/example.mjs'], verification: { passed: true } } });
+  assert.equal(d.blocks_current_work, true);
+});
