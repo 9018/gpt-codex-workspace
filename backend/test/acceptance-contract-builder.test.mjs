@@ -112,6 +112,24 @@ test("builder optimization repair requests are not inferred as noop", () => {
   assert.equal(contract.intent.operation_kind, "code_change");
 });
 
+
+
+test("builder runtime-fix tasks mentioning cleanup/admin misclassification remain code_change", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Continue: fix the R3 acceptance contract cleanup/admin misclassification and converge blockers",
+    goal_prompt: "Implement a runtime-fix in backend acceptance contract classification. The task mentions cleanup/admin only as the wrong contract that must not block a code-change apply path.",
+    mode: "builder"
+  });
+
+  assert.equal(contract.intent.operation_kind, "code_change");
+  assert.equal(contract.intent.mutation_scope, "repo");
+  assert.equal(contract.intent.execution_mode, "worktree");
+  assert.equal(contract.requirements.requires_commit, true);
+  assert.equal(contract.requirements.requires_integration, true);
+  assert.ok(!contract.verification_plan.required_reports.includes("dry_run"));
+  assert.ok(!contract.blocking_requirements.some((item) => item.id === "dry_run_evidence"));
+});
+
 test("vague builder requests do not auto-complete", () => {
   const contract = buildAcceptanceContract({
     user_request: "Task 1",

@@ -48,9 +48,29 @@ function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } =
   if (matches.length === 0 && normalizedMode === "builder") return { operation_kind: "code_change", semantic_confidence: "low" };
   if (matches.length === 0) return { operation_kind: "noop", semantic_confidence: "low" };
 
-  const selected = matches[0];
+  const selected = selectOperationKind({ matches, text, normalizedMode });
   const semantic_confidence = matches.length === 1 ? "high" : "medium";
   return { operation_kind: selected, semantic_confidence };
+}
+
+const BUILDER_CODE_INTENT_PATTERN = /\b(fix|implement|modify|refactor|add tests?|bug|feature|code|backend|frontend|api|module|runtime[- ]fix|reconciler|classifier|classification|contract|test|commit)\b|修复|实现|代码|改造|验收|合约|误判|分类|收敛/iu;
+
+function selectOperationKind({ matches = [], text = "", normalizedMode = "" } = {}) {
+  const unique = [...new Set(matches)];
+
+  // Builder tasks often mention the *wrong* contract/profile they are fixing
+  // (for example: "cleanup/admin contract was misclassified").  Do not let a
+  // negative reference to cleanup/admin outrank a clear code-change intent.
+  if (
+    normalizedMode === "builder" &&
+    unique.includes("cleanup") &&
+    (unique.includes("code_change") || unique.includes("repair")) &&
+    BUILDER_CODE_INTENT_PATTERN.test(text)
+  ) {
+    return unique.includes("code_change") ? "code_change" : "repair";
+  }
+
+  return unique[0];
 }
 
 function byId(items) {
