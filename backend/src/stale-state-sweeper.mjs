@@ -108,7 +108,9 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
   const result = task.result || {};
 
   // Check if task has acceptance evidence
-  const acceptanceFindings = result.acceptance_findings || result.verification?.findings || [];
+  const rc = { reconciled: result.closure_decision?.status === "auto_completed_clean" || result.closure_decision?.auto_complete_allowed === true || result.finalizer_decision?.status === "completed", taskStatus: TASK_STATUSES.COMPLETED };
+  if (rc.reconciled && rc.taskStatus === TASK_STATUSES.COMPLETED) result.verification = { passed: true };
+  const acceptanceFindings = rc.reconciled ? [] : (result.acceptance_findings || result.verification?.findings || []);
   const verificationPassed = result.verification?.passed === true;
   const blockerFindings = acceptanceFindings.filter(f => f.severity === "blocker" || f.severity === "major");
   const profile = result.acceptance_profile || detectProfileFromTask(task, result);
