@@ -41,19 +41,18 @@ export function isVerificationNormalized(result) {
   if (verification.passed === true && contractV.blocking_passed === true) return true;
   if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
 
-  // P0-MA11-R2: Also check repo head reachability from legacy result.commit.
-  // If task.result.commit exists and is an ancestor of the canonical repo HEAD,
-  // the commit is already integrated even without delivery_result_recovery metadata.
-  if (result && result.commit && (result.verification?.passed === true || result.tests)) {
-    const commitReachable = isCommitAncestorOfHead(result.commit, result.execution_cwd || process.cwd());
-    if (commitReachable) {
-      result.delivery_result_recovery = result.delivery_result_recovery || {};
-      result.delivery_result_recovery.reason = 'already_integrated';
-      result.delivery_result_recovery.recovered = true;
-      result.delivery_result_recovery.commit = result.commit;
-      result.delivery_result_recovery.commit_integrated = true;
-      return true;
-    }
+  // P0-MA11-R2/MA12-G3: Also check repo head reachability from legacy
+  // result.commit and delivery-recovery commit/local_head.  Some historical
+  // tasks recorded result.commit="none" even though delivery recovery retained
+  // a local_head that was later integrated into the canonical repo.
+  const integratedCommit = getVerifiedIntegratedCommitCandidate(result);
+  if (integratedCommit) {
+    result.delivery_result_recovery = result.delivery_result_recovery || {};
+    result.delivery_result_recovery.reason = 'already_integrated';
+    result.delivery_result_recovery.recovered = true;
+    result.delivery_result_recovery.commit = integratedCommit;
+    result.delivery_result_recovery.commit_integrated = true;
+    return true;
   }
 
   // P0-MA11-R1: Check for delivery_result_recovery already_integrated
@@ -79,17 +78,15 @@ export function classifyCurrentBlockerTask(task) {
   if (!isKnownTaskStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS, status, resultShape, false);
   if (isResolvedByOptions(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
 
-  // P0-MA11-R2: Populate delivery_result_recovery from result.commit reachability
-  // so that isVerificationNormalized and downstream consumers can use it.
-  if (result && result.commit && (result.verification?.passed === true || result.tests)) {
-    const commitReachable = isCommitAncestorOfHead(result.commit, result.execution_cwd || process.cwd());
-    if (commitReachable) {
-      result.delivery_result_recovery = result.delivery_result_recovery || {};
-      result.delivery_result_recovery.reason = 'already_integrated';
-      result.delivery_result_recovery.recovered = true;
-      result.delivery_result_recovery.commit = result.commit;
-      result.delivery_result_recovery.commit_integrated = true;
-    }
+  // P0-MA11-R2/MA12-G3: Populate delivery_result_recovery from reachable
+  // commit evidence so downstream consumers do not block on stale review state.
+  const integratedCommit = getVerifiedIntegratedCommitCandidate(result);
+  if (integratedCommit) {
+    result.delivery_result_recovery = result.delivery_result_recovery || {};
+    result.delivery_result_recovery.reason = 'already_integrated';
+    result.delivery_result_recovery.recovered = true;
+    result.delivery_result_recovery.commit = integratedCommit;
+    result.delivery_result_recovery.commit_integrated = true;
   }
 
   // P0-MA11: If canonical verification is normalized, stale review states are not blockers
@@ -103,7 +100,7 @@ export function classifyCurrentBlockerTask(task) {
   if (status === TASK_STATUSES.WAITING_FOR_REPAIR) {
     // P0-MA11-R1: If task has already-integrated commit with passing verification,
     // waiting_for_repair due to empty_commit noise is not a current blocker.
-    if (verificationNormalized && result?.commit && (result?.verification?.passed === true || result?.tests)) {
+    if (verificationNormalized && hasVerificationEvidence(result)) {
       return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, false);
     }
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, true);
@@ -139,6 +136,30 @@ function isResolvedByOptions(result) {
 
 function hasStringEvidence(value) {
   return typeof value === 'string' && value.trim().length > 0;
+}
+
+function hasVerificationEvidence(result) {
+  return result?.verification?.passed === true || hasStringEvidence(result?.tests);
+}
+
+function isValidCommitCandidate(value) {
+  if (!hasStringEvidence(value)) return false;
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'none' || normalized === 'null' || normalized === 'undefined') return false;
+  return /^[0-9a-f]{7,40}$/i.test(normalized);
+}
+
+function getVerifiedIntegratedCommitCandidate(result) {
+  if (!result || typeof result !== 'object' || Array.isArray(result)) return null;
+  if (!hasVerificationEvidence(result)) return null;
+  const deliveryRecovery = result.delivery_result_recovery || result.delivery_recovery || {};
+  const candidates = [result.commit, deliveryRecovery.commit, deliveryRecovery.local_head];
+  const repoPath = result.execution_cwd || deliveryRecovery.worktree_path || deliveryRecovery.canonical_repo_path || process.cwd();
+  for (const candidate of candidates) {
+    if (!isValidCommitCandidate(candidate)) continue;
+    if (isCommitAncestorOfHead(candidate, repoPath)) return candidate.trim();
+  }
+  return null;
 }
 
 function isVerifiedReadOnlyResult(result) {

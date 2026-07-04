@@ -190,3 +190,59 @@ test('changed review is retained', () => {
   const d = classifyCurrentBlockerTask({ status: 'waiting_for_review', result: { summary: 'changed code and tests passed', changed_files: ['backend/src/example.mjs'], verification: { passed: true } } });
   assert.equal(d.blocks_current_work, true);
 });
+
+test('verified review with reachable delivery local_head is excluded when result commit is none', () => {
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-current-blocker-local-head-'));
+  const repo = join(root, 'repo');
+  const other = join(root, 'other');
+  mkdirSync(repo);
+  mkdirSync(other);
+  execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['add', 'a.txt'], { cwd: repo });
+  execFileSync('git', ['commit', '-m', 'a'], { cwd: repo, stdio: 'ignore' });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  execFileSync('git', ['init'], { cwd: other, stdio: 'ignore' });
+  const previousDefaultRepoPath = process.env.GPTWORK_DEFAULT_REPO_PATH;
+  try {
+    process.env.GPTWORK_DEFAULT_REPO_PATH = repo;
+    const result = {
+      commit: 'none',
+      changed_files: ['backend/src/example.mjs'],
+      verification: { passed: true },
+      delivery_result_recovery: { local_head: commit.slice(0, 12), worktree_path: other },
+    };
+    const decision = classifyCurrentBlockerTask({ status: 'waiting_for_review', result });
+    assert.equal(decision.blocks_current_work, false);
+    assert.equal(result.delivery_result_recovery.reason, 'already_integrated');
+  } finally {
+    if (previousDefaultRepoPath === undefined) {
+      delete process.env.GPTWORK_DEFAULT_REPO_PATH;
+    } else {
+      process.env.GPTWORK_DEFAULT_REPO_PATH = previousDefaultRepoPath;
+    }
+  }
+});
+
+test('verified review with unreachable delivery local_head remains blocking', () => {
+  const previousDefaultRepoPath = process.env.GPTWORK_DEFAULT_REPO_PATH;
+  try {
+    delete process.env.GPTWORK_DEFAULT_REPO_PATH;
+    const decision = classifyCurrentBlockerTask({
+      status: 'waiting_for_review',
+      result: {
+        commit: 'none',
+        changed_files: ['backend/src/example.mjs'],
+        verification: { passed: true },
+        delivery_result_recovery: { local_head: 'deadbee' },
+      },
+    });
+    assert.equal(decision.blocks_current_work, true);
+  } finally {
+    if (previousDefaultRepoPath !== undefined) {
+      process.env.GPTWORK_DEFAULT_REPO_PATH = previousDefaultRepoPath;
+    }
+  }
+});

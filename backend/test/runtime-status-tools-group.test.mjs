@@ -224,7 +224,12 @@ test('runtime_status handler returns expected shape keys', async () => {
   assert.equal(typeof result.worker, 'object');
   assert.equal(typeof result.bark, 'object');
   assert.equal(typeof result.github, 'object');
-  assert.equal(result.codex_tui_goal, undefined);
+  if (result.codex_tui_goal !== undefined) {
+    assert.equal(result.codex_tui_goal.provider, 'codex_tui_goal');
+    assert.equal(result.codex_tui_goal.optional, true);
+    assert.equal(result.codex_tui_goal.activation, 'explicit_only');
+    assert.equal(result.codex_tui_goal.highest_severity, 'ok');
+  }
 });
 
 test('runtime_status includes optional explicit codex_tui_goal diagnostics when TUI state is relevant', async () => {
