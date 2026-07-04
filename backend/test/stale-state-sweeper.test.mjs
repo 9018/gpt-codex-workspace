@@ -440,14 +440,25 @@ test("sweeper: quota_wait backoff not yet elapsed → no action", () => {
 // ===========================================================================
 
 test("sweeper: applySweepActions updates task status via store", async () => {
-  let updatedTask = null;
-  const mockStore = {
-    updateTask: async (taskId, updater) => {
-      const task = { id: taskId, status: "waiting_for_review", logs: [] };
-      updater(task);
-      updatedTask = task;
-    },
-  };
+  // P0-MA11-R3: applySweepActions now uses store.mutate() (the correct
+  // StateStore API), not store.updateTask() which never existed.
+  // Use a real StateStore for the test.
+  const { StateStore } = await import("../src/state-store.mjs");
+  const { mkdtemp } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(join(tmpdir(), "sweeper-test-"));
+  const store = new StateStore({
+    statePath: join(dir, "state.json"),
+    defaultWorkspaceRoot: dir,
+  });
+  await store.load();
+  store.state.tasks = [{
+    id: "task_complete_me",
+    status: "waiting_for_review",
+    logs: [],
+  }];
+  await store.save();
 
   const sweepActions = [{
     taskId: "task_complete_me",
@@ -460,25 +471,38 @@ test("sweeper: applySweepActions updates task status via store", async () => {
     }],
   }];
 
-  const result = await applySweepActions(mockStore, sweepActions);
+  const result = await applySweepActions(store, sweepActions);
 
   assert.equal(result.applied, 1);
   assert.equal(result.errors.length, 0);
-  assert.ok(updatedTask !== null);
-  assert.equal(updatedTask.status, "completed");
-  assert.ok(Array.isArray(updatedTask.logs));
-  assert.ok(updatedTask.swept_at);
+
+  // Verify the store was actually mutated
+  const state = await store.load();
+  const task = state.tasks.find(t => t.id === "task_complete_me");
+  assert.ok(task !== null);
+  assert.equal(task.status, "completed");
+  assert.ok(Array.isArray(task.logs));
+  assert.ok(task.swept_at);
 });
 
-test("sweeper: applySweepActions handles store errors gracefully", async () => {
-  const mockStore = {
-    updateTask: async (taskId, updater) => {
-      throw new Error("Store failure");
-    },
-  };
+test("sweeper: applySweepActions reports error for non-existent task", async () => {
+  // P0-MA11-R3: applySweepActions uses store.mutate() and reports errors
+  // when a task ID is not found in state.
+  const { StateStore } = await import("../src/state-store.mjs");
+  const { mkdtemp } = await import("node:fs/promises");
+  const { join } = await import("node:path");
+  const { tmpdir } = await import("node:os");
+  const dir = await mkdtemp(join(tmpdir(), "sweeper-test-"));
+  const store = new StateStore({
+    statePath: join(dir, "state.json"),
+    defaultWorkspaceRoot: dir,
+  });
+  await store.load();
+  store.state.tasks = [];
+  await store.save();
 
   const sweepActions = [{
-    taskId: "task_error",
+    taskId: "task_missing",
     currentStatus: "retry_wait",
     recommendedStatus: "queued",
     reason: "Retry due",
@@ -488,30 +512,19 @@ test("sweeper: applySweepActions handles store errors gracefully", async () => {
     }],
   }];
 
-  const result = await applySweepActions(mockStore, sweepActions);
+  const result = await applySweepActions(store, sweepActions);
 
   assert.equal(result.applied, 0);
   assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0].taskId, "task_error");
-  assert.ok(result.errors[0].error);
+  assert.equal(result.errors[0].taskId, "task_missing");
+  assert.ok(result.errors[0].error.includes("not found"));
 });
 
-test("sweeper: applySweepActions skips tasks without updateTask", async () => {
-  const mockStore = {}; // No updateTask method
-
-  const sweepActions = [{
-    taskId: "task_skip",
-    currentStatus: "waiting_for_repair",
-    recommendedStatus: "completed",
-    reason: "Parent completed",
-    actions: [{
-      type: "update_task_status",
-      payload: { status: "completed" },
-    }],
-  }];
-
-  const result = await applySweepActions(mockStore, sweepActions);
+test("sweeper: applySweepActions handles empty sweep actions", async () => {
+  // P0-MA11-R3: applySweepActions does not require store.mutate when
+  // there are no actions to apply.
+  const result = await applySweepActions({}, []);
 
   assert.equal(result.applied, 0);
-  assert.equal(result.errors.length, 0); // Skipped silently
+  assert.equal(result.errors.length, 0);
 });

@@ -425,6 +425,9 @@ function computeMinBackoffMs(failureClass, attempt) {
 
 // ---------------------------------------------------------------------------
 // Integrated convergence: sweep stale states + complete queued agent_runs
+// P0-MA11-R3: PERSIST apply path — applySweepActions uses store.mutate(),
+// completeQueuedAgentRuns runs regardless of dryRun, and runHistoricalConvergence()
+// is the idempotent public entry point wired into worker loop + reconciler.
 // ---------------------------------------------------------------------------
 
 function hasResultEvidence(task = {}) {
@@ -443,6 +446,9 @@ function hasResultEvidence(task = {}) {
 /**
  * Perform a full convergence sweep: sweep stale task states AND complete
  * queued agent_runs for tasks with terminal or result evidence.
+ *
+ * P0-MA11-R3: Track applied/errors correctly for both sweepActions AND
+ * agentRunCompletions.  Previously the second branch overwrote the first.
  */
 export async function convergeStaleTaskStates(store, { repoState, now, dryRun = false } = {}) {
   const state = await store.load();
@@ -467,53 +473,104 @@ export async function convergeStaleTaskStates(store, { repoState, now, dryRun = 
     } catch { /* non-blocking */ }
   }
 
-  let applied = 0;
+  let sweepActionsApplied = 0;
   let errors = [];
   if (!dryRun && sweepActions.length > 0) {
     const applyResult = await applySweepActions(store, sweepActions);
-    applied = applyResult.applied;
+    sweepActionsApplied = applyResult.applied;
     errors = applyResult.errors || [];
   }
 
-  return { sweepActions, agentRunCompletions, applied, errors };
+  // agentRunCompletions are already persisted via completeAgentRun() inside
+  // completeQueuedAgentRuns, so they count toward `applied` regardless of dryRun.
+  const totalApplied = (dryRun ? 0 : sweepActionsApplied) + agentRunCompletions.length;
+  return { sweepActions, agentRunCompletions, applied: totalApplied, errors };
 }
 
 // ---------------------------------------------------------------------------
-// Sweep application
+// Sweep application — P0-MA11-R3: rewritten to use store.mutate() instead of
+// the non-existent store.updateTask().  The original code checked
+//   typeof store.updateTask === "function"
+// but StateStore only has mutate(), not updateTask().  As a result, NO sweep
+// action was ever persisted — R2 was purely diagnostic.
 // ---------------------------------------------------------------------------
 
 /**
  * Apply sweep actions to the store.
  *
- * @param {object} store - State store
+ * Uses store.mutate() to modify tasks in-place. This is the correct
+ * StateStore API — store.updateTask() does not exist.
+ *
+ * @param {object} store - StateStore instance
  * @param {Array<object>} sweepActions - Array of sweep actions
  * @returns {Promise<{ applied: number, errors: Array }>}
  */
 export async function applySweepActions(store, sweepActions = []) {
-  let applied = 0;
-  const errors = [];
+  if (!sweepActions.length) return { applied: 0, errors: [] };
 
-  for (const action of sweepActions) {
-    try {
+  let applied = 0;
+  const localErrors = [];
+
+  await store.mutate(state => {
+    const tasks = state.tasks || [];
+    for (const action of sweepActions) {
+      const taskIdx = tasks.findIndex(t => t && t.id === action.taskId);
+      if (taskIdx === -1) {
+        localErrors.push({ taskId: action.taskId, error: 'task not found in state' });
+        continue;
+      }
+      const task = tasks[taskIdx];
       for (const step of action.actions) {
-        if (step.type === "update_task_status" && typeof store.updateTask === "function") {
-          await store.updateTask(action.taskId, (task) => {
-            Object.assign(task, step.payload);
-            task.updated_at = new Date().toISOString();
-            task.swept_at = task.updated_at;
-            if (!Array.isArray(task.logs)) task.logs = [];
-            task.logs.push({
-              time: task.updated_at,
-              message: `[sweeper] ${action.reason}`,
-            });
+        if (step.type === "update_task_status") {
+          Object.assign(task, step.payload);
+          task.updated_at = new Date().toISOString();
+          task.swept_at = task.updated_at;
+          if (!Array.isArray(task.logs)) task.logs = [];
+          task.logs.push({
+            time: task.updated_at,
+            message: `[sweeper] ${action.reason}`,
           });
           applied++;
         }
       }
-    } catch (err) {
-      errors.push({ taskId: action.taskId, error: err.message });
     }
-  }
+    return state;
+  });
 
-  return { applied, errors };
+  return { applied, errors: localErrors };
+}
+
+// ---------------------------------------------------------------------------
+// P0-MA11-R3: runHistoricalConvergence — idempotent public entry point
+// wired into the worker-loop startup path and the reconciler.
+// ---------------------------------------------------------------------------
+
+let _convergenceRunning = false;
+
+/**
+ * Run historical convergence with a lock guard to prevent concurrent runs.
+ *
+ * Calls convergeStaleTaskStates with dryRun=false, persisting:
+ * - Sweep actions (waiting_for_review/repair/integration → completed)
+ * - Queued agent_run completion
+ *
+ * Designed for periodic or startup invocation. Idempotent: if a convergence
+ * is already in progress, subsequent calls are skipped.
+ *
+ * @param {object} store - StateStore instance
+ * @param {object} [options]
+ * @param {number} [options.now] - Current timestamp (ms)
+ * @returns {Promise<{ skipped: boolean, sweepActions: Array, agentRunCompletions: Array, applied: number, errors: Array }>}
+ */
+export async function runHistoricalConvergence(store, { now } = {}) {
+  if (_convergenceRunning) {
+    return { skipped: true, reason: 'convergence already running', sweepActions: [], agentRunCompletions: [], applied: 0, errors: [] };
+  }
+  _convergenceRunning = true;
+  try {
+    const result = await convergeStaleTaskStates(store, { now, dryRun: false });
+    return { ...result, skipped: false };
+  } finally {
+    _convergenceRunning = false;
+  }
 }

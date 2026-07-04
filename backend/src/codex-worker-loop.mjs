@@ -1,5 +1,6 @@
 import { appendFileSync } from "node:fs";
 import { runIdleMaintenance } from "./worker-maintenance.mjs";
+import { runHistoricalConvergence } from "./stale-state-sweeper.mjs";
 import {
   createWorkerState,
   markWorkerStarted,
@@ -74,6 +75,11 @@ export function startCodexWorker(server, {
           try {
             const wsRoot = await server.getDefaultWorkspaceRoot();
             if (wsRoot) runIdleMaintenance(wsRoot).catch(() => {});
+            // P0-MA11-R3: Periodic historical convergence alongside maintenance.
+            try {
+              const store = server.getStoreForTests ? server.getStoreForTests() : null;
+              if (store) await runHistoricalConvergence(store);
+            } catch {}
           } catch {
             // Maintenance is best-effort and should not block task execution.
           }
@@ -156,6 +162,13 @@ export function startCodexWorker(server, {
         runIdleMaintenance(wsRoot).catch(() => {});
         lastMaintenanceTime = Date.now();
       }
+      // P0-MA11-R3: Run historical convergence at startup (non-blocking).
+      // The reconciler already calls it, but this is a safety net in case the
+      // reconciler is bypassed or skipped. Idempotent by design.
+      try {
+        const store = server.getStoreForTests ? server.getStoreForTests() : null;
+        if (store) await runHistoricalConvergence(store);
+      } catch {}
     } catch {
       // Non-fatal
     }
