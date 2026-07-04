@@ -19,6 +19,7 @@ import { classifyClosure, checkNotificationConsistency } from './auto-closure-cl
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
 import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
 import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followup-task-planner.mjs';
+import { reconcileTaskClosure } from './closure/task-closure-reconciler.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
@@ -650,6 +651,21 @@ export async function finalizeCodexTaskRun({
   const finalizerApplied = applyTaskFinalStateDecision({ taskStatus, taskResult, finalizerDecision });
   taskStatus = finalizerApplied.taskStatus;
   taskResult = finalizerApplied.taskResult;
+
+
+  // ---- P0-MA12-G2: Auto Closure Reconciliation ----
+  // Reconcile closure_decision, finalizer_decision, and task.status so that
+  // verified + integrated tasks with all evidence close deterministically.
+  const reconciliationResult = reconcileTaskClosure({ taskStatus, taskResult, config });
+  if (reconciliationResult.reconciled) {
+    taskStatus = reconciliationResult.taskStatus;
+    taskResult = reconciliationResult.taskResult;
+    taskResult.reconciled_at = new Date().toISOString();
+    taskResult.reconciliation_reason = reconciliationResult.reason;
+    const taskWarnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+    taskResult.warnings = taskWarnings;
+    taskResult.warnings.push("Reconciled: " + reconciliationResult.reason);
+  }
 
   const result = typeof store.mutate === "function"
     ? await mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn: notifyTerminalTask })

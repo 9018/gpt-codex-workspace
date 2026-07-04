@@ -1,0 +1,221 @@
+/**
+ * task-closure-reconciler.mjs — P0-MA12-G2: Auto Closure Reconciliation
+ *
+ * Deterministic reconciliation step that runs after all writeback stages:
+ * finalizer writeback, pipeline gate evaluation, integration result writeback,
+ * and runtime convergence.
+ *
+ * Ensures closure_decision, finalizer_decision, and task.status are consistent
+ * with the actual evidence present in the task result.
+ *
+ * Reconciliation rules:
+ *   R1: All evidence present + closure says auto-complete → normalize
+ *       finalizer_decision to completed if it's stale.
+ *   R2: All evidence present + finalizer says completed → normalize
+ *       closure_decision to auto-completed if it's stale (requires_review).
+ *   R3: Both decisions agree on completed but task.status is stale → fix
+ *       task.status.
+ *   R4/R5: Evidence doesn't support completion → no change.
+ *   R6/R7: task.status already completed, one decision stale → normalize the
+ *       stale decision.
+ */
+
+import { CLOSURE_STATUSES } from './auto-progress-policy.mjs';
+
+// ---------------------------------------------------------------------------
+// Evidence helpers
+// ---------------------------------------------------------------------------
+
+function integrationIsSatisfied(integration = {}, needsIntegration) {
+  if (!integration || typeof integration !== 'object') return !needsIntegration;
+  if (integration.satisfied === true || integration.merged === true || integration.auto_completed === true) return true;
+  const status = String(integration.status || '').toLowerCase();
+  return ['merged', 'ff_only_merged', 'skipped', 'not_required'].includes(status);
+}
+
+function noUnresolvedBlockingFindings(findings = []) {
+  if (!Array.isArray(findings)) return true;
+  return !findings.some((f) => f && f.severity === 'blocker' && f.resolved !== true);
+}
+
+function verificationPassed(verification = {}) {
+  if (!verification || typeof verification !== 'object') return false;
+  return verification.passed === true;
+}
+
+function worktreeClean(taskResult = {}) {
+  const warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+  return !warnings.some((w) => typeof w === 'string' && w.includes('Worktree retained'));
+}
+
+// ---------------------------------------------------------------------------
+// Main reconciliation function
+// ---------------------------------------------------------------------------
+
+export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} } = {}) {
+  if (!taskResult || typeof taskResult !== 'object') {
+    return { taskStatus, taskResult, reconciled: false, reason: null };
+  }
+
+  const closureDecision = taskResult.closure_decision || {};
+  const finalizerDecision = taskResult.finalizer_decision || {};
+  const integration = taskResult.integration || {};
+  const verification = taskResult.verification || taskResult.final_verification || {};
+  const findings = taskResult.acceptance_findings || [];
+  const acceptanceGate = taskResult.acceptance_gate || {};
+
+  // -----------------------------------------------------------------------
+  // Evidence assessment
+  // -----------------------------------------------------------------------
+
+  const gateSatisfied =
+    acceptanceGate.passed === true ||
+    acceptanceGate.status === 'passed' ||
+    closureDecision.auto_complete_allowed === true ||
+    closureDecision.blocking_passed === true;
+
+  const verificationOk = verificationPassed(verification);
+  const integrationOk = integrationIsSatisfied(integration, taskResult.needs_integration);
+  const findingOk = noUnresolvedBlockingFindings(findings);
+  const worktreeOk = worktreeClean(taskResult);
+
+  const allEvidencePresent = gateSatisfied && verificationOk && integrationOk && findingOk && worktreeOk;
+
+  // -----------------------------------------------------------------------
+  // Current decision states
+  // -----------------------------------------------------------------------
+
+  const closureSaysComplete =
+    closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN ||
+    closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS;
+
+  const finalizerSaysComplete = finalizerDecision.status === 'completed';
+  const taskSaysComplete = taskStatus === 'completed';
+
+  // -----------------------------------------------------------------------
+  // Reconciliation rules
+  // -----------------------------------------------------------------------
+
+  let reconciled = false;
+  let reason = null;
+  let updatedTaskStatus = taskStatus;
+  let updatedTaskResult = { ...taskResult };
+
+  // R1: All evidence present + closure says auto-complete → normalize stale finalizer_decision
+  if (allEvidencePresent && closureSaysComplete && !finalizerSaysComplete) {
+    updatedTaskResult = {
+      ...updatedTaskResult,
+      finalizer_decision: {
+        ...finalizerDecision,
+        status: 'completed',
+        reason: 'reconciled_by_closure_evidence',
+        reconciled_from: finalizerDecision.status || 'unknown',
+        safe_to_auto_advance: true,
+        blockers: [],
+        repairable_blockers: [],
+        goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
+        queue_effect: { status: 'completed', unblock_dependents: true, hold_queue: false },
+      },
+    };
+    updatedTaskStatus = 'completed';
+    reconciled = true;
+    reason = 'finalizer_decision normalized to completed (all evidence present, closure already agrees)';
+  }
+
+  // R2: All evidence present + finalizer says completed -> normalize stale closure_decision
+  if (allEvidencePresent && !closureSaysComplete && finalizerSaysComplete) {
+    const hasFollowups =
+      (Array.isArray(updatedTaskResult.followups) && updatedTaskResult.followups.length > 0) ||
+      (Array.isArray(updatedTaskResult.followup_findings) && updatedTaskResult.followup_findings.length > 0) ||
+      (Array.isArray(updatedTaskResult.quality_notes) && updatedTaskResult.quality_notes.length > 0);
+    const newStatus = hasFollowups
+      ? CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS
+      : CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN;
+
+    updatedTaskResult = {
+      ...updatedTaskResult,
+      closure_decision: {
+        ...closureDecision,
+        status: newStatus,
+        reason: 'reconciled_by_finalizer_evidence',
+        reconciled_from: closureDecision.status || 'unknown',
+        auto_complete_allowed: true,
+        blocking_passed: true,
+        requires_human_decision: false,
+        task_status: 'completed',
+        blockers: [],
+        repairable_blockers: [],
+      },
+    };
+    updatedTaskStatus = 'completed';
+    reconciled = true;
+    reason = 'closure_decision normalized to ' + newStatus + ' (all evidence present, finalizer already agrees)';
+  }
+
+  // R3: Both decisions agree on completed but task.status is stale
+  if (!reconciled && closureSaysComplete && finalizerSaysComplete && !taskSaysComplete) {
+    updatedTaskStatus = 'completed';
+    reconciled = true;
+    reason = 'task.status normalized to completed (both decisions agree on completion)';
+  }
+
+  // R4: task.status completed + closure agrees, but finalizer is stale
+  if (!reconciled && taskSaysComplete && closureSaysComplete && !finalizerSaysComplete) {
+    updatedTaskResult = {
+      ...updatedTaskResult,
+      finalizer_decision: {
+        ...finalizerDecision,
+        status: 'completed',
+        reason: 'reconciled_by_task_status',
+        reconciled_from: finalizerDecision.status || 'unknown',
+        safe_to_auto_advance: true,
+        blockers: [],
+        repairable_blockers: [],
+        goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
+        queue_effect: { status: 'completed', unblock_dependents: true, hold_queue: false },
+      },
+    };
+    reconciled = true;
+    reason = 'finalizer_decision normalized to completed (task.status already completed, closure agrees)';
+  }
+
+  // R5: task.status completed + finalizer agrees, but closure is stale
+  if (!reconciled && taskSaysComplete && finalizerSaysComplete && !closureSaysComplete) {
+    const hasFollowups =
+      (Array.isArray(updatedTaskResult.followups) && updatedTaskResult.followups.length > 0) ||
+      (Array.isArray(updatedTaskResult.followup_findings) && updatedTaskResult.followup_findings.length > 0) ||
+      (Array.isArray(updatedTaskResult.quality_notes) && updatedTaskResult.quality_notes.length > 0);
+    const newStatus = hasFollowups
+      ? CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS
+      : CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN;
+
+    updatedTaskResult = {
+      ...updatedTaskResult,
+      closure_decision: {
+        ...closureDecision,
+        status: newStatus,
+        reason: 'reconciled_by_task_status',
+        reconciled_from: closureDecision.status || 'unknown',
+        auto_complete_allowed: true,
+        blocking_passed: true,
+        requires_human_decision: false,
+        task_status: 'completed',
+        blockers: [],
+        repairable_blockers: [],
+      },
+    };
+    reconciled = true;
+    reason = 'closure_decision normalized to ' + newStatus + ' (task.status already completed, finalizer agrees)';
+  }
+
+  if (!reconciled) {
+    return { taskStatus, taskResult, reconciled: false, reason: null };
+  }
+
+  return {
+    taskStatus: updatedTaskStatus,
+    taskResult: updatedTaskResult,
+    reconciled,
+    reason,
+  };
+}
