@@ -623,3 +623,96 @@ test('computePolicyQueueCounts reuses indexes instead of scanning all tasks for 
     });
   }
 });
+
+test('P0-MA11-R8: runtime_status queue counts reflect externally-mutated state file without restart', async () => {
+  // Regression: after an external process writes state.json (e.g. another
+  // Codex process converged a waiting_for_review task to completed),
+  // collectWorkerQueueCounts must return the updated counts without a
+  // process restart.  The fix tracks state file mtime and reloads from
+  // disk when mtime changes.
+  const store = await makeStateStore('r8-external-mutate-');
+  await store.load();
+
+  // Seed state with one waiting_for_review task (current_blockers=1)
+  await store.mutate((state) => {
+    state.tasks.push({
+      assignee: 'codex',
+      status: 'waiting_for_review',
+      id: 'task_r8_review',
+      result: { summary: 'Needs review' },
+      created_at: new Date(Date.now() - 60_000).toISOString(),
+    });
+  });
+
+  // Verify initial queue counts from in-process state
+  let before = await collectWorkerQueueCounts(store);
+  assert.equal(before.waiting_for_review, 1);
+  assert.equal(before.current_blockers, 1);
+  assert.equal(before.actionable_review, 1);
+
+  // Simulate an external mutation: write state.json directly, changing the
+  // waiting_for_review task to completed with convergence evidence.
+  // This mimics what applyDeterministicConvergence does in another process.
+  const externalState = JSON.parse(JSON.stringify(store.state));
+  const task = externalState.tasks.find(t => t.id === 'task_r8_review');
+  assert.ok(task, 'seed task must exist');
+  task.status = 'completed';
+  task.updated_at = new Date().toISOString();
+  task.ma11_convergence = { r6_converged: true, r6_reason: 'Regression test: deterministic convergence' };
+  task.result.verification = { passed: true };
+
+  // Write externally (simulate another process doing this)
+  const { writeFile } = await import('node:fs/promises');
+  await writeFile(store.statePath, JSON.stringify(externalState, null, 2), 'utf8');
+
+  // Now call collectWorkerQueueCounts - the mtime check in load() should
+  // detect the external change, reload state, rebuild indexes, and return
+  // current_blockers=0 without any restart.
+  const after = await collectWorkerQueueCounts(store);
+  assert.equal(after.completed, 1, 'converged task should be counted as completed');
+  assert.equal(after.waiting_for_review, 0, 'no more waiting_for_review after external convergence');
+  assert.equal(after.actionable_review, 0, 'actionable_review should drop to 0');
+  assert.equal(after.current_blockers, 0, 'current_blockers should drop from 1 to 0 without restart');
+
+  // Verify the state file was reloaded (store.state has the updated task)
+  const loadedTask = store.state.tasks.find(t => t.id === 'task_r8_review');
+  assert.equal(loadedTask?.status, 'completed', 'in-memory state should match file after external mutation');
+});
+
+test('P0-MA11-R8: runtime_status queue counts stay current after in-process mutate', async () => {
+  // Sanity-check that in-process mutations (via store.save/store.mutate)
+  // still update state version and invalidate the derived cache correctly.
+  const store = await makeStateStore('r8-inprocess-mutate-');
+  await store.load();
+
+  await store.mutate((state) => {
+    state.tasks.push({
+      assignee: 'codex',
+      status: 'waiting_for_review',
+      id: 'task_inprocess_review',
+      result: { summary: 'Needs review' },
+      created_at: new Date().toISOString(),
+    });
+  });
+
+  let counts = await collectWorkerQueueCounts(store);
+  assert.equal(counts.waiting_for_review, 1);
+  assert.equal(counts.current_blockers, 1);
+  assert.equal(counts.actionable_review, 1);
+
+  // In-process mutation — converge the task
+  await store.mutate((state) => {
+    const t = state.tasks.find(t => t.id === 'task_inprocess_review');
+    if (t) {
+      t.status = 'completed';
+      t.updated_at = new Date().toISOString();
+      t.result.verification = { passed: true };
+    }
+  });
+
+  counts = await collectWorkerQueueCounts(store);
+  assert.equal(counts.completed, 1);
+  assert.equal(counts.waiting_for_review, 0);
+  assert.equal(counts.actionable_review, 0);
+  assert.equal(counts.current_blockers, 0);
+});

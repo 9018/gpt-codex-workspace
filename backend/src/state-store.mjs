@@ -1,4 +1,4 @@
-import { copyFile, mkdir, readFile, writeFile, rename } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile, rename, stat } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -37,6 +37,7 @@ export class StateStore {
     this._mutationLock = null;
     this._stateVersion = 0;
     this._derivedCache = new Map();
+    this._stateMtime = 0;
     this._clearIndexes();
   }
 
@@ -103,16 +104,45 @@ export class StateStore {
     this._indexesReady = true;
   }
 
+  /** Refresh in-memory state from disk when the state file's mtime changed. */
+  async _tryReloadOnExternalChange() {
+    try {
+      const st = await stat(this.statePath);
+      if (Number.isFinite(st.mtimeMs) && st.mtimeMs > this._stateMtime) {
+        const raw = await readFile(this.statePath, "utf8");
+        this.state = JSON.parse(raw);
+        this._stateMtime = st.mtimeMs;
+        this._buildIndexes();
+        this._stateVersion += 1;
+        this.clearDerivedCache();
+      }
+    } catch {
+      // stat or readFile failed; keep in-memory state unchanged
+    }
+  }
+
   async load() {
     if (!this.state) {
       await this._migrateIfNeeded();
       try {
         this.state = JSON.parse(await readFile(this.statePath, "utf8"));
+        // Record mtime after initial load
+        try {
+          const st = await stat(this.statePath);
+          if (Number.isFinite(st.mtimeMs)) this._stateMtime = st.mtimeMs;
+        } catch {
+          // stat non-fatal
+        }
       } catch {
         this.state = this.defaultState();
         await this.save();
         return this.state;
       }
+    } else {
+      // Subsequent loads: check if the file was modified externally and
+      // reload if needed.  This ensures runtime diagnostics such as
+      // runtime_status see the latest state without requiring a restart.
+      await this._tryReloadOnExternalChange();
     }
     if (!this._indexesReady) this._buildIndexes();
     return this.state;
@@ -267,6 +297,12 @@ export class StateStore {
       this._buildIndexes();
       this._stateVersion += 1;
       this.clearDerivedCache();
+      // Record mtime after successful save so that subsequent
+      // _tryReloadOnExternalChange calls do not spuriously reload.
+      try {
+        const st = await stat(this.statePath);
+        if (Number.isFinite(st.mtimeMs)) this._stateMtime = st.mtimeMs;
+      } catch {}
     });
     // Reset on failure so subsequent saves still execute
     this._saveLock = chain.catch(() => {});
