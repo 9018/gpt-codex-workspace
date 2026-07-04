@@ -16,6 +16,7 @@
  * caller (e.g., worker loop or reconciliation service) applies them.
  */
 
+import { isCommitAncestorOfHead } from './current-blocker-policy.mjs';
 import { classifyFailureStructured } from "./failure-classifier.mjs";
 import { isRetryBudgetExhausted, getRetryExhaustedStatus } from "./task-retry.mjs";
 import {
@@ -166,14 +167,15 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
  */
 function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThresholdMs) {
   const actions = [];
-  // P0-MA11-R1: already-integrated commit with passing verification
+  // P0-MA11-R2: already-integrated commit with passing verification
+  // Check via delivery_recovery, integration status, or repo HEAD reachability
   if (task.result) {
     const result = task.result;
     const deliveryRecovery = result.delivery_result_recovery || result.delivery_recovery || null;
     const commit = result.commit || (deliveryRecovery && deliveryRecovery.commit) || null;
     const verificationPassed = result.verification?.passed === true || Boolean(result.tests);
     const isAlreadyIntegrated = (deliveryRecovery && deliveryRecovery.reason === 'already_integrated' && deliveryRecovery.recovered === true)
-      || (result.integration && (result.integration.merged === true || result.integration.status === 'already_integrated'));
+      || (result.integration && (result.integration.merged === true || ['merged', 'ff_only_merged', 'already_integrated', 'skipped', 'not_required'].includes(String(result.integration.status))));
 
     if (commit && verificationPassed && isAlreadyIntegrated) {
       actions.push({
@@ -181,6 +183,21 @@ function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThreshol
         currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
         recommendedStatus: TASK_STATUSES.COMPLETED,
         reason: 'Auto-sweep: task commit ' + commit.slice(0, 7) + ' already integrated, verification passed',
+        actions: [{ type: 'update_task_status', payload: { status: TASK_STATUSES.COMPLETED } }],
+      });
+      return actions;
+    }
+  }
+
+  // P0-MA11-R2: Also check repo HEAD reachability for legacy commits
+  if (task.result && task.result.commit && (task.result.verification?.passed === true || Boolean(task.result.tests))) {
+    const commitReachable = isCommitAncestorOfHead(task.result.commit, task.result.execution_cwd || process.cwd());
+    if (commitReachable) {
+      actions.push({
+        taskId: task.id,
+        currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
+        recommendedStatus: TASK_STATUSES.COMPLETED,
+        reason: 'Auto-sweep: task commit ' + task.result.commit.slice(0, 7) + ' reachable from repo HEAD, verification passed',
         actions: [{ type: 'update_task_status', payload: { status: TASK_STATUSES.COMPLETED } }],
       });
       return actions;
@@ -404,6 +421,61 @@ function computeMinBackoffMs(failureClass, attempt) {
   };
   const base = delays[failureClass] || 10_000;
   return Math.min(base * Math.pow(2, attempt), 300_000);
+}
+
+// ---------------------------------------------------------------------------
+// Integrated convergence: sweep stale states + complete queued agent_runs
+// ---------------------------------------------------------------------------
+
+function hasResultEvidence(task = {}) {
+  const result = task.result || {};
+  if (!result || Object.keys(result).length === 0) return false;
+  if (result.commit) return true;
+  if (Array.isArray(result.changed_files) && result.changed_files.length > 0) return true;
+  if (result.verification?.passed === true) return true;
+  if (result.reviewer_decision?.passed === true) return true;
+  if (result.integration?.merged === true) return true;
+  if (typeof result.summary === 'string' && result.summary.length > 10) return true;
+  if (result.delivery_result_recovery?.recovered === true) return true;
+  return false;
+}
+
+/**
+ * Perform a full convergence sweep: sweep stale task states AND complete
+ * queued agent_runs for tasks with terminal or result evidence.
+ */
+export async function convergeStaleTaskStates(store, { repoState, now, dryRun = false } = {}) {
+  const state = await store.load();
+  const tasks = state.tasks || [];
+  const sweepActions = sweepStaleTaskStates({ tasks, repoState, now });
+
+  const { completeQueuedAgentRuns } = await import('./agent-run-writeback.mjs');
+  const agentRunCompletions = [];
+  for (const task of tasks) {
+    if (!task || !task.id) continue;
+    if (!hasResultEvidence(task)) continue;
+    const result = task.result || {};
+    try {
+      const r = await completeQueuedAgentRuns(store, {
+        task_id: task.id,
+        goal_id: task.goal_id || null,
+        taskResult: result,
+      });
+      if (r.completed > 0) {
+        agentRunCompletions.push({ task_id: task.id, completed: r.completed, reasons: r.reasons });
+      }
+    } catch { /* non-blocking */ }
+  }
+
+  let applied = 0;
+  let errors = [];
+  if (!dryRun && sweepActions.length > 0) {
+    const applyResult = await applySweepActions(store, sweepActions);
+    applied = applyResult.applied;
+    errors = applyResult.errors || [];
+  }
+
+  return { sweepActions, agentRunCompletions, applied, errors };
 }
 
 // ---------------------------------------------------------------------------

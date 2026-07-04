@@ -2,6 +2,9 @@ import {
   RESULT_SHAPE_TYPES,
   classifyResultShape,
 } from './result-shape-classifier.mjs';
+import { execSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   TASK_STATUSES,
   isActiveExecutionStatus,
@@ -38,6 +41,21 @@ export function isVerificationNormalized(result) {
   if (verification.passed === true && contractV.blocking_passed === true) return true;
   if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
 
+  // P0-MA11-R2: Also check repo head reachability from legacy result.commit.
+  // If task.result.commit exists and is an ancestor of the canonical repo HEAD,
+  // the commit is already integrated even without delivery_result_recovery metadata.
+  if (result && result.commit && (result.verification?.passed === true || result.tests)) {
+    const commitReachable = isCommitAncestorOfHead(result.commit, result.execution_cwd || process.cwd());
+    if (commitReachable) {
+      result.delivery_result_recovery = result.delivery_result_recovery || {};
+      result.delivery_result_recovery.reason = 'already_integrated';
+      result.delivery_result_recovery.recovered = true;
+      result.delivery_result_recovery.commit = result.commit;
+      result.delivery_result_recovery.commit_integrated = true;
+      return true;
+    }
+  }
+
   // P0-MA11-R1: Check for delivery_result_recovery already_integrated
   // When a task has a commit that is already integrated in the canonical repo,
   // empty_commit/no_staged_changes from delivery recovery is not a real blocker.
@@ -60,7 +78,20 @@ export function classifyCurrentBlockerTask(task) {
 
   if (!isKnownTaskStatus(status)) return decision(CURRENT_WORK_DECISION_LABELS.UNKNOWN_STATUS, status, resultShape, false);
   if (isResolvedByOptions(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
-  
+
+  // P0-MA11-R2: Populate delivery_result_recovery from result.commit reachability
+  // so that isVerificationNormalized and downstream consumers can use it.
+  if (result && result.commit && (result.verification?.passed === true || result.tests)) {
+    const commitReachable = isCommitAncestorOfHead(result.commit, result.execution_cwd || process.cwd());
+    if (commitReachable) {
+      result.delivery_result_recovery = result.delivery_result_recovery || {};
+      result.delivery_result_recovery.reason = 'already_integrated';
+      result.delivery_result_recovery.recovered = true;
+      result.delivery_result_recovery.commit = result.commit;
+      result.delivery_result_recovery.commit_integrated = true;
+    }
+  }
+
   // P0-MA11: If canonical verification is normalized, stale review states are not blockers
   const verificationNormalized = isVerificationNormalized(result);
   
@@ -127,4 +158,23 @@ function decision(label, status, resultShape, blocksCurrentWork) {
     result_shape: resultShape,
     blocks_current_work: blocksCurrentWork,
   };
+}
+
+/**
+ * Check if a commit is an ancestor of the current HEAD in a git repo.
+ * Uses `git merge-base --is-ancestor` for the check. Returns false if the
+ * commit does not exist or is not reachable from HEAD, or if the git command
+ * fails (e.g., no git repo, commit not found).
+ */
+export function isCommitAncestorOfHead(commit, repoPath) {
+  if (!commit || typeof commit !== 'string' || commit.trim().length === 0) return false;
+  const safeCommit = commit.trim();
+  if (safeCommit.length < 7) return false;
+  try {
+    const cwd = repoPath && existsSync(repoPath) ? resolve(repoPath) : process.cwd();
+    execSync("git merge-base --is-ancestor " + safeCommit + " HEAD 2>/dev/null", { cwd, stdio: 'ignore', timeout: 5_000 });
+    return true;
+  } catch {
+    return false;
+  }
 }

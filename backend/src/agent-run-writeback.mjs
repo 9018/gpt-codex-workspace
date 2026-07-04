@@ -386,7 +386,7 @@ export async function completeQueuedAgentRuns(store, { task_id, goal_id, taskRes
           task_id, goal_id, role,
           status: 'completed',
           output_artifacts: buildRoleOutputArtifacts(role, taskResult),
-          summary: role + ": auto-completed from task result",
+          summary: role + ": skipped - no evidence",
         }, context);
         completed++;
         reasons.push(role + ": auto-completed from task result");
@@ -397,13 +397,13 @@ export async function completeQueuedAgentRuns(store, { task_id, goal_id, taskRes
           agent_run_id: run.id,
           status: 'skipped',
           output_artifacts: [],
-          summary: role + ": auto-completed from task result",
+          summary: role + ": skipped - no evidence",
         }, context);
         completed++;
         reasons.push(role + ": auto-completed from task result");
       }
     } catch (err) {
-      reasons.push(role + ": auto-completed from task result");
+      reasons.push(role + ": auto-completion error: " + (err.message || String(err)));
     }
   }
 
