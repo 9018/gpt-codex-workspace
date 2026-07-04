@@ -22,7 +22,7 @@
  *   e) Stale fallback noise with PROVIDER_EMPTY result shapes
  */
 
-import { collectWorkerQueueCounts, computePolicyQueueCounts, buildTaskQueueIndexes } from './worker-queue-counts.mjs';
+import { collectWorkerQueueCounts, computePolicyQueueCounts, buildTaskQueueIndexes, hasImplicitSuccessor, isPolicyCurrentBlockerTask, policyCurrentWorkDecision } from './worker-queue-counts.mjs';
 import {
   classifyCurrentBlockerTask,
   isVerificationNormalized,
@@ -39,7 +39,6 @@ import {
 import { classifyResultShape, RESULT_SHAPE_TYPES } from './result-shape-classifier.mjs';
 import { TYPED_REVIEW_STATES } from './task-review-status-taxonomy.mjs';
 import { convergeStaleTaskStates } from './stale-state-sweeper.mjs';
-import { hasImplicitSuccessor } from './worker-queue-counts.mjs';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -319,9 +318,8 @@ export async function generateBlockerManifest(store, { verbose = false } = {}) {
   const categoryCounts = {};
 
   for (const task of tasks) {
-    if (task.assignee !== 'codex') continue;
-    const decision = classifyCurrentBlockerTask(task);
-    if (!decision.blocks_current_work) continue;
+    if (!isPolicyCurrentBlockerTask(task, indexes)) continue;
+    const decision = policyCurrentWorkDecision(task, indexes);
 
     const category = classifyBlockerManifestCategory(task, decision, indexes);
     categoryCounts[category] = (categoryCounts[category] || 0) + 1;

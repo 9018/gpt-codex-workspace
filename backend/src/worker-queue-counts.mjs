@@ -179,10 +179,24 @@ function currentWorkDecision(task, indexes = buildTaskQueueIndexes([])) {
   return decision;
 }
 
+export function policyCurrentWorkDecision(task, indexes = buildTaskQueueIndexes([])) {
+  const decision = currentWorkDecision(task, indexes);
+  if (task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT) {
+    if (isResolvedLegacyTerminalTask(task)) return { ...decision, blocks_current_work: false };
+    if (hasImplicitSuccessor(task, indexes)) return { ...decision, blocks_current_work: false };
+  }
+  return decision;
+}
+
 function isFailedCurrentWorkTask(task, indexes = buildTaskQueueIndexes([])) {
   if (!(task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT)) return false;
-  if (isResolvedLegacyTerminalTask(task)) return false;
-  return currentWorkDecision(task, indexes).blocks_current_work;
+  return policyCurrentWorkDecision(task, indexes).blocks_current_work === true;
+}
+
+export function isPolicyCurrentBlockerTask(task, indexes = buildTaskQueueIndexes([])) {
+  if (task?.assignee !== "codex" || !COUNTED_STATUSES.has(task.status)) return false;
+  if (task.status === TASK_STATUSES.COMPLETED) return false;
+  return policyCurrentWorkDecision(task, indexes).blocks_current_work === true;
 }
 
 function isResolvedLegacyFailedTask(task, indexes = buildTaskQueueIndexes([])) {
@@ -202,7 +216,7 @@ export function computePolicyQueueCounts(tasks = [], indexes = buildTaskQueueInd
       if (isFailedCurrentWorkTask(task, indexes)) counts.failed += 1;
       continue;
     }
-    if (currentWorkDecision(task, indexes).blocks_current_work) counts[task.status] += 1;
+    if (isPolicyCurrentBlockerTask(task, indexes)) counts[task.status] += 1;
   }
   return counts;
 }

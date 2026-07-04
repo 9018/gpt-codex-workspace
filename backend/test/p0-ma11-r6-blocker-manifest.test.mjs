@@ -331,6 +331,50 @@ test('generateBlockerManifest: produces manifest with correct structure', async 
   assert.ok(result.beforeCounts.current_blockers >= 2, 'current_blockers >= 2');
 });
 
+
+
+test('generateBlockerManifest: uses queue policy and excludes resolved terminal records', async () => {
+  const testTasks = [
+    makeTask({
+      id: 'r6_policy_resolved_terminal',
+      status: TASK_STATUSES.FAILED,
+      result: {
+        changed_files: ['backend/src/old-terminal.mjs'],
+        verification: { passed: true },
+      },
+    }),
+    makeTask({
+      id: 'r6_policy_current_terminal',
+      status: TASK_STATUSES.FAILED,
+      result: { changed_files: ['backend/src/current-terminal.mjs'] },
+    }),
+    makeTask({
+      id: 'r6_policy_review',
+      status: TASK_STATUSES.WAITING_FOR_REVIEW,
+      result: { summary: 'needs review' },
+    }),
+  ];
+  const mockStore = {
+    async load() { return { tasks: testTasks }; },
+    _derivedCache: new Map(),
+    getOrBuildDerived(key, builder) { return builder(); },
+    statePath: '/tmp/test-state.json',
+  };
+
+  const { generateBlockerManifest } = await import('../src/blocker-manifest.mjs');
+  const result = await generateBlockerManifest(mockStore);
+
+  assert.equal(result.beforeCounts.current_blockers, 2);
+  assert.equal(result.manifest.length, 2);
+  assert.equal(result.categories[MANIFEST_CATEGORIES.UNRESOLVED_FAILURE], 1);
+  assert.equal(result.categories[MANIFEST_CATEGORIES.TRUE_HUMAN_REVIEW], 1);
+  assert.equal(
+    Object.values(result.categories).reduce((sum, value) => sum + value, 0),
+    result.beforeCounts.current_blockers,
+  );
+  assert.ok(!result.manifest.some((entry) => entry.task_id === 'r6_policy_resolved_terminal'));
+});
+
 // ---------------------------------------------------------------------------
 // 4. Deterministic convergence effect
 // ---------------------------------------------------------------------------
