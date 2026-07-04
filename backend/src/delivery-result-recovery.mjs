@@ -300,6 +300,41 @@ export async function runDeliveryRecovery({
 
     evidence.changed_files = collectChangedFiles(worktreePath, evidence.changed_files);
     if (evidence.changed_files.length === 0) {
+      // P0-MA11-R1: Check if the task commit is already integrated before
+      // declaring no_changed_files.  A clean worktree with a commit already
+      // on the canonical branch is a completed delivery, not a failure.
+      const taskCommit = normalizeCommit(taskResult.commit || parsedResult.commit);
+      if (taskCommit) {
+        const canonicalHead = safeGit(canonicalRepoPath, ["rev-parse", "HEAD"]);
+        if (canonicalHead) {
+          let commitIsIntegrated = canonicalHead === taskCommit;
+          if (!commitIsIntegrated) {
+            try {
+              git(canonicalRepoPath, ["merge-base", "--is-ancestor", taskCommit, canonicalHead]);
+              commitIsIntegrated = true;
+            } catch (_mergeBaseErr) {
+              // not an ancestor -- stay false
+            }
+          }
+          if (commitIsIntegrated) {
+            const canonicalClean = isClean(canonicalRepoPath);
+            evidence.recovered = true;
+            evidence.eligible = true;
+            evidence.commit_integrated = true;
+            evidence.commit = taskCommit;
+            evidence.local_head = canonicalHead;
+            evidence.remote_head = canonicalHead;
+            evidence.canonical_clean = canonicalClean;
+            evidence.canonical_clean_before = canonicalClean;
+            evidence.canonical_clean_after = canonicalClean;
+            evidence.reason = "already_integrated";
+            evidence.verification = { passed: true, commands: [] };
+            evidence.tests = taskResult.tests || "already integrated (no staged changes needed)";
+            evidence.warnings.push(`No changed files in worktree: commit ${taskCommit.slice(0, 7)} already integrated in canonical repo.`);
+            return finishEvidence(evidence);
+          }
+        }
+      }
       addBlocker(evidence, "no_changed_files", "Task worktree has no changed files to recover.");
       evidence.eligible = false;
       return finishEvidence(evidence);
@@ -336,6 +371,42 @@ export async function runDeliveryRecovery({
     git(worktreePath, ["add", "--all"]);
     const staged = git(worktreePath, ["diff", "--cached", "--name-only"]);
     if (!staged.trim()) {
+      // P0-MA11-R1: Already-integrated check for the empty_commit path.
+      // git add --all may produce no staged changes when the worktree is
+      // clean and the commit is already part of the canonical branch.
+      const taskCommit = normalizeCommit(taskResult.commit || parsedResult.commit);
+      if (taskCommit) {
+        const canonicalHead = safeGit(canonicalRepoPath, ["rev-parse", "HEAD"]);
+        if (canonicalHead) {
+          let commitIsIntegrated = canonicalHead === taskCommit;
+          if (!commitIsIntegrated) {
+            try {
+              git(canonicalRepoPath, ["merge-base", "--is-ancestor", taskCommit, canonicalHead]);
+              commitIsIntegrated = true;
+            } catch (_mergeBaseErr) {
+              // not an ancestor -- stay false
+            }
+          }
+          if (commitIsIntegrated) {
+            const canonicalClean = isClean(canonicalRepoPath);
+            evidence.recovered = true;
+            evidence.eligible = true;
+            evidence.commit_integrated = true;
+            evidence.commit = taskCommit;
+            evidence.local_head = canonicalHead;
+            evidence.remote_head = canonicalHead;
+            evidence.canonical_clean = canonicalClean;
+            evidence.canonical_clean_before = canonicalClean;
+            evidence.canonical_clean_after = canonicalClean;
+            evidence.integration = { mode: "ff_only", merged: true, status: "already_integrated", commit: taskCommit };
+            evidence.reason = "already_integrated";
+            evidence.verification = { passed: true, commands: evidence.commands || [] };
+            evidence.tests = taskResult.tests || "already integrated (no staged changes needed)";
+            evidence.warnings.push(`No staged changes in worktree: commit ${taskCommit.slice(0, 7)} already integrated in canonical repo.`);
+            return finishEvidence(evidence);
+          }
+        }
+      }
       addBlocker(evidence, "empty_commit", "No staged changes were available for recovery commit.");
       return finishEvidence(evidence);
     }

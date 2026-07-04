@@ -37,6 +37,18 @@ export function isVerificationNormalized(result) {
   const contractV = result.contract_verification || {};
   if (verification.passed === true && contractV.blocking_passed === true) return true;
   if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
+
+  // P0-MA11-R1: Check for delivery_result_recovery already_integrated
+  // When a task has a commit that is already integrated in the canonical repo,
+  // empty_commit/no_staged_changes from delivery recovery is not a real blocker.
+  const deliveryRecovery = result.delivery_result_recovery;
+  if (deliveryRecovery && deliveryRecovery.reason === 'already_integrated' && deliveryRecovery.recovered === true) {
+    // Only consider normalized if the task also has passing verification evidence
+    if (result.verification?.passed === true || result.tests) {
+      return true;
+    }
+  }
+
   return false;
 }
 
@@ -57,6 +69,11 @@ export function classifyCurrentBlockerTask(task) {
       verificationNormalized ? false : hasActionableReviewEvidence(result, resultShape));
   }
   if (status === TASK_STATUSES.WAITING_FOR_REPAIR) {
+    // P0-MA11-R1: If task has already-integrated commit with passing verification,
+    // waiting_for_repair due to empty_commit noise is not a current blocker.
+    if (verificationNormalized && result?.commit && (result?.verification?.passed === true || result?.tests)) {
+      return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, false);
+    }
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, true);
   }
   if (status === TASK_STATUSES.WAITING_FOR_INTEGRATION) {

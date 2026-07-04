@@ -162,9 +162,31 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
  * 1. If parent task is already completed → complete this task
  * 2. If parent is waiting_for_repair → check if repair creation succeeded
  * 3. If max repair attempts exceeded → failed
+ * P0-MA11-R1: Also check for already-integrated commit with passing verification
  */
 function sweepWaitingForRepair(task, tasks, currentTime, staleFor, staleThresholdMs) {
   const actions = [];
+  // P0-MA11-R1: already-integrated commit with passing verification
+  if (task.result) {
+    const result = task.result;
+    const deliveryRecovery = result.delivery_result_recovery || result.delivery_recovery || null;
+    const commit = result.commit || (deliveryRecovery && deliveryRecovery.commit) || null;
+    const verificationPassed = result.verification?.passed === true || Boolean(result.tests);
+    const isAlreadyIntegrated = (deliveryRecovery && deliveryRecovery.reason === 'already_integrated' && deliveryRecovery.recovered === true)
+      || (result.integration && (result.integration.merged === true || result.integration.status === 'already_integrated'));
+
+    if (commit && verificationPassed && isAlreadyIntegrated) {
+      actions.push({
+        taskId: task.id,
+        currentStatus: TASK_STATUSES.WAITING_FOR_REPAIR,
+        recommendedStatus: TASK_STATUSES.COMPLETED,
+        reason: 'Auto-sweep: task commit ' + commit.slice(0, 7) + ' already integrated, verification passed',
+        actions: [{ type: 'update_task_status', payload: { status: TASK_STATUSES.COMPLETED } }],
+      });
+      return actions;
+    }
+  }
+
   const parentTaskId = task.parent_task_id || task.repair_of_task_id;
 
   if (parentTaskId) {

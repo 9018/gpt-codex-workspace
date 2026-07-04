@@ -474,7 +474,11 @@ function hasVerifiedDeliveryResultRecovery(taskResult = {}, repoState = {}) {
   const recovery = taskResult.delivery_result_recovery || null;
   if (!recovery || recovery.passed !== true) return false;
   const recoveryReason = String(recovery.reason || "");
-  if (recoveryReason !== "result_missing_but_verified_commit" && recoveryReason !== "delivery_result_writeback_missing") return false;
+  // P0-MA11-R1: Also recognize already_integrated — the commit is already on
+  // the canonical branch so the worktree is clean and no recovery is needed.
+  if (recoveryReason !== "result_missing_but_verified_commit" 
+      && recoveryReason !== "delivery_result_writeback_missing"
+      && recoveryReason !== "already_integrated") return false;
 
   const verification = taskResult.verification || recovery.verification || {};
   const commands = Array.isArray(verification.commands) ? verification.commands : [];

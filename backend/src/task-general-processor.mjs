@@ -25,7 +25,7 @@ import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
-import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun } from "./agent-run-writeback.mjs";
+import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writePlannerAgentRun, completeQueuedAgentRuns } from "./agent-run-writeback.mjs";
 import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
@@ -153,6 +153,34 @@ function clearResolvedDeliveryFindings(findings = []) {
 
 function applySuccessfulDeliveryRecovery(taskResult, recovery, summary) {
   const recoveredSummary = recovery.summary || summary || taskResult.summary || "Recovered Codex delivery result from dirty worktree.";
+  // P0-MA11-R1: For already_integrated recovery, preserve the original commit
+  // and integration status rather than overwriting with a new recovery merge.
+  if (recovery.reason === "already_integrated") {
+    const alreadyIntegrated = {
+      ...taskResult,
+      kind: "codex_executed",
+      summary: recoveredSummary,
+      commit: recovery.commit || taskResult.commit,
+      local_head: recovery.local_head || taskResult.local_head,
+      remote_head: recovery.remote_head || taskResult.remote_head,
+      tests: recovery.tests || taskResult.tests,
+      verification: recovery.verification || taskResult.verification,
+      integration: { ...(taskResult.integration || {}), ...(recovery.integration || {}), status: "already_integrated", merged: true, required: false },
+      delivery_result_recovery: recovery,
+      reviewer_decision: { ...(taskResult.reviewer_decision || {}), status: "accepted", passed: true },
+      acceptance_findings: clearResolvedDeliveryFindings(taskResult.acceptance_findings || []),
+      warnings: Array.isArray(taskResult.warnings) ? [...taskResult.warnings, "Delivery already integrated: " + (recovery.warnings?.[0] || "no staged changes needed")] : (taskResult.warnings || []),
+      followups: Array.isArray(taskResult.followups) ? taskResult.followups : [],
+      failure_class: null,
+      convergence: { ...(taskResult.convergence || {}), nextStatus: "completed", closureReason: "already_integrated" },
+    };
+    if (Array.isArray(recovery.warnings)) {
+      alreadyIntegrated.warnings = uniqueStrings([...alreadyIntegrated.warnings, ...recovery.warnings]);
+    } else {
+      alreadyIntegrated.warnings = uniqueStrings(alreadyIntegrated.warnings);
+    }
+    return alreadyIntegrated;
+  }
   return {
     ...taskResult,
     kind: "codex_executed",
@@ -320,6 +348,19 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         codex_entry: { path: workspaceFiles.codex_entry_md, required: true },
         context_bundle: { path: workspaceFiles.context_bundle_md, required: true },
         context_manifest: { path: workspaceFiles.context_manifest_json, required: true },
+      },
+    }, context).catch(() => {});
+
+    // P0-MA11-R1: Write planner agent_run after context is prepared
+    // Planner's work is represented by the existing goal files.
+    await writePlannerAgentRun(store, {
+      task_id: task.id,
+      goal_id: goal.id,
+      planEvidence: {
+        codex_entry: { path: workspaceFiles.codex_entry_md, required: true },
+        context_bundle: { path: workspaceFiles.context_bundle_md || '', present: Boolean(workspaceFiles.context_bundle_md) },
+        context_manifest: { path: workspaceFiles.context_manifest_json || '', present: Boolean(workspaceFiles.context_manifest_json) },
+        goal_prompt: { path: workspaceFiles.goal_md || '', present: Boolean(workspaceFiles.goal_md) },
       },
     }, context).catch(() => {});
   }
@@ -1091,6 +1132,27 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   }, context).catch(() => {});
 
 
+
+  // P0-MA11-R1: Complete any queued agent runs from task result evidence before gate check
+  // Tasks that already have a commit and passing tests should not keep agent_runs queued.
+  if (taskResult && taskResult.commit && taskResult.verification?.passed === true) {
+    await completeQueuedAgentRuns(store, {
+      task_id: task.id,
+      goal_id: goal?.id,
+      taskResult,
+    }, context).catch(() => {});
+  } else if (!isLegacyTask(task)) {
+    // For any non-legacy task that has passed the execution phase, try to
+    // complete queued agent runs even without a commit (might be noop/sync).
+    const hasResultEvidence = taskResult && Object.keys(taskResult).length > 0;
+    if (hasResultEvidence) {
+      await completeQueuedAgentRuns(store, {
+        task_id: task.id,
+        goal_id: goal?.id,
+        taskResult,
+      }, context).catch(() => {});
+    }
+  }
 
   // P0-MA4: Pipeline gate check before closure
   {
