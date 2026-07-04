@@ -1131,6 +1131,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     integrationResult: taskResult.integration || {},
   }, context).catch(() => {});
 
+  // P0-MA12-G1: Write finalizer agent_run with result artifact before pipeline gate evaluation
+  // so evaluateTaskPipelineGates sees the completed finalizer with kind=result artifact
+  // and does not generate a false pipeline_gate_blocking finding.
+  // Agent run writeback: finalizer
+  await writeFinalizerAgentRun(store, {
+    task_id: task.id,
+    goal_id: goal?.id,
+    taskResult,
+    taskStatus,
+  }, context).catch(() => {});
+
+
 
 
   // P0-MA11-R1: Complete any queued agent runs from task result evidence before gate check
@@ -1167,14 +1179,6 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       taskResult = gateResult.taskResult;
     }
   }
-
-  // Agent run writeback: finalizer
-  await writeFinalizerAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    taskResult,
-    taskStatus,
-  }, context).catch(() => {});
 
   return finalizeCodexTaskRunFn({
     store,

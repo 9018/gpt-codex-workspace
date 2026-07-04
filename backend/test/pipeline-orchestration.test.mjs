@@ -285,3 +285,189 @@ test("pipeline-orch: getPipelineDiagnostics returns correct shape", async () => 
   assert.ok(taskResult.gate_status, "gate_status present for task_id");
   assert.ok(Array.isArray(taskResult.recent_agent_runs));
 });
+
+
+// ===========================================================================
+// Tests: P0-MA12-G1 Finalizer result artifact gate
+// ===========================================================================
+
+test("pipeline-orch: finalizer completed with result artifact satisfies gate", async () => {
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_finalizer_result_${Date.now()}`;
+
+  // Create all gate agent runs so gates_satisfied can be true
+  // Create a finalizer agent run with result artifact
+  const created = await createAgentRun(store, { task_id: taskId, goal_id: "g1", role: "finalizer", status: "queued" });
+  await completeAgentRun(store, {
+    agent_run_id: created.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "result", path: null, status: "completed" }],
+  });
+
+  // Create other gate roles so the pipeline is complete
+  const gateRoles = ["planner", "builder", "verifier", "reviewer", "integrator"];
+  const roleArtifact = {
+    planner: { kind: "plan", path: null },
+    builder: { kind: "change_summary", path: null, changed_count: 1 },
+    verifier: { kind: "verification", path: null, passed: true },
+    reviewer: { kind: "reviewer_decision", path: null, passed: true },
+    integrator: { kind: "integration", path: null, status: "merged", merged: true },
+  };
+  for (const role of gateRoles) {
+    const r = await createAgentRun(store, { task_id: taskId, goal_id: "g1", role, status: "queued" });
+    await completeAgentRun(store, {
+      agent_run_id: r.agent_run.id,
+      status: "completed",
+      output_artifacts: [roleArtifact[role]],
+    });
+  }
+
+  const result = await evaluateTaskPipelineGates(store, { task_id: taskId });
+  assert.equal(result.gates_satisfied, true, "All gates should be satisfied when finalizer has result artifact");
+
+  const finalizerGate = (result.gates || []).find(g => g.contract_role === "finalizer");
+  assert.ok(finalizerGate, "finalizer gate should exist");
+  assert.equal(finalizerGate.satisfied, true, "finalizer gate should be satisfied");
+  assert.ok(Array.isArray(finalizerGate.missing_artifacts));
+  assert.equal(finalizerGate.missing_artifacts.length, 0, "no missing artifacts when result artifact is present");
+});
+
+test("pipeline-orch: finalizer completed without result artifact blocks gate", async () => {
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_finalizer_no_result_${Date.now()}`;
+  // Create a finalizer agent run
+  const created = await createAgentRun(store, { task_id: taskId, goal_id: "g1", role: "finalizer", status: "queued" });
+  // Complete it WITHOUT result artifact (just change_summary kind, not 'result')
+  await completeAgentRun(store, {
+    agent_run_id: created.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "change_summary", path: null }],
+  });
+
+  const result = await evaluateTaskPipelineGates(store, { task_id: taskId });
+  const finalizerGate = (result.gates || []).find(g => g.contract_role === "finalizer");
+  assert.ok(finalizerGate, "finalizer gate should exist");
+  assert.equal(finalizerGate.satisfied, false, "finalizer gate should NOT be satisfied without result artifact");
+  assert.ok(finalizerGate.missing_artifacts.includes("result"),
+    "result should be in missing_artifacts");
+});
+
+test("pipeline-orch: stale finalizer-result pipeline_gate_blocking finding is cleared after artifact writeback", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_stale_clear_${Date.now()}`;
+  const task = { id: taskId, status: "completed" };
+
+  // Create a taskResult with stale pipeline_gate_blocking findings for finalizer
+  const taskResult = {
+    acceptance_findings: [
+      {
+        severity: "blocker",
+        code: "pipeline_gate_blocking",
+        message: "finalizer: missing required artifacts (result)",
+        source: "pipeline_orchestration",
+      },
+      {
+        severity: "blocker",
+        code: "pipeline_gate_blocking",
+        message: "verifier: gate not satisfied (status=completed)",
+        source: "pipeline_orchestration",
+      },
+    ],
+  };
+
+  // Create a completed finalizer agent run WITH result artifact
+  const created = await createAgentRun(store, { task_id: taskId, goal_id: "g1", role: "finalizer", status: "queued" });
+  await completeAgentRun(store, {
+    agent_run_id: created.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "result", path: null, status: "completed" }],
+  });
+
+  // Also create other agent runs so the pipeline is not empty
+  for (const role of ["builder", "verifier", "reviewer", "integrator"]) {
+    const r = await createAgentRun(store, { task_id: taskId, goal_id: "g1", role, status: "queued" });
+    const resultArtifact = role === "verifier" ? { kind: "verification", path: null, passed: true }
+      : role === "reviewer" ? { kind: "reviewer_decision", path: null, passed: true }
+      : role === "builder" ? { kind: "change_summary", path: null, changed_count: 1 }
+      : { kind: "integration", path: null, status: "merged", merged: true };
+    await completeAgentRun(store, { agent_run_id: r.agent_run.id, status: "completed", output_artifacts: [resultArtifact] });
+  }
+
+  const result = await applyPipelineGateBeforeClosure(store, task, taskResult, "completed", { allowMissingGates: false });
+
+  // The stale finalizer finding should be cleared
+  const remainingFinalizerFindings = (result.taskResult.acceptance_findings || []).filter(
+    f => f && f.code === "pipeline_gate_blocking" && f.message && f.message.startsWith("finalizer:")
+  );
+  assert.equal(remainingFinalizerFindings.length, 0,
+    "stale finalizer-result findings should be cleared when finalizer now has result artifact");
+});
+
+test("pipeline-orch: finalizer gate is satisfied when finalizer is skipped", async () => {
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_finalizer_skipped_${Date.now()}`;
+  // Create finalizer agent run that is skipped
+  const created = await createAgentRun(store, {
+    task_id: taskId, goal_id: "g1", role: "finalizer", status: "queued"
+  });
+  await completeAgentRun(store, {
+    agent_run_id: created.agent_run.id,
+    status: "skipped",
+    output_artifacts: [],
+  });
+
+  const result = await evaluateTaskPipelineGates(store, { task_id: taskId });
+  const finalizerGate = (result.gates || []).find(g => g.contract_role === "finalizer");
+  assert.ok(finalizerGate, "finalizer gate should exist");
+  assert.equal(finalizerGate.satisfied, true, "finalizer gate should be satisfied when skipped");
+});
+
+test("pipeline-orch: writeFinalizerAgentRun before gate check means gate sees result artifact", async () => {
+  // This test validates the core fix: when writeFinalizerAgentRun is called
+  // before evaluateTaskPipelineGates, the finalizer gate sees the result artifact.
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const { writeFinalizerAgentRun } = await import("../src/agent-run-writeback.mjs");
+  const { listAgentRuns } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_order_test_${Date.now()}`;
+
+  // Write finalizer agent run (simulating the new order: writeback before gate check)
+  await writeFinalizerAgentRun(store, {
+    task_id: taskId,
+    goal_id: "g1",
+    taskResult: { summary: "Task completed", status: "completed" },
+    taskStatus: "completed",
+  });
+
+  // Verify the finalizer run has the result artifact
+  const runs = await listAgentRuns(store, { task_id: taskId, limit: 10 });
+  const finalizerRun = runs.agent_runs.find(r => r.role === "finalizer");
+  assert.ok(finalizerRun, "finalizer run should exist after writeFinalizerAgentRun");
+  assert.equal(finalizerRun.status, "completed", "finalizer should be completed");
+  const hasResultArtifact = (finalizerRun.output_artifacts || []).some(
+    a => a && (a.kind === "result" || (typeof a === "object" && a.kind === "result"))
+  );
+  assert.equal(hasResultArtifact, true, "finalizer output_artifacts should include kind=result");
+
+  // Now evaluate gates - the finalizer gate should be satisfied
+  const gateResult = await evaluateTaskPipelineGates(store, { task_id: taskId });
+  const finalizerGate = (gateResult.gates || []).find(g => g.contract_role === "finalizer");
+  assert.ok(finalizerGate, "finalizer gate should be present");
+  assert.equal(finalizerGate.satisfied, true,
+    "finalizer gate should be satisfied after writeFinalizerAgentRun");
+  assert.equal(finalizerGate.missing_artifacts.length, 0,
+    "no missing artifacts when finalizer has result artifact");
+});

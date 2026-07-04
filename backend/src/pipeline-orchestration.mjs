@@ -268,6 +268,18 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
     return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: true };
   }
 
+  // P0-MA12-G1: Reconcile stale pipeline_gate_blocking finalizer-result findings.
+  // Before P0-MA12-G1, writeFinalizerAgentRun was called after applyPipelineGateBeforeClosure,
+  // so the finalizer gate was evaluated without the result artifact.
+  // If a finalizer gate was previously blocked but is now satisfied (because we now write
+  // the finalizer agent_run before gate evaluation), clear any stale findings.
+  const finalizerGate = (gateResult.gates || []).find(g => g.contract_role === "finalizer");
+  if (finalizerGate && finalizerGate.satisfied && Array.isArray(taskResult.acceptance_findings)) {
+    taskResult.acceptance_findings = taskResult.acceptance_findings.filter(f =>
+      !(f && f.code === "pipeline_gate_blocking" && f.message && f.message.startsWith("finalizer:"))
+    );
+  }
+
   // P0-MA11: Only check BLOCKING_GATE_ROLES (verifier, reviewer, finalizer, integrator)
   // context_curator and planner are informational, not blocking
   // If no agent runs exist and allowMissingGates=false, always block
