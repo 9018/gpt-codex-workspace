@@ -61,6 +61,10 @@ function makeStaleReviewFinalizer() {
   };
 }
 
+const buildCompletedClosure = makeCompletedClosureDecision;
+const buildCompletedFinalizer = makeCompletedFinalizer;
+const buildStaleReviewFinalizer = makeStaleReviewFinalizer;
+
 function buildFullEvidence(overrides = {}) {
   return {
     status: 'completed',
