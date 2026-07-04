@@ -1,9 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, writeFileSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { execFileSync } from 'node:child_process';
 
 import {
   CURRENT_WORK_DECISION_LABELS,
   classifyCurrentBlockerTask,
+  isCommitAncestorOfHead,
 } from '../src/current-blocker-policy.mjs';
 
 test('exports frozen canonical current-work decision labels', () => {
@@ -145,4 +150,32 @@ test('classifyCurrentBlockerTask is deterministic and does not mutate input', ()
     status: 'failed',
     result: { changed_files: ['backend/src/a.mjs'] },
   });
+});
+
+
+test('isCommitAncestorOfHead falls back from stale worktree to canonical repo path', () => {
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-current-blocker-'));
+  const repo = join(root, 'repo');
+  const other = join(root, 'other');
+  mkdirSync(repo);
+  mkdirSync(other);
+  execFileSync('git', ['init'], { cwd: repo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: repo });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: repo });
+  writeFileSync(join(repo, 'a.txt'), 'a\n');
+  execFileSync('git', ['add', 'a.txt'], { cwd: repo });
+  execFileSync('git', ['commit', '-m', 'a'], { cwd: repo, stdio: 'ignore' });
+  const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: repo, encoding: 'utf8' }).trim();
+  execFileSync('git', ['init'], { cwd: other, stdio: 'ignore' });
+  const previousDefaultRepoPath = process.env.GPTWORK_DEFAULT_REPO_PATH;
+  try {
+    process.env.GPTWORK_DEFAULT_REPO_PATH = repo;
+    assert.equal(isCommitAncestorOfHead(commit.slice(0, 7), other), true);
+  } finally {
+    if (previousDefaultRepoPath === undefined) {
+      delete process.env.GPTWORK_DEFAULT_REPO_PATH;
+    } else {
+      process.env.GPTWORK_DEFAULT_REPO_PATH = previousDefaultRepoPath;
+    }
+  }
 });

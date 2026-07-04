@@ -170,11 +170,18 @@ export function isCommitAncestorOfHead(commit, repoPath) {
   if (!commit || typeof commit !== 'string' || commit.trim().length === 0) return false;
   const safeCommit = commit.trim();
   if (safeCommit.length < 7) return false;
-  try {
-    const cwd = repoPath && existsSync(repoPath) ? resolve(repoPath) : process.cwd();
-    execSync("git merge-base --is-ancestor " + safeCommit + " HEAD 2>/dev/null", { cwd, stdio: 'ignore', timeout: 5_000 });
-    return true;
-  } catch {
-    return false;
+  const candidates = [];
+  if (repoPath && existsSync(repoPath)) candidates.push(resolve(repoPath));
+  if (process.env.GPTWORK_DEFAULT_REPO_PATH && existsSync(process.env.GPTWORK_DEFAULT_REPO_PATH)) {
+    candidates.push(resolve(process.env.GPTWORK_DEFAULT_REPO_PATH));
   }
+  candidates.push(process.cwd());
+
+  for (const cwd of [...new Set(candidates)]) {
+    try {
+      execSync("git merge-base --is-ancestor " + safeCommit + " HEAD 2>/dev/null", { cwd, stdio: 'ignore', timeout: 5_000 });
+      return true;
+    } catch {}
+  }
+  return false;
 }
