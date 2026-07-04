@@ -143,6 +143,41 @@ test('classifyBlockerManifestCategory: waiting_for_repair → deterministic_repa
   assert.equal(cat, MANIFEST_CATEGORIES.DETERMINISTIC_REPAIR_NEEDED);
 });
 
+
+
+test('classifyBlockerManifestCategory: stale waiting_for_review with merged integration → auto_terminalizable', () => {
+  const task = makeTask({
+    status: TASK_STATUSES.WAITING_FOR_REVIEW,
+    result: {
+      changed_files: ['backend/src/example.mjs'],
+      verification: { passed: true },
+      integration: { merged: true },
+      acceptance_findings: [
+        { severity: 'blocker', code: 'pipeline_gate_blocking', message: 'stale finalizer result finding' },
+      ],
+    },
+  });
+  const decision = classifyCurrentBlockerTask(task);
+  assert.equal(decision.blocks_current_work, true);
+  const cat = classifyBlockerManifestCategory(task, decision, emptyIndexes());
+  assert.equal(cat, MANIFEST_CATEGORIES.AUTO_TERMINALIZABLE);
+});
+
+test('classifyBlockerManifestCategory: waiting_for_review without completion evidence remains review', () => {
+  const task = makeTask({
+    status: TASK_STATUSES.WAITING_FOR_REVIEW,
+    result: {
+      summary: 'needs real review',
+      acceptance_findings: [
+        { severity: 'blocker', code: 'pipeline_gate_blocking', message: 'finalizer result missing' },
+      ],
+    },
+  });
+  const decision = classifyCurrentBlockerTask(task);
+  const cat = classifyBlockerManifestCategory(task, decision, emptyIndexes());
+  assert.equal(cat, MANIFEST_CATEGORIES.TRUE_HUMAN_REVIEW);
+});
+
 // ---------------------------------------------------------------------------
 // 2. canDeterministicallyConverge
 // ---------------------------------------------------------------------------
@@ -198,6 +233,21 @@ test('canDeterministicallyConverge: integration merged → can converge', () => 
   });
   const result = canDeterministicallyConverge(task, emptyIndexes());
   assert.equal(result.canConverge, true);
+});
+
+
+
+test('canDeterministicallyConverge: integration merged boolean → can converge', () => {
+  const task = makeTask({
+    status: TASK_STATUSES.WAITING_FOR_REVIEW,
+    result: {
+      integration: { merged: true },
+      verification: { passed: true },
+    },
+  });
+  const result = canDeterministicallyConverge(task, emptyIndexes());
+  assert.equal(result.canConverge, true);
+  assert.match(result.reason, /merged=true/);
 });
 
 test('canDeterministicallyConverge: no evidence → cannot converge', () => {

@@ -107,12 +107,20 @@ export function classifyBlockerManifestCategory(task, decision, indexes) {
     return MANIFEST_CATEGORIES.AUTO_TERMINALIZABLE;
   }
 
-  // 4. True human review statuses (status-level, must come before result-shape checks)
+  // 4. Deterministic convergence evidence must outrank stale review/failure
+  // classifications.  A task can carry an old review/gate finding even after
+  // its commit/integration/verification evidence proves it is safe to close.
+  const deterministic = canDeterministicallyConverge(task, indexes);
+  if (deterministic.canConverge) {
+    return MANIFEST_CATEGORIES.AUTO_TERMINALIZABLE;
+  }
+
+  // 5. True human review statuses (status-level, after deterministic evidence)
   if (TRUE_HUMAN_REVIEW_STATUSES.has(status)) {
     return MANIFEST_CATEGORIES.TRUE_HUMAN_REVIEW;
   }
 
-  // 5. unresolved_failure: failed with real evidence and no implicit successor
+  // 6. unresolved_failure: failed with real evidence and no implicit successor
   if (isFailedTerminalStatus(status)) {
     const hasSuccessor = hasImplicitSuccessor(task, indexes);
     if (!hasSuccessor) {
@@ -241,7 +249,11 @@ export function canDeterministicallyConverge(task, indexes) {
   // --- 5. Integration already merged/skipped ---
   if (safeResult?.integration) {
     const mergedStates = ['merged', 'ff_only_merged', 'already_integrated', 'skipped', 'not_required'];
-    if (mergedStates.includes(String(safeResult.integration.status))) {
+    const integrationStatus = String(safeResult.integration.status || '');
+    if (safeResult.integration.merged === true) {
+      return { canConverge: true, reason: 'integration merged=true', convergenceAction: 'complete_task' };
+    }
+    if (mergedStates.includes(integrationStatus)) {
       return { canConverge: true, reason: `integration status=${safeResult.integration.status}`, convergenceAction: 'complete_task' };
     }
   }
