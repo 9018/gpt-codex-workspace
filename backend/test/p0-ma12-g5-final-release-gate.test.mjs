@@ -589,21 +589,25 @@ test('G5 regression: decision mismatch between closure and finalizer', async () 
     `Finalizer reported status (${finalizerReportedStatus}) should differ from expected 'completed' when finalizer detects repair needed`);
 });
 
+
 /**
- * Regression 3: Manifest/runtime count mismatch.
+ * Regression 3: Manifest/runtime count mismatch — happy path zero blockers.
  *
  * The blocker manifest (generateBlockerManifest) and worker-queue-counts
  * (computePolicyQueueCounts) should agree on current blocker counts.
+ * In the happy path, after convergence ALL blocker dimensions must be 0:
+ * current_blockers, actionable_review (waiting_for_review), waiting_for_repair,
+ * waiting_for_integration, policy failed.
  */
-test('G5 regression: manifest/runtime count mismatch', async () => {
+test('G5 regression: manifest/runtime count mismatch — happy path zero blockers', async () => {
   const repo = makeGitRepo();
   const store = await makeStore(repo.root);
 
   const goalId = makeGoalId();
   const HEAD_COMMIT = repo.commit;
 
+  // All tasks are convergable or already terminal-completed — no unresolved blockers
   const t1Id = makeTaskId();  // Convergable — reachable commit + tests
-  const t2Id = makeTaskId();  // Unresolved — code evidence only
   const t3Id = makeTaskId();  // Completed with acceptance evidence
   const t4Id = makeTaskId();  // Failed but successor-resolved
   const t5Id = makeTaskId();  // Successor for t4
@@ -614,9 +618,6 @@ test('G5 regression: manifest/runtime count mismatch', async () => {
     state.tasks.push(
       { id: t1Id, goal_id: goalId, title: 'Convergable task', status: 'failed', assignee: 'codex',
         result: { changed_files: ['a.mjs'], commit: HEAD_COMMIT.slice(0, 12), tests: 'pass', execution_cwd: CANONICAL_REPO },
-        created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
-      { id: t2Id, goal_id: goalId, title: 'Unresolved task', status: 'failed', assignee: 'codex',
-        result: { changed_files: ['real-fail.mjs'] },
         created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
       { id: t3Id, goal_id: goalId, title: 'Completed task', status: 'completed', assignee: 'codex',
         result: { verification: { passed: true }, reviewer_decision: { passed: true, decision: 'accepted' },
@@ -637,7 +638,7 @@ test('G5 regression: manifest/runtime count mismatch', async () => {
 
   const manifest = await generateBlockerManifest(store);
   const after = await applyDeterministicConvergence(store);
-  const afterBlockers = after.afterCounts.current_blockers;
+  const afterCounts = after.afterCounts;
 
   const runtimeAfter = computePolicyQueueCounts(
     (await store.load()).tasks || [],
@@ -650,15 +651,83 @@ test('G5 regression: manifest/runtime count mismatch', async () => {
     (runtimeAfter.waiting_for_review || 0) +
     (runtimeAfter.failed || 0);
 
-  // After convergence, at most 2 blockers should remain (t2 unresolved)
-  assert.ok(afterBlockers <= 2,
-    `After convergence, at most 2 blockers should remain, got ${afterBlockers}`);
+  // After convergence, ALL blocker dimensions must be 0 in the happy path
+  assert.equal(afterCounts.current_blockers, 0,
+    `After convergence, 0 blockers should remain, got ${afterCounts.current_blockers}`);
+  assert.equal(afterCounts.waiting_for_repair || 0, 0,
+    'waiting_for_repair must be 0 in happy path');
+  assert.equal(afterCounts.waiting_for_integration || 0, 0,
+    'waiting_for_integration must be 0 in happy path');
+  assert.equal(afterCounts.waiting_for_review || 0, 0,
+    'waiting_for_review (actionable_review) must be 0 in happy path');
+  assert.equal(afterCounts.failed || 0, 0,
+    'policy failed must be 0 in happy path');
 
   // Runtime after should match manifest after
-  assert.equal(runtimeAfterBlockers, afterBlockers,
-    `Runtime after-blockers (${runtimeAfterBlockers}) should match manifest after-blockers (${afterBlockers})`);
+  assert.equal(runtimeAfterBlockers, afterCounts.current_blockers,
+    `Runtime after-blockers (${runtimeAfterBlockers}) should match manifest after-blockers (${afterCounts.current_blockers})`);
 });
 
+/**
+ * Regression 3b: Negative test — unresolved code evidence remains as blocker.
+ *
+ * A failed task with changed_files only (no commit, no successor, no reachable
+ * commit) must stay as a current_blocker after convergence. This validates that
+ * the hard-zero blocker gate only passes when ALL items are genuinely resolved.
+ * This replaces the old <=2 blocker fixture which mixed unresolved items into
+ * the happy path.
+ */
+test('G5 regression: unresolved code evidence remains as negative blocker', async () => {
+  const repo = makeGitRepo();
+  const store = await makeStore(repo.root);
+
+  const goalId = makeGoalId();
+  const taskId = makeTaskId();
+
+  await store.mutate(state => {
+    state.goals.push({ id: goalId, title: 'Unresolved blocker test', status: 'open', mode: 'builder',
+      workspace_id: 'hosted-default', project_id: 'default', created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
+    state.tasks.push(
+      { id: taskId, goal_id: goalId, title: 'Unresolved code evidence', status: 'failed', assignee: 'codex',
+        result: { changed_files: ['real-fail.mjs'] },
+        created_at: new Date().toISOString(), updated_at: new Date().toISOString() },
+    );
+    return state;
+  });
+
+  const { generateBlockerManifest, applyDeterministicConvergence, MANIFEST_CATEGORIES, classifyBlockerManifestCategory } =
+    await import(join(SRC_DIR, 'blocker-manifest.mjs'));
+  const { classifyCurrentBlockerTask, CURRENT_WORK_DECISION_LABELS } =
+    await import(join(SRC_DIR, 'current-blocker-policy.mjs'));
+  const { buildTaskQueueIndexes } = await import(join(SRC_DIR, 'worker-queue-counts.mjs'));
+
+  // Policy decision: this MUST block current work
+  const task = { id: taskId, goal_id: goalId, status: 'failed', assignee: 'codex',
+    result: { changed_files: ['real-fail.mjs'] } };
+  const decision = classifyCurrentBlockerTask(task);
+  assert.equal(decision.blocks_current_work, true,
+    'Unresolved code evidence MUST block current work');
+  assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.CODE_EVIDENCE_FAILURE,
+    `Label should be CODE_EVIDENCE_FAILURE, got ${decision.label}`);
+
+  // Manifest category: must be UNRESOLVED_FAILURE
+  const indexes = buildTaskQueueIndexes([task]);
+  const category = classifyBlockerManifestCategory(task, decision, indexes);
+  assert.equal(category, MANIFEST_CATEGORIES.UNRESOLVED_FAILURE,
+    `Category should be UNRESOLVED_FAILURE, got ${category}`);
+
+  // After convergence, it must remain as a blocker
+  const after = await applyDeterministicConvergence(store);
+  assert.equal(after.afterCounts.current_blockers, 1,
+    `Unresolved code evidence should remain as 1 blocker after convergence, got ${after.afterCounts.current_blockers}`);
+
+  // Must be in the manifest as NOT converged
+  const unresolvedInManifest = after.manifest.filter(e => e.category === MANIFEST_CATEGORIES.UNRESOLVED_FAILURE);
+  assert.ok(unresolvedInManifest.length >= 1,
+    'Unresolved code evidence must appear in manifest as UNRESOLVED_FAILURE');
+  assert.equal(after.converged.length, 0,
+    'No items should be converged for true unresolved failure');
+});
 /**
  * Regression 4: Invalid result — code_change without commit evidence.
  */
