@@ -241,12 +241,13 @@ test("sweeper: waiting_for_review non-blocker findings for sync profile → comp
   assert.ok(actions[0].reason.includes("sync_only"), `Reason should mention profile: ${actions[0].reason}`);
 });
 
-test("sweeper: waiting_for_review stale with no blockers → completed", () => {
+test("sweeper: waiting_for_review stale code_change with empty result NOT completed (P0-UA1)", () => {
+  // P0-UA1: code_change tasks without structured evidence must remain blocking
   const staleThresholdMs = 300_000;
   const now = Date.now();
   const actions = sweepStaleTaskStates({
     tasks: [{
-      id: "review_stale",
+      id: "review_stale_code_change",
       status: "waiting_for_review",
       updated_at: new Date(now - staleThresholdMs * 4).toISOString(),
       result: {},
@@ -255,9 +256,30 @@ test("sweeper: waiting_for_review stale with no blockers → completed", () => {
     staleThresholdMs,
   });
 
+  assert.equal(actions.length, 0, "code_change with empty result should NOT auto-complete even when stale");
+});
+
+test("sweeper: waiting_for_review stale sync_only with no blockers → completed", () => {
+  const staleThresholdMs = 300_000;
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "review_stale_sync",
+      status: "waiting_for_review",
+      mode: "sync",
+      updated_at: new Date(now - staleThresholdMs * 4).toISOString(),
+      result: {
+        verification: { passed: true },
+        changed_files: [],
+      },
+    }],
+    now,
+    staleThresholdMs,
+  });
+
   assert.equal(actions.length, 1);
   assert.equal(actions[0].recommendedStatus, "completed");
-  assert.ok(actions[0].reason.includes("stale"), `Reason should mention stale: ${actions[0].reason}`);
+  assert.ok(actions[0].reason.includes("verification passed"), `Reason should mention verification passed: ${actions[0].reason}`);
 });
 
 test("sweeper: waiting_for_review with blocker findings NOT completed for code_change", () => {
@@ -306,6 +328,191 @@ test("sweeper: waiting_for_review stale with sync-specific blockers → complete
   assert.equal(actions[0].recommendedStatus, "completed");
   assert.ok(actions[0].reason.includes("sync_only"), `Reason should mention profile: ${actions[0].reason}`);
 });
+
+
+// ===========================================================================
+// P0-UA1: Evidence gate tests for waiting_for_review sweeper
+// ===========================================================================
+// These verify that auto-completion requires both closure/finalizer decision
+// AND at least one reliable structured evidence -- not just finalizer alone.
+
+test("P0-UA1: finalizer completed alone with NO evidence \u2192 NOT auto-completed", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_finalizer_no_evidence",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        finalizer_decision: { status: "completed" },
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "finalizer completed + no evidence should NOT auto-complete");
+});
+
+test("P0-UA1: finalizer completed + verification.passed \u2192 auto-completed", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_finalizer_with_verification",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        finalizer_decision: { status: "completed" },
+        verification: { passed: true },
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 1, "finalizer + verification evidence should auto-complete");
+  assert.equal(actions[0].recommendedStatus, "completed");
+});
+
+test("P0-UA1: closure decision + acceptance_gate.passed clears findings (no syn verification)", () => {
+  // Evidence gate clears acceptance findings but does NOT synthesise
+  // verification.passed. Auto-completion still needs Rule 1.
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_closure_with_acceptance_gate",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        closure_decision: { status: "auto_completed_clean" },
+        acceptance_gate: { passed: true },
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "evidence gate clears findings but does not synthesise verification.passed");
+});
+
+test("P0-UA1: contract_verification blocking_passed without verification.passed stays in review", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_contract_verif",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        closure_decision: { status: "auto_completed_clean" },
+        contract_verification: { blocking_passed: true },
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "evidence without verification.passed keeps task in review");
+});
+
+test("P0-UA1: no-mutation profile with empty changed_files clears findings (needs Rule 1 or stale)", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_no_mutation_empty_files",
+      status: "waiting_for_review",
+      mode: "sync",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        finalizer_decision: { status: "completed" },
+        changed_files: [],
+        acceptance_profile: "sync_only",
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "evidence gate clears findings but needs Rule 1 or stale to complete");
+});
+
+test("P0-UA1: summary alone must NOT be accepted as evidence (requirement 2)", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_summary_only",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        closure_decision: { status: "auto_completed_clean" },
+        summary: "Completed the implementation and all tasks are done",
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "summary alone must NOT be accepted as evidence");
+});
+
+test("P0-UA1: blocker findings preserved when no evidence to reconcile (requirement 3)", () => {
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "gate_blocker_findings_preserved",
+      status: "waiting_for_review",
+      updated_at: new Date(now - 1000).toISOString(),
+      result: {
+        finalizer_decision: { status: "completed" },
+        acceptance_findings: [
+          { severity: "blocker", code: "codex_failed", message: "Codex execution failed" },
+        ],
+      },
+    }],
+    now,
+  });
+
+  assert.equal(actions.length, 0, "blocker findings must be preserved when no evidence to reconcile");
+});
+
+test("P0-UA1: stale sync_only with empty result auto-completes via stale fallback (non-code_change)", () => {
+  const staleThresholdMs = 300_000;
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "review_stale_sync_fallback",
+      status: "waiting_for_review",
+      updated_at: new Date(now - staleThresholdMs * 4).toISOString(),
+      mode: "sync",
+      result: {
+        acceptance_profile: "sync_only",
+        changed_files: [],
+      },
+    }],
+    now,
+    staleThresholdMs,
+  });
+
+  assert.equal(actions.length, 1, "stale sync_only should auto-complete via stale fallback");
+  assert.equal(actions[0].recommendedStatus, "completed");
+  assert.ok(actions[0].reason.includes("stale"), `Should mention stale: ${actions[0].reason}`);
+});
+
+test("P0-UA1: stale code_change with verification evidence still auto-completes via Rule 1", () => {
+  const staleThresholdMs = 300_000;
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "review_stale_code_change_with_verified",
+      status: "waiting_for_review",
+      updated_at: new Date(now - staleThresholdMs * 4).toISOString(),
+      result: {
+        verification: { passed: true },
+        commit: "abc1234",
+      },
+    }],
+    now,
+    staleThresholdMs,
+  });
+
+  assert.equal(actions.length, 1, "stale code_change with verification evidence should auto-complete");
+  assert.equal(actions[0].recommendedStatus, "completed");
+  assert.ok(actions[0].reason.includes("verification passed"), `Should complete via verification: ${actions[0].reason}`);
+});
+
 
 // ===========================================================================
 // retry_wait sweeper

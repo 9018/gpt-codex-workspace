@@ -94,6 +94,77 @@ export function sweepStaleTaskStates({ tasks = [], repoState = {}, now, staleThr
 // State-specific sweepers
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// P0-UA1: Structured evidence gate for waiting_for_review auto-convergence
+// ---------------------------------------------------------------------------
+// Only allow auto-convergence when at least one reliable structured evidence
+// is present. Natural language summary alone is NOT sufficient.
+
+const SWEEP_NO_MUTATION_PROFILES = new Set([
+  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
+  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
+  'github_sync_only',
+]);
+
+/**
+ * Check whether the task result contains at least one reliable structured
+ * evidence that the work is genuinely done.
+ *
+ * Reliable evidence (requirement 1):
+ *   1. acceptance_gate.passed === true
+ *   2. contract_verification.blocking_passed === true
+ *   3. verification.passed === true  (genuine, not synthesised)
+ *   4. tests/commands have passing evidence
+ *   5. commit/local_head reachable from HEAD
+ *   6. no_mutation/sync_only/readonly profile with changed_files=[] and
+ *      no mutation evidence
+ *
+ * Natural language summary alone is NOT sufficient (requirement 2).
+ */
+function hasStructuredEvidenceForSweep(task, result) {
+  if (!result || typeof result !== 'object') return false;
+
+  // 1. acceptance_gate.passed === true
+  if (result.acceptance_gate?.passed === true) return true;
+
+  // 2. contract_verification.blocking_passed === true
+  if (result.contract_verification?.blocking_passed === true) return true;
+
+  // 3. verification.passed === true (genuine, from real acceptance evidence)
+  if (result.verification?.passed === true) return true;
+
+  // 4. tests/commands have passing evidence
+  if (typeof result.tests === 'string' && result.tests.trim().length > 0) return true;
+  if (Array.isArray(result.verification?.commands) && result.verification.commands.length > 0) return true;
+
+  // 5. commit/local_head reachable from HEAD
+  const commit = result.commit || result.local_head;
+  if (commit && typeof commit === 'string') {
+    const clean = commit.trim().toLowerCase();
+    if (clean.length >= 7 && clean !== 'none' && clean !== 'null' && clean !== 'undefined') {
+      try {
+        if (isCommitAncestorOfHead(commit.trim(), result.execution_cwd || process.cwd())) return true;
+      } catch { /* non-blocking */ }
+    }
+  }
+
+  // 6. no_mutation/sync_only/readonly profile with changed_files=[] and no mutation evidence
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files : [];
+  if (changedFiles.length === 0) {
+    const profile = result.acceptance_profile || detectProfileFromTask(task, result);
+    if (SWEEP_NO_MUTATION_PROFILES.has(profile) || result.mutation_scope === 'none') {
+      // Also verify no mutation evidence present
+      const hasMutationEvidence = Boolean(result.implementation_diff)
+        || Boolean(result.diff_stat)
+        || (typeof result.commit === 'string' && result.commit.trim().length >= 7 && result.commit.trim().toLowerCase() !== 'none');
+      if (!hasMutationEvidence) return true;
+    }
+  }
+
+  // Summary alone is NOT sufficient (requirement 2)
+  return false;
+}
+
 /**
  * Sweep waiting_for_review tasks.
  *
@@ -111,10 +182,21 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
     return actions;
   }
 
-  // Check if task has acceptance evidence
-  const rc = { reconciled: result.closure_decision?.status === "auto_completed_clean" || result.closure_decision?.auto_complete_allowed === true || result.finalizer_decision?.status === "completed", taskStatus: TASK_STATUSES.COMPLETED };
-  if (rc.reconciled && rc.taskStatus === TASK_STATUSES.COMPLETED) result.verification = { passed: true };
-  const acceptanceFindings = rc.reconciled ? [] : (result.acceptance_findings || result.verification?.findings || []);
+  // --- P0-UA1: Strong evidence gate ---
+  // We no longer synthesise result.verification = { passed: true } based
+  // solely on closure/finalizer decision. Only genuine evidence counts.
+  const hasCompletedClosure = result.closure_decision?.status === "auto_completed_clean"
+    || result.closure_decision?.auto_complete_allowed === true
+    || result.finalizer_decision?.status === "completed";
+
+  const hasEvidence = hasStructuredEvidenceForSweep(task, result);
+  const reconcilable = hasCompletedClosure && hasEvidence;
+
+  // acceptanceFindings: non-empty only when not reconcilable, preserving
+  // blocker findings that should prevent auto-completion.
+  const acceptanceFindings = reconcilable
+    ? []
+    : (result.acceptance_findings || result.verification?.findings || []);
   const verificationPassed = result.verification?.passed === true;
   const blockerFindings = acceptanceFindings.filter(f => f.severity === "blocker" || f.severity === "major");
   const profile = result.acceptance_profile || detectProfileFromTask(task, result);
@@ -148,15 +230,18 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
     }
   }
 
-  // Rule 4: Stale with no progress → escalate
+  // Rule 4: Stale with no progress → escalate (P0-UA1: only for non-code_change profiles)
   if (staleFor > staleThresholdMs * 3 && blockerFindings.length === 0) {
-    actions.push({
-      taskId: task.id,
-      currentStatus: TASK_STATUSES.WAITING_FOR_REVIEW,
-      recommendedStatus: TASK_STATUSES.COMPLETED,
-      reason: `Auto-sweep: stale waiting_for_review (${Math.round(staleFor / 1000)}s) with no blockers — force completing.`,
-      actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
-    });
+    // code_change tasks must remain blocking even when stale (requirement 3)
+    if (profile !== 'code_change') {
+      actions.push({
+        taskId: task.id,
+        currentStatus: TASK_STATUSES.WAITING_FOR_REVIEW,
+        recommendedStatus: TASK_STATUSES.COMPLETED,
+        reason: `Auto-sweep: stale waiting_for_review (${Math.round(staleFor / 1000)}s) with no blockers — force completing.`,
+        actions: [{ type: "update_task_status", payload: { status: TASK_STATUSES.COMPLETED } }],
+      });
+    }
   }
 
   return actions;
