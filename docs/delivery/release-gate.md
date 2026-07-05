@@ -77,3 +77,14 @@ If any gate check fails:
 2. Check the module's test file for the specific assertion
 3. Fix the issue and re-run the gate
 4. Do not release until the gate passes
+
+## CI/CD Release Gate (GitHub Actions)
+
+A release gate workflow runs automatically on push/PR to `main` via `.github/workflows/release-gate.yml`. It executes in CI:
+
+1. `npm run check:syntax`
+2. `npm run check:imports`
+3. `npm run release:gate`
+4. `npm run release:delivery-check -- --profile full`
+
+The CI gate uses `--profile full` explicitly to match the default behavior of the backend script. Both the root-level wrapper and the backend script default to `full`.

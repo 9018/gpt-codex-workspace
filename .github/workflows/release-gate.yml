@@ -1,0 +1,42 @@
+name: Release Gate
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install backend dependencies
+        working-directory: backend
+        run: npm ci
+
+      - name: Syntax check
+        working-directory: backend
+        run: npm run check:syntax
+
+      - name: Import check
+        working-directory: backend
+        run: npm run check:imports
+
+      - name: Release gate
+        working-directory: backend
+        run: npm run release:gate
+
+      - name: Delivery check (full profile)
+        working-directory: backend
+        run: npm run release:delivery-check -- --profile full

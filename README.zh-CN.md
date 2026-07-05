@@ -68,7 +68,7 @@ node scripts/release-delivery-check.mjs --fast
 
 ```bash
 cd backend
-node scripts/release-delivery-check.mjs
+node scripts/release-delivery-check.mjs  # 默认 full 完整发布门禁
 ```
 
 完整门禁覆盖两种交付模式：无 GitHub 的本地 goal/task/worktree 执行，以及可选 GitHub Issues adapter 的导入/幂等/跳过原因链路；同时覆盖旧任务兼容层，保证历史 task 记录无需直接改写也能被验收、review 和队列状态展示消费。
