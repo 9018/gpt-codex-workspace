@@ -243,12 +243,42 @@ function buildQueueResult({ rawCounts, policyCounts, legacy_failed_policy, oldes
   const normalizedRawCounts = { ...EMPTY_QUEUE_COUNTS, ...(rawCounts || {}) };
   const actionable_review = normalizedPolicyCounts[TASK_STATUSES.WAITING_FOR_REVIEW] || 0;
   const current_blockers = computeCurrentBlockers(normalizedPolicyCounts);
+
+  // P0-UA5: Compute raw_legacy_resolved, raw_unresolved, policy_excluded
+  const rawLegacyResolved = legacy_failed_policy
+    ? (legacy_failed_policy.resolved_legacy_failed || 0) + (legacy_failed_policy.resolved_legacy_review || 0)
+    : 0;
+  const rawUnresolved = legacy_failed_policy
+    ? (legacy_failed_policy.unresolved_failed || 0) +
+      (normalizedPolicyCounts.waiting_for_lock || 0) +
+      (normalizedPolicyCounts.waiting_for_review || 0) +
+      (normalizedPolicyCounts.waiting_for_repair || 0) +
+      (normalizedPolicyCounts.waiting_for_integration || 0)
+    : 0;
+
+  // policy_excluded = raw non-terminal/completed count minus policy-blocking count
+  let rawNonTerminalTotal = 0;
+  for (const [st, count] of Object.entries(normalizedRawCounts)) {
+    if (st === TASK_STATUSES.COMPLETED) continue;
+    if (st === TASK_STATUSES.FAILED && legacy_failed_policy) {
+      rawNonTerminalTotal += count;
+      continue;
+    }
+    if (st && !Array.isArray(count)) rawNonTerminalTotal += count;
+  }
+  const policyBlockingTotal = current_blockers;
+  const policyExcluded = Math.max(0, rawNonTerminalTotal - policyBlockingTotal);
+
   return {
     ...normalizedPolicyCounts,
     raw_counts: normalizedRawCounts,
     policy_counts: normalizedPolicyCounts,
     actionable_review,
     current_blockers,
+    raw_legacy_resolved: rawLegacyResolved,
+    raw_unresolved: rawUnresolved,
+    policy_excluded: policyExcluded,
+    policy_excluded_count: policyExcluded,
     legacy_failed_policy,
     oldest_age_ms,
   };

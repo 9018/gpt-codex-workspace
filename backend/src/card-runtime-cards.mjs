@@ -1,3 +1,15 @@
+/**
+ * card-runtime-cards.mjs — Card formatters for runtime status, worker, and
+ * gptwork_doctor output.
+ *
+ * P0-UA5: Enhanced queue display now distinguishes:
+ *   - raw_counts: unmodified status counts for all Codex tasks
+ *   - policy_counts: policy-filtered counts (legacy resolved excluded)
+ *   - raw_legacy_resolved: tasks resolved by legacy reconciliation
+ *   - raw_unresolved: raw non-terminal tasks still present
+ *   - current_blockers: policy-counted blockers
+ *   - policy_excluded_count: tasks excluded from blockers by policy
+ */
 import { formatToolCard, formatKeyValue, formatDiagnostics, formatWarnings, formatNextActions, formatStatusChip, truncateOutput, truncateVerboseOutput } from "./card-format-utils.mjs";
 import { ACTIVE_EXECUTION_STATUSES, TASK_STATUSES } from "./task-status-taxonomy.mjs";
 
@@ -5,13 +17,16 @@ const QUEUE_DISPLAY_ROWS = [
   [TASK_STATUSES.ASSIGNED, "assigned"],
   [TASK_STATUSES.QUEUED, "queued"],
   [TASK_STATUSES.RUNNING, "running"],
+  [TASK_STATUSES.COMPLETED, "completed"],
+  [TASK_STATUSES.FAILED, "failed"],
   [TASK_STATUSES.WAITING_FOR_LOCK, "waiting for lock"],
   [TASK_STATUSES.WAITING_FOR_INTEGRATION, "waiting for integration"],
   [TASK_STATUSES.WAITING_FOR_REPAIR, "waiting for repair"],
   ["current_blockers", "current blockers"],
   ["actionable_review", "actionable review"],
-  [TASK_STATUSES.COMPLETED, "completed"],
-  [TASK_STATUSES.FAILED, "failed"],
+  ["raw_legacy_resolved", "raw legacy resolved"],
+  ["raw_unresolved", "raw unresolved"],
+  ["policy_excluded", "policy excluded"],
 ];
 
 function queueCurrentBlockers(q = {}) {
@@ -28,15 +43,41 @@ function queueDisplayValue(q = {}, key) {
   const policy = q.policy_counts || q;
   if (key === "current_blockers") return q.current_blockers ?? queueCurrentBlockers(q);
   if (key === "actionable_review") return q.actionable_review ?? policy.waiting_for_review ?? q.waiting_for_review ?? 0;
+  if (key === "raw_legacy_resolved") return q.raw_legacy_resolved ?? 0;
+  if (key === "raw_unresolved") return q.raw_unresolved ?? 0;
+  if (key === "policy_excluded") return q.policy_excluded ?? q.policy_excluded_count ?? 0;
   return policy[key] ?? q[key] ?? 0;
 }
 
 function addQueueDisplayRows(lines, q = {}) {
   lines.push('');
   lines.push('  Queue:');
-  for (const [key, label] of QUEUE_DISPLAY_ROWS) {
-    lines.push(formatKeyValue(label, queueDisplayValue(q, key)));
+
+  // Show raw vs policy counts header when both are available
+  const hasRawCounts = q.raw_counts && typeof q.raw_counts === 'object';
+  const hasPolicyCounts = q.policy_counts && typeof q.policy_counts === 'object';
+
+  if (hasRawCounts && hasPolicyCounts) {
+    lines.push('    (raw → policy, *=differs)');
   }
+
+  for (const [key, label] of QUEUE_DISPLAY_ROWS) {
+    const value = queueDisplayValue(q, key);
+
+    // Show raw→policy for per-status keys if both source objects exist
+    const rawVal = hasRawCounts ? (q.raw_counts[key] ?? 0) : null;
+    const policyVal = hasPolicyCounts ? (q.policy_counts[key] ?? 0) : null;
+
+    if (rawVal !== null && policyVal !== null && rawVal !== policyVal) {
+      if (['assigned','queued','running','waiting_for_lock','waiting_for_integration',
+           'waiting_for_repair','waiting_for_review','completed','failed'].includes(key)) {
+        lines.push(formatKeyValue(label, `${rawVal} → ${policyVal} *`));
+        continue;
+      }
+    }
+    lines.push(formatKeyValue(label, value));
+  }
+
   if (q.oldest_age_ms) {
     const activeAges = Object.entries(q.oldest_age_ms)
       .filter(([st]) => ACTIVE_EXECUTION_STATUSES.has(st))

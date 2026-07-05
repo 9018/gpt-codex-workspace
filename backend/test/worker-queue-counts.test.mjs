@@ -216,6 +216,10 @@ test('collectWorkerQueueCounts returns zero counts when load fails', async () =>
     failed: 0,
     raw_counts: ZERO_AGES,
     policy_counts: ZERO_AGES,
+    raw_legacy_resolved: 0,
+    raw_unresolved: 0,
+    policy_excluded: 0,
+    policy_excluded_count: 0,
     actionable_review: 0,
     current_blockers: 0,
     legacy_failed_policy: {
