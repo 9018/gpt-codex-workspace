@@ -53,6 +53,17 @@ export const LEGACY_RESOLUTION_LABELS = Object.freeze({
 });
 
 // ---------------------------------------------------------------------------
+// Drift classification constants (P0-UA6-G3)
+// ---------------------------------------------------------------------------
+
+export const DRIFT_TYPES = Object.freeze({
+  EXPLAINED: 'explained',
+  UNEXPLAINED: 'unexplained',
+});
+
+const EXPLAINED_DRIFT_RESOLUTION_CODES = Object.freeze(new Set(['already_integrated', 'diagnostic_no_mutation_completed', 'delivery_result_recovery']));
+
+// ---------------------------------------------------------------------------
 // Real-blocker patterns that must never be migrated
 // ---------------------------------------------------------------------------
 
@@ -65,6 +76,46 @@ const REAL_BLOCKER_PATTERNS = Object.freeze([
 
 // ---------------------------------------------------------------------------
 // Scanning and classification
+
+
+/**
+ * Classify raw state drift as explained or unexplained.
+ *
+ * Explained drift occurs when a task has a non-blocking policy decision and
+ * a known resolution code (e.g., already_integrated, diagnostic_no_mutation).
+ * Unexplained drift occurs when a task has a non-blocking decision but the
+ * resolution code is missing or unrecognized.
+ *
+ * @param {object} task - Task object
+ * @param {object} decision - Policy decision from classifyCurrentBlockerTask
+ * @returns {{ driftType: string, explanation: string|null }}
+ */
+export function classifyDrift(task, decision) {
+  if (!task || !decision) return { driftType: DRIFT_TYPES.UNEXPLAINED, explanation: null };
+  const resolutionCode = decision.label
+    || task.result?.resolution_policy_label
+    || task.result?.delivery_result_recovery?.reason
+    || 'unknown';
+  if (EXPLAINED_DRIFT_RESOLUTION_CODES.has(resolutionCode)) {
+    return { driftType: DRIFT_TYPES.EXPLAINED, explanation: resolutionCode };
+  }
+  return { driftType: DRIFT_TYPES.UNEXPLAINED, explanation: null };
+}
+
+/**
+ * Split an array of drift candidates into explained and unexplained groups.
+ *
+ * @param {Array<{task: object, decision: object}>} candidates
+ * @returns {{ explained: Array, unexplained: Array }}
+ */
+export function splitExplainedUnexplainedDrift(candidates = []) {
+  return candidates.reduce((acc, entry) => {
+    const { driftType } = classifyDrift(entry.task, entry.decision);
+    acc[driftType === DRIFT_TYPES.EXPLAINED ? 'explained' : 'unexplained'].push(entry);
+    return acc;
+  }, { explained: [], unexplained: [] });
+}
+
 // ---------------------------------------------------------------------------
 
 /**
@@ -343,6 +394,97 @@ export function formatReport(scanResult) {
 
   return lines.join('\n');
 }
+
+// ---------------------------------------------------------------------------
+// Repair loop success rate — count repair successor chains
+// P0-UA6-G3: fix repair_loop_success_rate to count repair successor chains.
+// A "successful" repair is one whose repair_successor (child repair task)
+// itself entered a terminal completed state, not just the parent task.
+// ---------------------------------------------------------------------------
+
+/**
+ * Compute repair loop success rate by counting successor chains.
+ *
+ * A repair chain starts at a root task (no parent_task_id) and follows
+ * repair tasks (those with parent_task_id referencing the predecessor).
+ * A chain is "successful" if the terminal repair task has a passing
+ * verification and result evidence.  Unresolved chain tips remain in
+ * waiting_for_repair and are excluded from the numerator.
+ *
+ * @param {Array<object>} tasks - All tasks in the store
+ * @returns {{ chains: Array, total: number, successful: number, rate: string }}
+ */
+export function repairLoopSuccessRate(tasks = []) {
+  if (!Array.isArray(tasks) || tasks.length === 0) {
+    return { chains: [], total: 0, successful: 0, rate: '0.00' };
+  }
+
+  // Build repair chains: group tasks by root_task_id lineage
+  const chainMap = new Map();
+  for (const task of tasks) {
+    const rootId = task.root_task_id || task.id;
+    if (!chainMap.has(rootId)) chainMap.set(rootId, []);
+    chainMap.get(rootId).push(task);
+  }
+
+  const chains = [];
+  for (const [rootId, chainTasks] of chainMap) {
+    // Only count chains with 2+ tasks (original + at least one repair)
+    if (chainTasks.length < 2) continue;
+    // Sort by repair_attempt ascending
+    chainTasks.sort((a, b) => (a.repair_attempt || 0) - (b.repair_attempt || 0));
+
+    // Find the terminal task in the chain (the last repair task)
+    const lastRepair = chainTasks.reduce((latest, t) => {
+      if ((t.repair_attempt || 0) > (latest.repair_attempt || 0)) return t;
+      return latest;
+    }, chainTasks[0]);
+
+    const terminalResult = lastRepair.result || {};
+    const terminalStatus = lastRepair.status || '';
+    const terminalCompleted = terminalStatus === 'completed'
+      && (terminalResult.verification?.passed === true || Boolean(terminalResult.tests));
+
+    chains.push({
+      rootTaskId: rootId,
+      chainLength: chainTasks.length,
+      terminalRepairId: lastRepair.id,
+      terminalStatus,
+      terminalCompleted,
+    });
+  }
+
+  const total = chains.length;
+  const successful = chains.filter(c => c.terminalCompleted).length;
+  const rate = total > 0 ? (successful / total * 100).toFixed(2) : '0.00';
+
+  return { chains, total, successful, rate };
+}
+
+/**
+ * Format a repair success rate report.
+ *
+ * @param {object} rateResult - Result from repairLoopSuccessRate
+ * @returns {string}
+ */
+export function formatRepairSuccessRateReport(rateResult) {
+  if (!rateResult) return 'Repair success rate: N/A';
+  const lines = [
+    '=== Repair Loop Success Rate ===',
+    'Total repair chains: ' + rateResult.total,
+    'Successful chains:   ' + rateResult.successful,
+    'Success rate:        ' + rateResult.rate + '%',
+    '',
+  ];
+  for (const chain of (rateResult.chains || [])) {
+    lines.push('  [' + chain.rootTaskId + '] chain=' + chain.chainLength + ' terminal=' + chain.terminalRepairId + ' status=' + chain.terminalStatus + ' success=' + chain.terminalCompleted);
+  }
+  lines.push('');
+  lines.push('Note: A chain is "successful" when the terminal repair task is completed with passing verification.');
+  return lines.join('\n');
+}
+
+
 
 // ---------------------------------------------------------------------------
 // CLI entry point

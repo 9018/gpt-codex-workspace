@@ -423,6 +423,30 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       return disabledResult;
     }
 
+    // P0-UA6-G4: Superpowers plugin preflight for TUI fallback
+    const { checkSuperpowersPluginForTuiFallback } = await import('./codex-execution-provider.mjs');
+    const superpowersCheck = checkSuperpowersPluginForTuiFallback(config);
+    if (superpowersCheck.available === false) {
+      const pluginMissingResult = {
+        kind: 'codex_tui_superpowers_missing',
+        provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+        status: 'provider_unavailable',
+        task_id: task.id,
+        goal_id: goal?.id || null,
+        commit: 'none',
+        changed_files: [],
+        tests: null,
+        diagnostic: superpowersCheck.diagnostic,
+        followup: superpowersCheck.diagnostic.remediation,
+      };
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = 'waiting_for_review';
+        item.result = pluginMissingResult;
+        item.logs.push({ time: new Date().toISOString(), message: '[worker] codex_tui_goal blocked: ' + (superpowersCheck.diagnostic?.code || 'superpowers_plugin_missing') });
+      });
+      return pluginMissingResult;
+    }
+
     const session = await startCodexTuiGoalSessionFn({
       task,
       goal,

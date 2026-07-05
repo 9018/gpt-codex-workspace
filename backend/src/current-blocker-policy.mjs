@@ -48,7 +48,28 @@ export function isVerificationNormalized(result) {
   if (verification.passed === true && contractV.blocking_passed === true) return true;
   // P0-MA20: Accept result.tests as standalone verification evidence.
   // Codex runs may produce tests text without populating verification.commands
-  // or contract_verification. Treat non-empty tests as verification evidence.
+  // or contract_verification. Treat non-empty tests as verification evidence
+  // for non-commit-bearing results.
+  //
+  // P0-UA6: Commit-bearing results must validate commit reachability BEFORE
+  // considering tests alone as normalization evidence.  Tests text alone must
+  // not normalize commit-bearing legacy results — if the commit is not reachable
+  // from HEAD, the task still has a genuine blocking issue even if tests appear
+  // to pass.  When the commit IS reachable AND verification/tests evidence is
+  // present, populate delivery_result_recovery so downstream consumers do not
+  // block on stale review state.
+  if (isValidCommitCandidate(result.commit)) {
+    const integratedCommit = getVerifiedIntegratedCommitCandidate(result);
+    if (integratedCommit) {
+      result.delivery_result_recovery = result.delivery_result_recovery || {};
+      result.delivery_result_recovery.reason = 'already_integrated';
+      result.delivery_result_recovery.recovered = true;
+      result.delivery_result_recovery.commit = integratedCommit;
+      result.delivery_result_recovery.commit_integrated = true;
+      return true;
+    }
+    return false;
+  }
   if (hasStringEvidence(result.tests)) return true;
   if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
 
