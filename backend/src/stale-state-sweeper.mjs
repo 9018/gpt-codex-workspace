@@ -107,6 +107,10 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
   const actions = [];
   const result = task.result || {};
 
+  if (result.integration_terminalization?.status === "waiting_for_external_integration") {
+    return actions;
+  }
+
   // Check if task has acceptance evidence
   const rc = { reconciled: result.closure_decision?.status === "auto_completed_clean" || result.closure_decision?.auto_complete_allowed === true || result.finalizer_decision?.status === "completed", taskStatus: TASK_STATUSES.COMPLETED };
   if (rc.reconciled && rc.taskStatus === TASK_STATUSES.COMPLETED) result.verification = { passed: true };
@@ -513,31 +517,45 @@ export async function applySweepActions(store, sweepActions = []) {
   let applied = 0;
   const localErrors = [];
 
-  await store.mutate(state => {
-    const tasks = state.tasks || [];
-    for (const action of sweepActions) {
-      const taskIdx = tasks.findIndex(t => t && t.id === action.taskId);
-      if (taskIdx === -1) {
-        localErrors.push({ taskId: action.taskId, error: 'task not found in state' });
-        continue;
-      }
-      const task = tasks[taskIdx];
-      for (const step of action.actions) {
-        if (step.type === "update_task_status") {
-          Object.assign(task, step.payload);
-          task.updated_at = new Date().toISOString();
-          task.swept_at = task.updated_at;
-          if (!Array.isArray(task.logs)) task.logs = [];
-          task.logs.push({
-            time: task.updated_at,
-            message: `[sweeper] ${action.reason}`,
-          });
-          applied++;
-        }
+  const applySteps = (task, action) => {
+    let changed = false;
+    for (const step of action.actions) {
+      if (step.type === "update_task_status") {
+        Object.assign(task, step.payload);
+        task.updated_at = new Date().toISOString();
+        task.swept_at = task.updated_at;
+        if (!Array.isArray(task.logs)) task.logs = [];
+        task.logs.push({
+          time: task.updated_at,
+          message: `[sweeper] ${action.reason}`,
+        });
+        applied++;
+        changed = true;
       }
     }
-    return state;
-  });
+    return changed;
+  };
+
+  if (typeof store.mutate === "function") {
+    await store.mutate(state => {
+      const tasks = state.tasks || [];
+      for (const action of sweepActions) {
+        const taskIdx = tasks.findIndex(t => t && t.id === action.taskId);
+        if (taskIdx === -1) {
+          localErrors.push({ taskId: action.taskId, error: 'task not found in state' });
+          continue;
+        }
+        applySteps(tasks[taskIdx], action);
+      }
+      return state;
+    });
+  } else if (typeof store.updateTask === "function") {
+    for (const action of sweepActions) {
+      await store.updateTask(action.taskId, (task) => applySteps(task, action));
+    }
+  } else {
+    localErrors.push({ error: 'store does not expose mutate or updateTask' });
+  }
 
   return { applied, errors: localErrors };
 }

@@ -75,15 +75,15 @@ export class StateStore {
 
     this._idxCodexActiveTasksByStatus = new Map();
     this._idxCodexTerminalTasksByStatus = new Map();
-    for (const st of codexActiveStatuses) this._idxCodexActiveTasksByStatus.set(st, []);
-    for (const st of codexTerminalStatuses) this._idxCodexTerminalTasksByStatus.set(st, []);
 
     for (const task of this.state.tasks || []) {
       this._idxTasksById.set(task.id, task);
       if (task.assignee === "codex") {
         if (codexActiveStatuses.has(task.status)) {
+          if (!this._idxCodexActiveTasksByStatus.has(task.status)) this._idxCodexActiveTasksByStatus.set(task.status, []);
           this._idxCodexActiveTasksByStatus.get(task.status).push(task);
         } else if (codexTerminalStatuses.has(task.status)) {
+          if (!this._idxCodexTerminalTasksByStatus.has(task.status)) this._idxCodexTerminalTasksByStatus.set(task.status, []);
           this._idxCodexTerminalTasksByStatus.get(task.status).push(task);
         }
       }

@@ -144,10 +144,14 @@ export function resolveQueueDependencyState(state, item) {
     };
   }
 
-  // ---- Detect if the task is a readonly operation ----
+  // ---- Detect the prerequisite task backing this dependency. Goal-level
+  // dependencies use their latest completed task so integration evidence is
+  // not lost after the goal itself is marked completed.
   const task = kind === "task" && target_id
     ? (Array.isArray(state.tasks) ? state.tasks.find((t) => t.id === target_id) : null)
-    : null;
+    : (kind === "goal" && target_id && Array.isArray(state.tasks)
+      ? [...state.tasks].reverse().find((t) => t.goal_id === target_id && isCompletedStatus(t.status))
+      : null);
 
   // Check if the task's result indicates a readonly/non-mutating operation
   const isReadonly =

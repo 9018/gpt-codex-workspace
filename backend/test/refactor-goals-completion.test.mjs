@@ -205,18 +205,18 @@ test('refactor goals: agent pipeline completed runs produce subagents and failur
   const store = await makeStore(root);
 
   const pipeline = await runAgentPipeline(store, { goal_id: 'goal_agents', task_id: 'task_agents' });
-  assert.deepEqual(pipeline.agent_runs.map((run) => run.role), ['planner', 'implementer', 'tester', 'reviewer', 'finalizer']);
+  assert.deepEqual(pipeline.agent_runs.map((run) => run.role), ['context_curator', 'planner', 'builder', 'verifier', 'reviewer', 'integrator', 'finalizer']);
 
   const { completeAgentRun, buildSubagentsFromAgentRuns, agentRunsBlockCompletion } = await import('../src/agent-run-service.mjs');
   for (const run of pipeline.agent_runs) {
-    await completeAgentRun(store, { agent_run_id: run.id, status: run.role === 'tester' ? 'failed' : 'completed', summary: `${run.role} summary` });
+    await completeAgentRun(store, { agent_run_id: run.id, status: run.role === 'verifier' ? 'failed' : 'completed', summary: `${run.role} summary` });
   }
   await store.load();
   const runs = store.state.agent_runs.filter((run) => run.task_id === 'task_agents');
   const subagents = buildSubagentsFromAgentRuns(runs);
 
-  assert.equal(subagents.length, 5);
-  assert.equal(subagents.find((item) => item.role === 'tester').status, 'failed');
+  assert.equal(subagents.length, 7);
+  assert.equal(subagents.find((item) => item.role === 'verifier').status, 'failed');
   assert.equal(agentRunsBlockCompletion(runs), true);
 });
 

@@ -261,6 +261,14 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
     return { taskStatus, taskResult, gateChecked: false, gatesSatisfied: true };
   }
 
+  // Legacy tasks may have synthetic verifier/reviewer/finalizer writeback runs
+  // created during finalization. Those runs are evidence, not an initialized
+  // multi-agent pipeline, so they must not turn legacy tasks into gate-blocked
+  // pipeline tasks.
+  if (allowMissingGates && isLegacyTask(task)) {
+    return { taskStatus, taskResult, gateChecked: true, gatesSatisfied: true };
+  }
+
   const gateResult = await evaluateTaskPipelineGates(store, { task_id: taskId, allowMissingGates });
 
   // Legacy task with no agent runs: pass through

@@ -174,7 +174,7 @@ test('ACCEPTANCE: result contract invalid maps correctly', () => {
 
 test('ACCEPTANCE: true human review (semantic ambiguity) maps correctly', () => {
   const r = classifyReviewState({ blockers: [{ code: 'semantic_ambiguity' }] });
-  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR);
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
 });
 
 test('ACCEPTANCE: canonical_dirty-like blocker maps to human review (state corruption)', () => {

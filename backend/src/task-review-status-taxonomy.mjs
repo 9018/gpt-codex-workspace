@@ -139,8 +139,14 @@ export function classifyReviewState({ reason = '', blockers = [], repairBudgetEx
   }
 
   // --- Contract/acceptance issues ---
-  if (codes.has('contract_invalid') || codes.has('semantic_ambiguity') ||
-      codes.has('contract_requires_review')) {
+  if (codes.has('semantic_ambiguity')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW],
+    };
+  }
+
+  if (codes.has('contract_invalid') || codes.has('contract_requires_review')) {
     return {
       reviewState: REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR,
       metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR],

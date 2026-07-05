@@ -442,13 +442,18 @@ export function decideTaskFinalState(evidence = {}) {
 
 export function applyTaskFinalStateDecision({ taskStatus, taskResult = {}, finalizerDecision = {} } = {}) {
   const status = FINALIZER_STATUSES.has(finalizerDecision.status) ? finalizerDecision.status : taskStatus;
+  const requiresReview = status === "completed"
+    ? false
+    : (status === "waiting_for_review"
+      ? true
+      : (finalizerDecision.review_state ? !finalizerDecision.machine_repairable : taskResult.requires_review === true));
   return {
     taskStatus: status,
     taskResult: {
       ...taskResult,
       status,
       finalizer_decision: finalizerDecision,
-      requires_review: finalizerDecision.review_state ? !finalizerDecision.machine_repairable : (status === "waiting_for_review" ? true : (status === "completed" ? false : taskResult.requires_review === true)),
+      requires_review: requiresReview,
       reason: finalizerDecision.reason || taskResult.reason,
     },
   };

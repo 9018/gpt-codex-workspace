@@ -1,10 +1,10 @@
 /**
  * repair-loop.mjs — Automatic repair loop for failed acceptance tasks.
-import { writeRepairerAgentRun } from "./agent-run-writeback.mjs";
  *
  * Creates repair tasks from acceptance findings, tracks repair attempts,
  * and manages the repair lifecycle.
  */
+import { writeRepairerAgentRun } from "./agent-run-writeback.mjs";
 
 import { randomUUID } from 'node:crypto';
 import { createGoal } from './goal-task-goals.mjs';

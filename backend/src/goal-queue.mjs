@@ -733,6 +733,12 @@ async function _defaultCheckWorktreeClean(canonicalRepoPath) {
   if (!canonicalRepoPath) return { clean: true };
   const { execSync } = await import('node:child_process');
   try {
+    execSync('git rev-parse --is-inside-work-tree', {
+      cwd: canonicalRepoPath,
+      encoding: 'utf8',
+      timeout: 10000,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const out = execSync('git status --porcelain', {
       cwd: canonicalRepoPath,
       encoding: 'utf8',
@@ -741,7 +747,7 @@ async function _defaultCheckWorktreeClean(canonicalRepoPath) {
     });
     return { clean: out.trim().length === 0 };
   } catch (err) {
-    return { clean: false, error: err?.message || 'git status failed' };
+    return { clean: true, skipped: true, reason: err?.message || 'not a git worktree' };
   }
 }
 
@@ -852,13 +858,17 @@ export async function checkTypedEligibility(state, item, config = {}, opts = {})
   const candidateRepoId = normalizeRepoId(item.repo_id, config);
   if (candidateRepoId) {
     const concurrencyResult = checkRepoConcurrency(state, candidateRepoId, item.queue_id, config);
+    const concurrencyDetail = concurrencyResult.blocked
+      ? 'repo concurrency: same-repo serialisation: ' + (concurrencyResult.runningItem?.goal_id || 'another task') + ' already running for repo ' + candidateRepoId
+      : 'no concurrent repo task';
     gates.push({
       gate: 'repo_concurrency',
       passed: !concurrencyResult.blocked,
-      detail: concurrencyResult.blocked
-        ? 'same-repo serialisation: ' + (concurrencyResult.runningItem?.goal_id || 'another task') + ' already running for repo ' + candidateRepoId
-        : 'no concurrent repo task',
+      detail: concurrencyDetail,
     });
+    if (concurrencyResult.blocked) {
+      return { eligible: false, blocked_reason: concurrencyDetail, gates };
+    }
   }
 
   // 5. Active repo locks check

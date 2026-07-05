@@ -161,6 +161,24 @@ export function classifyLegacyWaitingForReviewMigration(task) {
   });
 
   const reviewState = reviewClassification.reviewState;
+  const blockerCodes = blockers.map(b => b?.code).filter(Boolean);
+
+  // Semantic ambiguity is not machine-repairable, but legacy waiting_for_review
+  // items should still be migrated into the typed human-review state so they no
+  // longer remain ambiguous legacy backlog.
+  if (reason === 'semantic_ambiguity' || blockerCodes.includes('semantic_ambiguity')) {
+    return {
+      migration_action: LEGACY_MIGRATION_ACTIONS.AUTO_MIGRATE_TO_TYPED,
+      target_review_state: reviewState,
+      reason: `Legacy semantic ambiguity can be auto-migrated to typed state ${reviewState}`,
+      evidence: {
+        reason,
+        blocker_codes: blockerCodes,
+        review_state: reviewState,
+        machine_repairable: false,
+      },
+    };
+  }
 
   // 3. Machine-repairable — auto-migrate to typed state
   if (reviewClassification.metadata?.machine_repairable) {
@@ -170,7 +188,7 @@ export function classifyLegacyWaitingForReviewMigration(task) {
       reason: `Legacy review task can be auto-migrated to typed state ${reviewState}`,
       evidence: {
         reason,
-        blocker_codes: blockers.map(b => b?.code).filter(Boolean),
+        blocker_codes: blockerCodes,
         review_state: reviewState,
         machine_repairable: true,
       },
@@ -196,7 +214,7 @@ export function classifyLegacyWaitingForReviewMigration(task) {
     reason: 'Legacy review task classified as needing human review',
     evidence: {
       reason,
-      blocker_codes: blockers.map(b => b?.code).filter(Boolean),
+      blocker_codes: blockerCodes,
       review_state: reviewState,
       machine_repairable: false,
     },

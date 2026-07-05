@@ -173,9 +173,18 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
     return taskFailure("repair_budget_exhausted", { reason: codexResult.summary || "Repair budget exhausted." });
   }
 
+  const failed = failedCommands(verification);
+  for (const command of failed) {
+    const classified = commandFailureClass(command);
+    if (classified) {
+      return taskFailure(classified, { reason: `${command.cmd || command.command || "verification command"} failed.` });
+    }
+  }
+
   if (codexResult.failure_class && TASK_FAILURE_DEFINITIONS[codexResult.failure_class]) {
     return taskFailure(codexResult.failure_class, { reason: codexResult.summary || undefined });
   }
+
   if (verification.failure_class && TASK_FAILURE_DEFINITIONS[verification.failure_class]) {
     return taskFailure(verification.failure_class);
   }
@@ -212,14 +221,6 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
   }
   if (/deployment_failed|deploy_failed|deployment error/.test(combined)) {
     return taskFailure("deployment_failed", { reason: "Deployment step failed." });
-  }
-
-  const failed = failedCommands(verification);
-  for (const command of failed) {
-    const classified = commandFailureClass(command);
-    if (classified) {
-      return taskFailure(classified, { reason: `${command.cmd || command.command || "verification command"} failed.` });
-    }
   }
 
   if (verification.passed === false || /verification_command_failed|verification_failed|test failed|tests failed/.test(combined)) {

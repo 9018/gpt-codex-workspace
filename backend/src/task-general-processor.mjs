@@ -942,7 +942,13 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
       const convergenceBlocksRepair = convergenceResult.repairPlan === null
         && ["retry_wait", "quota_wait", "failed", "blocked", "restart_pending"].includes(convergenceResult.nextStatus);
-      if (convergenceBlocksRepair) {
+
+      // Respect convergence completion: if convergence already determined
+      // completion, do not create repair/review work for non-blocking findings.
+      if (convergenceResult.nextStatus === "completed") {
+        taskStatus = "completed";
+        taskResult.reason = convergenceResult.reason || convergenceResult.closureReason || "convergence_completed";
+      } else if (convergenceBlocksRepair) {
         taskStatus = convergenceResult.nextStatus;
         taskResult.reason = convergenceResult.reason || ("non_repairable_failure: " + (taskResult.failure_class || "unknown"));
         taskResult.repair_denied_reason = "Convergence classified this as non-repairable; no repair task created.";
