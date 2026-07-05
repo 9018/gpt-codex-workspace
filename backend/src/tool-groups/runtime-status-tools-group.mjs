@@ -121,7 +121,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           default_remote: config.defaultRemote,
           runtime_env_file_path: envPath,
           runtime_env_file_exists: envFileExists,
-          runtime_env_loaded: envLoadResult.keys.length > 0,
+          runtime_env_loaded: envLoadResult.loadedPath !== null,
           runtime_env_configured: isRuntimeEnvConfigured(),
           runtime_env_keys_loaded: envLoadResult.keys,
           state_path: statePath,
@@ -268,7 +268,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
             const s = getRestartSummary(getRestartStrategy(config));
             return s.restart_strategy_source || "default";
           })(),
-          runtime_env_loaded: envLoadResult.keys.length > 0,
+          runtime_env_loaded: envLoadResult.loadedPath !== null,
           runtime_env_configured: isRuntimeEnvConfigured(),
           runtime_env_file_path: envLoadResult.loadedPath || null,
           workspace_root: config.defaultWorkspaceRoot,

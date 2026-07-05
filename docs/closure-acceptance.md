@@ -5,7 +5,7 @@
 > MA1-MA9 delivery series.
 
 **Status:** Finalized
-**Canonical baseline:** `3502bc99c93abf83805761dfdb0f3793cd4d0a81`
+**Canonical baseline:** `c4ec54cd4c74641a50fabd0c4e98ae6f70a81693`
 **Canonical branch:** `main`
 **Last reviewed:** 2026-07-04
 
@@ -129,7 +129,7 @@ must follow standard secret management practices:
 
 Before accepting a deployment or release, the operator verifies:
 
-- [ ] Canonical HEAD matches the expected baseline commit (`3502bc99...`)
+- [ ] Canonical HEAD matches the expected baseline commit (`c4ec54c...`)
 - [ ] `cd backend && npm run check:syntax` passes
 - [ ] `cd backend && npm run check:imports` passes
 - [ ] `cd backend && npm run release:delivery-check` passes

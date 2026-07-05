@@ -311,7 +311,7 @@ test("MA10 launch initialization document exists and has required sections", asy
   assert.match(doc, /Productization Baseline/);
   assert.match(doc, /Startup \/ Default Configuration/);
   assert.match(doc, /One-Shot Production Initialization/);
-  assert.match(doc, /3502bc99c93abf83805761dfdb0f3793cd4d0a81/);
+  assert.match(doc, /c4ec54cd4c74641a50fabd0c4e98ae6f70a81693/);
   assert.ok(doc.length > 2000, "Document should be substantial");
 });
 
@@ -323,7 +323,7 @@ test("MA10 closure acceptance documentation exists and has required sections", a
   assert.match(doc, /Remaining Non-Security Risks/);
   assert.match(doc, /Operator-Facing Acceptance Procedure/);
   assert.match(doc, /Closure Criteria/);
-  assert.match(doc, /3502bc99c93abf83805761dfdb0f3793cd4d0a81/);
+  assert.match(doc, /c4ec54cd4c74641a50fabd0c4e98ae6f70a81693/);
   assert.ok(doc.length > 2000, "Document should be substantial");
 });
 

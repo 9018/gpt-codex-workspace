@@ -4,7 +4,7 @@
 > configuration, and one-shot production initialization procedure for GPTWork.
 
 **Status:** Finalized
-**Canonical baseline:** `3502bc99c93abf83805761dfdb0f3793cd4d0a81`
+**Canonical baseline:** `c4ec54cd4c74641a50fabd0c4e98ae6f70a81693`
 **Canonical branch:** `main`
 
 ---
@@ -36,7 +36,7 @@ gpt-codex-workspace/
 
 | Layer | Component | Language/Dependency |
 |---|---|---|
-| MCP Server | `gptwork-server.mjs` | Node.js >= 18, ESM |
+| MCP Server | `gptwork-server.mjs` | Node.js >= 22, ESM |
 | HTTP Transport | `http-handler.mjs` | Built-in Node.js HTTP |
 | State Store | `state-store.mjs` | JSON file persistence |
 | Worker | `codex-worker.mjs` | Subprocess orchestration |
@@ -160,7 +160,7 @@ cp .gptwork/runtime.env.example .gptwork/runtime.env
 
 ### 3.1 Prerequisites
 
-- Node.js >= 18
+- Node.js >= 22
 - Git (for worktree management and repository operations)
 - (Optional) `codex` CLI for `codex_exec` backend
 - (Optional) `zvec` binary for context vector indexing
@@ -175,7 +175,7 @@ git clone git@github.com:9018/gpt-codex-workspace.git
 cd gpt-codex-workspace
 
 # 2. Check out the launch baseline
-git checkout 3502bc99c93abf83805761dfdb0f3793cd4d0a81
+git checkout c4ec54cd4c74641a50fabd0c4e98ae6f70a81693
 
 # 3. Install dependencies
 cd backend && npm install
@@ -222,7 +222,7 @@ Expected health response:
   "status": "ok",
   "timestamp": "...",
   "version": "...",
-  "commit": "3502bc99c93abf83805761dfdb0f3793cd4d0a81",
+  "commit": "c4ec54cd4c74641a50fabd0c4e98ae6f70a81693",
   "uptime_seconds": ...
 }
 ```
