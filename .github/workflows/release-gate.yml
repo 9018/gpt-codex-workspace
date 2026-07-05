@@ -12,6 +12,8 @@ permissions:
 
 jobs:
   release-gate:
+    env:
+      GPTWORK_TOOL_MODE: full
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
