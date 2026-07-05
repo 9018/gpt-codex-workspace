@@ -314,6 +314,22 @@ function explicitVerificationFailed(result = {}) {
   return result?.verification?.passed === false || result?.final_verification?.passed === false;
 }
 
+/**
+ * Check whether the result carries authoritative terminal evidence that
+ * overrides stale fallback verification fields (`verification.passed`,
+ * `final_verification.passed`) from earlier cycles.
+ *
+ * When a task has been accepted, integrated, restarted, or auto-accepted,
+ * those fields take precedence over legacy verification flags that may
+ * have been set by a previous run whose state was later superseded.
+ */
+function hasAuthoritativeTerminalEvidence(result = {}) {
+  return result?.auto_accepted === true
+    || result?.reviewer_decision?.passed === true
+    || result?.reviewer_decision?.status === "accepted"
+    || result?.reviewer_decision?.status === "accepted_with_followups";
+}
+
 function completedPassedFinalizationProposal({ task, diagnostics }) {
   const result = task?.result;
   if (!result) {
@@ -329,25 +345,33 @@ function completedPassedFinalizationProposal({ task, diagnostics }) {
   const validation = validateResultContract(resultWithRuntimeFindings, { skipWorktreeCheck: true });
   const acceptance = normalizeAcceptanceForResult(resultWithRuntimeFindings);
 
-  if (explicitVerificationFailed(resultWithRuntimeFindings)) {
-    return {
-      next_action: "needs_gptchat_decision",
-      proposed_next_task: null,
-      recommendation: `Task "${task.title}" completed but verification failed. Keep acceptance checks in place and review or repair before finalization.`,
-      needs_gptchat_decision: true,
-      acceptance,
-    };
-  }
+  // Prefer authoritative terminal evidence (auto_accepted, reviewer_decision
+  // passed/accepted) over stale fallback verification fields from earlier
+  // cycles. A task that has been accepted, integrated, and restarted with
+  // zero blockers should not be held back by outdated verification flags.
+  const hasAuthoritative = hasAuthoritativeTerminalEvidence(resultWithRuntimeFindings);
 
-  if (!explicitVerificationPassed(resultWithRuntimeFindings)) {
-    return {
-      next_action: "needs_gptchat_decision",
-      proposed_next_task: null,
-      recommendation: `Task "${task.title}" completed without explicit passed verification evidence. GPTChat should review before finalization.`,
-      needs_gptchat_decision: true,
-      acceptance,
-      diagnosis_codes: ["verification_not_passed"],
-    };
+  if (!hasAuthoritative) {
+    if (explicitVerificationFailed(resultWithRuntimeFindings)) {
+      return {
+        next_action: "needs_gptchat_decision",
+        proposed_next_task: null,
+        recommendation: `Task "${task.title}" completed but verification failed. Keep acceptance checks in place and review or repair before finalization.`,
+        needs_gptchat_decision: true,
+        acceptance,
+      };
+    }
+
+    if (!explicitVerificationPassed(resultWithRuntimeFindings)) {
+      return {
+        next_action: "needs_gptchat_decision",
+        proposed_next_task: null,
+        recommendation: `Task "${task.title}" completed without explicit passed verification evidence. GPTChat should review before finalization.`,
+        needs_gptchat_decision: true,
+        acceptance,
+        diagnosis_codes: ["verification_not_passed"],
+      };
+    }
   }
 
   if (!validation.valid) {

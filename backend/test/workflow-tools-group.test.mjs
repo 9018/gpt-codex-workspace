@@ -170,6 +170,136 @@ test("proposal: completed + failed verification keeps manual decision", () => {
   assert.match(p.recommendation, /verification/i);
 });
 
+// ---------------------------------------------------------------------------
+// Evidence precedence: authoritative terminal evidence over stale verification
+// ---------------------------------------------------------------------------
+
+test("proposal: completed + auto_accepted + stale verification.failed -> auto_finalize_convergence", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+        auto_accepted: true,
+        reviewer_decision: { status: "accepted", passed: true },
+        acceptance_findings: [],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "auto_finalize_convergence");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_finalizing, true);
+});
+
+test("proposal: completed + reviewer_decision.passed + stale verification.failed -> auto_finalize_convergence", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+        reviewer_decision: { status: "accepted", passed: true },
+        acceptance_findings: [],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "auto_finalize_convergence");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_finalizing, true);
+});
+
+test("proposal: completed + reviewer_decision.status=accepted + stale verification.failed -> auto_finalize_convergence", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+        reviewer_decision: { status: "accepted", passed: true },
+        acceptance_findings: [],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "auto_finalize_convergence");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_finalizing, true);
+});
+
+test("proposal: completed + auto_accepted + stale final_verification.passed=false -> auto_finalize_convergence", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        final_verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+        auto_accepted: true,
+        reviewer_decision: { status: "accepted", passed: true },
+        acceptance_findings: [],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "auto_finalize_convergence");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.proposed_next_task, null);
+  assert.equal(p.auto_finalizing, true);
+});
+
+test("proposal: completed + no authoritative evidence + stale verification.failed -> needs_gptchat_decision", () => {
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "completed",
+      result: {
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test passed",
+        changed_files: ["src/file.js"],
+        verification: { passed: false, commands: [{ cmd: "npm test", exit_code: 1 }] },
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "needs_gptchat_decision");
+  assert.equal(p.needs_gptchat_decision, true);
+  assert.equal(p.proposed_next_task, null);
+  assert.match(p.recommendation, /verification/i);
+});
+
+
 test("proposal: completed + passed verification with mixed blockers keeps manual decision", () => {
   const p = generateProposal({
     diagnostics: makeDiagnostics(),
