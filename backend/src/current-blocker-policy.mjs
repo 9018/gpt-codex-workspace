@@ -12,6 +12,13 @@ import {
   normalizeTaskStatus,
 } from './task-status-taxonomy.mjs';
 
+// P0-MA22: No-mutation task profiles — changed_files=[] is a valid terminal.
+const NO_MUTATION_PROFILES = new Set([
+  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
+  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
+  'github_sync_only',
+]);
+
 export const CURRENT_WORK_DECISION_LABELS = Object.freeze({
   ACTIVE: 'active',
   REVIEW: 'review',
@@ -68,6 +75,20 @@ export function isVerificationNormalized(result) {
     if (result.verification?.passed === true || result.tests) {
       return true;
     }
+  }
+
+  // P0-MA22: No-mutation profiles with passing verification are always normalized.
+  // sync-only/verification-only tasks with changed_files=[] and passing verification
+  // should not be treated as having actionable blockers or review states.
+  // Only use explicit profile/kind markers -- generic flags like needs_integration
+  // or closure_type are too broad for this classification.
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files : [];
+  if (changedFiles.length === 0 && (result.verification?.passed === true || result.tests)) {
+    const isNoMutation = NO_MUTATION_PROFILES.has(result.operation_kind)
+      || NO_MUTATION_PROFILES.has(result.acceptance_profile)
+      || NO_MUTATION_PROFILES.has(result.acceptance_contract?.intent?.operation_kind)
+      || result.mutation_scope === 'none';
+    if (isNoMutation) return true;
   }
 
   return false;
@@ -204,11 +225,16 @@ function isVerifiedReadOnlyResult(result) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) return false;
   if (!Array.isArray(result.changed_files) || result.changed_files.length !== 0) return false;
   if (!(result.verification?.passed === true || hasStringEvidence(result.tests))) return false;
+  // P0-MA22: Also match no-mutation profiles (sync_only, verification_only, etc.)
   const text = [result.summary, result.tests, result.status, result.kind]
     .filter((value) => typeof value === 'string')
     .join(' ')
     .toLowerCase();
-  return /readonly|read-only/.test(text);
+  if (/readonly|read-only/.test(text)) return true;
+  if (NO_MUTATION_PROFILES.has(result.operation_kind)) return true;
+  if (NO_MUTATION_PROFILES.has(result.acceptance_profile)) return true;
+  if (result.mutation_scope === 'none') return true;
+  return false;
 }
 
 function hasActionableReviewEvidence(result, resultShape) {

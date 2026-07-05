@@ -1,5 +1,13 @@
 const TERMINAL_INTEGRATION_STATUSES = new Set(['merged', 'ff_only_merged', 'skipped', 'not_required']);
 
+// P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
+// legitimate terminal state (sync-only, verification-only, diagnostic, etc.).
+const NO_MUTATION_PROFILES = new Set([
+  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
+  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
+  'github_sync_only',
+]);
+
 function asObject(value) {
   return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 }
@@ -44,16 +52,20 @@ function hasRepairContext(task = {}, result = {}) {
 }
 
 function hasDiagnosticContext(task = {}, result = {}) {
-  // Diagnostic/no-mutation tasks with empty changed_files should be
+  // P0-MA22: No-mutation tasks (sync-only, verification-only, diagnostic,
+  // noop, already-integrated, etc.) with empty changed_files should be
   // treated as first-class valid completions, not missing-evidence failures.
   const operationKind = result.operation_kind || task.operation_kind || '';
   const mutationScope = result.mutation_scope || task.mutation_scope || '';
   const profile = result.acceptance_profile || '';
   const contract = result.acceptance_contract || task.acceptance_contract || {};
   const contractKind = contract.intent?.operation_kind || '';
-  return operationKind === 'diagnostic'
-    || profile === 'diagnostic'
-    || contractKind === 'diagnostic'
+  // P0-MA22: Use the no-mutation profile set.  Only check explicit profile/kind
+  // markers.  Generic flags like needs_integration or closure_type are not reliable
+  // for identifying no-mutation contexts.
+  return NO_MUTATION_PROFILES.has(operationKind)
+    || NO_MUTATION_PROFILES.has(profile)
+    || NO_MUTATION_PROFILES.has(contractKind)
     || mutationScope === 'none';
 }
 

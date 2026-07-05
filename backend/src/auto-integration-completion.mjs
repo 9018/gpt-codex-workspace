@@ -7,6 +7,15 @@ import { readVerificationReport, isVerificationReportReusable } from './verifica
 import { runLocalShell } from './workspace-service.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
+// P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
+// legitimate terminal state (sync-only, verification-only, diagnostic,
+// noop, already_integrated, repair_noop, etc.).
+const NO_MUTATION_PROFILES = new Set([
+  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
+  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
+  'github_sync_only',
+]);
+
 const AUTO_INTEGRATION_STATUSES = new Set(['branch_pushed', 'pr_opened']);
 const BLOCKED_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed', 'locked']);
 const REPAIRABLE_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed']);
@@ -197,17 +206,18 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   if (hasBlockerFindings(taskResult)) {
     blockers.push(blocker('blocker_findings_present', 'Existing blocker findings prevent automatic completion.'));
   }
-  // Diagnostic/no-mutation tasks with changed_files=[] should not be blocked
-  // because the acceptance contract marks requires_integration=false and
-  // auto_complete_when_blocking_requirements_pass=true.
-  // Diagnostic/no-mutation tasks have specific operation_kind or
-  // acceptance_contract markers.  Do NOT use generic properties like
-  // needs_integration or integration.required here — those are too broad
-  // and match non-diagnostic tasks with no changed files.
-  const isDiagnosticNoMutation = (taskResult.operation_kind === 'diagnostic')
-    || (taskResult.acceptance_profile === 'diagnostic')
-    || (taskResult.acceptance_contract?.intent?.operation_kind === 'diagnostic')
-    || (taskResult.mutation_scope === 'none');
+  // P0-MA22: No-mutation tasks (sync-only, verification-only, diagnostic,
+  // noop, already-integrated, etc.) with changed_files=[] should not be
+  // blocked.  These tasks have no code to produce changed_files from.
+  // Check all relevant metadata sources against the known no-mutation
+  // profile set to avoid false positives for genuine code-change tasks.
+  // P0-MA22: Use the no-mutation profile set.  Only check explicit profile/kind
+  // markers from the task result or its acceptance contract.  Do NOT use generic
+  // flags like needs_integration or closure_type which are too broad.
+  const isDiagnosticNoMutation = NO_MUTATION_PROFILES.has(taskResult.operation_kind)
+    || NO_MUTATION_PROFILES.has(taskResult.acceptance_profile)
+    || NO_MUTATION_PROFILES.has(taskResult.acceptance_contract?.intent?.operation_kind)
+    || taskResult.mutation_scope === 'none';
   if (changedFiles.length === 0 && !noChangeRepairEligible && !isDiagnosticNoMutation) {
     blockers.push(blocker('changed_files_missing', 'No changed_files evidence is present.'));
   }

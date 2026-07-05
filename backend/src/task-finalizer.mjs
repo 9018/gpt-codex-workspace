@@ -1,4 +1,12 @@
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+
+// P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
+// legitimate terminal state and integration is not meaningful.
+const NO_MUTATION_PROFILES = new Set([
+  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
+  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
+  'github_sync_only',
+]);
 import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
 
 
@@ -203,7 +211,7 @@ function integrationRequired(evidence = {}) {
   if (result.integration_not_required === true || result.noop_result === true || result.readonly_result === true || result.already_integrated_result === true) return false;
   if (Array.isArray(result.changed_files) && result.changed_files.length > 0 && result.commit) {
     // Check operation_kind to avoid false positives
-    const noopLikeKinds = new Set(["noop", "readonly_validation", "already_integrated", "diagnostic"]);
+    const noopLikeKinds = NO_MUTATION_PROFILES;
     if (!noopLikeKinds.has(result.operation_kind)) return true;
   }
   return false;

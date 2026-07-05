@@ -85,8 +85,11 @@ const RECONCILABLE_BLOCKER_CODES = new Set([
   'report_missing',
 ]);
 
-/** Non-mutation / diagnostic-like profiles that can have changed_files_mismatch as non-blocking. */
-const DIAGNOSTIC_NO_MUTATION_PROFILES = new Set([
+/** P0-MA22: No-mutation profile set -- tasks where changed_files=[] is a
+ * legitimate terminal state. Used to reconcile stale changed_files_missing
+ * and changed_files_mismatch blockers for sync-only/verification tasks.
+ */
+const NO_MUTATION_PROFILES = new Set([
   'diagnostic',
   'noop',
   'readonly_validation',
@@ -97,6 +100,9 @@ const DIAGNOSTIC_NO_MUTATION_PROFILES = new Set([
   'sync_only',
   'github_sync_only',
 ]);
+
+/** Non-mutation / diagnostic-like profiles that can have changed_files_mismatch as non-blocking. */
+const DIAGNOSTIC_NO_MUTATION_PROFILES = NO_MUTATION_PROFILES;
 
 // ---------------------------------------------------------------------------
 // Single-item reconciliation
@@ -477,6 +483,48 @@ function evaluateBlockerReconciliation(code, blocker, context) {
     task, bundle, state,
     isCompleted, isTerminal, isIntegrated, hasSuccessor,
   } = context;
+
+  // ---- changed_files_missing ----
+  // P0-MA22: No-mutation/sync-only/verification tasks with changed_files=[]
+  // are valid terminals.  If the task has verification evidence and the
+  // acceptance profile is a known no-mutation profile, reconcile this
+  // blocker without requiring integration or completion status.
+  if (code === 'changed_files_missing') {
+    const result = task.result || {};
+    const changedFiles = Array.isArray(result.changed_files) ? result.changed_files : [];
+    const bundleResult = bundle.result_summary || {};
+    const profile = result.acceptance_profile || bundle.acceptance_contract_summary?.intent?.operation_kind || '';
+    const opKind = result.operation_kind || '';
+    const isNoMutation = NO_MUTATION_PROFILES.has(profile) || NO_MUTATION_PROFILES.has(opKind)
+      || result.mutation_scope === 'none';
+    const verificationPassed = bundle.verification?.passed === true || result.verification?.passed === true;
+    const acceptancePassed = bundle.acceptance?.passed === true || bundle.acceptance?.status === 'accepted';
+    const commitExists = Boolean(bundleResult.commit || result.commit);
+    const alreadyIntegrated = bundle.integration?.merged === true || bundle.integration?.commit;
+    const recoveredAlreadyIntegrated = result.delivery_result_recovery?.reason === 'already_integrated'
+      && result.delivery_result_recovery?.recovered === true;
+
+    if (changedFiles.length === 0 && isNoMutation && (verificationPassed || acceptancePassed || commitExists)) {
+      return {
+        reconciled: true,
+        type: RECONCILIATION_TYPES.RECONCILED_BY_COMPLETION,
+        resolved_by: 'no_mutation_profile_verification_passed',
+        evidence: {
+          profile: profile || opKind || 'unknown',
+          changed_files_empty: true,
+          verification_passed: verificationPassed,
+          acceptance_passed: acceptancePassed,
+          commit: bundleResult.commit || result.commit || null,
+          already_integrated: alreadyIntegrated || recoveredAlreadyIntegrated,
+          needs_integration: result.needs_integration,
+          closure_type: result.closure_type,
+          reason: 'No-mutation task with passing verification -- changed_files=[] is a valid terminal state',
+        },
+        message: 'changed_files_missing reconciled by no-mutation profile "' + (profile || opKind || 'unknown') + '" with verification/commit evidence',
+      };
+    }
+    // Fall through to generic reconciliation
+  }
 
   // ---- changed_files_mismatch ----
   if (code === 'changed_files_mismatch') {
