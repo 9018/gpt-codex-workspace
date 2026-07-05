@@ -214,17 +214,26 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   // P0-MA22: Use the no-mutation profile set.  Only check explicit profile/kind
   // markers from the task result or its acceptance contract.  Do NOT use generic
   // flags like needs_integration or closure_type which are too broad.
+  // P0-UA6: Detect no-mutation via explicit evidence (no_mutation=true or
+  // repo_mutated=false) which covers verification-only / no-change validation
+  // tasks where the acceptance contract was inferred as code_change but no
+  // actual code mutation occurred.  These fields are set by
+  // applyLegacyNoChangeCompatibility in task-general-processor.mjs for tasks
+  // that complete with changed_files=[], verification.passed=true, and no commit.
   const isDiagnosticNoMutation = NO_MUTATION_PROFILES.has(taskResult.operation_kind)
     || NO_MUTATION_PROFILES.has(taskResult.acceptance_profile)
     || NO_MUTATION_PROFILES.has(taskResult.acceptance_contract?.intent?.operation_kind)
     || taskResult.mutation_scope === 'none';
-  if (changedFiles.length === 0 && !noChangeRepairEligible && !isDiagnosticNoMutation) {
+  const hasNoMutationEvidence = changedFiles.length === 0
+    && (taskResult.no_mutation === true || taskResult.repo_mutated === false);
+  const isNoChangeCompletion = noChangeRepairEligible || isDiagnosticNoMutation || hasNoMutationEvidence;
+  if (changedFiles.length === 0 && !isNoChangeCompletion) {
     blockers.push(blocker('changed_files_missing', 'No changed_files evidence is present.'));
   }
-  if ((!commit || commit === 'none') && !noChangeRepairEligible) {
+  if ((!commit || commit === 'none') && !isNoChangeCompletion) {
     blockers.push(blocker('commit_missing', 'No task commit evidence is present.'));
   }
-  if (!taskBranch && !noChangeRepairEligible) {
+  if (!taskBranch && !isNoChangeCompletion) {
     blockers.push(blocker('task_branch_missing', 'Task branch evidence is missing.'));
   }
   if (resolvedRepo?.worktree_lifecycle?.mode !== 'git_worktree' && !noChangeRepairEligible) {
@@ -250,6 +259,7 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
     task_worktree_path: taskWorktreePath,
     canonical_repo_path: canonicalRepoPath,
     no_change_repair: noChangeRepair,
+    has_no_mutation_evidence: hasNoMutationEvidence,
   };
 }
 
@@ -387,7 +397,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       evidence.blockers.push(blocker('canonical_repo_missing', 'Canonical repo path does not exist.'));
       return evidence;
     }
-    if (candidate.no_change_repair?.completion_eligible !== true && !existsSync(candidate.task_worktree_path)) {
+    if (candidate.no_change_repair?.completion_eligible !== true && !candidate.has_no_mutation_evidence && !existsSync(candidate.task_worktree_path)) {
       evidence.reason = 'task_worktree_missing';
       evidence.blockers.push(blocker('task_worktree_missing', 'Task worktree path does not exist.'));
       return evidence;
@@ -400,11 +410,11 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       return evidence;
     }
 
-    if (candidate.no_change_repair?.completion_eligible === true) {
+    if (candidate.no_change_repair?.completion_eligible === true || candidate.has_no_mutation_evidence === true) {
       evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
       if (!evidence.canonical_clean_before) {
         evidence.reason = 'canonical_dirty';
-        evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before no-change repair completion.'));
+        evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before no-change completion.'));
         return evidence;
       }
       evidence.canonical_clean_after = evidence.canonical_clean_before;
@@ -416,12 +426,12 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
         merged: true,
         skipped: true,
         already_integrated: true,
-        no_change_repair: true,
+        no_change_repair: candidate.has_no_mutation_evidence !== true,
         commit: candidate.commit || canonicalHead,
       };
       evidence.verification_report = {
         passed: true,
-        profile: taskResult.verification?.profile || taskResult.acceptance_profile || 'repair_noop',
+        profile: taskResult.verification?.profile || taskResult.acceptance_profile || 'verification_only',
         requested_profile: taskResult.verification?.requested_profile || null,
         head: taskResult.verification?.head || canonicalHead,
         dirty: false,
@@ -430,7 +440,9 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       };
       evidence.completed = true;
       evidence.eligible = true;
-      evidence.reason = 'no_change_repair_already_integrated_and_verified';
+      evidence.reason = candidate.has_no_mutation_evidence
+        ? 'verification_only_completed'
+        : 'no_change_repair_already_integrated_and_verified';
       return evidence;
     }
 

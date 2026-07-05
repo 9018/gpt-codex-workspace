@@ -341,6 +341,133 @@ test('analyzeAutoIntegrationCandidate blocks repair_noop without passed verifica
   assert.ok(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'));
 });
 
+test('analyzeAutoIntegrationCandidate allows verification-only with no_mutation evidence', () => {
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_verification_only', title: 'P0-UA6 full regression validation' },
+    taskResult: baseTaskResult(null, {
+      changed_files: [],
+      commit: null,
+      no_mutation: true,
+      verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+  });
+
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.reason, 'eligible');
+  assert.equal(candidate.has_no_mutation_evidence, true);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'), false);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'commit_missing'), false);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'task_branch_missing'), false);
+});
+
+test('analyzeAutoIntegrationCandidate allows verification-only with repo_mutated false', () => {
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_repo_mutated_false', title: 'P0-UA6 full regression validation' },
+    taskResult: baseTaskResult(null, {
+      changed_files: [],
+      commit: null,
+      repo_mutated: false,
+      verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+  });
+
+  assert.equal(candidate.eligible, true);
+  assert.equal(candidate.reason, 'eligible');
+  assert.equal(candidate.has_no_mutation_evidence, true);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'), false);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'commit_missing'), false);
+  assert.equal(candidate.blockers.some((entry) => entry.code === 'task_branch_missing'), false);
+});
+
+test('analyzeAutoIntegrationCandidate keeps generic builder changed_files empty blocked even with verification passed', () => {
+  // A generic builder task with changed_files=[] but NO no_mutation/repo_mutated 
+  // evidence should still be blocked. This distinguishes code_change tasks that
+  // failed to produce changes from legitimate verification-only tasks.
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_builder_noop2', title: 'Build feature with no changes' },
+    taskResult: baseTaskResult(null, {
+      changed_files: [],
+      commit: null,
+      verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }], findings: [] },
+      reviewer_decision: { status: 'accepted', passed: true },
+      integration: { status: 'not_required', required: false },
+    }),
+    resolvedRepo: {
+      canonical_repo_path: '/tmp/canonical',
+      task_worktree_path: '/tmp/worktree',
+      worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/worktree' },
+    },
+    integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+  });
+
+  assert.equal(candidate.eligible, false);
+  assert.equal(candidate.has_no_mutation_evidence, false);
+  assert.ok(candidate.blockers.some((entry) => entry.code === 'changed_files_missing'));
+});
+
+test('runAutoIntegrationCompletion completes verification-only no_mutation task without merge', async () => {
+  const fixture = createGitFixture('no-mutation-verify');
+  try {
+    const canonicalHead = git(fixture.canonical, ['rev-parse', 'HEAD']);
+    const commands = [];
+    const result = await runAutoIntegrationCompletion({
+      task: { id: 'task_no_mutation_verify' },
+      goal: { id: 'goal_no_mutation_verify' },
+      taskResult: baseTaskResult(null, {
+        changed_files: [],
+        commit: null,
+        no_mutation: true,
+        repo_mutated: false,
+        verification: { 
+          passed: true,
+          profile: 'verification_only',
+          commands: [{ cmd: 'npm --prefix backend test', exit_code: 0 }],
+          findings: [],
+        },
+        reviewer_decision: { status: 'accepted', passed: true },
+        integration: { status: 'not_required', required: false },
+      }),
+      resolvedRepo: resolvedRepo(fixture),
+      integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+      config: { defaultBranch: 'main' },
+      runCommandFn: async () => { return { returncode: 0, stdout: 'ok', stderr: '' }; },
+    });
+
+    assert.equal(result.attempted, true);
+    assert.equal(result.eligible, true);
+    assert.equal(result.completed, true);
+    assert.equal(result.reason, 'verification_only_completed');
+    assert.equal(result.merge.attempted, false);
+    assert.equal(result.merge.merged, true);
+    assert.equal(result.merge.skipped, true);
+    assert.equal(result.merge.already_integrated, true);
+    assert.equal(result.verification_report.passed, true);
+    assert.equal(result.verification_report.profile, 'verification_only');
+    assert.equal(result.verification_report.head, canonicalHead);
+    assert.equal(result.verification_report.dirty, false);
+    // Canonical should remain unchanged
+    assert.equal(git(fixture.canonical, ['rev-parse', 'HEAD']), canonicalHead);
+  } finally {
+    rmSync(fixture.root, { recursive: true, force: true });
+  }
+});
+
 test('classifyIntegrationQueueResult marks merged and skipped as terminal completion', () => {
   assert.deepEqual(classifyIntegrationQueueResult({ ok: true, status: 'merged', merged: true }), {
     kind: 'terminal_completed',

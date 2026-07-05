@@ -253,10 +253,13 @@ function inferProfileFromTask(task = {}, result = {}) {
   const changed = Array.isArray(result.changed_files) ? result.changed_files :
     Array.isArray(task.changed_files) ? task.changed_files : [];
 
-  // No changed files: return DEFAULT for backward compatibility
-  // (default profile still checks verification and changed_files_match_git)
-  // sync_only is only returned for explicit sync mode tasks
-  if (changed.length === 0) return ACCEPTANCE_PROFILES.DEFAULT;
+  // P0-UA6: No changed files → return VERIFICATION_ONLY.
+  // The DEFAULT profile requires changed_files_present which cannot be
+  // satisfied for changed_files=[]. VERIFICATION_ONLY does not require
+  // changed_files_present, allowing verification-only / no-mutation tasks
+  // to complete when verification passed.  Tasks without passed verification
+  // still fail since VERIFICATION_ONLY requires verification_passed.
+  if (changed.length === 0) return ACCEPTANCE_PROFILES.VERIFICATION_ONLY;
 
   const allDocs = changed.length > 0 && changed.every((f) => f.startsWith('docs/') || f.endsWith('.md'));
   if (allDocs) return ACCEPTANCE_PROFILES.DOCS_ONLY;
