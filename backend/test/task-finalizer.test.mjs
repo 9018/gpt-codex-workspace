@@ -185,3 +185,78 @@ test("task-finalizer: unrecoverable failed execution can remain failed", () => {
   assert.equal(decision.status, "failed");
   assert.equal(decision.reason, "unrecoverable_execution_failure");
 });
+
+test("task-finalizer: P0-MA19 diagnostic/no-mutation task with changed_files=[] completes automatically", () => {
+  const decision = decideTaskFinalState({
+    current_status: "completed",
+    codex_result: {
+      status: "completed",
+      kind: "codex_executed",
+      operation_kind: "diagnostic",
+      changed_files: [],
+      commit: "abc123",
+      no_mutation: true,
+      needs_integration: false,
+      acceptance_contract: {
+        intent: { operation_kind: "diagnostic" },
+        requirements: { requires_integration: false },
+        verification_plan: { profile: "diagnostic", required_commands: [], report_must_be_clean: false },
+        completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+        blocking_requirements: [
+          { id: "diagnostic_report", evidence: ["report"] },
+          { id: "no_mutation_evidence", evidence: ["no_mutation"] },
+        ],
+      },
+      verification: { passed: true },
+      reviewer_decision: { status: "accepted", passed: true },
+      contract_verification: {
+        blocking_passed: true,
+        completion_eligible: true,
+        requires_review: false,
+        blockers: [],
+      },
+      acceptance_findings: [],
+    },
+    verification: { passed: true, findings: [] },
+    acceptance: { passed: true, status: "accepted" },
+    contract_verification: {
+      blocking_passed: true,
+      completion_eligible: true,
+      requires_review: false,
+      blockers: [],
+    },
+    integration: { required: false },
+    repair_budget: { attempts_remaining: 0 },
+  });
+
+  assert.equal(decision.status, "completed",
+    "Diagnostic task should be completed, not waiting_for_review");
+  assert.equal(decision.safe_to_auto_advance, true,
+    "Completed diagnostic task should allow auto-advance");
+  assert.equal(decision.integration_effect.required, false,
+    "Diagnostic task should not require integration");
+});
+
+test("task-finalizer: P0-MA19 diagnostic/no-mutation task without explicit no_mutation field still completes via terminal evidence", () => {
+  const decision = decideTaskFinalState({
+    current_status: "completed",
+    codex_result: {
+      status: "completed",
+      kind: "codex_executed",
+      changed_files: [],
+      verification: { passed: true },
+      reviewer_decision: { status: "accepted", passed: true },
+      contract_verification: {
+        blocking_passed: true,
+        completion_eligible: true,
+        requires_review: false,
+        blockers: [],
+      },
+      acceptance_findings: [],
+    },
+    verification: { passed: true, findings: [] },
+    acceptance: { passed: true, status: "accepted" },
+    repair_budget: { attempts_remaining: 0 },
+  });
+  assert.equal(decision.status, "completed");
+});

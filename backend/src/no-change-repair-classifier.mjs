@@ -43,6 +43,32 @@ function hasRepairContext(task = {}, result = {}) {
   return false;
 }
 
+function hasDiagnosticContext(task = {}, result = {}) {
+  // Diagnostic/no-mutation tasks with empty changed_files should be
+  // treated as first-class valid completions, not missing-evidence failures.
+  const operationKind = result.operation_kind || task.operation_kind || '';
+  const mutationScope = result.mutation_scope || task.mutation_scope || '';
+  const profile = result.acceptance_profile || '';
+  const contract = result.acceptance_contract || task.acceptance_contract || {};
+  const contractKind = contract.intent?.operation_kind || '';
+  return operationKind === 'diagnostic'
+    || profile === 'diagnostic'
+    || contractKind === 'diagnostic'
+    || mutationScope === 'none';
+}
+
+function hasDiagnosticOutcomeEvidence({ task = {}, result = {}, integrationResult = {} } = {}) {
+  // For diagnostic tasks, outcome evidence is the no_mutation and
+  // diagnostic_report specified in the acceptance contract.
+  if (bool(result.no_mutation) || result.repo_mutated === false) return true;
+  if (result.kind === 'diagnostic_report' || result.acceptance_profile === 'diagnostic') return true;
+  if (bool(result.diagnostic_evidence?.report) || bool(result.diagnostic_evidence?.findings)) return true;
+  if (bool(result.no_mutation_evidence) || bool(result.diagnostic_report)) return true;
+  const text = textOf({ task, result, integrationResult });
+  return /diagnostic[_ ]?report|no[_ ]mutation|readonly[_ ]?analysis|no code changes needed/.test(text);
+}
+
+
 function hasOutcomeMarker({ task = {}, result = {}, integrationResult = {} } = {}) {
   const evidence = asObject(result.no_change_repair_evidence || result.no_change_repair || result.already_integrated_evidence);
   if (bool(result.repair_noop) || bool(result.already_integrated) || bool(result.no_code_changes_needed)) return true;
@@ -134,17 +160,28 @@ export function classifyNoChangeRepairOutcome({ task = {}, taskResult = {}, resu
   const target = targetEvidence(result, integrationResult);
   const repairContext = hasRepairContext(task, result);
   const outcomeMarker = hasOutcomeMarker({ task, result, integrationResult });
+  const diagnosticContext = hasDiagnosticContext(task, result);
+  const diagnosticOutcome = diagnosticContext ? hasDiagnosticOutcomeEvidence({ task, result, integrationResult }) : false;
   const verification = verificationPassed(result);
   const acceptance = acceptancePassed(result);
   const unresolved = unresolvedBlockers(result);
   const integration = integrationSatisfied(result, integrationResult);
   const blockers = [];
 
+  // Diagnostic/no-mutation tasks should be treated as first-class completions
+  // when they have proper diagnostic outcome evidence.  The repair-task-only
+  // restrictions do not apply because diagnostic tasks are explicitly
+  // recognized as valid changed_files=[]
+  const isDiagnosticCompletion = diagnosticContext && diagnosticOutcome && changedFiles.length === 0;
+  const repairOrDiagnostic = repairContext || isDiagnosticCompletion;
+
   if (changedFiles.length > 0) blockers.push({ code: 'changed_files_present', message: 'No-change repair completion only applies when changed_files is empty.' });
-  if (!repairContext) blockers.push({ code: 'repair_context_missing', message: 'Task is not a repair task.' });
-  if (!outcomeMarker) blockers.push({ code: 'no_change_outcome_missing', message: 'No deterministic repair_noop or already-integrated outcome marker is present.' });
-  if (!target.present) blockers.push({ code: 'already_integrated_target_evidence_missing', message: 'No commit reachability, empty intended diff, or canonical file-match evidence is present.' });
-  if (!verification) blockers.push({ code: 'verification_not_passed', message: 'No passed verification evidence is present.' });
+  if (!repairOrDiagnostic) blockers.push({ code: 'repair_context_missing', message: 'Task is not a repair task nor a diagnostic task.' });
+  if (!repairOrDiagnostic && !outcomeMarker) blockers.push({ code: 'no_change_outcome_missing', message: 'No deterministic repair_noop or already-integrated outcome marker is present.' });
+  if (!repairOrDiagnostic && !target.present) blockers.push({ code: 'already_integrated_target_evidence_missing', message: 'No commit reachability, empty intended diff, or canonical file-match evidence is present.' });
+  // For diagnostic completions, verification is optional (contract says
+  // required_commands=[] and report_must_be_clean=false).
+  if (!isDiagnosticCompletion && !verification) blockers.push({ code: 'verification_not_passed', message: 'No passed verification evidence is present.' });
   if (!acceptance) blockers.push({ code: 'acceptance_not_passed', message: 'No accepted reviewer or acceptance verdict is present.' });
   if (unresolved.length > 0) blockers.push({ code: 'unresolved_blockers_present', message: 'Unresolved blocker or major findings are present.', findings: unresolved });
   if (!integration) blockers.push({ code: 'integration_not_satisfied', message: 'Integration is still required and is not terminal.' });

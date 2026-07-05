@@ -197,7 +197,18 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   if (hasBlockerFindings(taskResult)) {
     blockers.push(blocker('blocker_findings_present', 'Existing blocker findings prevent automatic completion.'));
   }
-  if (changedFiles.length === 0 && !noChangeRepairEligible) {
+  // Diagnostic/no-mutation tasks with changed_files=[] should not be blocked
+  // because the acceptance contract marks requires_integration=false and
+  // auto_complete_when_blocking_requirements_pass=true.
+  // Diagnostic/no-mutation tasks have specific operation_kind or
+  // acceptance_contract markers.  Do NOT use generic properties like
+  // needs_integration or integration.required here — those are too broad
+  // and match non-diagnostic tasks with no changed files.
+  const isDiagnosticNoMutation = (taskResult.operation_kind === 'diagnostic')
+    || (taskResult.acceptance_profile === 'diagnostic')
+    || (taskResult.acceptance_contract?.intent?.operation_kind === 'diagnostic')
+    || (taskResult.mutation_scope === 'none');
+  if (changedFiles.length === 0 && !noChangeRepairEligible && !isDiagnosticNoMutation) {
     blockers.push(blocker('changed_files_missing', 'No changed_files evidence is present.'));
   }
   if ((!commit || commit === 'none') && !noChangeRepairEligible) {

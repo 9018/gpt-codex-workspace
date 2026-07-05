@@ -335,6 +335,30 @@ export async function runDeliveryRecovery({
           }
         }
       }
+      // P0-MA19: Diagnostic/no-mutation tasks with changed_files=[] are valid
+      // terminals.  If the task is a diagnostic/no-mutation task that passed
+      // acceptance, changed_files=[] is expected, not a recovery failure.
+      const isDiagnostic = (taskResult.operation_kind === 'diagnostic')
+        || (taskResult.acceptance_profile === 'diagnostic')
+        || (taskResult.mutation_scope === 'none')
+        || (taskResult.acceptance_contract?.intent?.operation_kind === 'diagnostic');
+      if (isDiagnostic) {
+        const canonicalClean = isClean(canonicalRepoPath);
+        evidence.recovered = true;
+        evidence.eligible = true;
+        evidence.commit_integrated = true;
+        evidence.commit = normalizeCommit(taskResult.commit || parsedResult.commit) || evidence.commit || null;
+        evidence.local_head = safeGit(canonicalRepoPath, ["rev-parse", "HEAD"]) || evidence.local_head;
+        evidence.remote_head = evidence.remote_head || evidence.local_head;
+        evidence.canonical_clean = canonicalClean;
+        evidence.canonical_clean_before = canonicalClean;
+        evidence.canonical_clean_after = canonicalClean;
+        evidence.reason = "diagnostic_no_mutation_completed";
+        evidence.verification = { passed: true, commands: evidence.commands || [] };
+        evidence.tests = taskResult.tests || "diagnostic task (no mutation, no changed files)";
+        evidence.warnings.push("Diagnostic/no-mutation task with changed_files=[]: no recovery needed.");
+        return finishEvidence(evidence);
+      }
       addBlocker(evidence, "no_changed_files", "Task worktree has no changed files to recover.");
       evidence.eligible = false;
       return finishEvidence(evidence);
