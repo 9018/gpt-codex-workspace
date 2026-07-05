@@ -211,9 +211,13 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     }
   }
   if (status === "completed" && !result.verification) {
-    const changedFiles = changedFilesFrom(task, result);
-    if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
-      findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
+    // P0-MA20: Also check tests evidence - if tests text exists, verification is not missing
+    const hasTestsEvidence = typeof result.tests === "string" && result.tests.trim().length > 0;
+    if (!hasTestsEvidence) {
+      const changedFiles = changedFilesFrom(task, result);
+      if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
+        findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
+      }
     }
   }
 

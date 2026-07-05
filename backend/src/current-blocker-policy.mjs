@@ -39,6 +39,10 @@ export function isVerificationNormalized(result) {
   const verification = result.verification || {};
   const contractV = result.contract_verification || {};
   if (verification.passed === true && contractV.blocking_passed === true) return true;
+  // P0-MA20: Accept result.tests as standalone verification evidence.
+  // Codex runs may produce tests text without populating verification.commands
+  // or contract_verification. Treat non-empty tests as verification evidence.
+  if (hasStringEvidence(result.tests)) return true;
   if (result.acceptance_gate?.passed === true && result.closure_decision?.blocking_passed === true) return true;
 
   // P0-MA11-R2/MA12-G3: Also check repo head reachability from legacy

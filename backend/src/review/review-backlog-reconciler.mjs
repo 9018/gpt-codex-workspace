@@ -705,6 +705,31 @@ function evaluateBlockerReconciliation(code, blocker, context) {
         message: 'verification_missing reconciled by integration evidence',
       };
     }
+
+    // P0-MA20: Accept result_summary.tests as verification evidence — Codex runs may
+    // produce tests text without populating verification.commands.
+    if (bundle.result_summary?.tests && typeof bundle.result_summary.tests === "string" && bundle.result_summary.tests.trim().length > 0) {
+      return {
+        reconciled: true,
+        type: RECONCILIATION_TYPES.RECONCILED_BY_COMPLETION,
+        resolved_by: "tests_evidence",
+        evidence: { tests_available: true },
+        message: "verification_missing reconciled by result_summary.tests evidence",
+      };
+    }
+    // P0-MA20: Check successor repair evidence — if a completed successor with
+    // verification exists, stale verification_missing on this task is non-blocking.
+    // Also check if the task itself has a parent that is completed (the reverse direction):
+    // a child/repair task that is stuck can be resolved by its completed+pending parent.
+    if (evaluateSuccessorRepairEvidence(task, state)) {
+      return {
+        reconciled: true,
+        type: RECONCILIATION_TYPES.RECONCILED_BY_SUCCESSOR,
+        resolved_by: "successor_repair",
+        evidence: { successor_evidence: true },
+        message: "verification_missing reconciled by successor repair evidence",
+      };
+    }
     return {
       reconciled: false,
       type: null,

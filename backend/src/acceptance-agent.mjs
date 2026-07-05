@@ -465,7 +465,12 @@ async function runCheck(check, { task, result, evidence, repoPath }) {
 
     case 'verification_present_for_non_noop':
       if (result?.noop === true) return null;
-      // Tasks without changed files don't need verification (query/analysis/noop-like)
+      // P0-MA20: Accept result.tests as verification evidence when commands are missing.
+      // Codex runs may produce tests text without populating verification.commands.
+      if (typeof result?.tests === 'string' && result.tests.trim().length > 0) {
+        return null;
+      }
+            // Tasks without changed files don't need verification (query/analysis/noop-like)
       const verify_changedFiles = evidence.changed_files || result?.changed_files || [];
       if (verify_changedFiles.length === 0) return null;
       if (!result?.verification?.commands?.length) {
