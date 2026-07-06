@@ -26,6 +26,10 @@ export const ERROR_CATEGORIES = {
   TIMEOUT: 'timeout',
   /** P0: Network-level failures — retry with backoff, NOT code repair */
   NETWORK: 'network',
+  /** P0-07: Dirty worktree after codex exec — delivery recovery needed */
+  DIRTY_WORKTREE_AFTER_CODEX: 'dirty_worktree_after_codex',
+  /** P0-07: Changed_files mismatch — git status doesn't match reported changed_files */
+  CHANGED_FILES_MISMATCH: 'changed_files_mismatch',
   UNKNOWN: 'unknown',
 };
 
@@ -89,6 +93,15 @@ export function classifyError(error) {
   if (msg.includes('worker crash') || msg.includes('child pid dead') || msg.includes('worker died')) {
     return { category: ERROR_CATEGORIES.WORKER_CRASH, code: 'worker_crash', recoverable: true, retry_budget: 1 };
   }
+  // ---- P0-07: Dirty worktree after codex exec ----
+  if (msg.includes('dirty worktree') || msg.includes('dirty_worktree_after_codex') || msg.includes('worktree is dirty')) {
+    return { category: ERROR_CATEGORIES.DIRTY_WORKTREE_AFTER_CODEX, code: 'dirty_worktree_after_codex', recoverable: true, retry_budget: 0 };
+  }
+  // ---- P0-07: Changed_files mismatch ----
+  if (msg.includes('changed_files') && (msg.includes('mismatch') || msg.includes('inconsistent') || msg.includes('discrepancy'))) {
+    return { category: ERROR_CATEGORIES.CHANGED_FILES_MISMATCH, code: 'changed_files_mismatch', recoverable: true, retry_budget: 0 };
+  }
+
   if (msg.includes('result.json missing') || msg.includes('result missing') || msg.includes('no result')) {
     return { category: ERROR_CATEGORIES.RESULT_MISSING, code: 'result_missing', recoverable: true, retry_budget: 1 };
   }

@@ -300,6 +300,22 @@ export async function runDeliveryRecovery({
 
     evidence.changed_files = collectChangedFiles(worktreePath, evidence.changed_files);
     if (evidence.changed_files.length === 0) {
+      // P0-07: Preserve changed_files from commit diff when worktree is clean
+      // but a commit exists.  Derive changed_files from git diff of the
+      // commit against its parent so the review packet has accurate evidence.
+      const taskCommit = normalizeCommit(taskResult.commit || parsedResult.commit);
+      if (taskCommit) {
+        try {
+          const commitFiles = git(worktreePath, ["diff-tree", "--no-commit-id", "-r", "--name-only", "-r", taskCommit]);
+          if (commitFiles && commitFiles.trim()) {
+            const fromCommitDiff = commitFiles.trim().split("\n").filter(Boolean);
+            evidence.changed_files = uniqueStrings(fromCommitDiff);
+          }
+        } catch (_diffErr) {
+          // non-blocking: commit may not exist in worktree
+        }
+      }
+      if (evidence.changed_files.length === 0) {
       // P0-MA11-R1: Check if the task commit is already integrated before
       // declaring no_changed_files.  A clean worktree with a commit already
       // on the canonical branch is a completed delivery, not a failure.
@@ -362,6 +378,7 @@ export async function runDeliveryRecovery({
       addBlocker(evidence, "no_changed_files", "Task worktree has no changed files to recover.");
       evidence.eligible = false;
       return finishEvidence(evidence);
+      }
     }
     if (!hasRecoverableFile(evidence.changed_files)) {
       addBlocker(evidence, "no_recoverable_files", "Task worktree changes do not include code, config, tests, or docs files.");

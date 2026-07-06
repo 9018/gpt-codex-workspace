@@ -4,8 +4,10 @@
  * Provides stable classification for stdout=0, result.json missing, stderr with
  * signals such as 429/rate-limit, model startup failures, and other failure
  * modes encountered during Codex CLI execution.
+ * P0-07: Extended with explicit no_first_output_timeout and codex_timeout
+ * classifications so these production paths have well-defined next_actions.
  *
- * Exports:
+ * Exports (P0-07):
  *   classifyRunFailure(input)    — classify a runner execution result
  *   QUOTA_PATTERNS               — regex patterns for quota/rate-limit detection
  *   PROMPT_LENGTH_THRESHOLD      — threshold for needs_task_splitting
@@ -17,6 +19,8 @@
  *   no_result_json_with_git_changes
  *   no_result_json_with_commit
  *   needs_task_splitting
+ *   no_first_output_timeout      (P0-07)
+ *   codex_timeout                (P0-07)
  *   codex_failed (fallback)
  */
 
@@ -128,6 +132,8 @@ function _extractHeaderMetadata(text) {
  * @param {number}  [input.promptLength=0]         - Prompt character length
  * @param {number}  [input.contextLength=0]        - Context/token length estimate
  * @param {string}  [input.outputSummary=null]     - Any structured summary from stdout
+ * @param {boolean} [input.timedOut=false]         - P0-07: Process timed out (no content or total)
+ * @param {boolean} [input.noFirstOutputTimeout=false] - P0-07: No first output before timeout
  *
  * @returns {{
  *   failure_class: string,
@@ -136,6 +142,10 @@ function _extractHeaderMetadata(text) {
  *   operator_action: string,
  *   creates_repair_task: boolean,
  *   creates_retry_followup: boolean,
+ *   creates_delivery_recovery: boolean,  (P0-07)
+ *   can_auto_retry: boolean,             (P0-07)
+ *   healing_action: string|null,         (P0-07)
+ *   review_reason: string|null,          (P0-07)
  *   diagnostics: object
  * }}
  */
@@ -156,6 +166,8 @@ export function classifyRunFailure(input = {}) {
     promptLength = 0,
     contextLength = 0,
     outputSummary = null,
+    timedOut = false,
+    noFirstOutputTimeout = false,
   } = input;
 
   const stdoutText = String(stdout || "");
@@ -174,7 +186,60 @@ export function classifyRunFailure(input = {}) {
     has_git_changes: hasGitChanges,
     execution_cwd: executionCwd || null,
     result_json_path: resultJsonPath || null,
+    timed_out: timedOut,
+    no_first_output_timeout: noFirstOutputTimeout,
   };
+
+
+  // -----------------------------------------------------------------------
+  // P0-07: no_first_output_timeout — Codex CLI started but produced no
+  // output before the first-output timeout.  This is an infra/resource
+  // issue (model cold-start, network, quota), NOT a code defect.
+  // -----------------------------------------------------------------------
+  if (noFirstOutputTimeout) {
+    return {
+      failure_class: "no_first_output_timeout",
+      detected_reason: `Codex CLI was invoked but produced no output before the first-output timeout. Possible causes: model cold-start delay, provider overload, network latency, or quota exhaustion at startup. The task produced no result.json and no commit.`,
+      severity: "recoverable",
+      operator_action: "Retry with compacted context bundle to reduce model startup time. " +
+        "If the problem persists, check provider status and API key validity. " +
+        "This is an infra/resource issue — no code changes needed.",
+      creates_repair_task: false,
+      creates_retry_followup: true,
+      can_auto_retry: true,
+      healing_action: "compact_and_retry",
+      creates_delivery_recovery: false,
+      review_reason: null,
+      diagnostics,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // P0-07: codex_timeout — The process ran past the total exec timeout.
+  // The model may have returned partial results but was cut off before
+  // completing.  Check for partial commit/worktree evidence.
+  // -----------------------------------------------------------------------
+  if (timedOut) {
+    const hasPartialEvidence = hasCommit || hasGitChanges || hasStdout;
+    return {
+      failure_class: "codex_timeout",
+      detected_reason: `Codex CLI execution timed out after the configured timeout.` +
+        (hasPartialEvidence
+          ? ` Partial evidence detected: commit=${hasCommit}, git_changes=${hasGitChanges}, stdout=${hasStdout}. Consider recovering partial work.`
+          : ` No partial evidence was produced. The model may not have started responding before the timeout.`),
+      severity: hasPartialEvidence ? "recoverable" : "failed",
+      operator_action: hasPartialEvidence
+        ? "Recover partial work from the worktree and retry. Preserve any uncommitted changes before retrying."
+        : "Retry with compacted context bundle or increased timeout. If the problem persists, check model/provider capacity.",
+      creates_repair_task: false,
+      creates_retry_followup: true,
+      can_auto_retry: true,
+      healing_action: "compact_and_retry",
+      creates_delivery_recovery: hasPartialEvidence,
+      review_reason: hasPartialEvidence ? "codex_timeout_with_partial_evidence" : null,
+      diagnostics,
+    };
+  }
 
   const headerMeta = _extractHeaderMetadata(combinedText);
   const model = explicitModel || headerMeta.model || null;

@@ -208,11 +208,38 @@ export async function executeCodexTaskRun({
     parsedResult.model = headerMeta.model || parsedResult.model || null;
     parsedResult.provider = headerMeta.provider || parsedResult.provider || null;
   } else {
+    // P0-07: structured fallback — if parsedResult returned no summary,
+    // capture stdout/stderr excerpts for review packet diagnostics.
+    // This ensures the review reason is actionable even when the model
+    // produced no structured output.
     if (out) {
       const headerIndex = out.indexOf(RESULT_SEPARATOR);
       summary = headerIndex >= 0 ? out.substring(headerIndex) : out;
     }
     if (!summary && cr.stderr) summary = (cr.stderr || "").trim().slice(0, 10000);
+
+    // P0-07: When summary is still missing after all fallbacks, annotate
+    // the parsed result with explicit diagnostic info for review packet.
+    if (!summary) {
+      parsedResult = parsedResult || {};
+      parsedResult._no_structured_summary = true;
+      parsedResult._fallback_diagnostic = {
+        reason: "No structured summary could be extracted from stdout or stderr.",
+        stdout_bytes: cr?.stdout_bytes || 0,
+        stderr_bytes: cr?.stderr_bytes || 0,
+        exit_code: cr?.returncode ?? null,
+        timed_out: cr?.timed_out || false,
+        no_first_output_timeout: cr?.no_first_output_timeout || false,
+        has_stdout: Boolean(cr?.stdout?.trim()),
+        has_stderr: Boolean(cr?.stderr?.trim()),
+        first_output_delay_ms: cr?.first_output_delay_ms ?? null,
+        content_first_output_delay_ms: cr?.content_first_output_delay_ms ?? null,
+        no_content_first_output_timeout: cr?.no_content_first_output_timeout || false,
+        no_content_progress_timeout: cr?.no_content_progress_timeout || false,
+        review_reason: "Codex exec produced no structured result. Check provider logs and stdout/stderr output for model errors. If the model returned content but no structured fields, this may indicate a model/provider compatibility issue.",
+        repair_suggestion: "If the model returned raw content without structured fields, consider adjusting the prompt format. If no content was returned at all, retry with compacted context or check provider availability.",
+      };
+    }
   }
 
   // Build diagnostic metadata for caller
