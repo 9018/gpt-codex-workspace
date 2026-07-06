@@ -274,6 +274,7 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
     verification,
     contract_verification: contractVerification,
     no_change_repair_completion_summary: compactNoChangeRepair(result?.no_change_repair_completion_summary || null),
+    unified_decision: result?.unified_decision || null,
     closure_decision: compactClosureDecision(result?.closure_decision || null),
     integration: compactIntegration(result?.integration || null),
     changed_files: compactList(result?.changed_files || task.changed_files).map((item) => trimText(item, 240)),

@@ -74,6 +74,7 @@ function keyEvidence(bundle = {}) {
     contract_verification: bundle.contract_verification,
     no_change_repair_completion_summary: bundle.no_change_repair_completion_summary || null,
     closure_decision: bundle.closure_decision,
+    unified_decision: bundle.unified_decision || null,
     report_paths: bundle.report_paths,
     run_evidence: bundle.run_evidence,
   };
