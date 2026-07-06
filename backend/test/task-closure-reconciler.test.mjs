@@ -377,3 +377,134 @@ test('R13: worktree retained blocks reconciliation', () => {
 function buildTaskResult(overrides = {}) {
   return buildFullEvidence(overrides);
 }
+// ===========================================================================
+// P0-AFC6: R0 tests — Canonical unified_decision is the source of truth
+// ===========================================================================
+
+test('AFC6-R0a: unified_decision overrides stale review state (legacy waiting_for_review)', () => {
+  // The canonical unified_decision says 'completed', but the task is stuck
+  // in 'waiting_for_review' with stale sub-decisions. R0 must repair all three
+  // without re-checking evidence.
+  const taskResult = buildFullEvidence({
+    verification: { passed: true, findings: [] },
+    integration: { status: 'merged', merged: true, satisfied: true },
+    closure_decision: {
+      status: CLOSURE_STATUSES.REQUIRES_REVIEW,
+      reason: 'stale_review',
+      auto_complete_allowed: false,
+      blocking_passed: false,
+      requires_human_decision: true,
+      task_status: 'waiting_for_review',
+    },
+    finalizer_decision: {
+      status: 'waiting_for_review',
+      reason: 'manual_review_required',
+    },
+    unified_decision: {
+      status: 'completed',
+      blocking_passed: true,
+      safe_to_auto_advance: true,
+      source: 'reconciler',
+      reconciled: true,
+    },
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'waiting_for_review', taskResult });
+
+  assert.equal(result.reconciled, true, 'should reconcile via R0');
+  assert.equal(result.taskStatus, 'completed', 'task status must be completed');
+  assert.equal(result.taskResult.closure_decision.status, CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN, 'closure_decision should be repaired');
+  assert.equal(result.taskResult.finalizer_decision.status, 'completed', 'finalizer_decision should be repaired');
+  assert.equal(result.goalStatus, 'completed', 'goalStatus must be completed');
+  assert.match(result.reason, /unified_decision overrides/);
+});
+
+test('AFC6-R0b: unified_decision overrides typed review state (waiting_for_human_required)', () => {
+  // Even a typed review state like waiting_for_human_required must be repaired
+  // when the canonical unified_decision says completed.
+  const taskResult = buildFullEvidence({
+    closure_decision: {
+      status: CLOSURE_STATUSES.REQUIRES_REVIEW,
+      reason: 'human_required',
+      auto_complete_allowed: false,
+      blocking_passed: false,
+      requires_human_decision: true,
+      task_status: 'waiting_for_human_required',
+    },
+    finalizer_decision: {
+      status: 'waiting_for_human_required',
+      reason: 'human_required',
+    },
+    unified_decision: {
+      status: 'completed',
+      blocking_passed: true,
+      safe_to_auto_advance: true,
+      source: 'reconciler',
+      reconciled: true,
+    },
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'waiting_for_human_required', taskResult });
+
+  assert.equal(result.reconciled, true, 'should reconcile via R0');
+  assert.equal(result.taskStatus, 'completed', 'task status must be completed');
+  assert.equal(result.taskResult.closure_decision.status, CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN);
+  assert.equal(result.taskResult.finalizer_decision.status, 'completed');
+  assert.equal(result.goalStatus, 'completed');
+});
+
+test('AFC6-R0c: unified_decision overrides missing evidence', () => {
+  // R0 must repair even when individual evidence fields say the task is not
+  // ready for completion. The canonical unified_decision is the source of truth.
+  const taskResult = buildFullEvidence({
+    verification: { passed: false, findings: [{ severity: 'blocker', code: 'verification_failed' }] },
+    integration: { status: 'conflict', merged: false },
+    acceptance_findings: [{ severity: 'blocker', code: 'test_failed', resolved: false }],
+    closure_decision: {
+      status: CLOSURE_STATUSES.REQUIRES_REVIEW,
+      reason: 'verification_failed',
+      auto_complete_allowed: false,
+      blocking_passed: false,
+      requires_human_decision: true,
+      task_status: 'waiting_for_review',
+    },
+    finalizer_decision: {
+      status: 'waiting_for_review',
+      reason: 'manual_review_required',
+    },
+    unified_decision: {
+      status: 'completed',
+      blocking_passed: true,
+      safe_to_auto_advance: true,
+      source: 'reconciler',
+      reconciled: true,
+    },
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'waiting_for_review', taskResult });
+
+  assert.equal(result.reconciled, true, 'unified_decision must override missing evidence');
+  assert.equal(result.taskStatus, 'completed');
+  assert.equal(result.taskResult.closure_decision.status, CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN);
+  assert.equal(result.taskResult.finalizer_decision.status, 'completed');
+  assert.equal(result.goalStatus, 'completed');
+});
+
+test('AFC6-R0d: unified_decision already aligned — no reconciliation needed', () => {
+  // When everything is already consistent with unified_decision=completed,
+  // R0 must not fire and the reconciler returns not reconciled.
+  const taskResult = buildFullEvidence({
+    unified_decision: {
+      status: 'completed',
+      blocking_passed: true,
+      safe_to_auto_advance: true,
+      source: 'reconciler',
+      reconciled: true,
+    },
+  });
+
+  const result = reconcileTaskClosure({ taskStatus: 'completed', taskResult });
+
+  assert.equal(result.reconciled, false, 'should not reconcile when everything is already aligned');
+  assert.equal(result.taskStatus, 'completed');
+});

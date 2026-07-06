@@ -1,18 +1,22 @@
 /**
  * task-closure-reconciler.mjs — P0-MA12-G2: Auto Closure Reconciliation
+ *                          — P0-AFC6: Canonical unified_decision as source of truth
  *
  * Deterministic reconciliation step that runs after all writeback stages:
  * finalizer writeback, pipeline gate evaluation, integration result writeback,
  * and runtime convergence.
  *
  * Ensures closure_decision, finalizer_decision, and task.status are consistent
- * with the actual evidence present in the task result.
+ * with the canonical outcome decision (unified_decision) or, when no canonical
+ * decision exists, with the actual evidence present in the task result.
  *
  * Reconciliation rules:
+ *   R0: Canonical unified_decision says completed → trust it unconditionally
+ *       and repair any stale task status or sub-decision state. P0-AFC6.
  *   R1: All evidence present + closure says auto-complete → normalize
  *       finalizer_decision to completed if it's stale.
  *   R2: All evidence present + finalizer says completed → normalize
- *       closure_decision to auto-completed if it's stale (requires_review).
+ *       closure_decision to auto-completed if it's stale.
  *   R3: Both decisions agree on completed but task.status is stale → fix
  *       task.status.
  *   R4/R5: Evidence doesn't support completion → no change.
@@ -67,6 +71,88 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
   const verification = taskResult.verification || taskResult.final_verification || {};
   const findings = taskResult.acceptance_findings || [];
   const acceptanceGate = taskResult.acceptance_gate || {};
+
+  // -----------------------------------------------------------------------
+  // R0 (P0-AFC6): Canonical unified_decision is the source of truth.
+  // When unified_decision.status === 'completed', force-repair any stale
+  // task status, closure_decision, or finalizer_decision WITHOUT re-checking
+  // individual evidence fields. This guarantees that the canonical outcome
+  // decision (set by P0-AFC5 finalizer or a prior reconciliation pass) cannot
+  // be overridden by stale downstream state.
+  //
+  // Also returns goalStatus: 'completed' so callers can repair goal state
+  // immediately rather than re-deriving from individual evidence fields.
+  // -----------------------------------------------------------------------
+
+  const unifiedDecision = taskResult.unified_decision || {};
+
+  if (unifiedDecision.status === 'completed') {
+    const closureSaysComplete =
+      closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN ||
+      closureDecision.status === CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS;
+    const finalizerSaysComplete = finalizerDecision.status === 'completed';
+    const taskNeedsFix = taskStatus !== 'completed';
+    const closureNeedsFix = !closureSaysComplete;
+    const finalizerNeedsFix = !finalizerSaysComplete;
+
+    if (taskNeedsFix || closureNeedsFix || finalizerNeedsFix) {
+      let updatedTaskResultLocal = { ...taskResult };
+      let updatedTaskStatusLocal = taskStatus;
+
+      // Repair stale closure_decision
+      if (closureNeedsFix) {
+        const hasFollowups =
+          (Array.isArray(updatedTaskResultLocal.followups) && updatedTaskResultLocal.followups.length > 0) ||
+          (Array.isArray(updatedTaskResultLocal.followup_findings) && updatedTaskResultLocal.followup_findings.length > 0) ||
+          (Array.isArray(updatedTaskResultLocal.quality_notes) && updatedTaskResultLocal.quality_notes.length > 0);
+        const newClosureStatus = hasFollowups
+          ? CLOSURE_STATUSES.AUTO_COMPLETED_WITH_FOLLOWUPS
+          : CLOSURE_STATUSES.AUTO_COMPLETED_CLEAN;
+
+        updatedTaskResultLocal.closure_decision = {
+          ...closureDecision,
+          status: newClosureStatus,
+          reason: 'reconciled_by_unified_decision',
+          reconciled_from: closureDecision.status || 'unknown',
+          auto_complete_allowed: true,
+          blocking_passed: true,
+          requires_human_decision: false,
+          task_status: 'completed',
+          blockers: [],
+          repairable_blockers: [],
+        };
+      }
+
+      // Repair stale finalizer_decision
+      if (finalizerNeedsFix) {
+        updatedTaskResultLocal.finalizer_decision = {
+          ...finalizerDecision,
+          status: 'completed',
+          reason: 'reconciled_by_unified_decision',
+          reconciled_from: finalizerDecision.status || 'unknown',
+          safe_to_auto_advance: true,
+          blockers: [],
+          repairable_blockers: [],
+          goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
+          queue_effect: { status: 'completed', unblock_dependents: true, hold_queue: false },
+        };
+      }
+
+      updatedTaskStatusLocal = 'completed';
+
+      return {
+        taskStatus: updatedTaskStatusLocal,
+        taskResult: updatedTaskResultLocal,
+        goalStatus: 'completed',
+        reconciled: true,
+        reason: 'canonical unified_decision overrides stale task status or sub-decision state',
+      };
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // (if R0 did not fire, continue with evidence-based reconciliation rules)
+  // -----------------------------------------------------------------------
 
   // -----------------------------------------------------------------------
   // Evidence assessment
