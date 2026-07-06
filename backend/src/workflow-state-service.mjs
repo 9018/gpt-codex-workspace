@@ -210,7 +210,72 @@ function normalizeDecisionStatus(decision) {
   return decision.status || decision.verdict || decision.outcome || null;
 }
 
+/**
+ * P0-AFC5: Prefer canonical unified_decision over raw acceptance findings.
+ * When a task result carries a unified_decision, the downstream proposal
+ * logic (repair, review, or auto-accept) MUST be driven by that canonical
+ * outcome, not by stale raw acceptance_findings left from earlier cycles.
+ */
+function normalizeFromUnifiedDecision(unifiedDecision) {
+  if (!unifiedDecision || typeof unifiedDecision !== 'object') return null;
+
+  const uStatus = unifiedDecision.status;
+
+  // Completed unified_decision → no blockers regardless of raw findings
+  if (uStatus === 'completed' && unifiedDecision.blocking_passed !== false) {
+    return {
+      passed: true,
+      status: 'accepted',
+      reviewer_decision: {
+        status: 'accepted',
+        passed: true,
+        blocking_count: 0,
+        residual_count: 0,
+      },
+      acceptance_findings: [],
+      next_tasks: [],
+      repair_proposals: [],
+      blocking_count: 0,
+      residual_count: 0,
+      from_canonical_decision: true,
+    };
+  }
+
+  // Repair / waiting_for_repair unified_decision → use repairable_blockers
+  if (uStatus === 'waiting_for_repair' || unifiedDecision.requires_repair === true) {
+    const repairableBlockers = Array.isArray(unifiedDecision.repairable_blockers)
+      ? unifiedDecision.repairable_blockers
+      : [];
+    return {
+      passed: false,
+      status: 'needs_fix',
+      reviewer_decision: {
+        status: 'needs_fix',
+        passed: false,
+        blocking_count: repairableBlockers.length,
+        residual_count: 0,
+      },
+      acceptance_findings: repairableBlockers.map(b => ({
+        severity: b.severity || 'blocker',
+        code: b.code || 'repairable',
+        message: b.message || '',
+        source: b.source || 'unified_decision',
+      })),
+      next_tasks: [],
+      repair_proposals: [],
+      blocking_count: repairableBlockers.length,
+      residual_count: 0,
+      from_canonical_decision: true,
+    };
+  }
+
+  return null;
+}
+
 function normalizeAcceptanceForResult(result = {}) {
+  // P0-AFC5: Canonical unified_decision takes precedence over raw findings.
+  const fromUnified = normalizeFromUnifiedDecision(result.unified_decision);
+  if (fromUnified) return fromUnified;
   const findings = Array.isArray(result.acceptance_findings) ? result.acceptance_findings : [];
   const policy = evaluateAcceptance({ findings });
   const suppliedDecision = result.reviewer_decision && typeof result.reviewer_decision === "object" ? result.reviewer_decision : null;

@@ -300,6 +300,90 @@ test("proposal: completed + no authoritative evidence + stale verification.faile
 });
 
 
+// ===========================================================================
+// P0-AFC5: Workflow advance uses canonical unified_decision, not raw findings
+// ===========================================================================
+
+test("AF5: unified_decision completed + stale blocker findings -> auto_accepted, not repair", () => {
+  // When the canonical unified_decision says completed, stale raw blocker
+  // findings from earlier cycles MUST NOT produce a repair proposal.
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "waiting_for_review",
+      result: {
+        status: "completed",
+        kind: "codex_executed",
+        summary: "Done",
+        commit: "abc123",
+        tests: "npm test: passed 15/15",
+        changed_files: ["src/file.js"],
+        unified_decision: {
+          status: "completed",
+          blocking_passed: true,
+          requires_repair: false,
+          requires_review: false,
+          repairable_blockers: [],
+        },
+        // Stale blocker findings that the canonical decision has already resolved
+        acceptance_findings: [
+          { severity: "blocker", code: "dirty_worktree_after_codex", message: "Worktree dirty (stale)" },
+          { severity: "major", code: "test_failed", message: "Test failure (stale)" },
+        ],
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "auto_accepted", "must auto-accept, not repair");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.equal(p.auto_accepted, true);
+  assert.equal(p.acceptance.passed, true, "acceptance must be passed");
+  assert.equal(p.acceptance.from_canonical_decision, true);
+  assert.equal(p.proposed_next_task, null, "must not propose a task");
+  assert.equal(p.repair_proposal, undefined, "must not produce repair proposal");
+});
+
+test("AF5: unified_decision waiting_for_repair -> creates repair proposal", () => {
+  // When the canonical unified_decision says waiting_for_repair, the proposal
+  // logic MUST still create a repair task using the repairable_blockers.
+  const p = generateProposal({
+    diagnostics: makeDiagnostics(),
+    task: makeTask({
+      status: "waiting_for_review",
+      result: {
+        status: "completed",
+        kind: "codex_executed",
+        summary: "Done with issues",
+        commit: "abc123",
+        tests: "npm test: passed 12/15",
+        changed_files: ["src/file.js"],
+        unified_decision: {
+          status: "waiting_for_repair",
+          blocking_passed: false,
+          requires_repair: true,
+          requires_review: false,
+          repairable_blockers: [
+            { severity: "blocker", code: "verification_failed", message: "3 tests failed" },
+          ],
+        },
+      },
+    }),
+    manualVerdict: "passed",
+    manualNote: "",
+  });
+  assert.equal(p.next_action, "create_repair_task", "must create repair task");
+  assert.equal(p.needs_gptchat_decision, false);
+  assert.ok(p.proposed_next_task !== null, "must propose a repair task");
+  assert.ok(p.proposed_next_task.description.includes("verification_failed"),
+    "repair task description must reference the repairable blocker");
+  assert.equal(p.acceptance.passed, false, "acceptance must be not passed");
+  assert.equal(p.acceptance.from_canonical_decision, true);
+});
+
+
+
+
 test("proposal: completed + passed verification with mixed blockers keeps manual decision", () => {
   const p = generateProposal({
     diagnostics: makeDiagnostics(),
