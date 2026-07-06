@@ -253,3 +253,66 @@ test("contract verifier passes integration check when delivery_result_recovery i
   assert.equal(verification.blocking_passed, true);
   assert.ok(!verification.blockers.some(b => b.code === "integration_completed_missing"), "should not have integration_completed_missing blocker");
 });
+
+
+// P0-Fix: integration.status=not_required satisfies integration_completed check
+// for docs-only tasks where integration evidence is present but status is
+// not_required (not merged, not auto_completed).
+test("contract verifier passes integration check when integration.status is not_required", () => {
+  const c = contract("code_change", {
+    requirements: { requires_commit: true, requires_integration: true },
+    blocking_requirements: [
+      { id: "integration_completed", description: "Required local integration or ff-only handoff is completed when applicable.", evidence: ["integration", "remote_head"] }
+    ],
+  });
+
+  const verification = verifyAcceptanceContract({
+    contract: c,
+    result: {
+      status: "completed",
+      summary: "docs-only task with integration not_required",
+      operation_kind: "code_change",
+      changed_files: ["docs/operations.md"],
+      commit: "876d4b0",
+      tests: "check:syntax pass",
+      verification: { passed: true, commands: [{ cmd: "npm run check:syntax", exit_code: 0 }] },
+      integration: { status: "not_required", required: false, terminal: true, merged: false },
+    },
+    verification: { passed: true, commands: [{ cmd: "npm run check:syntax", exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.contract_valid, true);
+  assert.equal(verification.blocking_passed, true);
+  assert.equal(verification.acceptance_status, "satisfied");
+  assert.ok(!verification.blockers.some(b => b.code === "integration_completed_missing"), "should not have integration_completed_missing blocker when status=not_required");
+});
+
+// P0-Fix-Negative: contract verifier correctly blocks when integration is missing
+// and integration is required (ensures genuine blockers are preserved).
+test("contract verifier blocks when integration is missing and requires_integration is true", () => {
+  const c = contract("code_change", {
+    requirements: { requires_commit: true, requires_integration: true },
+    blocking_requirements: [
+      { id: "integration_completed", description: "Required local integration or ff-only handoff is completed when applicable.", evidence: ["integration", "remote_head"] }
+    ],
+  });
+
+  const verification = verifyAcceptanceContract({
+    contract: c,
+    result: {
+      status: "completed",
+      summary: "task with missing integration",
+      operation_kind: "code_change",
+      changed_files: ["src/app.mjs"],
+      commit: "abc123",
+      tests: "npm test",
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      // No integration field at all
+    },
+    verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.ok(verification.blockers.some(b => b.code === "integration_completed_missing"), "should have integration_completed_missing blocker when integration is missing and required");
+});

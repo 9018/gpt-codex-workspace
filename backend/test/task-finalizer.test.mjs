@@ -293,3 +293,86 @@ test("task-finalizer: delivery_result_recovery already_integrated satisfies inte
   assert.equal(decision.integration_effect.terminal, true, "integration_effect.terminal should be true");
   assert.equal(decision.integration_effect.required, true, "integration_effect.required should be true (code_change)");
 });
+
+
+// P0-Fix: integration.status=not_required terminal allows finalizer to
+// terminalize to completed even when merged=false.
+test("task-finalizer: integration.status not_required satisfies integration requirement", () => {
+  const decision = decideTaskFinalState(passedEvidence({
+    current_status: "completed",
+    integration: { required: true, status: "not_required", merged: false, required: false, terminal: true },
+    codex_result: {
+      ...passedEvidence().codex_result,
+      integration: { status: "not_required", merged: false, required: false, terminal: true },
+    },
+    contract_verification: {
+      blocking_passed: true,
+      completion_eligible: true,
+      requires_review: false,
+      blockers: [],
+    },
+  }));
+
+  assert.equal(decision.status, "completed");
+  assert.equal(decision.safe_to_auto_advance, true);
+  assert.equal(decision.integration_effect.satisfied, true, "integration_effect.satisfied should be true");
+  assert.equal(decision.integration_effect.terminal, true, "integration_effect.terminal should be true");
+  assert.equal(decision.integration_effect.required, true, "integration_effect.required should be true");
+});
+
+// P0-Fix: Negative test — missing integration when integration is required
+// correctly blocks (genuine blocker preserved).
+test("task-finalizer: missing integration blocks when integration required", () => {
+  const decision = decideTaskFinalState(passedEvidence({
+    current_status: "completed",
+    integration: { required: true, status: null, merged: false },
+    codex_result: {
+      ...passedEvidence().codex_result,
+      // No integration field at all
+      integration: undefined,
+    },
+    contract_verification: {
+      blocking_passed: false,
+      completion_eligible: false,
+      requires_review: true,
+      blockers: [{ code: "integration_completed_missing", message: "Blocking contract requires completed integration evidence." }],
+    },
+  }));
+
+  assert.notEqual(decision.status, "completed");
+  assert.equal(decision.safe_to_auto_advance, false);
+  assert.equal(decision.integration_effect.satisfied, false, "integration_effect.satisfied should be false");
+  assert.equal(decision.integration_effect.terminal, false, "integration_effect.terminal should be false");
+});
+
+// P0-Fix: docs-only task with recovery already_integrated and pre-populated
+// integration (as the evidence normalizer would produce). The normalized result
+// has integration.status=already_integrated from delivery_result_recovery.
+test("task-finalizer: recovery already_integrated after normalization satisfies integration", () => {
+  const decision = decideTaskFinalState(passedEvidence({
+    current_status: "completed",
+    integration: { required: true, status: "already_integrated", merged: true },
+    codex_result: {
+      ...passedEvidence().codex_result,
+      // Integration has been populated by the evidence normalizer from recovery
+      integration: { status: "already_integrated", merged: true },
+      delivery_result_recovery: {
+        reason: "already_integrated",
+        commit_integrated: true,
+        integration: { mode: "ff_only", merged: true, status: "already_integrated", commit: "876d4b0" },
+        recovered: true,
+      },
+    },
+    contract_verification: {
+      blocking_passed: true,
+      completion_eligible: true,
+      requires_review: false,
+      blockers: [],
+    },
+  }));
+
+  assert.equal(decision.status, "completed");
+  assert.equal(decision.safe_to_auto_advance, true);
+  assert.equal(decision.integration_effect.satisfied, true, "integration_effect.satisfied should be true");
+  assert.equal(decision.integration_effect.terminal, true, "integration_effect.terminal should be true");
+});

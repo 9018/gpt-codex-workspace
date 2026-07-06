@@ -344,3 +344,59 @@ test("normalizeOperationEvidence propagates integration from delivery_result_rec
   );
   assert.equal(integrationBlockers.length, 0, "should have no integration/changed_files/commit blockers");
 });
+
+
+// P0-Fix: integration.status=not_required is preserved through normalization
+// and should not produce integration_missing blockers.
+test("normalizeOperationEvidence preserves integration.status=not_required", () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: "completed",
+      summary: "docs-only task",
+      changed_files: ["docs/operations.md"],
+      commit: "876d4b0",
+      tests: "check pass",
+      verification: { passed: true, commands: [{ cmd: "npm run check:syntax", exit_code: 0 }] },
+      integration: { status: "not_required", required: false, terminal: true },
+    },
+  });
+
+  assert.equal(normalized.operation_kind, "code_change");
+  assert.equal(normalized.integration.status, "not_required", "integration.status should be not_required");
+  assert.equal(normalized.integration.merged, false, "integration.merged should be false when status=not_required");
+  assert.equal(normalized.integration.auto_completed, false, "integration.auto_completed should be false");
+
+  // No integration_missing blocker because the field is present
+  const integrationBlockers = normalized.blockers.filter(b =>
+    b.code && (b.code.includes("integration") || b.code.includes("changed_files") || b.code.includes("commit"))
+  );
+  assert.equal(integrationBlockers.length, 0, "should have no blockers for integration/changed_files/commit");
+});
+
+// P0-Fix: stale delivery_result_recovery without reason=already_integrated does
+// NOT overwrite explicit integration.status=not_required.
+test("normalizeOperationEvidence does not overwrite explicit integration with incomplete recovery", () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: "completed",
+      summary: "docs-only with incomplete recovery",
+      changed_files: ["docs/operations.md"],
+      commit: "876d4b0",
+      tests: "check pass",
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      integration: { status: "not_required", required: false, terminal: true },
+      // Recovery exists but does NOT have reason=already_integrated or commit_integrated=true
+      delivery_result_recovery: {
+        reason: "verification_failed",
+        commit_integrated: false,
+        recovered: false,
+      },
+    },
+  });
+
+  // Should still preserve integration.status=not_required from the explicit field
+  assert.equal(normalized.integration.status, "not_required", "integration.status should still be not_required");
+  assert.equal(normalized.integration.merged, false, "integration.merged should be false");
+  assert.equal(normalized.integration.satisfied, undefined, "integration.satisfied should not be set when recovery does not apply");
+  assert.equal(normalized.blockers.length, 0, "should have no blockers");
+});

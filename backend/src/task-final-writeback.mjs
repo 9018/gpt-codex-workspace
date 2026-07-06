@@ -339,27 +339,40 @@ export async function finalizeCodexTaskRun({
   // reachable on the canonical repo HEAD.  If so, populate integration
   // evidence so the contract verifier does not produce a false
   // integration_completed_missing blocker for an already-integrated task.
-  if (taskStatus === "completed" && taskResult?.commit && verifierRepoPath
+  // P0-Fix2: Try multiple paths (primary worktree/stale, then canonical) so
+  // that already-integrated commits on the canonical branch are not missed
+  // when the worktree has been cleaned up.
+  if (taskStatus === "completed" && taskResult?.commit
       && !taskResult.integration?.merged && !taskResult.auto_integration_completion?.completed) {
-    try {
-      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: verifierRepoPath, encoding: "utf8", timeout: 10000 }).trim();
-      let integrated = head === taskResult.commit;
-      if (!integrated) {
-        try {
-          execFileSync("git", ["merge-base", "--is-ancestor", taskResult.commit, head], { cwd: verifierRepoPath, timeout: 10000 });
-          integrated = true;
-        } catch {}
-      }
-      if (integrated) {
-        taskResult.integration = {
-          ...(taskResult.integration || {}),
-          merged: true,
-          status: "already_integrated",
-          commit: taskResult.commit,
-          required: false,
-        };
-      }
-    } catch {}
+    const _checkPaths = [...new Set([
+      verifierRepoPath,
+      resolvedRepo?.canonical_repo_path,
+      workspace?.root,
+      config.defaultRepoPath,
+      config.defaultWorkspaceRoot,
+    ].filter(Boolean))];
+    for (const _checkPath of _checkPaths) {
+      try {
+        const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: _checkPath, encoding: "utf8", timeout: 10000 }).trim();
+        let integrated = head === taskResult.commit;
+        if (!integrated) {
+          try {
+            execFileSync("git", ["merge-base", "--is-ancestor", taskResult.commit, head], { cwd: _checkPath, timeout: 10000 });
+            integrated = true;
+          } catch {}
+        }
+        if (integrated) {
+          taskResult.integration = {
+            ...(taskResult.integration || {}),
+            merged: true,
+            status: "already_integrated",
+            commit: taskResult.commit,
+            required: false,
+          };
+          break;
+        }
+      } catch {}
+    }
   }
 
   if (taskStatus === "completed") {
@@ -854,6 +867,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     acceptance_findings: Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [],
     next_tasks: Array.isArray(taskResult.next_tasks) ? taskResult.next_tasks : [],
     delivery_result_recovery: taskResult.delivery_result_recovery || null,
+    integration: taskResult.integration || null,
     needs_integration: taskResult.needs_integration === true,
     needs_restart_check: taskResult.needs_restart_check === true,
     delivery_state_normalized: taskResult.delivery_state_normalized === true,
