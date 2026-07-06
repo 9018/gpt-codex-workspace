@@ -378,38 +378,7 @@ export function decideTaskFinalState(evidence = {}) {
       reason: "external_capacity_failure",
       blockers: [blocker("external_capacity_failure", "External quota or rate-limit capacity failure.", { text: textEvidence(evidence) })],
     });
-  
-  const finalizerDecisionToNormalize = {
-    status: normalizedStatus,
-    reason: String(reason || "finalizer_decision"),
-    blockers,
-    repairable_blockers: repairableBlockers || [],
-    safe_to_auto_advance: safeToAutoAdvance === true,
-    blocking_passed: (blockers || []).length === 0 && (repairableBlockers || []).length === 0,
-    integration_effect: integrationEffect(evidence, normalizedStatus),
-    goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
-    queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
-  };
-  const unifiedDecision = normalizeToUnifiedDecision({
-    finalizerDecision: finalizerDecisionToNormalize,
-    taskResult: evidence.codex_result || evidence.result || evidence.task_result || {},
-    verification: evidence.verification || {},
-    contractVerification: evidence.contract_verification || {},
-  });
-  return {
-    status: normalizedStatus,
-    reason: reason || "finalizer_decision",
-    blockers,
-    repairable_blockers: repairableBlockers,
-    non_blocking_followups: followupsFrom(evidence),
-    ...reviewStateBlock,
-    integration_effect: integrationEffect(evidence, normalizedStatus),
-    goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
-    queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
-    safe_to_auto_advance: safeToAutoAdvance === true,
-    unified_decision: unifiedDecision,
-  };
-}
+  }
 
   const semanticOrUnsafeBlockers = manualReviewBlockers(evidence);
   if (semanticOrUnsafeBlockers.some((entry) => entry.code === "semantic_ambiguity" || entry.code === "manual_approval_required" || entry.code === "state_corruption")) {

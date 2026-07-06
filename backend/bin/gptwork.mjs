@@ -95,14 +95,14 @@ async function getOnboardingInit() {
   return _savedOnboardingInit;
 }
 
-async function printInit() {
+async function printInit(opts = {}) {
   const oi = await getOnboardingInit();
-  const checks = await oi.runInit();
+  const checks = await oi.runInit(opts.production ? { production: true } : {});
   console.log("");
-  oi.printInitReport(checks);
+  oi.printInitReport(checks, { showNextSteps: true, productionMode: !!opts.production });
 }
 
-async function printFix() {
+async function printFix(opts = {}) {
   const oi = await getOnboardingInit();
   const result = await oi.runFix();
   console.log("");
@@ -216,7 +216,7 @@ async function printStatus() {
   console.log(`bark: ${barkConfigured ? "configured" : "not configured"}`);
 }
 
-async function printDoctor() {
+async function printDoctor(opts = {}) {
   const { store, config, envLoadResult } = await localStore();
   const state = await store.load();
   // Resolve repo root directory
@@ -590,11 +590,13 @@ async function main() {
   if (command === "start") return startServer();
   if (command === "connect") return printConnect();
   if (command === "init") {
-    if (args.includes("--help")) {
+    const help = args.includes("--help");
+    if (help) {
       console.log("gptwork init -- one-step initialization and diagnostics");
+      console.log("  Use --production to enable production-specific checks");
       return;
     }
-    return printInit();
+    return printInit({ production: args.includes("--production") });
   }
   if (command === "fix") {
     if (args.includes("--help")) {
@@ -605,7 +607,8 @@ async function main() {
   }
 
   if (command === "status") return printStatus();
-  if (command === "doctor") return printDoctor();
+  const doctorProduction = args.includes("--production");
+  if (command === "doctor") return printDoctor({ production: doctorProduction });
   if (command === "self-test") return printSelfTest();
   if (command === "verify-delivery") return runVerifyDelivery([subcommand, ...rest].filter(Boolean));
   if (command === "demo-multi-task") return runDemoMultiTask([subcommand, ...rest].filter(Boolean));

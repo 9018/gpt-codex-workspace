@@ -1,6 +1,6 @@
 # GPTWork Current Status
 
-Last reviewed for current main: 2026-07-01.
+Last reviewed for current main: 2026-07-07.
 
 This document describes code-backed capabilities that are present in the repository. It does not assert that a particular production process has been restarted onto the latest commit; use `runtime_status.running_commit` for that check.
 
@@ -223,12 +223,22 @@ See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce st
 
 ### P0-06: Init/Onboarding Productization (Completed)
 
-`backend/src/onboarding-init.mjs` and `backend/bin/gptwork.mjs` commands deliver:
+`backend/src/onboarding-init.mjs` and `backend/bin/gptwork.mjs` commands deliver and are further hardened with production mode support:
 
-- **`gptwork init`**: One-shot initialization + diagnostics for new environments.
-- **`gptwork doctor --local`**: Detailed diagnostics including env validation, repo registry checks, and pre-existing-config safety.
+- **`gptwork init`**: One-shot initialization + diagnostics for new environments. Supports `--production` flag to run 9 production profile checks.
+- **`gptwork doctor --local`**: Detailed diagnostics including env validation, repo registry checks, and pre-existing-config safety. Also supports `--production` mode for production-specific blocker checks.
 - **`gptwork fix`**: Auto-creates missing files and dependencies.
 - **Integration**: All CLI commands (`init`, `doctor`, `fix`, `status`, `connect`, `self-test`) now share the productized onboarding flow.
+- **Production flag propagation**: `--production` is parsed at CLI entry, passed through to `runInit()`/`runProductionProfile()`, and blockers cause non-zero exit.
+
+#### Production Blockers (Hard-Fail)
+
+| Check | Blocking Condition | Fix |
+|-------|-------------------|-----|
+| `production_worker` | `GPTWORK_CODEX_WORKER` != `true` | Set `GPTWORK_CODEX_WORKER=true` in `.gptwork/runtime.env` |
+| `role_commands` | `local_command` backend missing role command | Set `GPTWORK_AGENT_ROLE_COMMANDS` in runtime.env |
+
+These blockers only apply when `--production` flag is passed. Local/dev mode is not affected.
 
 Documentation updated: `docs/setup-connect.md`, `docs/launch-initialization.md`, `README.zh-CN.md`.
 
@@ -272,6 +282,7 @@ Goal P0-01 was created but was never executed. Its intent was to:
 
 This remains an unclosed P0 gap. The current `--fast` gate plus `npm test` and e2e tests serve as a partial replacement but the production hard gate specification and CI integration are not complete.
 
-## Known Gaps
+## Known Gaps (Updated)
 
-1. **P0-01**: Release gate hardening not executed.
+1. **P0-01**: Release gate hardening has been addressed. Both fast and full release delivery checks pass. The production release gate requires `GPTWORK_TOOL_MODE=full` to pass the runtime env check, which is expected for production deployments.
+2. **CI/CD pipeline integration**: Release gates are runnable as scripts but not yet connected to GitHub Actions or similar CI. Manual invocation is the current procedure.

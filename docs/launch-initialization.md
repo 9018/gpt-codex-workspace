@@ -339,8 +339,8 @@ The following 9 checks are performed by `runProductionProfile()` in
 
 ### 4.2 Blocking Failures
 
-If `gptwork init --production` reports **blocker** status, those issues
-must be resolved before the server is safe to run in production.
+If `gptwork init --production` or `gptwork doctor --production` reports **blocker** status, those issues
+must be resolved before the server is safe to run in production. Both commands exit with a non-zero exit code when blockers are present.
 
 | Check | Blocking Condition | Fix |
 |-------|-------------------|-----|
@@ -441,9 +441,11 @@ Actions:
 gptwork fix
 ```
 
-### 5.4 `gptwork doctor --local`
+### 5.4 `gptwork doctor --local` / `gptwork doctor --production`
 
 Runtime diagnostics with enhanced checks from `printDoctor()`:
+- `gptwork doctor --local`: Standard local diagnostics
+- `gptwork doctor --production`: Production-specific blocker checks (exits non-zero on blockers)
 
 - Repository root and workspace root
 - Runtime env file path and loaded key count
