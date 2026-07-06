@@ -1,6 +1,6 @@
 # GPTWork Setup and Connection Guide
 
-> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → complete) is **integrated** into the main flow. All setup, configuration, and connection procedures below apply to the fully integrated system. The repair loop and serial integration queue are **integrated** — tasks exceeding the repair budget enter `waiting_for_review` for manual disposition. The delivery pipeline is fully shipped with P0-MA12 convergence.
+> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → gate → complete) is **productized** with P0/P1 convergence. The acceptance gate engine (verification + contract verification + closure decision) auto-closes passing tasks. The goal queue auto-advances dependents when upstream tasks complete. Agent execution backends default to `codex_exec` (builder/repairer) and `local_command` (verifier/reviewer). Codex TUI is an explicit operator fallback — never automatic. Production init (`gptwork init --production`) validates worker, role commands, exec settings, and workspace configuration before the first run.
 
 ---
 
@@ -69,6 +69,23 @@ gptwork setup
 ```
 
 Creates `.gptwork/runtime.env` with safe defaults. Does not overwrite existing secrets.
+
+### Agent Execution Backends
+
+GPTWork routes execution through configurable backends per agent role. The defaults define the productized path:
+
+| Role | Default Backend | Semantic | Description |
+|------|----------------|----------|-------------|
+| builder | `codex_exec` | real | Codex executes autonomously in an isolated worktree. **Default production path.** |
+| repairer | `codex_exec` | real | Codex performs repair attempts with the same worktree isolation. |
+| verifier | `local_command` | real | Deterministic local command execution (e.g. `npm test`). |
+| reviewer | `local_command` | real | Deterministic local command execution for review evidence. |
+| integrator | `null` | auto_artifact | Auto-completed from task integration evidence. |
+| finalizer | `null` | auto_artifact | Auto-completed from task result evidence. |
+| context_curator | `null` | auto_artifact | Context bundle prepared from task metadata. |
+| planner | `null` | auto_artifact | Plan determined from context/prompt files. |
+
+`codex_tui_goal` is available as an **explicit operator fallback** only — never automatic. When enabled, the operator works interactively in a terminal session and must collect durable evidence (commit, tests, result.md) before the acceptance gate can close the task.
 
 ### Runtime Environment Variables
 
@@ -192,6 +209,16 @@ npm run release:check
 | `curl http://127.0.0.1:8787/health` | `{"ok":true,"service":"gptwork-mcp","time":"..."}` |
 | `gptwork connect --local` | Shows local MCP URL, ChatGPT connector example, and connectivity option explanations |
 
+### Auto-Acceptance and Queue Advancement
+
+GPTWork's acceptance gate engine automatically closes tasks when verification evidence, acceptance contract, and closure decision all pass. The goal queue auto-advances: when an upstream task reaches terminal-completed status, its dependents become eligible for auto-start (subject to dependency rules and repo serialization).
+
+Key principles:
+- **Acceptance is not verification**: verification commands may pass while acceptance fails (e.g. missing contract evidence).
+- **Integration is not deployment**: a merged commit still needs deployment/restart verification.
+- **Review is not failure**: `waiting_for_review` means human judgment is needed, not that the task is failed.
+- **Auto-closure is gated**: new builder-mode tasks enforce strict pipeline gate checks (verification, reviewer_decision, integration) before closure is allowed.
+
 ---
 
 ## GitHub Issues Fallback
@@ -224,47 +251,54 @@ When you don't have a public HTTPS endpoint for ChatGPT, you can use GitHub Issu
 GPTWork includes a production profile checker to validate that the server is
 configured for production operation. Run it after initialization:
 
+```bash
+gptwork init --production
+```
 
+The `--production` flag enables blocking-level checks that interrupt
+initialization with fix hints when production requirements are not met.
 
 ### Production Profile Checks
 
-| Check | What it validates | Production Expected |
-|-------|-------------------|---------------------|
-|  | Codex worker enabled |  |
-|  | verifier/reviewer commands | Commands set when using  backend |
-|  | Role backends valid | , , or  |
-|  | Delivery recovery commands |  configured |
-|  | Exec timeout and concurrency | Timeout >= 3600s, concurrency >= 1 |
-|  | HEAD vs docs baseline | Current HEAD matches canonical baseline |
-|  | State path, repo, workspace root | All production values set |
-|  | Vector store config |  (detect zvec) or explicit backend |
-|  | Integration mode |  (ff-only) or explicit |
+| Check | Code | What it validates | Production Expected |
+|-------|------|-------------------|---------------------|
+| Production worker | `production_worker` | Codex worker enabled | `GPTWORK_CODEX_WORKER=true` |
+| Role commands | `role_commands` | verifier/reviewer commands | Commands set when using `local_command` backend |
+| Role backends | `agent_backends` | Valid backend IDs | `codex_exec`, `local_command`, or `null` |
+| Recovery commands | `release_gate_commands` | Delivery recovery commands | `GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS` configured |
+| Exec settings | `codex_exec_settings` | Timeout and concurrency | Timeout >= 3600s, concurrency >= 1 |
+| Current head | `current_head` | HEAD vs docs baseline | Current HEAD matches canonical baseline |
+| Workspace settings | `workspace_settings` | State path, repo, workspace root | All production values set |
+| Vector store | `context_vector_store` | Vector store config | `auto` (detect zvec) or explicit backend |
+| Integration mode | `integration_mode` | Integration config | `ff-only` or explicit |
 
 ### Failure Diagnosis
 
 - **blocker** — Production requirements that prevent safe operation:
-  -  with status : Worker is disabled. Set  in .
-  -  with status : A verifier/reviewer role uses  but the command is not configured. Run:
-    
+  - `production_worker` with status `blocker`: Worker is disabled. Set `GPTWORK_CODEX_WORKER=true` in `.gptwork/runtime.env`.
+  - `role_commands` with status `blocker`: A verifier/reviewer role uses `local_command` but the command is not configured. Run:
+    ```bash
+    gptwork settings set GPTWORK_AGENT_ROLE_COMMANDS "verifier=npm test||reviewer=npm run check"
+    ```
 
 - **warn** — Recommended but not blocking:
-  - Missing , , or .
+  - Missing `release_gate_commands`, `context_vector_store`, or `current_head` check.
   - Codex exec timeout below 3600s.
   - Context vector store disabled.
 
 ### Dev vs Production Defaults
 
 | Setting | Dev Default | Production Expected |
-|---------|-------------|-------------------|
-|  |  |  |
-|  |  |  |
-|  |  |  |
-|  |  |  |
-|  |  |  |
-|  |  |  |
+|---------|-------------|---------------------|
+| `GPTWORK_CODEX_WORKER` | not set | `true` |
+| `GPTWORK_AGENT_BACKEND` | `codex_exec` | `codex_exec` |
+| `GPTWORK_AGENT_ROLE_BACKENDS` | — | `verifier=local_command,reviewer=local_command` |
+| `GPTWORK_CODEX_EXEC_TIMEOUT` | 3600s | >= 3600s |
+| `GPTWORK_CONTEXT_VECTOR_STORE` | `auto` | `auto` or `zvec` |
+| `GPTWORK_INTEGRATION_MODE` | `ff-only` | `ff-only` |
 
-The  flag on  and  enables the
-production profile checks described above. Without , only basic
+The `--production` flag on `gptwork init` and `gptwork doctor` enables the
+production profile checks described above. Without `--production`, only basic
 diagnostics run and no production-specific validation is applied.
 
 ---
