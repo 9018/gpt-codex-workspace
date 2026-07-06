@@ -325,6 +325,24 @@ export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) 
     requires_review: result.requires_review === true,
   };
 
+  // P0-AutoTerm: Propagate integration evidence from delivery_result_recovery when
+  // the result has an already_integrated recovery that the normalized integration
+  // field does not yet reflect.  This covers the case where a task commit is
+  // already on the canonical branch but integration evidence was not explicitly
+  // written to taskResult.integration before normalization.
+  if (!normalized.integration?.merged && !normalized.integration?.auto_completed) {
+    const recovery = result.delivery_result_recovery || {};
+    if (recovery.reason === 'already_integrated' || recovery.commit_integrated === true) {
+      normalized.integration = {
+        ...(recovery.integration || {}),
+        merged: true,
+        auto_completed: recovery.integration?.auto_completed === true,
+        status: recovery.integration?.status || 'already_integrated',
+        satisfied: true,
+      };
+    }
+  }
+
   if (contractKind && operationKind !== 'unknown' && operationKind !== contractKind) {
     normalized.blockers.push(blocker('operation_kind_mismatch', `Result operation_kind ${operationKind} does not match contract operation_kind ${contractKind}.`, { operation_kind: operationKind, contract_operation_kind: contractKind }));
     normalized.requires_review = true;

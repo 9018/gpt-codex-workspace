@@ -9,6 +9,7 @@ const RECOVERY_FINDING_CODES = new Set([
   "dirty_worktree_after_codex",
   "result_missing",
   "codex_failed",
+  "integration_completed_missing",
 ]);
 
 const EMPTY_COMMIT_VALUES = new Set(["", "none", "null", "undefined"]);

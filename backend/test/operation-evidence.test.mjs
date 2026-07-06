@@ -311,3 +311,36 @@ function require_infer() {
     return { inferOperationKind: null };
   }
 }
+
+
+// P0-AutoTerm: delivery_result_recovery with already_integrated propagates to
+// normalized integration field.
+test("normalizeOperationEvidence propagates integration from delivery_result_recovery", () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: "completed",
+      summary: "task was already integrated",
+      changed_files: ["README.md"],
+      commit: "c8c4847",
+      tests: "check pass",
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      delivery_result_recovery: {
+        reason: "already_integrated",
+        commit_integrated: true,
+        integration: { mode: "ff_only", merged: true, status: "already_integrated", commit: "c8c4847" },
+      },
+    },
+  });
+
+  assert.equal(normalized.operation_kind, "code_change");
+  assert.equal(normalized.integration.merged, true, "integration.merged should be true");
+  assert.equal(normalized.integration.status, "already_integrated", "integration.status should be already_integrated");
+  assert.equal(normalized.integration.satisfied, true, "integration.satisfied should be true");
+
+  // After normalization with delivery_result_recovery integration, the
+  // normalizer should NOT produce integration_missing blockers
+  const integrationBlockers = normalized.blockers.filter(b =>
+    b.code && (b.code.includes("integration") || b.code.includes("changed_files") || b.code.includes("commit"))
+  );
+  assert.equal(integrationBlockers.length, 0, "should have no integration/changed_files/commit blockers");
+});

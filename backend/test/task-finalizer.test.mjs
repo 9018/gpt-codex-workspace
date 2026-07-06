@@ -260,3 +260,36 @@ test("task-finalizer: P0-MA19 diagnostic/no-mutation task without explicit no_mu
   });
   assert.equal(decision.status, "completed");
 });
+
+
+// P0-AutoTerm: delivery_result_recovery with already_integrated evidence
+// allows the finalizer to terminalize to completed.
+test("task-finalizer: delivery_result_recovery already_integrated satisfies integration requirement", () => {
+  // Simulate a docs-only task where the result has no top-level integration
+  // evidence but delivery_result_recovery confirms already_integrated.
+  const decision = decideTaskFinalState(passedEvidence({
+    integration: { status: "already_integrated", merged: true },
+    codex_result: {
+      ...passedEvidence().codex_result,
+      integration: { status: "already_integrated", merged: true },
+      delivery_result_recovery: {
+        reason: "already_integrated",
+        commit_integrated: true,
+        recovered: true,
+        integration: { mode: "ff_only", merged: true, status: "already_integrated", commit: "abc123" },
+      },
+    },
+    contract_verification: {
+      blocking_passed: true,
+      completion_eligible: true,
+      requires_review: false,
+      blockers: [],
+    },
+  }));
+
+  assert.equal(decision.status, "completed");
+  assert.equal(decision.safe_to_auto_advance, true);
+  assert.equal(decision.integration_effect.satisfied, true, "integration_effect.satisfied should be true");
+  assert.equal(decision.integration_effect.terminal, true, "integration_effect.terminal should be true");
+  assert.equal(decision.integration_effect.required, true, "integration_effect.required should be true (code_change)");
+});

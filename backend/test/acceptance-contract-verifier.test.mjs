@@ -209,3 +209,47 @@ test('semantic ambiguity and legacy missing contract are indeterminate review ca
   assert.equal(legacy.requires_review, true);
   assert.ok(legacy.blockers.some((blocker) => blocker.code === 'acceptance_contract_missing'));
 });
+
+
+// P0-AutoTerm: Integration evidence from delivery_result_recovery satisfies
+// integration_completed requirement so the contract verifier does not produce
+// a false integration_completed_missing blocker.
+test("contract verifier passes integration check when delivery_result_recovery indicates already_integrated", () => {
+  // Use the local contract() helper with requires_integration: true and an
+  // integration_completed blocking requirement.
+  const c = contract("code_change", {
+    requirements: { requires_commit: true, requires_integration: true },
+    blocking_requirements: [
+      { id: "integration_completed", description: "Required local integration or ff-only handoff is completed when applicable.", evidence: ["integration", "remote_head"] }
+    ],
+  });
+
+  // Result has delivery_result_recovery with already_integrated evidence but
+  // no top-level integration field (simulating the stuck-task scenario).
+  // The evidence normalizer propagates delivery_result_recovery.integration
+  // to the normalized integration field, which satisfies the blocker.
+  const verification = verifyAcceptanceContract({
+    contract: c,
+    result: {
+      status: "completed",
+      summary: "docs task with already integrated commit",
+      operation_kind: "code_change",
+      changed_files: ["README.zh-CN.md"],
+      commit: "c8c4847",
+      tests: "check:syntax pass; check:imports pass",
+      verification: { passed: true, commands: [{ cmd: "npm run check:syntax", exit_code: 0 }] },
+      delivery_result_recovery: {
+        reason: "already_integrated",
+        commit_integrated: true,
+        integration: { mode: "ff_only", merged: true, status: "already_integrated", commit: "c8c4847" },
+        recovered: true,
+      },
+    },
+    verification: { passed: true, commands: [{ cmd: "npm run check:syntax", exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.contract_valid, true);
+  assert.equal(verification.blocking_passed, true);
+  assert.ok(!verification.blockers.some(b => b.code === "integration_completed_missing"), "should not have integration_completed_missing blocker");
+});

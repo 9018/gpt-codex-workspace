@@ -172,3 +172,23 @@ test("runDeliveryRecovery recovers ff-only failure when canonical advanced", asy
   assert.match(git(canonical, ["log", "--oneline", "-1"]), /fix.*recover/i);
   assert.equal(git(canonical, ["status", "--porcelain"]), "");
 });
+
+
+test("analyzeDeliveryRecoveryCandidate detects integration_completed_missing trigger", () => {
+  const candidate = analyzeDeliveryRecoveryCandidate({
+    task: { id: "task_int_1" },
+    taskResult: {
+      changed_files: ["README.md"],
+      commit: "abc123",
+      acceptance_findings: [{ code: "integration_completed_missing" }],
+    },
+    parsedResult: { status: "completed", changed_files: ["README.md"], commit: "abc123" },
+    resolvedRepo: { repo_id: "test", canonical_repo_path: "/tmp", task_worktree_path: "/tmp", worktree_lifecycle: { ok: true, mode: "git_worktree" } },
+    cr: { returncode: 0 },
+  });
+
+  assert.equal(candidate.attempted, true);
+  assert.equal(candidate.eligible, true);
+  assert.ok(candidate.triggers.includes("integration_completed_missing"), "should include integration_completed_missing in triggers");
+  assert.equal(candidate.reason, "candidate");
+});

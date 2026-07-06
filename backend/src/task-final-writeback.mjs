@@ -1,6 +1,7 @@
 import { dirname, join } from "node:path";
 import { appendFileSync } from "node:fs";
 import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { determineGoalStatus, convergeStaleGoalStatuses } from "./goal-convergence.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
@@ -333,6 +334,33 @@ export async function finalizeCodexTaskRun({
     || workspace?.root
     || config.defaultRepoPath
     || config.defaultWorkspaceRoot;
+
+  // P0-AutoTerm: Before verification, check if the task commit is already
+  // reachable on the canonical repo HEAD.  If so, populate integration
+  // evidence so the contract verifier does not produce a false
+  // integration_completed_missing blocker for an already-integrated task.
+  if (taskStatus === "completed" && taskResult?.commit && verifierRepoPath
+      && !taskResult.integration?.merged && !taskResult.auto_integration_completion?.completed) {
+    try {
+      const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: verifierRepoPath, encoding: "utf8", timeout: 10000 }).trim();
+      let integrated = head === taskResult.commit;
+      if (!integrated) {
+        try {
+          execFileSync("git", ["merge-base", "--is-ancestor", taskResult.commit, head], { cwd: verifierRepoPath, timeout: 10000 });
+          integrated = true;
+        } catch {}
+      }
+      if (integrated) {
+        taskResult.integration = {
+          ...(taskResult.integration || {}),
+          merged: true,
+          status: "already_integrated",
+          commit: taskResult.commit,
+          required: false,
+        };
+      }
+    } catch {}
+  }
 
   if (taskStatus === "completed") {
     const resultJsonForVerification = buildFallbackResultJson({ taskStatus, taskResult, summary });
