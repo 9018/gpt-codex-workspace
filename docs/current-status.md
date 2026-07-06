@@ -273,6 +273,126 @@ Diagnostic review confirmed that codex_tui operator fallback is already correctl
 - **TUI Provider**: Session count, active sessions, findings severity.
 - **Next Actions**: Prioritized action items with severity labels.
 
+### P0-AFC1: Unified Decision Core Module (Completed)
+
+`backend/src/codex-unified-decision.mjs` provides the `UnifiedAcceptanceDecision` normalizer that
+produces a canonical acceptance decision from the finalizer, verification evidence, and integration
+evidence. Downstream consumers (finalizer, closure decider, reconciler, review packet builder) all
+reference the canonical `unified_decision` rather than recomputing from raw signals.
+
+Tests in `unified-decision-consistency.test.mjs` verify:
+- Consistent output regardless of which source module drives the decision.
+- Edge cases for sync mode, invalid contracts, failed results, and missing commit evidence.
+- Deterministic field ordering and absence of spurious fields.
+
+### P0-AFC2: Evidence Rules (Completed)
+
+`backend/src/evidence/evidence-normalizer.mjs` normalizes result data into structured evidence
+profiles covering implementation, integration, deployment, verification, and recovery facts.
+`operation-evidence-profiles.mjs` defines the profiles for each operation kind.
+
+- `operation-evidence.test.mjs` and `evidence-normalizer.test.mjs` verify profile construction and
+  field normalization.
+- Recovery paths generate evidence for missing or incomplete task results.
+
+### P0-AFC3: Acceptance Explain Only (Completed)
+
+The explain-only acceptance model surfaces the acceptance result as a clear structured explanation
+in task results and review packets without requiring explicit acceptance artifact approval. The
+verification, acceptance, and integration statuses are reported as facts that downstream consumers
+(finalizer, closure decider) can act on.
+
+### P0-AFC4: Finalizer Apply Decision (Completed)
+
+`backend/src/codex-finalizer-status.mjs` and `backend/src/codex-finalizer-contract.mjs` ensure
+that `reconcileTaskClosure` sets the canonical `unified_decision` when the R1 path normalizes the
+finalizer decision. The finalizer propagates unified_decision as the source of truth for downstream
+workflow-advance decisions.
+
+Tests in `p0-afc4-finalizer-apply-decision.test.mjs` and `codex-finalizer-contract.test.mjs` verify:
+- `reconcileTaskClosure` sets unified_decision after R1 normalization.
+- Field reconciliation between finalizer output and task acceptance evidence.
+- Edge cases for missing or incomplete finalizer decisions.
+
+### P0-AFC5: Workflow Advance Decision (Completed)
+
+The workflow advance path now prefers the canonical `unified_decision` over raw findings from
+individual modules. `backend/src/codex-unified-decision.mjs` is the single source of truth for
+workflow transition decisions. Downstream paths (integration queue, queue auto-advance, goal
+advancement) consume the unified decision rather than independently evaluating raw findings.
+
+`unified-decision-consistency.test.mjs` covers multi-module consistency for workflow advance scenarios.
+
+### P0-AFC6: Reconciler Drift Repair (Completed)
+
+`backend/src/closure/task-closure-reconciler.mjs` trusts the canonical `unified_decision` as the
+source of truth when reconciling drift between task result state and expected closure records. When
+unified_decision indicates completion and integration, the reconciler does not second-guess the
+decision with independently computed acceptance rules.
+
+Tests in `task-closure-reconciler.test.mjs` verify:
+- Verified + integrated + result-artifact tasks auto-close via unified_decision trust.
+- Drift repair does not overwrite canonical decisions.
+- Missing evidence paths still produce clear findings.
+
+### P0-AFC7: Continuation Flow (Completed)
+
+`backend/src/closure/continuation-flow.mjs` connects completed canonical outcomes
+(`unified_decision`) to continuation behavior. When a task completes with a unified_decision
+indicating acceptance, the continuation flow determines the appropriate next action:
+- No continuation needed when the task is terminal.
+- Follow-up task creation when quality notes or followups are present.
+- Advancement of the parent goal or queue when all tasks are complete.
+
+Tests in `continuation-flow.test.mjs` and `followup-task-planner.test.mjs` verify:
+- Canonical outcomes trigger correct continuation behavior.
+- Follow-up task planner correctly preserves quality notes and non-blocking followups.
+- Goal/queue advancement is gated on unified_decision acceptance.
+
+### P0-AFC8: Review Packet Status (Completed)
+
+`backend/src/review/review-packet-builder.mjs` and
+`backend/src/review/task-acceptance-bundle.mjs` now use the canonical outcome
+(`unified_decision`) as the primary status in review packets, alongside context bundle health
+diagnostics. Review packets report:
+- `canonical_outcome` from unified_decision (accepted, rejected, needs_review, etc.)
+- `context_health` from context bundle diagnostics (present, missing, stale)
+- `missing_evidence` when required evidence is absent
+
+Tests in `task-review-packet.test.mjs`, `task-acceptance-bundle.test.mjs`, and
+`review-backlog-reconciler.test.mjs` verify:
+- Canonical outcome is correctly embedded in review packets.
+- Context bundle health is reported without leaking bundle contents.
+- Missing evidence produces findings, not silent omission.
+
+### P0-AFC9: Closure Records (Completed)
+
+`backend/src/closure/auto-progress-policy.mjs` provides the closure status record system covering
+all status transitions, mappings, configuration overrides, and auto-complete predicate logic.
+Auto-progress is the deterministic path for tasks that meet all closure criteria without human
+review.
+
+Tests in `auto-progress-policy.test.mjs` verify:
+- `CLOSURE_STATUSES` constants match expected values with correct ordering.
+- Auto-complete predicate evaluates all blocking gates correctly.
+- Configuration overrides (env, runtime, per-task) produce expected results.
+- Every status transition and edge case is covered across the closure status space.
+
+### P0-AFC10: Project Verification (Completed)
+
+This documentation entry. P0-AFC10 adds verification coverage for the completed AFC sequence by:
+- Recording the AFC1--AFC9 delivery summary in this status document.
+- Running syntax check (`check:syntax`) and release delivery check (`release-delivery-check --fast`).
+- Verifying that all nine preceding AFC tasks produce passing tests and a clean delivery gate.
+- Committing the documentation update as the final AFC increment.
+
+The full AFC series delivers a complete pipeline from unified decision normalization (AFC1) through
+evidence rules (AFC2), acceptance explanation (AFC3), finalizer apply (AFC4), workflow advance (AFC5),
+drift repair (AFC6), continuation flow (AFC7), review packet status (AFC8), closure records (AFC9),
+to final project verification (AFC10). Every task produces passing tests in its commit, and the
+combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline
+end to end.
+
 ### P0-01: Release Gate Hardening (NOT EXECUTED)
 
 Goal P0-01 was created but was never executed. Its intent was to:
@@ -285,4 +405,5 @@ This remains an unclosed P0 gap. The current `--fast` gate plus `npm test` and e
 ## Known Gaps (Updated)
 
 1. **P0-01**: Release gate hardening has been addressed. Both fast and full release delivery checks pass. The production release gate requires `GPTWORK_TOOL_MODE=full` to pass the runtime env check, which is expected for production deployments.
-2. **CI/CD pipeline integration**: Release gates are runnable as scripts but not yet connected to GitHub Actions or similar CI. Manual invocation is the current procedure.
+2. **P0-AFC series**: The acceptance-flow-closure pipeline (AFC1-AFC10) is complete. All nine preceding AFC tasks produce passing tests. Each task is verified individually and the combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline end to end. No known gaps in the AFC series.
+3. **CI/CD pipeline integration**: Release gates are runnable as scripts but not yet connected to GitHub Actions or similar CI. Manual invocation is the current procedure.
