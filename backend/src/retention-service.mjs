@@ -12,7 +12,7 @@
  *   GPTWORK_RETENTION_ARCHIVE_BEFORE_DELETE - Archive before deleting (default: true)
  */
 
-import { existsSync } from "node:fs";
+import { existsSync, statSync } from "node:fs";
 import { readFile, readdir, rm, mkdir, writeFile, appendFile, rename, stat } from "node:fs/promises";
 import { join } from "node:path";
 import { createAdminAuditLogger } from "./admin-audit-log.mjs";
@@ -20,10 +20,13 @@ import { retainedWorktreeDecision } from "./legacy-reconciliation.mjs";
 import {
   TASK_STATUSES,
   isActiveExecutionStatus,
+  isFailedTerminalStatus,
   isHumanReviewStatus,
   isTerminalStatus as isTaxonomyTerminalTaskStatus,
   normalizeTaskStatus,
 } from "./task-status-taxonomy.mjs";
+
+import { execFileSync } from "node:child_process";
 
 // ---------------------------------------------------------------------------
 // Config helpers
@@ -80,6 +83,13 @@ function _isActiveTaskStatus(status) {
   return normalized !== TASK_STATUSES.WAITING_FOR_INTEGRATION
     && (isActiveExecutionStatus(normalized) || isHumanReviewStatus(normalized));
 }
+
+function _isProtectedOrReviewTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return _isActiveTaskStatus(normalized)
+    || normalized === TASK_STATUSES.WAITING_FOR_INTEGRATION;
+}
+
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -159,6 +169,27 @@ async function _countDirFiles(dirPath) {
     }
   } catch {}
   return count;
+}
+
+function _findGitRoot(fromDir) {
+  try {
+    return execFileSync("git", ["rev-parse", "--show-toplevel"], {
+      cwd: fromDir, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+  } catch { return null; }
+}
+
+function _parseTaskIdFromBranchRef(ref) {
+  const m = ref.match(/^(?:refs\/heads\/)?gptwork\/(?:task|goal)\/(.+)/);
+  return m ? m[1] : null;
+}
+
+function _isCompletedOrFailedTaskStatus(status) {
+  const normalized = normalizeTaskStatus(status);
+  return normalized === TASK_STATUSES.COMPLETED
+    || normalized === TASK_STATUSES.FAILED
+    || normalized === TASK_STATUSES.TIMED_OUT
+    || normalized === TASK_STATUSES.CANCELLED;
 }
 
 // ---------------------------------------------------------------------------
@@ -670,6 +701,122 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
     families.push(family);
   }
 
+  // ── 18. git branches (task/goal branches) ────────────────────────────
+  {
+    const gitRoot = _findGitRoot(workspaceRoot);
+    let totalBranches = 0;
+    let terminalBranches = 0;
+    let orphanedBranches = 0;
+    let protectedBranches = 0;
+    const knownTasks = state.tasks || [];
+
+    if (gitRoot) {
+      try {
+        const output = execFileSync("git", ["branch", "--list", "gptwork/task/*", "gptwork/goal/*"], {
+          cwd: gitRoot, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"]
+        }).trim();
+        const branches = output.split("\n").filter(Boolean).map(b => b.replace(/^\s*\*?\s*/, ""));
+        totalBranches = branches.length;
+
+        for (const branch of branches) {
+          const entityId = _parseTaskIdFromBranchRef(branch);
+          if (!entityId) { orphanedBranches++; continue; }
+          const task = knownTasks.find(t => t.id === entityId);
+          if (!task) { orphanedBranches++; continue; }
+          if (_isCompletedOrFailedTaskStatus(task.status)) {
+            terminalBranches++;
+          } else {
+            protectedBranches++;
+          }
+        }
+      } catch { /* git not available */ }
+    }
+
+    const branchFamily = _makeFamilyStatus("git_branches", {
+      type: "filesystem",
+      total: totalBranches,
+      active: protectedBranches,
+      terminal: terminalBranches,
+      proposedAction: terminalBranches > limit
+        ? `prune ${Math.max(0, terminalBranches - limit)} oldest terminal branches (keep ${limit})`
+        : orphanedBranches > 0
+          ? `${orphanedBranches} orphaned branch(es) without matching task`
+          : `within limit (${terminalBranches}/${limit})`,
+      safe: true,
+    });
+    branchFamily.orphaned_count = orphanedBranches;
+    branchFamily.protected_count = protectedBranches;
+    families.push(branchFamily);
+  }
+
+  // ── 19. git worktrees (active git worktree list) ─────────────────────
+  {
+    const gitRoot = _findGitRoot(workspaceRoot);
+    let totalWorktrees = 0;
+    let activeWorktrees = 0;
+    let terminalWorktrees = 0;
+    let orphanedWorktrees = 0;
+    let reservedWorktrees = 0;
+    const knownTasks = state.tasks || [];
+    const mainWt = gitRoot ? gitRoot.replace(/\/+$/, "") : null;
+
+    if (gitRoot) {
+      try {
+        const output = execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: gitRoot, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"]
+        }).trim();
+        const blocks = output.split("\n\n").filter(Boolean);
+
+        for (const block of blocks) {
+          const lines = block.split("\n").filter(Boolean);
+          let wtPath = null;
+          let branchRef = null;
+
+          for (const line of lines) {
+            if (line.startsWith("worktree ")) {
+              wtPath = line.slice("worktree ".length).trim();
+            } else if (line.startsWith("branch ")) {
+              branchRef = line.slice("branch ".length).trim();
+            }
+          }
+
+          if (wtPath && mainWt && wtPath.replace(/\/+$/, "") === mainWt) {
+            reservedWorktrees++;
+            continue;
+          }
+          if (!wtPath || !branchRef) { continue; }
+          totalWorktrees++;
+
+          const entityId = _parseTaskIdFromBranchRef(branchRef);
+          if (!entityId) { orphanedWorktrees++; continue; }
+          const task = knownTasks.find(t => t.id === entityId);
+          if (!task) { orphanedWorktrees++; continue; }
+          if (_isCompletedOrFailedTaskStatus(task.status)) {
+            terminalWorktrees++;
+          } else {
+            activeWorktrees++;
+          }
+        }
+      } catch { /* git not available */ }
+    }
+
+    const wtFamily = _makeFamilyStatus("git_worktrees", {
+      type: "filesystem",
+      total: totalWorktrees,
+      active: activeWorktrees,
+      terminal: terminalWorktrees,
+      proposedAction: terminalWorktrees > limit
+        ? `remove ${Math.max(0, terminalWorktrees - limit)} terminal git worktrees (keep ${limit})`
+        : orphanedWorktrees > 0
+          ? `${orphanedWorktrees} orphaned worktree(s) without matching task`
+          : `within limit (${terminalWorktrees}/${limit})`,
+      safe: true,
+    });
+    wtFamily.orphaned_count = orphanedWorktrees;
+    wtFamily.reserved_count = reservedWorktrees;
+    families.push(wtFamily);
+  }
+
   return {
     retention_config: {
       enabled: retCfg.enabled,
@@ -686,6 +833,19 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
       total_bytes: families.reduce((s, f) => s + f.bytes, 0),
       total_bytes_h: _humanSize(families.reduce((s, f) => s + f.bytes, 0)),
       families_over_limit: families.filter((f) => f.proposed_action && f.proposed_action.includes("remove")).length,
+      storage_pressure: {
+        has_terminal_branches: families.filter(f => f.name === "git_branches").some(f => f.terminal > 0),
+        has_terminal_worktrees: families.filter(f => f.name === "git_worktrees").some(f => f.terminal > 0),
+        has_terminal_retained_worktrees: families.filter(f => f.name === "retained_worktrees").some(f => f.terminal > 0),
+        branch_over_limit: families.filter(f => f.name === "git_branches").some(f => f.terminal > limit),
+        worktree_over_limit: families.filter(f => f.name === "git_worktrees").some(f => f.terminal > limit),
+        retained_worktree_over_limit: families.filter(f => f.name === "retained_worktrees").some(f => f.terminal > limit),
+        branch_prune_candidates: families.filter(f => f.name === "git_branches").reduce((s, f) => s + Math.max(0, f.terminal - limit), 0),
+        worktree_prune_candidates: families.filter(f => f.name === "git_worktrees").reduce((s, f) => s + Math.max(0, f.terminal - limit), 0),
+        retained_worktree_removable: families.filter(f => f.name === "retained_worktrees").reduce((s, f) => s + f.terminal, 0),
+        total_orphaned_branches: families.filter(f => f.name === "git_branches").reduce((s, f) => s + (f.orphaned_count || 0), 0),
+        total_orphaned_worktrees: families.filter(f => f.name === "git_worktrees").reduce((s, f) => s + (f.orphaned_count || 0), 0),
+      },
     },
   };
 }
@@ -1297,6 +1457,71 @@ export async function retentionCleanup({
       _recordSkip("retained_worktrees", "no_removable_worktrees", `${candidates} retained worktree candidate(s)`);
     } else {
       _recordChange("retained_worktrees", "summary", `removed ${removed} resolved terminal retained worktree(s)`, null);
+    }
+  }
+
+
+  // ── 17. git branches cleanup (task/goal branches) ──────────────
+  {
+    const gitRoot = _findGitRoot(workspaceRoot);
+    const knownTasks = state.tasks || [];
+
+    if (gitRoot) {
+      try {
+        const output = execFileSync("git", ["branch", "--list", "gptwork/task/*", "gptwork/goal/*"], {
+          cwd: gitRoot, encoding: "utf8", timeout: 10000, stdio: ["ignore", "pipe", "ignore"]
+        }).trim();
+        const branches = output.split("\n").filter(Boolean).map(b => b.replace(/^\s*\*?\s*/, ""));
+        let removedCount = 0;
+        let candidateCount = 0;
+
+        // Track which tasks are terminal for branch pruning
+        const taskStatusMap = {};
+        for (const task of knownTasks) {
+          taskStatusMap[task.id] = task.status || "unknown";
+        }
+
+        // Sort branches by associated task updated_at for oldest-first pruning
+        const branchTaskDates = [];
+        for (const branch of branches) {
+          const entityId = _parseTaskIdFromBranchRef(branch);
+          if (!entityId) continue;
+          const task = knownTasks.find(t => t.id === entityId);
+          if (task && _isCompletedOrFailedTaskStatus(task.status)) {
+            candidateCount++;
+            branchTaskDates.push({ branch, task, date: Date.parse(task.updated_at || task.created_at || "0") || 0 });
+          }
+        }
+
+        // Prune oldest-first when over limit
+        branchTaskDates.sort((a, b) => a.date - b.date); // oldest first
+        let pruned = 0;
+        for (const entry of branchTaskDates) {
+          if (candidateCount - pruned <= limit) break;
+          _recordChange("git_branches", "prune_terminal", `branch ${entry.branch} (task ${entry.task.id} ${entry.task.status})`, null);
+          if (!dryRun) {
+            try {
+              execFileSync("git", ["branch", "-D", entry.branch], {
+                cwd: gitRoot, stdio: ["ignore", "pipe", "ignore"], timeout: 5000
+              });
+            } catch {}
+          }
+          pruned++;
+          removedCount++;
+        }
+
+        if (removedCount > 0) {
+          _recordChange("git_branches", "summary", `pruned ${removedCount} terminal git branches`, null);
+        } else if (candidateCount > 0) {
+          _recordSkip("git_branches", "within_limit", `${candidateCount} terminal branches (limit=${limit})`);
+        } else {
+          _recordSkip("git_branches", "no_terminal_branches", "no terminal git branches to prune");
+        }
+      } catch (err) {
+        _recordSkip("git_branches", "error", err.message);
+      }
+    } else {
+      _recordSkip("git_branches", "no_git_root", "git root not found");
     }
   }
 

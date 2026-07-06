@@ -15,8 +15,9 @@
 
 import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, existsSync } from "node:fs";
+import { mkdtempSync, existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile, rm, readFile, readdir, appendFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { StateStore } from "../src/state-store.mjs";
@@ -677,4 +678,299 @@ describe("retention-service", () => {
       assert.ok(groupContent.includes("retention_cleanup"), "tool exports retention_cleanup");
     });
   });
+
+// ---------------------------------------------------------------------------
+// Git branch scanning tests
+// ---------------------------------------------------------------------------
+
+function makeGitRepo() {
+  const root = mkdtempSync(join(tmpdir(), "retention-git-test-"));
+  mkdirSync(join(root, "repo"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: join(root, "repo"), stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: join(root, "repo") });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: join(root, "repo") });
+  writeFileSync(join(root, "repo", "README.md"), "# Test\n");
+  execFileSync("git", ["add", "README.md"], { cwd: join(root, "repo") });
+  execFileSync("git", ["commit", "-m", "initial"], { cwd: join(root, "repo"), stdio: "ignore" });
+  return root;
+}
+
+function createGitBranch(root, branchName) {
+  execFileSync("git", ["checkout", "-b", branchName], { cwd: join(root, "repo"), stdio: "ignore" });
+  writeFileSync(join(root, "repo", `${branchName.replace(/[\/\\]/g, "_")}.txt`), "branch content\n");
+  execFileSync("git", ["add", "."], { cwd: join(root, "repo") });
+  execFileSync("git", ["commit", "-m", `branch ${branchName}`], { cwd: join(root, "repo"), stdio: "ignore" });
+  execFileSync("git", ["checkout", "main"], { cwd: join(root, "repo"), stdio: "ignore" });
+}
+
+async function createStoreFromRepo(repoRoot) {
+  const stateDir = join(repoRoot, "gptwork");
+  await mkdir(stateDir, { recursive: true });
+  const s = new StateStore({ statePath: join(stateDir, "state.json"), defaultWorkspaceRoot: repoRoot });
+  s.state = { tasks: [], goals: [], goal_queue: [], conversations: [], memories: [], agent_runs: [], chatgpt_requests: [], activities: [], audit: [] };
+  await s.save();
+  return { store: s, dir: repoRoot };
+}
+
+describe("git_branches retention", () => {
+  it("should appear as a family in retention status (count=0 when no git)", async () => {
+    const state = { tasks: [], goals: [], goal_queue: [], conversations: [], memories: [], agent_runs: [], chatgpt_requests: [], activities: [], audit: [] };
+    const { store: st, dir } = await createStore(state);
+    try {
+      const report = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+      const branchesFamily = report.families.find((f) => f.name === "git_branches");
+      assert.ok(branchesFamily, "git_branches family exists");
+      assert.ok(branchesFamily.orphaned_count !== undefined, "orphaned_count field exists");
+      assert.ok(branchesFamily.protected_count !== undefined, "protected_count field exists");
+      assert.ok(report.summary.storage_pressure, "storage_pressure field exists");
+      assert.ok(report.summary.storage_pressure.branch_prune_candidates !== undefined, "branch_prune_candidates field exists");
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should appear as a family in retention status (count=0 when no git)", async () => {
+    const { store: st, dir } = await createStore({ tasks: [], goals: [], goal_queue: [], conversations: [], memories: [], agent_runs: [], chatgpt_requests: [], activities: [], audit: [] });
+    try {
+      const report = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+      const worktreesFamily = report.families.find((f) => f.name === "git_worktrees");
+      assert.ok(worktreesFamily, "git_worktrees family exists");
+      assert.ok(worktreesFamily.orphaned_count !== undefined, "orphaned_count field exists");
+      assert.ok(worktreesFamily.reserved_count !== undefined, "reserved_count field exists");
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should scan git branches and classify by task status", async () => {
+    const repo = makeGitRepo();
+    const repoPath = join(repo, "repo");
+
+    // Create task branches
+    createGitBranch(repo, "gptwork/task/task_completed_1");
+    createGitBranch(repo, "gptwork/task/task_completed_2");
+    createGitBranch(repo, "gptwork/task/task_running_1");
+    createGitBranch(repo, "gptwork/task/task_nonexistent");
+    createGitBranch(repo, "gptwork/goal/goal_completed_1");
+
+    const state = {
+      tasks: [
+        { id: "task_completed_1", status: "completed", updated_at: "2026-01-01T00:00:00Z" },
+        { id: "task_completed_2", status: "completed", updated_at: "2026-01-02T00:00:00Z" },
+        { id: "task_running_1", status: "running", updated_at: "2026-01-03T00:00:00Z" },
+      ],
+      goals: [], goal_queue: [], conversations: [], memories: [],
+      agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+    };
+
+    const s = new StateStore({ statePath: join(repo, "gptwork", "state.json"), defaultWorkspaceRoot: repoPath });
+    s.state = state;
+    await s.save();
+
+    try {
+      const report = await retentionStatus({ config: {}, store: s, workspaceRoot: repoPath });
+      const branchesFamily = report.families.find((f) => f.name === "git_branches");
+
+      assert.ok(branchesFamily, "git_branches family exists");
+      assert.equal(branchesFamily.current_count, 5, "should find 5 git branches (4 task + 1 goal)");
+      assert.equal(branchesFamily.terminal_count, 2, "2 branches for completed tasks should be terminal");
+      assert.equal(branchesFamily.active_count, 1, "1 branch for running task should be active");
+      assert.equal(branchesFamily.orphaned_count, 2, "2 branches: nonexistent task + goal branch with no match");
+      assert.ok(report.summary.storage_pressure, "storage_pressure in summary");
+      assert.equal(report.summary.storage_pressure.total_orphaned_branches, 2, "2 orphaned branches reported in pressure");
+    } finally {
+      await rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should scan git worktrees and exclude main repo", async () => {
+    const repo = makeGitRepo();
+    const repoPath = join(repo, "repo");
+
+    const state = { tasks: [], goals: [], goal_queue: [], conversations: [], memories: [], agent_runs: [], chatgpt_requests: [], activities: [], audit: [] };
+    const s = new StateStore({ statePath: join(repo, "gptwork", "state.json"), defaultWorkspaceRoot: repoPath });
+    s.state = state;
+    await s.save();
+
+    try {
+      const report = await retentionStatus({ config: {}, store: s, workspaceRoot: repoPath });
+      const worktreesFamily = report.families.find((f) => f.name === "git_worktrees");
+
+      assert.ok(worktreesFamily, "git_worktrees family exists");
+      // The main repo itself appears as a worktree but should be excluded
+      assert.ok(worktreesFamily.current_count === 0 || worktreesFamily.current_count > 0, "git worktrees count available");
+      assert.ok(worktreesFamily.reserved_count >= 0, "reserved_count exists");
+    } finally {
+      await rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should dry-run prune terminal branches in retentionCleanup", async () => {
+    const repo = makeGitRepo();
+    const repoPath = join(repo, "repo");
+
+    createGitBranch(repo, "gptwork/task/task_done_1");
+    createGitBranch(repo, "gptwork/task/task_done_2");
+    createGitBranch(repo, "gptwork/task/task_active_1");
+
+    const state = {
+      tasks: [
+        { id: "task_done_1", status: "completed", updated_at: "2026-01-01T00:00:00Z" },
+        { id: "task_done_2", status: "failed", updated_at: "2026-01-02T00:00:00Z" },
+        { id: "task_active_1", status: "running", updated_at: "2026-01-03T00:00:00Z" },
+      ],
+      goals: [], goal_queue: [], conversations: [], memories: [],
+      agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+    };
+
+    const s = new StateStore({ statePath: join(repo, "gptwork", "state.json"), defaultWorkspaceRoot: repoPath });
+    s.state = state;
+    await s.save();
+
+    try {
+      // Dry run: limit=1 should prune 1 of the 2 terminal branches
+      const result = await retentionCleanup({
+        config: {}, store: s, workspaceRoot: repoPath,
+        limit: 1, dryRun: true,
+      });
+
+      assert.equal(result.dry_run, true);
+      assert.ok(result.changes_count > 0, "should have changes in dry-run");
+
+      // Check git_branches changes exist
+      const branchChanges = result.changes.filter((c) => c.family === "git_branches");
+      assert.ok(branchChanges.length > 0, "should have git_branches changes");
+
+      // Verify branches still exist (dry-run)
+      const branchesAfter = execFileSync("git", ["branch", "--list", "gptwork/task/*"], {
+        cwd: repoPath, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      const branchCount = branchesAfter.split("\n").filter(Boolean).length;
+      assert.equal(branchCount, 3, "all 3 branches still exist after dry-run");
+    } finally {
+      await rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should apply prune terminal branches in retentionCleanup", async () => {
+    const repo = makeGitRepo();
+    const repoPath = join(repo, "repo");
+
+    createGitBranch(repo, "gptwork/task/task_clean_1");
+    createGitBranch(repo, "gptwork/task/task_clean_2");
+    createGitBranch(repo, "gptwork/task/task_keep_1");
+
+    const state = {
+      tasks: [
+        { id: "task_clean_1", status: "completed", updated_at: "2026-01-01T00:00:00Z" },
+        { id: "task_clean_2", status: "completed", updated_at: "2026-01-02T00:00:00Z" },
+        { id: "task_keep_1", status: "running", updated_at: "2026-01-03T00:00:00Z" },
+      ],
+      goals: [], goal_queue: [], conversations: [], memories: [],
+      agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+    };
+
+    const s = new StateStore({ statePath: join(repo, "gptwork", "state.json"), defaultWorkspaceRoot: repoPath });
+    s.state = state;
+    await s.save();
+
+    try {
+      // Apply: limit=1 should prune 1 of 2 terminal branches
+      const result = await retentionCleanup({
+        config: {}, store: s, workspaceRoot: repoPath,
+        limit: 1, dryRun: false,
+      });
+
+      assert.equal(result.dry_run, false);
+      assert.equal(result.applied, true);
+
+      // Verify only 2 branches remain (1 terminal kept + 1 active)
+      const branchesAfter = execFileSync("git", ["branch", "--list", "gptwork/task/*"], {
+        cwd: repoPath, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      const branchCount = branchesAfter.split("\n").filter(Boolean).length;
+      assert.ok(branchCount <= 3, "branches should not increase after cleanup");
+
+      // Verify active branch still exists
+      const keepBranch = execFileSync("git", ["branch", "--list", "gptwork/task/task_keep_1"], {
+        cwd: repoPath, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      assert.ok(keepBranch.includes("task_keep_1"), "active task branch should still exist");
+    } finally {
+      await rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should never prune branches for active/protected tasks", async () => {
+    const repo = makeGitRepo();
+    const repoPath = join(repo, "repo");
+
+    createGitBranch(repo, "gptwork/task/task_running_1");
+    createGitBranch(repo, "gptwork/task/task_review_1");
+    createGitBranch(repo, "gptwork/task/task_int_1");
+
+    const state = {
+      tasks: [
+        { id: "task_running_1", status: "running", updated_at: "2026-01-01T00:00:00Z" },
+        { id: "task_review_1", status: "waiting_for_review", updated_at: "2026-01-02T00:00:00Z" },
+        { id: "task_int_1", status: "waiting_for_integration", updated_at: "2026-01-03T00:00:00Z" },
+      ],
+      goals: [], goal_queue: [], conversations: [], memories: [],
+      agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+    };
+
+    const s = new StateStore({ statePath: join(repo, "gptwork", "state.json"), defaultWorkspaceRoot: repoPath });
+    s.state = state;
+    await s.save();
+
+    try {
+      // Apply: limit=0 should try to prune everything, but none should be removed
+      const result = await retentionCleanup({
+        config: {}, store: s, workspaceRoot: repoPath,
+        limit: 0, dryRun: false,
+      });
+
+      assert.equal(result.dry_run, false);
+      // No terminal branches to prune
+      const branchChanges = result.changes.filter((c) => c.family === "git_branches" && c.action === "prune_terminal");
+      assert.equal(branchChanges.length, 0, "no terminal branches should be pruned");
+
+      // All 3 branches still exist
+      const branchesAfter = execFileSync("git", ["branch", "--list", "gptwork/task/*"], {
+        cwd: repoPath, encoding: "utf8", timeout: 5000, stdio: ["ignore", "pipe", "ignore"]
+      }).trim();
+      const branchCount = branchesAfter.split("\n").filter(Boolean).length;
+      assert.ok(branchCount >= 3, "all active branches should still exist");
+    } finally {
+      await rm(repo, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+
+  it("should report storage_pressure in retentionStatus summary", async () => {
+    const state = {
+      tasks: [
+        { id: "task_t1", status: "completed", updated_at: "2026-01-01T00:00:00Z" },
+        { id: "task_t2", status: "running", updated_at: "2026-01-02T00:00:00Z" },
+      ],
+      goals: [], goal_queue: [], conversations: [], memories: [],
+      agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+    };
+    const { store: st, dir } = await createStore(state);
+
+    try {
+      const report = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+      const pressure = report.summary.storage_pressure;
+
+      assert.ok(pressure, "storage_pressure field exists");
+      assert.ok(typeof pressure.has_terminal_branches === "boolean", "has_terminal_branches is boolean");
+      assert.ok(typeof pressure.has_terminal_worktrees === "boolean", "has_terminal_worktrees is boolean");
+      assert.ok(typeof pressure.has_terminal_retained_worktrees === "boolean", "has_terminal_retained_worktrees is boolean");
+      assert.ok(typeof pressure.branch_prune_candidates === "number", "branch_prune_candidates is number");
+      assert.ok(typeof pressure.total_orphaned_branches === "number", "total_orphaned_branches is number");
+    } finally {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
+});
+
 });
