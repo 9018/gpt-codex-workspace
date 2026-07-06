@@ -259,13 +259,15 @@ Token values must come from runtime environment or workflow secrets. Do not plac
 7. Deployment unclear: compare running commit/config to expected target, not only HTTP 200.
 8. Before completion: run release checks, commit, write result files, and confirm repo clean.
 
-## Related Docs
 
 - [Current Status](current-status.md)
 - [Architecture](architecture.md)
+- [Goal Queue](goal-queue.md)
+- [Queue Auto-Advance](queue-auto-advance.md)
 - [Context and Worktree Contract](delivery/context-and-worktree-contract.md)
 - [GitHub Fallback](github-fallback.md)
 - [中文主文档](../README.zh-CN.md)
+
 
 ## Productized Capabilities
 
@@ -307,3 +309,13 @@ node scripts/release-storage-pressure.mjs
 
 Reports storage pressure for task/goal counts vs configured limits. Can be wired into CI/CD as a pre-release gate.
 
+
+## Related Docs
+
+- [Current Status](current-status.md)
+- [Architecture](architecture.md)
+- [Goal Queue](goal-queue.md)
+- [Queue Auto-Advance](queue-auto-advance.md)
+- [Context and Worktree Contract](delivery/context-and-worktree-contract.md)
+- [GitHub Fallback](github-fallback.md)
+- [中文主文档](../README.zh-CN.md)

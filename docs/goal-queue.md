@@ -158,3 +158,57 @@ Both are checked before starting a queue item. If unmet, the item transitions to
 cd backend
 node --test test/goal-queue.test.mjs
 ```
+
+## Queue Auto-Advance
+
+The queue auto-advance system automates execution of queued goals through
+the full pipeline: dependency resolution, acceptance gating, typed blocker
+assignment, and automatic advancement of the next eligible item.
+
+### Auto-Advance Tick
+
+The `queueAutoAdvanceTick` function runs on every worker tick cycle (via
+`codex-worker-loop.mjs`). It:
+
+1. Runs the queue reconciler to fix stale blockers
+2. Scans eligible items (waiting/ready, auto_start=true) in position order
+3. Evaluates each item against typed eligibility gates
+4. Sets typed `blocked_reason` on ineligible items
+5. Advances the first fully-eligible item
+
+### Typed Blocked Reasons (P0-MA8)
+
+Queue items use typed `blocked_reason` constants instead of human-readable
+strings. The nine typed reasons are:
+
+| Typed Constant | `blocked_reason` String |
+|----------------|-------------------------|
+| `DEPENDENCY_NOT_TERMINAL` | `dependency_not_terminal` |
+| `ACTIVE_REPO_LOCK` | `active_repo_lock` |
+| `DIRTY_WORKTREE` | `dirty_worktree` |
+| `WAITING_FOR_REVIEW` | `waiting_for_review` |
+| `WAITING_FOR_REPAIR` | `waiting_for_repair` |
+| `WAITING_FOR_INTEGRATION` | `waiting_for_integration` |
+| `ACCEPTANCE_NOT_SATISFIED` | `acceptance_not_satisfied` |
+| `INTEGRATION_NOT_SATISFIED` | `integration_not_satisfied` |
+| `FINALIZER_NOT_TERMINAL` | `finalizer_not_terminal` |
+
+### Queue Reconciler (P0-C8)
+
+The reconciler extends queue policy with integration awareness:
+
+- **Extended terminal statuses**: `readonly_closed`, `integration_not_required`,
+  `integrated`, `superseded`, `resolved_by_successor` all count as terminal
+  completed for queue advancement
+- **Integration gating**: Mutating tasks with a commit but no integration
+  evidence block downstream dependants with `INTEGRATION_NOT_SATISFIED`
+- **Stale blocker detection**: Blocked items whose dependency has resolved
+  are detected and auto-fixed
+- **Repair propagation**: Completed repair tasks cascade unblocking to
+  dependants of the repaired root task
+
+### Related Documentation
+
+See [Queue Auto-Advance](queue-auto-advance.md) for the full reference:
+architecture, typed eligibility gates, reconciler functions, finalizer gate,
+runtime conditions, diagnostics, and safe-to-advance decision flow.
