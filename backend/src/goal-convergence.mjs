@@ -23,12 +23,12 @@ const SYNC_LIKE_PROFILES = new Set([
 export function determineGoalStatus(goal, task, taskResult = {}) {
 
 
-  // P0: Use unified_decision when available — single source of truth for
-  // goal status derivation. This prevents contradictory conclusions between
-  // closure, finalizer, queue propagation, and goal convergence.
+  // P0-AFC4: Use unified_decision as the SINGLE source of truth — trust the
+  // canonical outcome unconditionally when status is completed. Older evidence
+  // fields (acceptance_findings, verification, integration) cannot override it.
   if (taskResult && taskResult.unified_decision && taskResult.unified_decision.status) {
     const ud = taskResult.unified_decision;
-    if (ud.status === UNIFIED_STATUSES.COMPLETED && ud.blocking_passed && ud.safe_to_auto_advance) {
+    if (ud.status === UNIFIED_STATUSES.COMPLETED) {
       return 'completed';
     }
     if (ud.status === UNIFIED_STATUSES.FAILED || ud.status === UNIFIED_STATUSES.BLOCKED || ud.status === UNIFIED_STATUSES.TIMED_OUT) {

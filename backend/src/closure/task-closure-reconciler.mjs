@@ -105,6 +105,28 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
   let updatedTaskStatus = taskStatus;
   let updatedTaskResult = { ...taskResult };
 
+  /**
+   * Build a unified_decision snapshot that matches the reconciled completion.
+   * P0-AFC4: The canonical outcome must be propagated so that downstream
+   * consumers (goal-convergence, task-final-writeback) do not re-derive
+   * status from individual evidence fields.
+   */
+  function buildReconciledUnifiedDecision() {
+    return {
+      status: 'completed',
+      blocking_passed: true,
+      safe_to_auto_advance: true,
+      requires_review: false,
+      requires_repair: false,
+      requires_integration: false,
+      requires_restart: false,
+      source: 'reconciler',
+      reconciled: true,
+      normalized_at: new Date().toISOString(),
+    };
+  }
+
+
   // R1: All evidence present + closure says auto-complete → normalize stale finalizer_decision
   if (allEvidencePresent && closureSaysComplete && !finalizerSaysComplete) {
     updatedTaskResult = {
@@ -120,6 +142,7 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
         goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
         queue_effect: { status: 'completed', unblock_dependents: true, hold_queue: false },
       },
+      unified_decision: buildReconciledUnifiedDecision(),
     };
     updatedTaskStatus = 'completed';
     reconciled = true;
@@ -178,6 +201,7 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
         goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
         queue_effect: { status: 'completed', unblock_dependents: true, hold_queue: false },
       },
+      unified_decision: buildReconciledUnifiedDecision(),
     };
     reconciled = true;
     reason = 'finalizer_decision normalized to completed (task.status already completed, closure agrees)';
@@ -210,6 +234,17 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
     };
     reconciled = true;
     reason = 'closure_decision normalized to ' + newStatus + ' (task.status already completed, finalizer agrees)';
+  }
+
+
+  // P0-AFC4: Ensure unified_decision is propagated for R2/R3/R5
+  // (where the reconciler normalizes taskStatus or closure_decision
+  // but does not explicitly set unified_decision).
+  if (!updatedTaskResult.unified_decision && updatedTaskStatus === "completed") {
+    updatedTaskResult = {
+      ...updatedTaskResult,
+      unified_decision: buildReconciledUnifiedDecision(),
+    };
   }
 
   if (!reconciled) {

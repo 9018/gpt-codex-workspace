@@ -1097,7 +1097,13 @@ async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorkt
 }
 
 function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config }) {
-  item.status = taskStatus;
+  // P0-AFC4: Use canonical decision (finalizer_decision) as the source of truth
+  // for item.status. This ensures reconciled completion outcomes are preserved
+  // even if the raw taskStatus parameter is stale or older evidence contradicts.
+  const canonicalStatus = taskResult?.finalizer_decision?.status
+    || taskResult?.unified_decision?.status
+    || taskStatus;
+  item.status = canonicalStatus;
   item.execution_mode = deriveExecutionMode(taskResult, item);
   item.worktree = deriveSpecWorktreeRecord(taskResult, item.worktree);
   item.attempt = Number.isInteger(item.attempt) ? item.attempt : 0;
@@ -1178,7 +1184,11 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
     if (goal) {
       const goalItem = state.goals.find((candidate) => candidate.id === goal.id);
       if (goalItem) {
-        goalStatus = determineGoalStatus(goalItem, item, item.result || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
+        const canonicalStatus = taskResult?.finalizer_decision?.status
+          || taskResult?.unified_decision?.status
+          || taskStatus;
+        goalStatus = determineGoalStatus(goalItem, item, item.result || {})
+          || (canonicalStatus === "timed_out" ? "failed" : canonicalStatus);
         goalItem.status = goalStatus;
         goalItem.updated_at = doneAt;
         state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });
