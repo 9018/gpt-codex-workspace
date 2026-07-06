@@ -45,7 +45,7 @@ test('getTaskReviewPacket returns safe minimal review fields and recommended act
   assert.deepEqual(Object.keys(packet), [
     'task_id', 'goal_id', 'title', 'status', 'task_status', 'reason_for_review', 'compact_git_summary',
     'changed_files', 'reconciliation', 'reconciled_evidence', 'key_evidence', 'blocking_findings', 'non_blocking_followups',
-    'recommended_next_action', 'missing_evidence',
+    'recommended_next_action', 'missing_evidence', 'agent_backends', 'pipeline_gate',
   ]);
   assert.equal(packet.reason_for_review, 'Contract verifier requested review');
   assert.equal(packet.recommended_next_action.action, 'review_blockers');

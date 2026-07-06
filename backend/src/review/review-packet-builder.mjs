@@ -2,6 +2,7 @@ import { REVIEW_STATES, isTypedReviewState, isMachineRepairableReviewState } fro
 
 import { getTaskAcceptanceBundle } from './task-acceptance-bundle.mjs';
 import { reconcileBundle } from './review-backlog-reconciler.mjs';
+import { DEFAULT_AGENT_PIPELINE, ALL_PIPELINE_ROLES, describeRoleBackend } from '../subagent-policy.mjs';
 
 function compactGitSummary(bundle = {}, taskResult = {}) {
   const summary = taskResult.compact_git_summary || taskResult.git_summary || {};
@@ -102,6 +103,11 @@ export async function getTaskReviewPacket({ store, config = {}, task_id } = {}) 
     non_blocking_followups: bundle.non_blocking_followups,
     recommended_next_action: recommendedNextAction(bundle),
     missing_evidence: bundle.missing_evidence,
+    // P0-05: Per-role backend and evidence provenance
+    // Shows each role's configured backend, execution semantic, evidence source,
+    // and whether it's overridden from the default.
+    agent_backends: ALL_PIPELINE_ROLES.map((role) => describeRoleBackend(role, config)),
+
     // P0-04: Pipeline gate info — explains which roles/artifacts are blocking closure
     pipeline_gate: taskResult.pipeline_gate_blocked === true || (Array.isArray(taskResult.pipeline_gate_reasons) && taskResult.pipeline_gate_reasons.length > 0)
       ? {

@@ -41,14 +41,39 @@ export const LEGACY_ROLE_MAPPING = Object.freeze({
 });
 
 // -- Role-to-backend default mapping -------------------------------------------
-// builder/repairer use codex_exec for actual code changes.
-// Other roles use deterministic local/null service to write artifact records.
+// P0-05: Product-default executable backends.
+//
+// builder/repairer:   codex_exec (real agent execution via Codex CLI)
+// verifier/reviewer:  local_command (deterministic shell command execution)
+// context_curator/planner:  null auto-artifact (prepared from task metadata)
+// integrator/finalizer:     null auto-artifact (auto-completed from result evidence)
+//
+// Override per role via GPTWORK_AGENT_ROLE_BACKENDS env var:
+//   GPTWORK_AGENT_ROLE_BACKENDS=verifier=null,reviewer=null
+//   GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
+//
+// Configuration examples:
+//   # Global backend for all roles
+//   GPTWORK_AGENT_BACKEND=local_command
+//
+//   # Per-role backends
+//   GPTWORK_AGENT_ROLE_BACKENDS=builder=codex_exec,verifier=local_command,reviewer=local_command
+//
+//   # Per-role local commands (default: role-agnostic agentLocalCommand)
+//   GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm test -- --ci,reviewer=node scripts/review.mjs
+//
+// Evidence provenance:
+//   - codex_exec:  Backend: codex_exec,  Evidence: real agent execution via Codex CLI
+//   - local_command: Backend: local_command,  Evidence: deterministic shell command
+//   - null:        Backend: null,  Evidence: auto_artifact (no external commands)
 export const DEFAULT_AGENT_BACKEND_BY_ROLE = Object.freeze({
   context_curator: "null",
   planner: "null",
   builder: "codex_exec",
-  verifier: "null",
-  reviewer: "null",
+  // P0-05: verifier and reviewer now default to local_command for deterministic execution
+  verifier: "local_command",
+  reviewer: "local_command",
+  // integrator and finalizer remain null (auto-artifact from result evidence)
   integrator: "null",
   finalizer: "null",
   repairer: "codex_exec",
@@ -78,7 +103,8 @@ export function validateAgentRoles(roles = DEFAULT_AGENT_PIPELINE) {
 
 /**
  * Resolve the default backend for a given pipeline role.
- * builder -> "codex_exec", others -> "null" unless overridden.
+ * P0-05: builder -> "codex_exec", verifier/reviewer -> "local_command",
+ * others -> "null" (auto-artifact) unless overridden.
  *
  * @param {string} role - Agent role
  * @param {object} [overrides={}] - Optional role->backend override map
@@ -90,6 +116,63 @@ export function resolveDefaultBackendForRole(role, overrides = {}) {
     return overrides[normalized];
   }
   return DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || "null";
+}
+
+/**
+ * Describe a role's backend with evidence provenance for diagnostics and review packets.
+ * Returns a structured description including the backend id, execution semantic,
+ * null reason (if applicable), evidence source, and a human-readable doc string.
+ *
+ * @param {string} role - Agent role
+ * @param {object} [config={}] - Runtime config with potential overrides
+ * @returns {{ backend: string, semantic: string, null_reason: string|null, evidence_source: string, doc: string, overridden: boolean }}
+ */
+export function describeRoleBackend(role, config = {}) {
+  const normalized = normalizeContractRole(role, "builder");
+  const configBackend = config.agentRoleBackends?.[normalized]
+    || config.agentBackendByRole?.[normalized];
+  const globalBackend = config.agentBackend || config.agentBackendDefault;
+  const resolvedBackend = configBackend || globalBackend || DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || "codex_exec";
+  const overridden = Boolean(configBackend || globalBackend);
+
+  let semantic, nullReason, evidenceSource, doc;
+
+  if (resolvedBackend === "codex_exec") {
+    semantic = "real";
+    nullReason = null;
+    evidenceSource = "codex_exec (real agent execution)";
+    doc = "Actual Codex execution for code changes.";
+  } else if (resolvedBackend === "local_command") {
+    semantic = "real";
+    nullReason = null;
+    evidenceSource = "local_command (deterministic shell command)";
+    doc = "Deterministic local command execution.";
+  } else {
+    // null backend
+    semantic = "auto_artifact";
+    nullReason = "auto_artifact";
+    evidenceSource = "null (auto_artifact — no external commands executed)";
+    doc = "Auto-completed from task/result evidence.";
+    // Check for specific role documentation
+    const roleDocs = {
+      context_curator: "Context bundle prepared from task metadata.",
+      planner: "Plan determined from context/prompt files.",
+      integrator: "Auto-completed from integration result evidence.",
+      finalizer: "Auto-completed from task result evidence.",
+    };
+    if (roleDocs[normalized]) doc = roleDocs[normalized];
+  }
+
+  return {
+    role: normalized,
+    backend: resolvedBackend,
+    semantic,
+    null_reason: nullReason,
+    evidence_source: evidenceSource,
+    doc,
+    overridden,
+    config_source: configBackend ? "agentRoleBackends" : globalBackend ? "agentBackend" : "default",
+  };
 }
 
 /**

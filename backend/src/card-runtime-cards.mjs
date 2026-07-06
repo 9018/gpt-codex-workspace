@@ -237,6 +237,24 @@ export function gptworkDoctorCard(data) {
     diagnostics.push({ severity: 'warning', message: 'Canonical repo not registered -- use register_repository' });
   }
 
+  // P0-05: Show per-role agent backend and evidence provenance
+  if (data.agent_backends && data.agent_backends.length > 0) {
+    const backendSections = [];
+    for (const roleInfo of data.agent_backends) {
+      const overridden = roleInfo.overridden ? ' [overridden]' : '';
+      if (roleInfo.backend === 'null' && roleInfo.null_reason === 'auto_artifact') {
+        backendSections.push(roleInfo.role + ': null (auto-artifact)' + overridden);
+      } else {
+        backendSections.push(roleInfo.role + ': ' + roleInfo.backend + ' (' + roleInfo.evidence_source + ')' + overridden);
+      }
+    }
+    lines.push('');
+    lines.push(formatKeyValue('agent backends', ''));
+    for (const s of backendSections) {
+      lines.push('  ' + s);
+    }
+  }
+
   const nextActions = (data.suggested_next_actions || []).slice(0, 8);
 
   return formatToolCard('GPTWork Doctor', { lines, diagnostics, nextActions });

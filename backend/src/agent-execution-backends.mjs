@@ -1,10 +1,52 @@
-import { runLocalShell } from "./workspace-service.mjs";
 
 export const AGENT_BACKEND_IDS = Object.freeze({
   CODEX_EXEC: "codex_exec",
   LOCAL_COMMAND: "local_command",
   NULL: "null",
 });
+// -- Execution semantic tags ---------------------------------------------------
+// Distinguish real agent execution from deterministic auto-artifact completion
+// and test-only stubs. This enables review packets and runtime doctor to clearly
+// label each role's execution provenance.
+//
+// real:          Actual agent execution via codex_exec or local_command
+// auto_artifact: Null backend used for deterministic artifact completion
+//                (e.g. integrator/finalizer auto-completed from task result)
+// test_noop:     Null backend used in tests or debugging
+// configured:    Explicit operator choice (null or local_command)
+export const AGENT_BACKEND_SEMANTIC = Object.freeze({
+  REAL: "real",
+  AUTO_ARTIFACT: "auto_artifact",
+  TEST_NOOP: "test_noop",
+  CONFIGURED: "configured",
+});
+
+// -- Null backend reason classification ----------------------------------------
+// Product semantics for null backend usage:
+// - auto_artifact: Deterministic artifact completion for roles whose work
+//                  is fully derived from existing task result evidence.
+//                  Used for integrator/finalizer by default.
+// - test_only:     Explicit test usage (configured for unit/integration tests).
+// - configured:    Operator explicitly chose null backend for a role.
+export const NULL_REASON = Object.freeze({
+  AUTO_ARTIFACT: "auto_artifact",
+  TEST_ONLY: "test_only",
+  CONFIGURED: "configured_null",
+});
+
+// Backend default documentation -- used by diagnostics and codex.entry.md
+export const ROLE_BACKEND_DEFAULTS = Object.freeze({
+  context_curator: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: null, doc: "Context bundle prepared from task metadata." },
+  planner: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: null, doc: "Plan determined from context/prompt files." },
+  builder: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Actual Codex execution for code changes." },
+  verifier: { backend: AGENT_BACKEND_IDS.LOCAL_COMMAND, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Deterministic local command execution for verification." },
+  reviewer: { backend: AGENT_BACKEND_IDS.LOCAL_COMMAND, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Deterministic local command execution for review." },
+  integrator: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: NULL_REASON.AUTO_ARTIFACT, doc: "Auto-completed from integration result evidence." },
+  finalizer: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: NULL_REASON.AUTO_ARTIFACT, doc: "Auto-completed from task result evidence." },
+  repairer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Actual Codex execution for repair attempts." },
+});
+
+
 
 const BACKEND_ID_SET = new Set(Object.values(AGENT_BACKEND_IDS));
 const BACKEND_ALIASES = Object.freeze({
@@ -16,6 +58,31 @@ const BACKEND_ALIASES = Object.freeze({
   none: AGENT_BACKEND_IDS.NULL,
   null: AGENT_BACKEND_IDS.NULL,
 });
+/**
+ * Resolve the execution semantic for a resolved backend id and role context.
+ *
+ * @param {string} backendId - Resolved backend identifier
+ * @param {object} [options={}]
+ * @param {string} [options.role] - Agent role to check against defaults
+ * @param {string} [options.nullReason] - Explicit null_reason if provided
+ * @returns {string} One of AGENT_BACKEND_SEMANTIC values
+ */
+export function resolveBackendSemantic(backendId, { role = "builder", nullReason } = {}) {
+  if (backendId !== AGENT_BACKEND_IDS.NULL) {
+    return AGENT_BACKEND_SEMANTIC.REAL;
+  }
+  if (nullReason === NULL_REASON.TEST_ONLY) return AGENT_BACKEND_SEMANTIC.TEST_NOOP;
+  if (nullReason === NULL_REASON.CONFIGURED) return AGENT_BACKEND_SEMANTIC.CONFIGURED;
+  if (nullReason === NULL_REASON.AUTO_ARTIFACT) return AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT;
+  // Infer from defaults
+  const defaults = ROLE_BACKEND_DEFAULTS[role];
+  if (defaults && defaults.backend === AGENT_BACKEND_IDS.NULL) {
+    return defaults.semantic;
+  }
+  return AGENT_BACKEND_SEMANTIC.CONFIGURED;
+}
+
+
 
 function normalizeBackendId(value, fallback = AGENT_BACKEND_IDS.CODEX_EXEC) {
   const id = String(value || "").trim().toLowerCase();
@@ -65,7 +132,7 @@ function parseJsonLine(stdout) {
   return null;
 }
 
-function summaryFromOutput(output = {}) {
+export function summaryFromOutput(output = {}) {
   const stdout = String(output.stdout || "").trim();
   if (stdout) return stdout.slice(0, 10000);
   const stderr = String(output.stderr || "").trim();
@@ -78,24 +145,48 @@ export function resolveAgentBackendId({ config = {}, role = "builder", task = {}
   if (taskSelected) return normalizeBackendId(taskSelected);
   const roleSelected = roleValue(config.agentRoleBackends, role) || roleValue(config.agentBackendByRole, role);
   if (roleSelected) return normalizeBackendId(roleSelected);
-  return normalizeBackendId(config.agentBackend || config.agentBackendDefault || config.defaultAgentBackend || AGENT_BACKEND_IDS.CODEX_EXEC);
+  const globalBackend = config.agentBackend || config.agentBackendDefault || config.defaultAgentBackend;
+  if (globalBackend) return normalizeBackendId(globalBackend);
+  // Fallback to role defaults
+  const roleDefault = ROLE_BACKEND_DEFAULTS[role];
+  if (roleDefault) return roleDefault.backend;
+  return AGENT_BACKEND_IDS.CODEX_EXEC;
 }
 
-export function normalizeBackendResult({ backendId, task = {}, goal = null, role = "builder", output = {}, parsed = null } = {}) {
+export function normalizeBackendResult({ backendId, task = {}, goal = null, role = "builder", output = {}, parsed = null, defaultInfo = null, nullReason: explicitNullReason = null } = {}) {
   const exitCode = output.returncode ?? output.exit_code ?? 0;
   const timedOut = Boolean(output.timed_out);
   const status = timedOut ? "timed_out" : exitCode === 0 ? "completed" : "failed";
   const parsedSummary = parsed?.summary || parsed?.SUMMARY || "";
   const summary = parsedSummary || summaryFromOutput(output);
+
+  // Determine execution semantic and null reason
+  const backend = normalizeBackendId(backendId);
+  const info = defaultInfo || ROLE_BACKEND_DEFAULTS[role] || null;
+  const nullReason = explicitNullReason
+    || (backend === AGENT_BACKEND_IDS.NULL
+        ? (info?.reason || NULL_REASON.AUTO_ARTIFACT)
+        : null);
+  const executionSemantic = resolveBackendSemantic(backend, { role, nullReason });
+  const evidenceSource = backend === AGENT_BACKEND_IDS.CODEX_EXEC
+    ? "codex_exec (real agent execution)"
+    : backend === AGENT_BACKEND_IDS.LOCAL_COMMAND
+      ? "local_command (deterministic shell command)"
+      : `null (${nullReason || "noop"} -- no external commands executed)`;
+
   return {
     kind: "agent_backend_result",
-    backend: normalizeBackendId(backendId),
+    backend,
     role: normalizeRole(role),
     task_id: task.id || null,
     goal_id: goal?.id || null,
     status,
     summary,
     structured: true,
+    execution_semantic: executionSemantic,
+    evidence_source: evidenceSource,
+    null_reason: nullReason,
+    null_backend: backend === AGENT_BACKEND_IDS.NULL,
     completed_at: new Date().toISOString(),
     stdout: output.stdout || "",
     stderr: output.stderr || "",
@@ -112,6 +203,26 @@ export function normalizeBackendResult({ backendId, task = {}, goal = null, role
     first_output_delay_ms: output.first_output_delay_ms,
     ...(parsed && typeof parsed === "object" ? parsed : {}),
   };
+}
+
+/**
+ * Check if a backend result indicates a null/noop execution.
+ *
+ * @param {object} parsedResult - Result from normalizeBackendResult
+ * @returns {boolean} True if the backend was null
+ */
+export function isNullBackendResult(parsedResult) {
+  return parsedResult?.backend === AGENT_BACKEND_IDS.NULL || parsedResult?.null_backend === true;
+}
+
+/**
+ * Check if a backend result indicates a real (non-null) execution.
+ *
+ * @param {object} parsedResult - Result from normalizeBackendResult
+ * @returns {boolean} True if the backend was real execution
+ */
+export function isRealBackendResult(parsedResult) {
+  return parsedResult?.execution_semantic === AGENT_BACKEND_SEMANTIC.REAL;
 }
 
 export class CodexExecBackend {
@@ -161,14 +272,25 @@ export class NullBackend {
   }
 
   async run(args = {}) {
-    const { task = {}, goal = null, role = "builder" } = args;
+    const { config = {}, task = {}, goal = null, role = "builder", nullReason: explicitNullReason } = args;
     const cr = { stdout: "", stderr: "", returncode: 0, timed_out: false };
+
+    // Determine null reason: explicit > config > defaults
+    const defaultInfo = ROLE_BACKEND_DEFAULTS[role] || null;
+    const nullReason = explicitNullReason
+      || config.agentNullReason
+      || defaultInfo?.reason
+      || null;
+    const semantic = resolveBackendSemantic(AGENT_BACKEND_IDS.NULL, { role, nullReason });
+
     const parsedResult = normalizeBackendResult({
       backendId: this.id,
       task,
       goal,
       role,
       output: cr,
+      defaultInfo,
+      nullReason,
       parsed: {
         status: "completed",
         summary: "Null backend completed without executing external commands.",
@@ -179,7 +301,9 @@ export class NullBackend {
         verification: { passed: true, commands: [] },
         no_mutation: true,
         noop: true,
-        noop_reason: "Configured null backend.",
+        noop_reason: nullReason
+          ? `Null backend: ${nullReason.replace(/_/g, " ")}`
+          : "Null backend: automatic artifact completion -- no external commands executed.",
       },
     });
     return { backend: this.id, cr, parsedResult, summary: parsedResult.summary };

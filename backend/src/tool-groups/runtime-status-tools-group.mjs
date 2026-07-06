@@ -6,6 +6,7 @@ import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-wor
 import { scanPendingRestartMarkersSync, scanPendingRestartMarkers, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 import { collectCodexTuiRuntimeDiagnostics } from "../codex-tui-runtime-diagnostics.mjs";
+import { ALL_PIPELINE_ROLES, describeRoleBackend } from "../subagent-policy.mjs";
 
 /**
  * Scoped MCP tool group: runtime/status diagnostic tools.
@@ -198,6 +199,8 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           warnings,
         };
         if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
+        // P0-05: Per-role agent backend info with evidence provenance
+        result.agent_backends = ALL_PIPELINE_ROLES.map((role) => describeRoleBackend(role, config));
         return result;
       },
     }),
@@ -395,6 +398,8 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           repo_locks: _lockSummary,
         };
         if (codexTuiGoal) result.codex_tui_goal = codexTuiGoal;
+        // P0-05: Per-role agent backend info with evidence provenance
+        result.agent_backends = ALL_PIPELINE_ROLES.map((role) => describeRoleBackend(role, config));
         return result;
       },
     }),
