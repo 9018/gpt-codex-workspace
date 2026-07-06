@@ -19,6 +19,7 @@ import {
 
 import {
   isLegacyTask,
+  shouldEnforcePipelineGates,
   getEffectivePipelineRoles,
   resolveRoleBackend,
 } from "../src/pipeline-orchestration.mjs";
@@ -470,4 +471,240 @@ test("pipeline-orch: writeFinalizerAgentRun before gate check means gate sees re
     "finalizer gate should be satisfied after writeFinalizerAgentRun");
   assert.equal(finalizerGate.missing_artifacts.length, 0,
     "no missing artifacts when finalizer has result artifact");
+});
+
+// ===========================================================================
+// Tests: P0-04 Pipeline Gate Hardening
+// ===========================================================================
+
+test("P0-04: isLegacyTask with require_pipeline_gates=true returns false", () => {
+  assert.equal(isLegacyTask({ require_pipeline_gates: true }), false,
+    "task with require_pipeline_gates=true should NOT be legacy");
+  assert.equal(isLegacyTask({ require_pipeline_gates: true, legacy: true }), false,
+    "require_pipeline_gates=true takes precedence over explicit legacy=true");
+  assert.equal(isLegacyTask({ require_pipeline_gates: true, skip_pipeline: true }), false,
+    "require_pipeline_gates=true takes precedence over skip_pipeline=true");
+  // Legacy markers still work for tasks without require_pipeline_gates
+  assert.equal(isLegacyTask({}), true, "empty task is still legacy");
+  assert.equal(isLegacyTask({ legacy: true }), true, "explicit legacy");
+  assert.equal(isLegacyTask({ pipeline: false }), true, "pipeline disabled");
+  assert.equal(isLegacyTask({ skip_pipeline: true }), true, "skip pipeline");
+  assert.equal(isLegacyTask({ pipeline_id: "p1" }), false, "has pipeline_id");
+});
+
+test("P0-04: shouldEnforcePipelineGates returns correct values", () => {
+  // New builder tasks should enforce gates
+  assert.equal(shouldEnforcePipelineGates({ require_pipeline_gates: true }), true,
+    "require_pipeline_gates=true should enforce gates");
+  // Legacy tasks should not enforce gates
+  assert.equal(shouldEnforcePipelineGates({ legacy: true }), false,
+    "explicit legacy should not enforce gates");
+  assert.equal(shouldEnforcePipelineGates({ skip_pipeline: true }), false,
+    "skip_pipeline should not enforce gates");
+  assert.equal(shouldEnforcePipelineGates({ pipeline: false }), false,
+    "pipeline=false should not enforce gates");
+  // Has pipeline metadata but no explicit require_pipeline_gates
+  assert.equal(shouldEnforcePipelineGates({ pipeline_id: "p1" }), true,
+    "has pipeline_id should enforce gates");
+  // Empty task defaults to legacy = not enforced
+  assert.equal(shouldEnforcePipelineGates({}), false,
+    "empty task defaults to not enforcing gates");
+});
+
+test("P0-04: buildGoalTask adds require_pipeline_gates for builder mode", async () => {
+  const { buildGoalTask } = await import("../src/goal-task-task-factory.mjs");
+  const now = new Date().toISOString();
+
+  const builderTask = buildGoalTask({
+    id: "g_builder_p0_04",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    title: "Builder task",
+    mode: "builder",
+    user_request: "Do work",
+    goal_prompt: "Do work",
+    created_at: now,
+  }, { id: "conv_builder_p0_04" }, "system");
+
+  assert.equal(builderTask.require_pipeline_gates, true,
+    "builder mode task should have require_pipeline_gates=true");
+
+  const readonlyTask = buildGoalTask({
+    id: "g_readonly_p0_04",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    title: "Readonly task",
+    mode: "readonly",
+    user_request: "Read only",
+    goal_prompt: "Read only",
+    created_at: now,
+  }, { id: "conv_readonly_p0_04" }, "system");
+
+  assert.equal(readonlyTask.require_pipeline_gates, false,
+    "readonly mode task should have require_pipeline_gates=false");
+});
+
+test("P0-04: new task with no agent_runs and allowMissingGates=false blocks closure", async () => {
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const store = await makeStore();
+
+  // Test with a new task (require_pipeline_gates=true) that has no agent runs
+  const result = await evaluateTaskPipelineGates(store, {
+    task_id: "t_new_strict",
+    allowMissingGates: false,
+  });
+
+  assert.equal(result.gates_satisfied, false,
+    "new task with no agent runs and strict mode should have gates NOT satisfied");
+  assert.ok(result.blocking_gates.includes("no_agent_runs"),
+    "blocking_gates should include 'no_agent_runs'");
+  assert.ok(result.blocking_reasons.some(r => r.includes("No agent runs found")),
+    "should explain that no agent runs were found");
+  assert.equal(result.has_legacy_task, true,
+    "should still report has_legacy_task since no agent_runs found");
+});
+
+test("P0-04: legacy task (empty) passes through gate check with allowMissingGates=true", async () => {
+  const { evaluateTaskPipelineGates } = await import("../src/pipeline-orchestration.mjs");
+  const store = await makeStore();
+
+  const result = await evaluateTaskPipelineGates(store, {
+    task_id: "t_legacy",
+    allowMissingGates: true,
+  });
+
+  assert.equal(result.gates_satisfied, true,
+    "legacy task with allowMissingGates=true should have gates satisfied");
+  assert.equal(result.blocking_gates.length, 0,
+    "no blocking gates for legacy task");
+  assert.equal(result.has_legacy_task, true,
+    "should report legacy task");
+});
+
+test("P0-04: applyPipelineGateBeforeClosure blocks new task missing required artifacts", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_block_missing_artifact_${Date.now()}`;
+  const task = { id: taskId, require_pipeline_gates: true };
+  const taskResult = { summary: "test", acceptance_findings: [] };
+  const taskStatus = "completed";
+
+  // Create a builder agent run WITHOUT the required change_summary artifact
+  const builderRun = await createAgentRun(store, {
+    task_id: taskId, goal_id: "g1", role: "builder", status: "queued",
+  });
+  await completeAgentRun(store, {
+    agent_run_id: builderRun.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "unrelated", path: null }],  // missing change_summary!
+  });
+
+  const result = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, {
+    allowMissingGates: false,
+  });
+
+  assert.equal(result.gatesSatisfied, false,
+    "should not be satisfied when builder is missing change_summary artifact");
+  assert.equal(result.taskStatus, "waiting_for_review",
+    "should downgrade to waiting_for_review for gate blocking");
+  assert.ok(result.taskResult.pipeline_gate_blocked,
+    "should mark pipeline_gate_blocked");
+
+  // Verify the acceptance finding message includes artifact details
+  const gateFindings = (result.taskResult.acceptance_findings || []).filter(
+    f => f.code === "pipeline_gate_blocking"
+  );
+  assert.ok(gateFindings.length > 0,
+    "should include pipeline_gate_blocking findings");
+});
+
+test("P0-04: applyPipelineGateBeforeClosure passes through for legacy task with allowMissingGates=true", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const store = await makeStore();
+
+  const task = { id: "t_legacy_gate" };
+  const taskResult = { summary: "test", acceptance_findings: [] };
+  const taskStatus = "completed";
+
+  const result = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, {
+    allowMissingGates: true,
+  });
+
+  assert.equal(result.taskStatus, "completed",
+    "legacy task with allowMissingGates=true should keep completed");
+  assert.equal(result.gatesSatisfied, true,
+    "gates should be satisfied for legacy task");
+});
+
+test("P0-04: applyPipelineGateBeforeClosure does NOT block for legacy task with missing artifacts", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_legacy_miss_${Date.now()}`;
+  const task = { id: taskId, legacy: true };
+  const taskResult = { summary: "test", acceptance_findings: [] };
+  const taskStatus = "completed";
+
+  // Create an agent run (but without required artifacts)
+  await createAgentRun(store, {
+    task_id: taskId, goal_id: "g1", role: "builder", status: "queued",
+  });
+
+  const result = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, {
+    allowMissingGates: true,
+  });
+
+  // Legacy task with allowMissingGates=true should pass through
+  assert.equal(result.taskStatus, "completed",
+    "legacy task should pass through even with agent runs missing artifacts");
+  assert.equal(result.gatesSatisfied, true,
+    "gates satisfied for legacy task with allowMissingGates=true");
+  assert.equal(result.gateChecked, true,
+    "gate should be checked");
+});
+
+test("P0-04: review packet includes pipeline_gate info when blocked", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  const taskId = `t_review_gate_${Date.now()}`;
+  const task = { id: taskId, require_pipeline_gates: true };
+  const taskResult = { summary: "test", acceptance_findings: [] };
+  const taskStatus = "completed";
+
+  // Create a verifier agent run WITHOUT the required verification artifact
+  const verifierRun = await createAgentRun(store, {
+    task_id: taskId, goal_id: "g1", role: "verifier", status: "queued",
+  });
+  await completeAgentRun(store, {
+    agent_run_id: verifierRun.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "unrelated", path: null }],  // missing verification!
+  });
+
+  // Apply gate check
+  const gateResult = await applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, {
+    allowMissingGates: false,
+  });
+
+  assert.equal(gateResult.gatesSatisfied, false,
+    "gate should be unsatisfied");
+
+  // Simulate the task having the gate result for review packet
+  const reviewTaskResult = {
+    ...taskResult,
+    ...gateResult.taskResult,
+  };
+
+  // Verify pipeline_gate_blocked is set
+  assert.equal(reviewTaskResult.pipeline_gate_blocked, true,
+    "pipeline_gate_blocked should be set");
+  assert.ok(Array.isArray(reviewTaskResult.pipeline_gate_reasons),
+    "pipeline_gate_reasons should be an array");
+  assert.ok(reviewTaskResult.pipeline_gate_reasons.length > 0,
+    "should have at least one gate reason");
 });

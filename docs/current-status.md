@@ -16,7 +16,7 @@ The project now treats delivery state as several separate facts:
 | acceptance | The user goal is satisfied according to the acceptance contract and evidence. |
 | integration | The change entered canonical main or was explicitly not required. |
 | deployment | The running environment is using the expected commit/configuration. |
-| closure | The task can be closed because blocking gates passed or no longer apply. |
+| closure | The task can be closed because blocking gates passed or no longer apply. P0-04: New builder-mode tasks enforce strict pipeline gates before closure — missing required artifacts block the task. |
 | review | Human judgment is required. Review is not the same as failure. |
 
 Important boundaries are enforced in code and docs: `branch_pushed` is not `merged`; `pr_opened` is not `merged`; `merged` is not `deployed`; `health 200` is not proof of the expected running commit. `quality_notes` and `non_blocking_followups` are preserved but do not block current task closure.
@@ -97,6 +97,22 @@ Goal workspaces now distinguish bounded entry, supporting context, metadata, dee
 Codex prompts are entry-first and instruct workers not to read full goal context unless the bounded entry and bundle are insufficient.
 
 ### Finalizer and Processor Slimming
+
+Large finalization and task-processing responsibilities have been split into focused modules: result parsers, result fact factories, finalizer validation, runtime change handling, status handling, task final writeback, delivery result recovery, and closure/integration helpers. The remaining processor paths orchestrate these modules rather than embedding all policy in one place.
+
+### Pipeline Gate Enforcement (P0-04)
+
+Multi-agent pipeline gates transitioned from passive recording to strict enforcement for new builder-mode tasks.
+
+Key changes:
+
+- **New task detection**: Tasks created with `mode: builder` now set `require_pipeline_gates: true` during task construction. This flag gates the strict enforcement path.
+- **isLegacyTask hardening**: `isLegacyTask` now checks `require_pipeline_gates` first — if `true`, the task is definitively non-legacy and requires gate enforcement. Existing tasks without this flag retain legacy compatibility.
+- **Pipeline init is no longer fire-and-forget**: `ensurePipelineRunsForTask` is awaited for new tasks. Initialization failures are logged to goal messages rather than silently swallowed. The downstream gate check handles blocking when agent runs are missing.
+- **Strict gate default**: `applyPipelineGateBeforeClosure` defaults `allowMissingGates` to `false`. New tasks pass `allowMissingGates: false` via caller logic. Legacy tasks still get `allowMissingGates: true`.
+- **Detailed blocking messages**: Pipeline gate blocking findings now include the specific missing required artifact kinds (e.g. `change_summary`, `verification`, `reviewer_decision`, `result`, `integration`).
+- **Review packet enrichment**: `get_task_review_packet` now includes `pipeline_gate` field when the task has gate blocking info: `{ blocked, reasons, legacy_bypass }`.
+- **Legacy compatibility strategy**: Tasks without `require_pipeline_gates` (existing tasks, readonly/admin tasks) bypass gate enforcement via `allowMissingGates: true`. Explicit legacy markers (`legacy: true`, `skip_pipeline: true`) continue to work.
 
 Large finalization and task-processing responsibilities have been split into focused modules: result parsers, result fact factories, finalizer validation, runtime change handling, status handling, task final writeback, delivery result recovery, and closure/integration helpers. The remaining processor paths orchestrate these modules rather than embedding all policy in one place.
 

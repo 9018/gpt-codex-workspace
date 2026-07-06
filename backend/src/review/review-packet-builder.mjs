@@ -102,6 +102,14 @@ export async function getTaskReviewPacket({ store, config = {}, task_id } = {}) 
     non_blocking_followups: bundle.non_blocking_followups,
     recommended_next_action: recommendedNextAction(bundle),
     missing_evidence: bundle.missing_evidence,
+    // P0-04: Pipeline gate info — explains which roles/artifacts are blocking closure
+    pipeline_gate: taskResult.pipeline_gate_blocked === true || (Array.isArray(taskResult.pipeline_gate_reasons) && taskResult.pipeline_gate_reasons.length > 0)
+      ? {
+          blocked: taskResult.pipeline_gate_blocked === true,
+          reasons: Array.isArray(taskResult.pipeline_gate_reasons) ? taskResult.pipeline_gate_reasons : [],
+          legacy_bypass: taskResult.legacy_pipeline_bypass === true,
+        }
+      : null,
   };
 
   // Run reconciliation against the bundle to detect stale state

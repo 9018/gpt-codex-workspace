@@ -365,9 +365,23 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }, context).catch(() => {});
   }
 
-  // P0-MA11: Force agent-run pipeline initialization for new non-legacy tasks
+  // P0-MA11/P0-04: Force agent-run pipeline initialization for new non-legacy tasks.
+  // Pipeline init failure must not be silently ignored for new tasks.
+  // The gate check will see no agent runs and block the task when gates are enforced.
   if (!isLegacyTask(task)) {
-    ensurePipelineRunsForTask(store, { task_id: task.id, goal_id: goal?.id || "" }, context).catch(() => {});
+    try {
+      await ensurePipelineRunsForTask(store, { task_id: task.id, goal_id: goal?.id || "" }, context);
+    } catch (err) {
+      // P0-04: Pipeline init failure must be visible, not silently ignored.
+      // Gate check will handle blocking since no agent runs exist for new tasks.
+      if (goal) {
+        appendGoalMessageFn(store, config, {
+          goal_id: goal.id,
+          role: "codex",
+          content: `Pipeline init warning for new task ${task.id}: ${err.message} — gate will block if pipeline runs missing`,
+        }, context).catch(() => {});
+      }
+    }
   }
 
   // Resolve repo plan first (no git mutation) — safe for queue/dry-run

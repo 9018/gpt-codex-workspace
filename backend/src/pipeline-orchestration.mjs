@@ -250,11 +250,11 @@ export async function checkPipelineGateBlocking(store, { task_id, allowMissingGa
  * @param {object} taskResult - Mutable task result object
  * @param {string} taskStatus - Current task status
  * @param {object} [options]
- * @param {boolean} [options.allowMissingGates=true] - Legacy compatibility flag
+ * @param {boolean} [options.allowMissingGates=false] - When true, missing gates are treated as satisfied (legacy compatibility)
  * @returns {Promise<{ taskStatus: string, taskResult: object, gateChecked: boolean, gatesSatisfied: boolean }>}
  */
 export async function applyPipelineGateBeforeClosure(store, task, taskResult, taskStatus, options = {}) {
-  const { allowMissingGates = true } = options;
+  const { allowMissingGates = false } = options;
   const taskId = task.id || taskResult.task_id || "";
 
   if (!taskId) {
@@ -304,12 +304,20 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
   // Gates NOT satisfied: only downgrade if task would be completed
   if (taskStatus === "completed") {
     const downgradedStatus = "waiting_for_review";
-    const gateFindings = blockingUnsatisfied.map(g => ({
-      severity: "blocker",
-      code: "pipeline_gate_blocking",
-      message: `Pipeline gate blocking: ${g.contract_role} - ${g.summary || g.missing_fields?.join(', ') || 'gate not satisfied'}`,
-      source: "pipeline_orchestration",
-    }));
+    const gateFindings = blockingUnsatisfied.map(g => {
+      // P0-04: Build detailed gate blocking message including missing artifacts
+      const missingInfo = g.missing_artifacts?.length > 0
+        ? `missing required artifacts: ${g.missing_artifacts.join(', ')}`
+        : g.missing_fields?.length > 0
+          ? `missing fields: ${g.missing_fields.join(', ')}`
+          : g.summary || `gate not satisfied (status=${g.status || 'unknown'})`;
+      return {
+        severity: "blocker",
+        code: "pipeline_gate_blocking",
+        message: `Pipeline gate blocking: ${g.contract_role} - ${missingInfo}`,
+        source: "pipeline_orchestration",
+      };
+    });
 
     // Append findings
     taskResult.acceptance_findings = [
@@ -394,6 +402,9 @@ export async function buildPipelineCompletionArtifact(store, { task_id, goal_id,
  * @returns {boolean}
  */
 export function isLegacyTask(task = {}) {
+  // P0-04: New builder-mode tasks explicitly require pipeline gate enforcement.
+  // This flag is set during task creation for all new builder-mode tasks.
+  if (task.require_pipeline_gates === true) return false;
   if (task.legacy === true) return true;
   if (task.agent_pipeline === false) return true;
   if (task.pipeline === false) return true;
@@ -402,6 +413,22 @@ export function isLegacyTask(task = {}) {
   if (task.pipeline_id) return false;
   return true; // Default: treat as legacy until pipeline is initialized
 }
+/**
+ * Determine whether pipeline gates should be strictly enforced for this task.
+ * Non-legacy tasks (new builder-mode tasks) require strict gate enforcement.
+ * Legacy tasks bypass gate enforcement via allowMissingGates.
+ *
+ * @param {object} task - Task object
+ * @returns {boolean}
+ */
+export function shouldEnforcePipelineGates(task = {}) {
+  if (task.require_pipeline_gates === true) return true;
+  if (task.legacy === true) return false;
+  if (task.pipeline === false || task.skip_pipeline === true) return false;
+  return !isLegacyTask(task);
+}
+
+
 
 /**
  * Get the effective pipeline roles for a task, supporting legacy role names.

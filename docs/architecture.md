@@ -111,9 +111,38 @@ Responsibilities:
 
 - Build compact acceptance bundles and review packets.
 - Include contract summary, result summary, verification, contract verification, closure decision, changed files, missing evidence, blockers/follow-ups, and recommended next action.
+- Include pipeline gate info (blocked status, reasons, missing roles/artifacts) when gates are enforced.
 - Exclude full transcript, durable memories, full context bundle, payload files, and large diffs.
 
 Review means human judgment. It is not equivalent to failure.
+
+### Pipeline Gate Enforcement
+
+Paths: `backend/src/pipeline-orchestration.mjs`, `backend/src/agent-run-writeback.mjs`, `backend/src/agent-artifact-contract.mjs`
+
+P0-04: Pipeline gates transitioned from passive recording to strict enforcement.
+
+Responsibilities:
+
+- Create and maintain agent_run records for each pipeline role (context_curator, planner, builder, verifier, reviewer, integrator, finalizer).
+- Evaluate pipeline gate satisfaction before task closure: each blocking role must have a completed agent_run with the required artifact kind.
+- Enforce strict gates for new builder-mode tasks (`require_pipeline_gates: true`): missing required artifacts downgrade the task from `completed` to `waiting_for_review`.
+- Provide legacy compatibility via `allowMissingGates`: legacy tasks (without `require_pipeline_gates`) bypass gate enforcement.
+- Include pipeline gate blocking findings in acceptance findings and review packets, with explicit messages naming the missing role and required artifacts.
+
+Gate enforcement flow:
+
+1. Task creation in `buildGoalTask` sets `require_pipeline_gates: true` for builder-mode tasks.
+2. `ensurePipelineRunsForTask` is awaited for new tasks; init failures are logged, not silently swallowed.
+3. Agent writeback functions record completed runs with output artifacts per `ARTIFACT_SCHEMA.required_by_role`.
+4. Before closure, `applyPipelineGateBeforeClosure` evaluates gates: if blocking roles lack required artifacts, the task is downgraded with detailed findings.
+5. Legacy tasks (without `require_pipeline_gates`) pass through with `allowMissingGates: true`.
+
+Legacy compatibility strategy:
+
+- Tasks created before this change do not have `require_pipeline_gates` and are treated as legacy.
+- Legacy tasks bypass pipeline gate enforcement: `allowMissingGates` is set to `true` based on `isLegacyTask(task)`.
+- Explicit legacy markers (`legacy: true`, `agent_pipeline: false`, `skip_pipeline: true`) are still respected.
 
 ### Context-Index
 
