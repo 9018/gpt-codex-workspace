@@ -134,3 +134,61 @@ test("followup planner output does not block current task completion", () => {
   assert.equal(nextTasks[0].auto_enqueue, false);
 });
 
+
+test("sync operation kind completes cleanly", () => {
+  const decision = decide({
+    operationKind: "sync",
+    result: { changed_files: [], status: "completed" },
+  });
+
+  assert.equal(decision.status, "auto_completed_clean");
+  assert.equal(mapClosureStatusToTaskStatus(decision.status), "completed");
+  assert.equal(decision.blocking_passed, true);
+});
+
+test("contract_invalid requires review", () => {
+  const decision = decideTaskClosure({
+    contract: null,
+    contractVerification: {
+      contract_valid: false,
+      blockers: [{ code: "missing_contract", message: "No contract provided", severity: "blocker" }],
+    },
+    verification: { passed: true, findings: [] },
+    result: { status: "completed", summary: "completed" },
+    task: { id: "task_invalid" },
+  });
+
+  assert.equal(decision.status, "requires_review");
+  assert.ok(decision.blockers.some((b) => b.code === "missing_contract"));
+});
+
+test("failed result status maps to failed closure", () => {
+  const decision = decide({
+    operationKind: "code_change",
+    result: { status: "failed", summary: "Build failure" },
+  });
+
+  assert.equal(decision.status, "failed");
+  assert.equal(mapClosureStatusToTaskStatus(decision.status), "failed");
+});
+
+test("missing commit evidence when requires_commit is set requires review", () => {
+  const decision = decideTaskClosure({
+    contract: {
+      intent: { operation_kind: "code_change" },
+      requirements: { requires_commit: true, requires_integration: false },
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+    contractVerification: {
+      contract_valid: true, blocking_passed: true, acceptance_status: "satisfied",
+      completion_eligible: true, blockers: [], non_blocking_followups: [],
+      quality_notes: [], state_assertions: { passed: true, failures: [] },
+    },
+    verification: { passed: true, findings: [], commands: [{ cmd: "check", exit_code: 0 }] },
+    result: { status: "completed", summary: "code change done", changed_files: ["src/app.mjs"] },
+    task: { id: "task_commit_missing" },
+  });
+
+  assert.equal(decision.status, "requires_review");
+  assert.ok(decision.blockers.some((b) => b.code === "commit_evidence_missing"));
+});
