@@ -38,6 +38,7 @@ import { createRetentionToolsGroup } from "./tool-groups/retention-tools-group.m
 import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-service.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import { createCodexTuiToolsGroup } from "./tool-groups/codex-tui-tools-group.mjs";
+import { createProductStatusToolsGroup } from "./tool-groups/product-status-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -47,6 +48,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "product_status",
     "open_project_context",
     "create_encoded_goal",
     "get_task",
@@ -57,6 +59,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "product_status",
     "gptwork_doctor",
     "github_status",
     "open_project_context",
@@ -143,6 +146,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "product_status",
     "gptwork_doctor",
     "github_status",
     "notification_status",
@@ -181,6 +185,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "product_status",
     "open_project_context",
     "get_goal_context",
     "append_goal_message",

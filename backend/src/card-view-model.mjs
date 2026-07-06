@@ -22,6 +22,7 @@ const CARD_ENABLED_TOOLS = new Set([
   "get_goal_queue",
   "get_goal_context",
   "run_assigned_codex_tasks",
+  "product_status",
 ]);
 
 const TASK_STAGES = [
@@ -668,6 +669,8 @@ export function buildCardViewModel(tool, data, meta = {}) {
       return buildGoalQueueCard(tool, payload, meta);
     case "run_assigned_codex_tasks":
       return buildRunAssignedCard(tool, payload, meta);
+    case "product_status":
+      return buildProductStatusCard(tool, payload, meta);
     default:
       return buildGenericCard(tool, payload, meta);
   }
@@ -693,5 +696,49 @@ export function legacyFieldsFromCard(card) {
     items,
   };
 }
+
+/**
+ * Build a card view model for the product_status tool.
+ * Aggregated product dashboard with sections for system, worker,
+ * queue, blockers, review, retention, TUI, and next actions.
+ */
+function buildProductStatusCard(tool, data, meta) {
+  const card = baseCard(tool, data, { ...meta, title: "Product Status" });
+  card.card_type = "dashboard";
+  card.status = data._diagnostics?.warnings?.some(w => w.severity === "error") ? "error"
+    : data._diagnostics?.warnings?.some(w => w.severity === "warning") ? "warning"
+    : "ok";
+  card.severity = card.status === "error" ? "error" : card.status === "warning" ? "warning" : "ok";
+  card.summary = data.summary || "Product dashboard";
+
+  addKeyValues(card.key_values, [
+    { key: "running_commit", value: data.system?.running_commit },
+    { key: "worktree", value: data.system?.worktree_dirty ? "dirty" : "clean" },
+    { key: "worker", value: data.worker?.enabled ? (data.worker?.running ? "running" : "idle") : "disabled" },
+    { key: "worker_health", value: data.worker?.health_phase },
+    { key: "blockers_raw", value: data.current_blockers?.raw },
+    { key: "blockers_actionable", value: data.current_blockers?.policy_filtered },
+    { key: "actionable_review", value: data.review_classification?.actionable_review },
+    { key: "retention_pressure", value: data.retention?.pressure },
+  ]);
+
+  card.sections.push({ title: "System", type: "table", rows: tableRowsFromObject(data.system || {}, ["running_commit", "repo_head", "worktree_dirty", "runtime_env_loaded", "tool_mode"]) });
+  card.sections.push({ title: "Worker", type: "table", rows: tableRowsFromObject(data.worker || {}, ["enabled", "running", "health_phase", "last_tick_age_s", "concurrency"]) });
+  card.sections.push({ title: "Queue", type: "table", rows: tableRowsFromObject(data.queue || {}, ["assigned", "queued", "running", "completed", "failed"]) });
+  card.sections.push({ title: "Current Blockers", type: "table", rows: tableRowsFromObject(data.current_blockers || {}, ["raw", "policy_filtered", "policy_excluded"]) });
+  card.sections.push({ title: "Review", type: "table", rows: tableRowsFromObject(data.review_classification?.categories || {}, ["human_required", "machine_repairable", "resolved_history"]) });
+  card.sections.push({ title: "Retention", type: "table", rows: tableRowsFromObject(data.retention || {}, ["pressure", "tasks", "goals", "limit"]) });
+
+  if (data.next_actions?.length > 0) {
+    card.sections.push({ title: "Next Actions", type: "list", items: data.next_actions.map(a => `[${a.priority}] ${a.action}`) });
+  }
+
+  for (const diag of data._diagnostics?.warnings || []) {
+    card.diagnostics.push(diag);
+  }
+
+  return finalize(card);
+}
+
 
 export { CARD_VERSION };

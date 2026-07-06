@@ -1,5 +1,6 @@
 import { runtimeStatusCard, workerStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 import { renderCardText } from "./card-render-text.mjs";
+import { productStatusCard } from "./product-status-view.mjs";
 
 export function summarizeToolResult(name, structuredContent) {
       if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
@@ -14,6 +15,8 @@ export function summarizeToolResult(name, structuredContent) {
           return runtimeStatusCard(structuredContent);
         case "gptwork_doctor":
           return gptworkDoctorCard(structuredContent);
+        case "product_status":
+          return productStatusCard(structuredContent);
         case "get_task":
           return getTaskCard(structuredContent);
         case "create_encoded_goal":

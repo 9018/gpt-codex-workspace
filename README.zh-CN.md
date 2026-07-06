@@ -232,6 +232,7 @@ GitHub token 只应通过运行环境或 workflow secret 注入。文档、Issue
 完整发布门禁会运行 `G10 no-GitHub delivery E2E`、`G10 GitHub adapter delivery E2E` 和 `G10 legacy compatibility tests` 三组检查；任一失败都不应发布。
 
 ## 运维诊断
+- 产品级状态面板：`product_status`，一行命令给出 running commit、worker health、queue progress、current blockers、review 分类、retention pressure、TUI provider 状态和 prioritized next actions。
 
 常用路径：
 

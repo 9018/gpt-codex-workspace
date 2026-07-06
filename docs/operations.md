@@ -42,6 +42,53 @@ get_task_acceptance_bundle(task_id)
 
 These compact packets should be enough for most closure/review decisions without full transcript, durable memories, complete context bundle, or large diffs.
 
+## Product Status Dashboard
+
+For a single-pane-of-glass overview, use:
+
+```text
+product_status
+```
+
+This replaces reading 10+ separate tool results and answers the high-signal questions:
+* Is the project making progress?
+* Where is it stuck?
+* What should I do next?
+
+### Dashboard Sections
+
+| Section | What it tells you |
+|---|---|
+| **System** | Running commit, repo head, worktree cleanliness, runtime env, tool mode |
+| **Worker** | Worker enabled/running state, health phase, last tick age, concurrency |
+| **Queue** | Assigned, queued, running, completed, failed counts |
+| **Current Blockers** | Raw non-terminal count vs policy-filtered actionable blockers |
+| **Review** | Human-required vs machine-repairable vs resolved-history review tasks |
+| **Raw Historical** | Legacy-resolved and unresolved totals (for context, not actionable) |
+| **Retention** | Storage pressure, task/goal counts vs limit |
+| **TUI Provider** | TUI session count, active sessions, findings severity |
+| **Config** | Bark/GitHub enablement, agent backend |
+| **Next Actions** | Prioritized action items (blocker / warning / info) |
+
+### Design Principles
+
+1. **Raw counts vs actionable blockers**: The `current_blockers` section explicitly separates raw non-terminal task counts from policy-filtered actionable blockers, so you know which are real problems vs historical noise.
+2. **Review categorization**: Review tasks are classified as `human_required` (needs manual decision), `machine_repairable` (can auto-repair), or `resolved_history` (legacy-resolved, safe to ignore).
+3. **Next actions are prioritized**: Each action carries a priority label (`blocker`, `warning`, `info`) so you know what to address first.
+4. **Text and card**: The output renders via both the Apps SDK card system (rich view) and plain-text fallback for terminal/script consumption.
+
+### When to use product_status vs individual tools
+
+| Use case | Tool |
+|---|---|
+| First glance at project health | `product_status` |
+| Deep queue inspection | `worker_status` |
+| Detailed worker diagnostics | `gptwork_doctor` |
+| Review packet for a specific task | `get_task_review_packet(task_id)` |
+| Retention planning | `retention_status` |
+| TUI session debugging | `codex_tui_status` |
+
+
 ## Context Diagnostics
 
 Use either tool name:
@@ -203,7 +250,7 @@ Token values must come from runtime environment or workflow secrets. Do not plac
 
 ## Troubleshooting Checklist
 
-1. Need project overview: call `open_project_context`.
+1. Need project overview: call `open_project_context` (or `product_status` for a compact status dashboard).
 2. Need context health: call `project_context_status` / `context_status`.
 3. Need task review: call `get_task_review_packet`.
 4. Need liveness: `curl /health`, then `runtime_status` for expected commit.
