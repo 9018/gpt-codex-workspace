@@ -82,9 +82,14 @@ test('verifyTaskCompletion requires review when blocking contract evidence is mi
     },
   });
 
+  // P0-AFC3: Contract verification provides evidence, not independent decisions.
+  // blocking_passed: false means blockers were found; passed is true because
+  // command execution (git diff, no tests) succeeded. The canonical decider
+  // handles outcome determination using this evidence.
   assert.equal(verification.passed, false);
   assert.equal(verification.status, 'waiting_for_review');
-  assert.equal(verification.contract_verification.requires_review, true);
+  assert.equal(verification.contract_verification.requires_review, false);
+  assert.equal(verification.contract_verification.blocking_passed, false);
   assert.ok(verification.findings.some((finding) => finding.code === 'commit_present_missing'));
   assert.deepEqual(verification.contract_verification.quality_notes, ['style followup']);
 });

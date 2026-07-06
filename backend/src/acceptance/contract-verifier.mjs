@@ -159,18 +159,24 @@ export function verifyAcceptanceContract({
     blockers.push(blocker('integration_completed_missing', 'Contract requires integration evidence.', { requires_integration: true }));
   }
 
-  const reviewReasons = normalizeList(normalizedContract.review_policy?.requires_review_when).map(String);
-  const semanticReview = reviewReasons.includes('semantic_ambiguity') || normalizedContract.intent?.semantic_confidence === 'low';
-  const contractInvalidReview = reviewReasons.includes('contract_invalid') && !semantic.valid;
   const blockingPassed = blockers.length === 0;
-  const normalizedRequiresReview = normalizedResult.requires_review === true
-    && !(noChangeRepair.completion_eligible === true && normalizedBlockers.length === 0);
-  const requiresReview = !blockingPassed || semanticReview || contractInvalidReview || normalizedRequiresReview;
+
+  // P0-AFC3: The contract verifier provides evidence for the canonical
+  // outcome decision (decideTaskClosure) instead of independently choosing
+  // the final task state.  `requires_review` is therefore always `false`
+  // here -- the canonical decider is the sole authority for that decision.
+  const requiresReview = false;
+
   const policy = normalizedContract.completion_policy || {};
-  const completionEligible = blockingPassed && !requiresReview && policy.auto_complete_when_blocking_requirements_pass !== false;
-  const acceptanceStatus = blockingPassed && !requiresReview
+  // completion_eligible is purely evidence-based: viable when no blockers.
+  const completionEligible = blockingPassed && policy.auto_complete_when_blocking_requirements_pass !== false;
+  // acceptance_status is evidence-based: it reflects what the verifier
+  // found about the evidence, not an independent outcome decision.
+  // The value 'indeterminate' signals semantic uncertainty (low confidence
+  // or invalid semantics) for downstream consumers that need it.
+  const acceptanceStatus = blockingPassed
     ? 'satisfied'
-    : (semanticReview || !semantic.valid ? 'indeterminate' : 'unsatisfied');
+    : (normalizedContract.intent?.semantic_confidence === 'low' || !semantic.valid ? 'indeterminate' : 'unsatisfied');
 
   return {
     contract_valid: semantic.valid,

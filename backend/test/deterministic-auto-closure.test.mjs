@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 
 import { decideTaskClosure, mapClosureStatusToTaskStatus } from "../src/closure/task-closure-decider.mjs";
 import { planFollowupTasks } from "../src/closure/followup-task-planner.mjs";
+import { verifyAcceptanceContract } from "../src/acceptance/contract-verifier.mjs";
 
 function decide({ operationKind, result = {}, contractVerification = {}, contract = {}, verification = {} }) {
   const resolvedContract = {
@@ -308,4 +309,86 @@ test("already-satisfied delivery evidence with already_integrated status complet
   // Already-satisfied integration should not trigger requires_review
   assert.equal(decision.status, "auto_completed_clean");
   assert.equal(decision.blockers.length, 0);
+});
+
+
+// ---------------------------------------------------------------------------
+// P0-AFC3: Accepted results with non-blocking notes
+// ---------------------------------------------------------------------------
+
+test("non-blocking quality notes preserve acceptance and produce followups from decider", () => {
+  // Verifier provides quality notes evidence, decider determines the outcome.
+  const decision = decide({
+    operationKind: "code_change",
+    result: { changed_files: ["src/foo.mjs"], commit: "abc123" },
+    contractVerification: {
+      quality_notes: ["Add JSDoc to public API methods."],
+      non_blocking_followups: [{ title: "Extract shared helpers", reason: "Reduce duplication" }],
+    },
+  });
+
+  // Blocking gate passes — non-blocking notes are preserved as evidence.
+  assert.equal(decision.blocking_passed, true);
+  assert.equal(decision.status, "auto_completed_with_followups");
+  assert.equal(decision.quality_notes.length, 1);
+  assert.equal(decision.quality_notes[0], "Add JSDoc to public API methods.");
+  assert.equal(decision.non_blocking_followups.length, 1);
+  assert.equal(decision.non_blocking_followups[0].title, "Extract shared helpers");
+});
+
+test("blockers with quality notes block completion despite notes", () => {
+  // Verifier detects blockers plus quality notes.  Blockers win — decider
+  // must NOT let quality notes override blocking requirements.
+  const decision = decideTaskClosure({
+    contract: {
+      intent: { operation_kind: "code_change" },
+      requirements: { requires_commit: true, requires_integration: false },
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+    contractVerification: {
+      contract_valid: true,
+      blocking_passed: false,
+      completion_eligible: false,
+      blockers: [{ severity: "blocker", code: "commit_present_missing", message: "Commit evidence missing." }],
+      non_blocking_followups: [{ title: "Refactor helpers", reason: "Post-beta polish" }],
+      quality_notes: ["Add JSDoc to public API methods."],
+      state_assertions: { passed: true, failures: [] },
+    },
+    verification: { passed: true, findings: [], commands: [{ cmd: "check", exit_code: 0 }] },
+    result: { status: "completed", summary: "partial" },
+    task: { id: "task_blockers_with_notes" },
+  });
+
+  assert.equal(decision.blocking_passed, false);
+  assert.equal(decision.status, "requires_review");
+  assert.ok(decision.blockers.length > 0);
+  // Non-blocking notes are preserved even when blockers prevent completion
+  assert.equal(decision.non_blocking_followups.length, 1);
+  assert.equal(decision.quality_notes.length, 1);
+});
+
+test("contract verifier returns evidence-based status for non-blocking only input", () => {
+  // Direct test of verifyAcceptanceContract with quality notes but no blockers.
+
+  const verification = verifyAcceptanceContract({
+    contract: { intent: { operation_kind: "diagnostic", semantic_confidence: "high" } },
+    result: {
+      status: "completed",
+      summary: "diagnostic OK",
+      operation_kind: "diagnostic",
+      diagnostic_evidence: { summary: "No issues found", repo_mutated: false },
+      repo_mutated: false,
+      quality_notes: ["Add verbose mode for debugging."],
+    },
+    verification: { passed: true, commands: [] },
+  });
+
+  // Evidence-based status: no blockers → satisfied + not independently deciding review
+  assert.equal(verification.blocking_passed, true);
+  assert.equal(verification.acceptance_status, "satisfied");
+  assert.equal(verification.requires_review, false);
+  assert.equal(verification.completion_eligible, true);
+  assert.equal(verification.blockers.length, 0);
+  // Quality notes preserved as evidence
+  assert.deepEqual(verification.quality_notes, ["Add verbose mode for debugging."]);
 });

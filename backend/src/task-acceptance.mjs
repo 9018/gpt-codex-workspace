@@ -273,7 +273,10 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     stateAssertions,
     repoState: { repoPath },
   }) : null;
-  if (contract_verification?.requires_review === true || contract_verification?.blocking_passed === false) {
+  // P0-AFC3: Contract verification provides evidence, not independent decisions.
+  // The canonical decider (decideTaskClosure) handles outcome determination.
+  // Blockers from contract verification are included unconditionally as evidence.
+  if (contract_verification?.blocking_passed === false) {
     findings.push(...contractFindings(contract_verification));
   }
 

@@ -43,7 +43,8 @@ function semanticAmbiguous(contract = {}, contractVerification = {}) {
   const reviewWhen = normalizeList(contract?.review_policy?.requires_review_when).map(String);
   return contract?.intent?.semantic_confidence === 'low'
     || reviewWhen.includes('semantic_ambiguity')
-    || contractVerification.acceptance_status === 'indeterminate'
+    // P0-AFC3: acceptance_status no longer produces 'indeterminate' independently.
+    // Semantic ambiguity is detected via semantic_confidence and review_policy.
     || contractVerification.semantic_ambiguity === true;
 }
 

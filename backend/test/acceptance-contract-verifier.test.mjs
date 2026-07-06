@@ -272,10 +272,13 @@ test('missing blocking evidence and state assertion failures require review', ()
     stateAssertions: { passed: false, failures: [{ kind: 'repo_clean', evidence: { status: ' M file' } }] },
   });
 
+  // P0-AFC3: Contract verification provides evidence; decider handles outcome.
+  // requires_review is always false from the verifier — the canonical decider
+  // (decideTaskClosure) determines review needs from blockers and other evidence.
   assert.equal(verification.blocking_passed, false);
   assert.equal(verification.acceptance_status, 'unsatisfied');
   assert.equal(verification.completion_eligible, false);
-  assert.equal(verification.requires_review, true);
+  assert.equal(verification.requires_review, false);
   assert.ok(verification.blockers.some((blocker) => blocker.code === 'commit_present_missing'));
   assert.ok(verification.blockers.some((blocker) => blocker.code === 'state_assertion_failed'));
 });
@@ -339,8 +342,9 @@ test('no-change repair contract remains blocked when verification is missing', (
     stateAssertions: { passed: true, assertions: [], failures: [] },
   });
 
+  // P0-AFC3: Contract verification provides evidence; decider handles outcome.
   assert.equal(verification.blocking_passed, false);
-  assert.equal(verification.requires_review, true);
+  assert.equal(verification.requires_review, false);
   assert.ok(verification.blockers.some((entry) => entry.code === 'changed_files_reported_missing'));
   assert.ok(verification.blockers.some((entry) => entry.code === 'verification_report_missing'));
 });
@@ -352,8 +356,11 @@ test('semantic ambiguity and legacy missing contract are indeterminate review ca
     verification: { passed: true },
     stateAssertions: { passed: true, assertions: [], failures: [] },
   });
+  // P0-AFC3: acceptance_status preserves 'indeterminate' for ambiguity,
+  // but requires_review is always false from the verifier — the canonical
+  // decider (decideTaskClosure) determines if review is needed.
   assert.equal(ambiguous.acceptance_status, 'indeterminate');
-  assert.equal(ambiguous.requires_review, true);
+  assert.equal(ambiguous.requires_review, false);
 
   const legacy = verifyAcceptanceContract({ result: { status: 'completed', summary: 'legacy', verification: { passed: true } }, verification: { passed: true } });
   assert.equal(legacy.contract_valid, false);
