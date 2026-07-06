@@ -323,6 +323,402 @@ export function validateRuntimeEnvAgainstExample(gptworkDir) {
 }
 
 // ───────────────────────────────────────────────────────────────────
+
+// ───────────────────────────────────────────────────────────────────
+// Production Profile Checks
+// ───────────────────────────────────────────────────────────────────
+
+/**
+ * Check that codexWorker is enabled (required for production).
+ * Production expects GPTWORK_CODEX_WORKER=true.
+ */
+export function checkProductionWorkerEnabled(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  let workerEnabled = process.env.GPTWORK_CODEX_WORKER === "true";
+  
+  // Also check runtime.env directly
+  if (!workerEnabled && existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    workerEnabled = envVars.GPTWORK_CODEX_WORKER === "true";
+  }
+  
+  return {
+    name: "production_worker",
+    status: workerEnabled ? "pass" : "blocker",
+    detail: workerEnabled
+      ? "Codex worker enabled (GPTWORK_CODEX_WORKER=true)"
+      : "Codex worker not enabled — production requires GPTWORK_CODEX_WORKER=true",
+    fixable: true,
+    fixHint: "Set GPTWORK_CODEX_WORKER=true in .gptwork/runtime.env"
+  };
+}
+
+/**
+ * Check verifier/reviewer role commands for local_command backend.
+ * When a role is set to local_command, the corresponding command must exist.
+ */
+export function checkVerifierReviewerCommands(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  const findings = [];
+  
+  // Parse role backends
+  let roleBackendsRaw = process.env.GPTWORK_AGENT_ROLE_BACKENDS || "";
+  let roleCommandsRaw = process.env.GPTWORK_AGENT_ROLE_COMMANDS || "";
+  let agentBackend = process.env.GPTWORK_AGENT_BACKEND || "";
+  
+  // Also check runtime.env
+  if (existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    if (!roleBackendsRaw) roleBackendsRaw = envVars.GPTWORK_AGENT_ROLE_BACKENDS || "";
+    if (!roleCommandsRaw) roleCommandsRaw = envVars.GPTWORK_AGENT_ROLE_COMMANDS || "";
+    if (!agentBackend) agentBackend = envVars.GPTWORK_AGENT_BACKEND || "";
+  }
+  
+  const roleBackends = parseSimpleMap(roleBackendsRaw, ",");
+  const roleCommands = parseSimpleMap(roleCommandsRaw, "||");
+  
+  // Check verifier and reviewer roles specifically
+  for (const role of ["verifier", "reviewer"]) {
+    const backend = roleBackends[role] || agentBackend;
+    if (backend === "local_command") {
+      if (!roleCommands[role]) {
+        findings.push({
+          role,
+          backend,
+          commandMissing: true,
+          detail: `${role} uses local_command backend but no command configured for this role`
+        });
+      }
+    }
+  }
+  
+  if (findings.length > 0) {
+    const details = findings.map(f =>
+      `${f.role} local_command missing command${f.commandMissing ? " (set GPTWORK_AGENT_ROLE_COMMANDS)" : ""}`
+    ).join("; ");
+    return {
+      name: "role_commands",
+      status: "blocker",
+      detail: details,
+      fixable: true,
+      fixHint: "Set GPTWORK_AGENT_ROLE_COMMANDS=verifier=<command>||reviewer=<command> in runtime.env"
+    };
+  }
+  
+  return { name: "role_commands", status: "pass", detail: "All role commands properly configured" };
+}
+
+/**
+ * Check that agent backends resolve to valid backends.
+ */
+export function checkAgentRoleBackends(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  
+  let roleBackendsRaw = process.env.GPTWORK_AGENT_ROLE_BACKENDS || "";
+  if (existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    if (!roleBackendsRaw) roleBackendsRaw = envVars.GPTWORK_AGENT_ROLE_BACKENDS || "";
+  }
+  
+  const validBackends = ["codex_exec", "local_command", "null"];
+  const roleBackends = parseSimpleMap(roleBackendsRaw, ",");
+  const invalid = [];
+  
+  for (const [role, backend] of Object.entries(roleBackends)) {
+    if (!validBackends.includes(backend)) {
+      invalid.push(`${role}=${backend}`);
+    }
+  }
+  
+  if (invalid.length > 0) {
+    return {
+      name: "agent_backends",
+      status: "warn",
+      detail: `Invalid role backends: ${invalid.join(", ")} (valid: ${validBackends.join(", ")})`,
+      fixable: true,
+      fixHint: "Fix GPTWORK_AGENT_ROLE_BACKENDS values"
+    };
+  }
+  
+  return { name: "agent_backends", status: "pass", detail: "All role backends valid" };
+}
+
+/**
+ * Check release gate commands are configured for production.
+ */
+export function checkReleaseGateCommands(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  
+  let recoveryCommands = process.env.GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS || "";
+  if (existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    if (!recoveryCommands) recoveryCommands = envVars.GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS || "";
+  }
+  
+  if (!recoveryCommands) {
+    return {
+      name: "release_gate_commands",
+      status: "warn",
+      detail: "No delivery result recovery commands configured (GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS)",
+      fixable: true,
+      fixHint: "Set GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS=npm --prefix backend run check:syntax||git diff --check"
+    };
+  }
+  
+  const commands = recoveryCommands.split("||").map(s => s.trim()).filter(Boolean);
+  return {
+    name: "release_gate_commands",
+    status: "pass",
+    detail: `${commands.length} delivery recovery command(s) configured`
+  };
+}
+
+/**
+ * Check codex exec timeout should be sane for production (>= 3600).
+ */
+export function checkCodexExecSettings(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  
+  let timeout = parseInt(process.env.GPTWORK_CODEX_EXEC_TIMEOUT || "0", 10);
+  let concurrency = parseInt(process.env.GPTWORK_CODEX_CONCURRENCY || "0", 10);
+  
+  if (!timeout && existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    timeout = parseInt(envVars.GPTWORK_CODEX_EXEC_TIMEOUT || "0", 10);
+    concurrency = parseInt(envVars.GPTWORK_CODEX_CONCURRENCY || "0", 10);
+  }
+  
+  const warnings = [];
+  if (!timeout) {
+    warnings.push("codex exec timeout not configured (default: 3600s)");
+  } else if (timeout < 3600) {
+    warnings.push(`codex exec timeout ${timeout}s is low for production (recommended >= 3600)`);
+  }
+  
+  if (concurrency && concurrency < 1) {
+    warnings.push(`codex concurrency ${concurrency} too low (minimum 1)`);
+  }
+  
+  if (warnings.length > 0) {
+    return {
+      name: "codex_exec_settings",
+      status: "warn",
+      detail: warnings.join("; "),
+      fixable: true,
+      fixHint: "Set GPTWORK_CODEX_EXEC_TIMEOUT=3600 and GPTWORK_CODEX_CONCURRENCY=4 in runtime.env"
+    };
+  }
+  
+  return {
+    name: "codex_exec_settings",
+    status: "pass",
+    detail: `codex exec timeout=${timeout || 3600}s, concurrency=${concurrency || 4}`
+  };
+}
+
+/**
+ * Check commit baseline vs current HEAD.
+ */
+export function checkCurrentHeadDiagnostics(projectRoot) {
+  const root = projectRoot || PROJECT_ROOT;
+  let currentHead = null;
+  
+  try {
+    currentHead = execSync("git rev-parse HEAD 2>/dev/null", { cwd: root, encoding: "utf8", timeout: 5000 }).trim();
+  } catch {}
+  
+  // Check for baseline reference in docs or .gptwork
+  let baselineRef = null;
+  const docsDir = join(root, "docs");
+  if (existsSync(docsDir)) {
+    try {
+      const launchInitPath = join(docsDir, "launch-initialization.md");
+      if (existsSync(launchInitPath)) {
+        const initContent = readFileSync(launchInitPath, "utf8");
+        const match = initContent.match(/Canonical baseline.*?`([a-f0-9]{7,40})`/);
+        if (match) baselineRef = match[1];
+      }
+    } catch {}
+  }
+  
+  if (!currentHead) {
+    return { name: "current_head", status: "skip", detail: "Cannot determine current HEAD" };
+  }
+  
+  if (baselineRef && currentHead.startsWith(baselineRef)) {
+    return {
+      name: "current_head",
+      status: "pass",
+      detail: `Current HEAD ${currentHead.slice(0, 12)} matches canonical baseline ${baselineRef.slice(0, 12)}`
+    };
+  }
+  
+  if (baselineRef) {
+    return {
+      name: "current_head",
+      status: "warn",
+      detail: `Current HEAD ${currentHead.slice(0, 12)} differs from docs baseline ${baselineRef.slice(0, 12)} (verify deployment)`,
+      fixHint: "Run: git log --oneline -1 HEAD; grep 'Canonical baseline' docs/launch-initialization.md"
+    };
+  }
+  
+  return {
+    name: "current_head",
+    status: "pass",
+    detail: `Current HEAD: ${currentHead.slice(0, 12)} (no canonical baseline reference found)`
+  };
+}
+
+/**
+ * Check workspace root, state path, and default repo settings.
+ */
+export function checkWorkspaceSettings(gptworkDir, projectRoot) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const root = projectRoot || PROJECT_ROOT;
+  const envPath = join(dir, "runtime.env");
+  
+  let statePath = process.env.GPTWORK_STATE_PATH || "";
+  let workspaceRoot = process.env.GPTWORK_WORKSPACE_ROOT || "";
+  let defaultRepo = process.env.GPTWORK_DEFAULT_REPO || "";
+  
+  if (existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    if (!statePath) statePath = envVars.GPTWORK_STATE_PATH || "";
+    if (!workspaceRoot) workspaceRoot = envVars.GPTWORK_WORKSPACE_ROOT || "";
+    if (!defaultRepo) defaultRepo = envVars.GPTWORK_DEFAULT_REPO || "";
+  }
+  
+  const findings = [];
+  if (!statePath) findings.push("GPTWORK_STATE_PATH not configured (default: .gptwork/state.json)");
+  if (!workspaceRoot) findings.push("GPTWORK_WORKSPACE_ROOT not configured (default: data/workspaces/default)");
+  if (!defaultRepo) findings.push("GPTWORK_DEFAULT_REPO not configured");
+  
+  if (findings.length > 0) {
+    return {
+      name: "workspace_settings",
+      status: "warn",
+      detail: findings.join("; "),
+      fixable: true,
+      fixHint: "Set GPTWORK_STATE_PATH, GPTWORK_WORKSPACE_ROOT, GPTWORK_DEFAULT_REPO in runtime.env"
+    };
+  }
+  
+  return {
+    name: "workspace_settings",
+    status: "pass",
+    detail: `repo=${defaultRepo}, state=${statePath || ".gptwork/state.json"}, workspace=${workspaceRoot || "data/workspaces/default"}`
+  };
+}
+
+/**
+ * Check context vector store configuration.
+ */
+export function checkContextVectorStore(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  
+  let vectorStore = process.env.GPTWORK_CONTEXT_VECTOR_STORE || "";
+  if (!vectorStore && existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    vectorStore = envVars.GPTWORK_CONTEXT_VECTOR_STORE || "";
+  }
+  
+  if (!vectorStore || vectorStore === "auto") {
+    return {
+      name: "context_vector_store",
+      status: "pass",
+      detail: "Context vector store: auto (will detect zvec availability)"
+    };
+  }
+  
+  if (vectorStore === "none" || vectorStore === "off") {
+    return {
+      name: "context_vector_store",
+      status: "warn",
+      detail: "Context vector store disabled (GPTWORK_CONTEXT_VECTOR_STORE=none)",
+      fixHint: "Set GPTWORK_CONTEXT_VECTOR_STORE=auto (recommended) or install zvec"
+    };
+  }
+  
+  return {
+    name: "context_vector_store",
+    status: "pass",
+    detail: `Context vector store: ${vectorStore}`
+  };
+}
+
+/**
+ * Check integration mode settings.
+ */
+export function checkIntegrationMode(gptworkDir) {
+  const dir = gptworkDir || GPTWORK_DIR;
+  const envPath = join(dir, "runtime.env");
+  
+  let mode = process.env.GPTWORK_INTEGRATION_MODE || "";
+  if (!mode && existsSync(envPath)) {
+    const envVars = parseEnvFile(envPath);
+    mode = envVars.GPTWORK_INTEGRATION_MODE || "";
+  }
+  
+  if (!mode || mode === "auto") {
+    return {
+      name: "integration_mode",
+      status: "pass",
+      detail: "Integration mode: auto (ff-only merge when applicable)"
+    };
+  }
+  
+  return {
+    name: "integration_mode",
+    status: "pass",
+    detail: `Integration mode: ${mode}`
+  };
+}
+
+/**
+ * Run only production-profile checks.
+ */
+export function runProductionProfile(opts = {}) {
+  const gptworkDir = opts.gptworkDir || GPTWORK_DIR;
+  const projectRoot = opts.projectRoot || PROJECT_ROOT;
+
+  return [
+    checkProductionWorkerEnabled(gptworkDir),
+    checkVerifierReviewerCommands(gptworkDir),
+    checkAgentRoleBackends(gptworkDir),
+    checkReleaseGateCommands(gptworkDir),
+    checkCodexExecSettings(gptworkDir),
+    checkCurrentHeadDiagnostics(projectRoot),
+    checkWorkspaceSettings(gptworkDir, projectRoot),
+    checkContextVectorStore(gptworkDir),
+    checkIntegrationMode(gptworkDir),
+  ];
+}
+
+// ───────────────────────────────────────────────────────────────────
+// Internal Helpers for Profile Checks
+// ───────────────────────────────────────────────────────────────────
+
+function parseSimpleMap(raw, separator) {
+  const text = String(raw || "").trim();
+  if (!text) return {};
+  const out = {};
+  for (const entry of text.split(separator)) {
+    const part = entry.trim();
+    if (!part) continue;
+    const eqIdx = part.indexOf("=");
+    if (eqIdx < 0) continue;
+    const key = part.slice(0, eqIdx).trim().toLowerCase();
+    const val = part.slice(eqIdx + 1).trim().toLowerCase();
+    if (key && val) out[key] = val;
+  }
+  return out;
+}
 // Composite Commands
 // ───────────────────────────────────────────────────────────────────
 
@@ -347,6 +743,11 @@ export function runFullCheck(opts = {}) {
     checkDirtyRepo(PROJECT_ROOT),
     checkCodexAvailability(),
   ];
+
+  // Append production profile checks when requested
+  if (opts.production) {
+    checks.push(...runProductionProfile(opts));
+  }
 
   return checks;
 }
@@ -508,7 +909,7 @@ export async function runFix(opts = {}) {
  * Print a formatted init/doctor report to console.
  */
 export function printInitReport(checks, { showNextSteps = true } = {}) {
-  const statusCounts = { pass: 0, warn: 0, fail: 0, skip: 0 };
+  const statusCounts = { pass: 0, warn: 0, fail: 0, skip: 0, blocker: 0 };
   for (const c of checks) {
     statusCounts[c.status] = (statusCounts[c.status] || 0) + 1;
   }
@@ -516,19 +917,19 @@ export function printInitReport(checks, { showNextSteps = true } = {}) {
   console.log("GPTWork Init Report");
   console.log("=".repeat(60));
   for (const c of checks) {
-    const icon = c.status === "pass" ? "\u2714" : c.status === "warn" ? "\u26A0" : c.status === "skip" ? "\u2013" : "\u2718";
+    const icon = c.status === "pass" ? "\u2714" : c.status === "warn" ? "\u26A0" : c.status === "skip" ? "\u2013" : c.status === "blocker" ? "\u26D4" : "\u2718";
     console.log(`  ${icon} ${c.name}: ${c.detail.slice(0, 100)}`);
   }
 
   console.log("");
-  console.log(`Summary: ${statusCounts.pass || 0} passed, ${statusCounts.warn || 0} warnings, ${statusCounts.fail || 0} failed, ${statusCounts.skip || 0} skipped`);
+  console.log(`Summary: ${statusCounts.pass || 0} passed, ${statusCounts.warn || 0} warnings, ${statusCounts.blocker || 0} blockers, ${statusCounts.fail || 0} failed, ${statusCounts.skip || 0} skipped`);
 
-  const hasIssues = (statusCounts.fail || 0) > 0 || (statusCounts.warn || 0) > 0;
+  const hasIssues = (statusCounts.blocker || 0) > 0 || (statusCounts.fail || 0) > 0 || (statusCounts.warn || 0) > 0;
   if (hasIssues) {
     console.log("");
     console.log("-- Recommended Actions --");
     for (const c of checks) {
-      if ((c.status === "fail" || c.status === "warn") && c.fixHint) {
+      if ((c.status === "blocker" || c.status === "fail" || c.status === "warn") && c.fixHint) {
         console.log(`  * ${c.name}: ${c.fixHint}`);
       }
     }
@@ -537,7 +938,7 @@ export function printInitReport(checks, { showNextSteps = true } = {}) {
   if (showNextSteps) {
     console.log("");
     console.log("-- Next Steps --");
-    const allPass = (statusCounts.fail || 0) === 0;
+    const allPass = (statusCounts.blocker || 0) === 0 && (statusCounts.fail || 0) === 0;
     if (allPass) {
       console.log("  Everything looks good. Start the server:");
       console.log("  $ gptwork start");

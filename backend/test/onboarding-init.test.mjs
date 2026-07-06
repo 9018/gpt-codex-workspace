@@ -42,6 +42,16 @@ import {
   checkRequiredDirs,
   checkGptworkDir,
   checkGitRepo,
+  checkProductionWorkerEnabled,
+  checkVerifierReviewerCommands,
+  checkAgentRoleBackends,
+  checkReleaseGateCommands,
+  checkCodexExecSettings,
+  checkCurrentHeadDiagnostics,
+  checkWorkspaceSettings,
+  checkContextVectorStore,
+  checkIntegrationMode,
+  runProductionProfile,
 } from "../src/onboarding-init.mjs";
 
 // ───────────────────────────────────────────────────────────────────
@@ -462,4 +472,117 @@ test("printFixReport doesn't throw", () => {
 
 test("printFixReport handles empty result", () => {
   printFixReport({ fixes: [], warnings: [] });
+});
+
+// ───────────────────────────────────────────────────────────────────
+// Production Profile Checks
+// ───────────────────────────────────────────────────────────────────
+
+test("checkProductionWorkerEnabled returns blocker when worker disabled", () => {
+  delete process.env.GPTWORK_CODEX_WORKER;
+  const r = checkProductionWorkerEnabled("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "blocker");
+  assert.ok(r.detail.includes("worker not enabled") || r.detail.includes("CODEX_WORKER"));
+  assert.ok(r.fixable);
+});
+
+test("checkProductionWorkerEnabled returns pass when worker enabled via env", () => {
+  process.env.GPTWORK_CODEX_WORKER = "true";
+  const r = checkProductionWorkerEnabled("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "pass");
+  assert.ok(r.detail.includes("worker enabled"));
+  delete process.env.GPTWORK_CODEX_WORKER;
+});
+
+test("checkVerifierReviewerCommands returns pass when no local_command roles", () => {
+  const r = checkVerifierReviewerCommands("/tmp/nonexistent-gptwork");
+  assert.ok(["pass"].includes(r.status));
+});
+
+test("checkVerifierReviewerCommands returns blocker when local_command verifier has no command", () => {
+  process.env.GPTWORK_AGENT_ROLE_BACKENDS = "verifier=local_command";
+  delete process.env.GPTWORK_AGENT_ROLE_COMMANDS;
+  const r = checkVerifierReviewerCommands("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "blocker");
+  assert.ok(r.detail.includes("verifier"));
+  assert.ok(r.fixable);
+  delete process.env.GPTWORK_AGENT_ROLE_BACKENDS;
+});
+
+test("checkVerifierReviewerCommands passes when local_command has role command", () => {
+  process.env.GPTWORK_AGENT_ROLE_BACKENDS = "verifier=local_command";
+  process.env.GPTWORK_AGENT_ROLE_COMMANDS = "verifier=npm test";
+  const r = checkVerifierReviewerCommands("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "pass");
+  delete process.env.GPTWORK_AGENT_ROLE_BACKENDS;
+  delete process.env.GPTWORK_AGENT_ROLE_COMMANDS;
+});
+
+test("checkAgentRoleBackends warns on invalid backend", () => {
+  process.env.GPTWORK_AGENT_ROLE_BACKENDS = "verifier=invalid_backend";
+  const r = checkAgentRoleBackends("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "warn");
+  assert.ok(r.detail.includes("invalid"));
+  delete process.env.GPTWORK_AGENT_ROLE_BACKENDS;
+});
+
+test("checkReleaseGateCommands warns when not configured", () => {
+  delete process.env.GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS;
+  const r = checkReleaseGateCommands("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "warn");
+  assert.ok(r.fixable);
+});
+
+test("checkReleaseGateCommands passes when configured", () => {
+  process.env.GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS = "npm --prefix backend run check:syntax||git diff --check";
+  const r = checkReleaseGateCommands("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "pass");
+  delete process.env.GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS;
+});
+
+test("checkCodexExecSettings warns on low timeout", () => {
+  process.env.GPTWORK_CODEX_EXEC_TIMEOUT = "60";
+  const r = checkCodexExecSettings("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "warn");
+  delete process.env.GPTWORK_CODEX_EXEC_TIMEOUT;
+});
+
+test("checkCurrentHeadDiagnostics returns pass, warn, or skip for current repo", () => {
+  const r = checkCurrentHeadDiagnostics();
+  assert.ok(["pass", "warn", "skip"].includes(r.status),
+    `Unexpected status: ${r.status}, detail: ${r.detail}`);
+});
+
+test("checkWorkspaceSettings returns warn when not configured", () => {
+  delete process.env.GPTWORK_DEFAULT_REPO;
+  const r = checkWorkspaceSettings("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "warn");
+});
+
+test("checkContextVectorStore returns pass with auto", () => {
+  const r = checkContextVectorStore("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "pass");
+});
+
+test("checkIntegrationMode returns pass with auto", () => {
+  const r = checkIntegrationMode("/tmp/nonexistent-gptwork");
+  assert.equal(r.status, "pass");
+});
+
+test("runProductionProfile returns all production checks", () => {
+  const checks = runProductionProfile({ gptworkDir: "/tmp/nonexistent-gptwork" });
+  assert.ok(Array.isArray(checks));
+  assert.equal(checks.length, 9);
+  for (const c of checks) {
+    assert.ok(c.name);
+    assert.ok(["pass", "warn", "blocker", "skip"].includes(c.status));
+  }
+});
+
+test("runFullCheck with production option appends production checks", () => {
+  const checks = runFullCheck({ production: true, gptworkDir: "/tmp/nonexistent-gptwork" });
+  const names = checks.map(c => c.name);
+  assert.ok(names.includes("production_worker"), "includes production_worker");
+  assert.ok(names.includes("role_commands"), "includes role_commands");
+  assert.ok(names.includes("current_head"), "includes current_head");
 });

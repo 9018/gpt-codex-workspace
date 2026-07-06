@@ -218,6 +218,58 @@ When you don't have a public HTTPS endpoint for ChatGPT, you can use GitHub Issu
 
 ---
 
+
+## Production Profile
+
+GPTWork includes a production profile checker to validate that the server is
+configured for production operation. Run it after initialization:
+
+
+
+### Production Profile Checks
+
+| Check | What it validates | Production Expected |
+|-------|-------------------|---------------------|
+|  | Codex worker enabled |  |
+|  | verifier/reviewer commands | Commands set when using  backend |
+|  | Role backends valid | , , or  |
+|  | Delivery recovery commands |  configured |
+|  | Exec timeout and concurrency | Timeout >= 3600s, concurrency >= 1 |
+|  | HEAD vs docs baseline | Current HEAD matches canonical baseline |
+|  | State path, repo, workspace root | All production values set |
+|  | Vector store config |  (detect zvec) or explicit backend |
+|  | Integration mode |  (ff-only) or explicit |
+
+### Failure Diagnosis
+
+- **blocker** — Production requirements that prevent safe operation:
+  -  with status : Worker is disabled. Set  in .
+  -  with status : A verifier/reviewer role uses  but the command is not configured. Run:
+    
+
+- **warn** — Recommended but not blocking:
+  - Missing , , or .
+  - Codex exec timeout below 3600s.
+  - Context vector store disabled.
+
+### Dev vs Production Defaults
+
+| Setting | Dev Default | Production Expected |
+|---------|-------------|-------------------|
+|  |  |  |
+|  |  |  |
+|  |  |  |
+|  |  |  |
+|  |  |  |
+|  |  |  |
+
+The  flag on  and  enables the
+production profile checks described above. Without , only basic
+diagnostics run and no production-specific validation is applied.
+
+---
+
+
 ## Troubleshooting
 
 ### "MCP tools not showing in ChatGPT"
