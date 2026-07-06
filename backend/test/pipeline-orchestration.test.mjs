@@ -79,8 +79,8 @@ test("pipeline-orch: DEFAULT_AGENT_BACKEND_BY_ROLE maps builder/repairer to code
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.builder, "codex_exec");
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.repairer, "codex_exec");
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.context_curator, "null");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.verifier, "null");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.reviewer, "null");
+  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.verifier, "local_command");
+  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.reviewer, "local_command");
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.finalizer, "null");
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.integrator, "null");
   assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.planner, "null");
@@ -88,7 +88,7 @@ test("pipeline-orch: DEFAULT_AGENT_BACKEND_BY_ROLE maps builder/repairer to code
 
 test("pipeline-orch: resolveDefaultBackendForRole returns correct defaults", () => {
   assert.equal(resolveDefaultBackendForRole("builder"), "codex_exec");
-  assert.equal(resolveDefaultBackendForRole("verifier"), "null");
+  assert.equal(resolveDefaultBackendForRole("verifier"), "local_command");
   assert.equal(resolveDefaultBackendForRole("repairer"), "codex_exec");
   // Legacy alias maps to canonical
   assert.equal(resolveDefaultBackendForRole("implementer"), "codex_exec");
@@ -257,7 +257,7 @@ test("pipeline-orch: getEffectivePipelineRoles maps legacy roles", () => {
 
 test("pipeline-orch: resolveRoleBackend resolves correct backend", () => {
   assert.equal(resolveRoleBackend({}, {}, "builder"), "codex_exec");
-  assert.equal(resolveRoleBackend({}, {}, "verifier"), "null");
+  assert.equal(resolveRoleBackend({}, {}, "verifier"), "local_command");
   assert.equal(resolveRoleBackend({ role: "implementer" }, {}), "codex_exec");
 
   // Task-level override

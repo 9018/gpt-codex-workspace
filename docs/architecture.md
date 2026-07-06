@@ -251,3 +251,53 @@ ChatGPT should normally use `standard`. `full` is for trusted operator sessions 
 - [Operations](operations.md)
 - [Context and Worktree Contract](delivery/context-and-worktree-contract.md)
 - [中文主文档](../README.zh-CN.md)
+
+## Productization Additions
+
+### Agent Execution Backends (P0-05)
+
+Path: `backend/src/agent-execution-backends.mjs`
+
+Supports three execution backends:
+- `codex_exec` (default for builder/repairer): Real Codex CLI execution.
+- `local_command` (default for verifier/reviewer): Deterministic shell command execution.
+- `null` (default for integrator/finalizer/context_curator/planner): Auto-artifact from result evidence.
+
+Runtime configuration:
+- `GPTWORK_AGENT_BACKEND`: Global default backend (default: `codex_exec`).
+- `GPTWORK_AGENT_ROLE_BACKENDS`: Per-role overrides (e.g., `builder=codex_exec,verifier=local_command`).
+- `GPTWORK_AGENT_LOCAL_COMMAND`: Default shell command for `local_command` backend.
+- `GPTWORK_AGENT_ROLE_COMMANDS`: Per-role commands for `local_command`.
+
+### Init/Onboarding Productization (P0-06)
+
+Path: `backend/src/onboarding-init.mjs`
+CLI: `backend/bin/gptwork.mjs` subcommands `init`, `doctor`, `fix`, `status`, `connect`, `self-test`
+
+Productized onboarding flow:
+1. `gptwork init` runs diagnostics and auto-fixes common issues.
+2. `gptwork doctor --local` performs detailed env validation, repo registry check, and config safety.
+3. `gptwork fix` auto-creates missing files and resolves dependency gaps.
+
+### Codex Exec Production Hardening (P0-07)
+
+Paths:
+- `backend/src/codex-run-diagnostics.mjs` — Execution diagnostics and failure classification.
+- `backend/src/self-healing-policy.mjs` — Self-healing for dirty worktree, changed_files mismatch.
+- `backend/src/delivery-result-recovery.mjs` — Recovery evidence for missing results.
+- `backend/src/task-final-writeback.mjs` — Stronger result fallback and evidence.
+- `backend/src/task-codex-execution.mjs` — Timeout and no-output diagnosis.
+
+### Codex TUI Operator Fallback (P1-08)
+
+`codex_exec` is the default production execution mode.
+`codex_tui` is available as an explicit-only fallback for operator sessions.
+No code changes were needed; the product boundary was already correctly implemented.
+
+### Product Status Dashboard (P1-09)
+
+`product_status` tool provides a single-pane-of-glass overview:
+- System, Worker, Queue, Blockers, Review, Retention, TUI Provider, Config, Next Actions.
+- Renders via both Apps SDK card system (rich view) and plain-text fallback.
+- Raw counts separated from actionable blockers; review tasks classified by resolution path.
+

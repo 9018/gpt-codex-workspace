@@ -266,3 +266,44 @@ Token values must come from runtime environment or workflow secrets. Do not plac
 - [Context and Worktree Contract](delivery/context-and-worktree-contract.md)
 - [GitHub Fallback](github-fallback.md)
 - [中文主文档](../README.zh-CN.md)
+
+## Productized Capabilities
+
+### Product Status Dashboard
+
+For a single-pane-of-glass overview, use `product_status`. It aggregates system, worker, queue, blockers, review, retention, TUI provider, and prioritized next actions into one compact dashboard. This is the recommended first call for operators.
+
+See "Product Status Dashboard" in the main operations body above for the full section reference.
+
+### Agent Backend Configuration
+
+When configuring which execution backend to use per role, set:
+
+```bash
+GPTWORK_AGENT_BACKEND=codex_exec        # global default (default: codex_exec)
+GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
+GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
+GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
+```
+
+### Onboarding Commands
+
+Productized onboarding flow:
+
+```bash
+cd backend
+gptwork init          # One-shot initialization + diagnostics
+gptwork doctor --local  # Full diagnostics
+gptwork fix           # Auto-fix missing files and dependencies
+gptwork status --local  # Quick status check
+```
+
+### Retention Gate Script
+
+```bash
+cd backend
+node scripts/release-storage-pressure.mjs
+```
+
+Reports storage pressure for task/goal counts vs configured limits. Can be wired into CI/CD as a pre-release gate.
+

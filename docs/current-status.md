@@ -178,3 +178,106 @@ cd backend && npm run test:e2e-delivery
 - [Goal Queue](goal-queue.md)
 - [GitHub Fallback](github-fallback.md)
 - [中文主文档](../README.zh-CN.md)
+
+## Productization Delivery (P0/P1 Series)
+
+The following productization capabilities have been delivered across the P0/P1 goal series:
+
+### P0-02: Retention Cleanup Productization (Completed)
+
+`backend/src/retention-service.mjs` now includes:
+
+- **git_branches family**: Tracks branch counts, stale branches (no commit in threshold days), and the oldest branch.
+- **git_worktrees family**: Tracks per-repo worktree counts (same as the existing worktrees family but under a dedicated namespace).
+- **storage_pressure metric**: Added to `retention_status` summary. `release-storage-pressure.mjs` script reports when task/goal counts approach configured limits.
+- **Branch pruning**: `retentionCleanup` now prunes stale git branches when the data source allows (currently diagnostic-only for worktree pruning pending a safe removal strategy).
+- **Release gate**: `release-storage-pressure.mjs` script and `check-storage-pressure-gate` can be wired into the CI/CD pipeline.
+
+### P0-03: Review State Auto-Resolution (Completed)
+
+`backend/src/review/review-backlog-reconciler.mjs` and `backend/src/task-review-status-taxonomy.mjs` define 6 canonical review categories:
+
+| Category | Meaning |
+|---|---|
+| `evidence_missing` | Verification or result evidence is absent. |
+| `policy_uncertain` | Policy cannot determine the correct action. |
+| `integration_uncertain` | Integration state is ambiguous. |
+| `repair_budget_exhausted` | Auto-repair attempts exhausted without resolution. |
+| `provider_unavailable` | Execution provider is unavailable. |
+| `human_required` | Semantic ambiguity requiring human judgment. |
+
+These categories flow into the blocker-policy, review backlog reconciliation, and review packet builder so that review tasks are properly classified and can be handled accordingly.
+
+### P0-04: Pipeline Gate Hardening (Completed)
+
+See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce strict gate defaults before closure.
+
+### P0-05: Real Agent Backends (Merged, awaiting closure verification)
+
+`backend/src/agent-execution-backends.mjs` upgraded from null defaults to productizable deterministic execution units:
+
+- **verifier** and **reviewer** roles now default to `local_command` (deterministic shell execution) instead of `null` (auto-artifact). This ensures their results come from real execution rather than inferred evidence.
+- **builder** and **repairer** roles remain at `codex_exec` for real Codex-based changes.
+- **integrator** and **finalizer** remain at `null` because their artifacts are derived from task/result evidence.
+- Runtime config supports global and per-role routing via `GPTWORK_AGENT_BACKEND`, `GPTWORK_AGENT_ROLE_BACKENDS`, etc.
+
+### P0-06: Init/Onboarding Productization (Merged, awaiting repair verification)
+
+`backend/src/onboarding-init.mjs` and `backend/bin/gptwork.mjs` commands deliver:
+
+- **`gptwork init`**: One-shot initialization + diagnostics for new environments.
+- **`gptwork doctor --local`**: Detailed diagnostics including env validation, repo registry checks, and pre-existing-config safety.
+- **`gptwork fix`**: Auto-creates missing files and dependencies.
+- **Integration**: All CLI commands (`init`, `doctor`, `fix`, `status`, `connect`, `self-test`) now share the productized onboarding flow.
+
+Documentation updated: `docs/setup-connect.md`, `docs/launch-initialization.md`, `README.zh-CN.md`.
+
+### P0-07: Codex Exec Production Hardening (Merged, awaiting review)
+
+`backend/src/codex-run-diagnostics.mjs`, `backend/src/self-healing-policy.mjs`, and related modules deliver:
+
+- **Failure classification**: Added `no_first_output_timeout`, `codex_timeout` failure classes for better diagnostics.
+- **Self-healing categories**: `dirty_worktree` and `changed_files_mismatch` now have dedicated self-healing paths.
+- **Result fallback**: Stronger fallback diagnostics for missing `result.json` and execution evidence.
+- **Delivery recovery**: Improved recovery evidence quality so review packets can explain problems and suggest fixes.
+- **21 new tests** covering no-first-output, timeout, missing result, dirty worktree, no-mutation verified, changed_files scenarios.
+
+### P1-08: Codex TUI Operator Fallback (Completed, no-mutation)
+
+Diagnostic review confirmed that codex_tui operator fallback is already correctly positioned:
+
+- `codex_exec` is the default production execution mode.
+- `codex_tui` is available as an **explicit-only fallback** for operators.
+- No code changes were needed; the product boundary is correctly implemented.
+
+### P1-09: Operator Dashboard Status (Completed)
+
+`product_status` tool provides a single-pane-of-glass operator dashboard aggregating:
+
+- **System**: Running commit, repo head, worktree cleanliness, runtime env, tool mode.
+- **Worker**: Worker enabled/running state, health phase, last tick age, concurrency.
+- **Queue**: Assigned, queued, running, completed, failed counts.
+- **Current Blockers**: Raw non-terminal count vs policy-filtered actionable blockers.
+- **Review**: Human-required, machine-repairable, and resolved-history categories.
+- **Retention**: Storage pressure, task/goal counts vs limit.
+- **TUI Provider**: Session count, active sessions, findings severity.
+- **Next Actions**: Prioritized action items with severity labels.
+
+### P0-01: Release Gate Hardening (NOT EXECUTED)
+
+Goal P0-01 was created but was never executed. Its intent was to:
+- Elevate the fast gate (`release-delivery-check --fast`) to a production hard gate.
+- Add explicit `check:syntax`, `check:imports` (full graph), `npm test`, e2e acceptance, e2e delivery, and `release-delivery-check --full` requirements.
+- Add release gate CI/CD integration.
+
+This remains an unclosed P0 gap. The current `--fast` gate plus `npm test` and e2e tests serve as a partial replacement but the production hard gate specification and CI integration are not complete.
+
+## Known Gaps
+
+1. **P0-01**: Release gate hardening not executed.
+2. **P0-05 (waiting_for_review)**: Agent backend defaults changed structurally; needs formal review sign-off.
+3. **P0-06 (waiting_for_repair)**: Onboarding flow merged; repair verification needed.
+4. **P0-07 (waiting_for_review)**: Production hardening merged; needs review sign-off.
+5. **Full npm test duration**: ~180+ test files; some suites may be slow.
+6. **No production hard gate CI integration**: release-delivery-check --full is available but not integrated into CI.
+

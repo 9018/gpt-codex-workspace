@@ -319,3 +319,31 @@ docs/
 ## License
 
 MIT
+
+## 当前产品化状态（P0/P1 Series）
+
+当前 main 已经合入以下产品化能力：
+
+| Goal | 状态 | 能力 |
+|---|---|---|
+| P0-01 Release Gate Hardening | ⚠️ **未执行** | 将 fast gate 提升为产品级 hard gate，含全量 syntax/import/test/e2e |
+| P0-02 Retention Cleanup Productization | ✅ 完成 | git_branches/git_worktrees 保留族、storage_pressure、分支修剪 |
+| P0-03 Review State Auto-Resolution | ✅ 完成 | 6 种规范 review 分类（evidence_missing/policy_uncertain/...） |
+| P0-04 Pipeline Gate Hardening | ✅ 完成 | 新 builder-mode 任务强 gate 检查，旧任务兼容 |
+| P0-05 Real Agent Backends | ⏳ 等待 review | verifier/reviewer 默认改为 local_command 确定性执行 |
+| P0-06 Init Onboarding Productization | ⏳ 等待 repair | `gptwork init/doctor/fix` 产品化开机流程 |
+| P0-07 Codex Exec Production Hardening | ⏳ 等待 review | timeout/无输出/脏 worktree/changed_files 误判自愈 |
+| P1-08 Codex TUI Operator Fallback | ✅ 完成 | codex_exec 默认生产，codex_tui 显式 fallback |
+| P1-09 Operator Dashboard Status | ✅ 完成 | `product_status` 一站式仪表盘 |
+| **P1-10 最终收敛（本任务）** | **进行中** | 全局文档/验收/门禁检查 |
+
+### 产品边界明确划分
+
+- **codex_exec**: 默认生产执行模式，适用于 builder/repairer 角色。
+- **codex_tui**: 显式 Operator fallback，仅操作员手动选择，不自动降级。
+- **多 Agent 角色**: context_curator → planner → builder → verifier → reviewer → integrator → finalizer + repairer（recovery 分支）。
+- **Review 自动归宿**: 6 种规范分类，blocker-policy 和 review packet 内置。
+- **Init/Onboarding**: `gptwork init / doctor --local / fix` 产品化流程。
+- **Retention**: `retentionCleanup` 支持 git 分支修剪、worktree 诊断、storage_pressure 门禁。
+- **Status Dashboard**: `product_status` 单命令面板。
+
