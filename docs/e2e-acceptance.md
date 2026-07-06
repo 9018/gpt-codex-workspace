@@ -1,150 +1,227 @@
-# E2E Product Acceptance
+# E2E Delivery Workflow and Acceptance
 
-> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → complete) is **integrated** into the main flow. Multi-task concurrency, worktree isolation, queue scheduling, and acceptance verification all function as built-in capabilities. The repair loop and serial integration queue remain **experimental** — acceptance failures currently require manual review rather than auto-repair, and serial integration is still being hardened.
+> Documents the end-to-end delivery pipeline from queued goal to terminal task state,
+> covering the acceptance gate, finalizer, unified decision model, integration,
+> restart boundaries, and change-type terminalization rules.
 
----
+**Status**: Current
+**Last reviewed**: 2026-07-07
 
-**Date**: 2026-06-22
-**Commit**: f376e85 (starting point)
-**Status**: PASS / 38 tests passed
+## Delivery Pipeline Overview
 
-This document records the results of product-level E2E acceptance for GPTWork MCP.
+The delivery system transforms a queued goal into a completed, verified, integrated
+result through discrete pipeline stages. Each stage is owned by a dedicated module
+and produces evidence consumed by downstream gates.
 
-## Verification Philosophy
+```
+Queued Goal
+    │
+    ▼
+[Queue Scheduler] ─────► dependency resolution, eligibility gates, worktree materialization
+    │
+    ▼
+[Codex Execution] ─────► task runs in isolated worktree, produces result.json + commit
+    │
+    ▼
+[Verification] ────────► syntax, imports, tests, change-type detection
+    │
+    ▼
+[Acceptance Gate] ─────► evidence-based profile checks, contract verification
+    │
+    ▼
+[Integration Queue] ───► serial ff-only merge / push for mutating changes
+    │
+    ▼
+[Finalizer] ───────────► terminal state decision (completed / repair / review)
+    │
+    ▼
+[Unified Decision] ────► normalised status propagated to goal, queue, notifications
+```
 
-- **Automated tests**: Most scenarios are covered by `backend/test/e2e-product-acceptance.test.mjs` (38 tests, all pass).
-- **Dry-run / No-op**: External integrations (GitHub Issues sync, Bark notifications) are verified via graceful-degradation tests that simulate disabled/missing-token states. No real API calls are made.
-- **CLI tests**: CLI commands (`--help`, `doctor --local`, `watch-handoff --dry-run`, `watch-handoff --once`) are tested via `execFileSync`.
+## Pipeline Stages
 
----
+### 1. Queue Scheduler
 
-## Area 1: Runtime / Doctor / Context
+The queue scheduler (`goal-queue.mjs`) turns queued goals into executable tasks.
+Auto-advance (`queueAutoAdvanceTick`) runs on every worker tick cycle:
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 1a | CLI help | `node bin/gptwork.mjs --help` | Shows setup/start/status/doctor/settings/watch-handoff | All commands listed | PASS |
-| 1b | Doctor no-secrets | `node bin/gptwork.mjs doctor --local` | Shows workspace/tool mode, no payload_base64 | Passes | PASS |
-| 1c | runtime_status | `runtime_status` (via handleRpc) | Returns pid, workspace, timeout=3600, worker/github/bark status, no credentials | All fields present with secrets scrubbed | PASS |
-| 1d | gptwork_doctor | `gptwork_doctor` (via handleRpc) | Returns diagnostics, no secrets | Diagnostic content returned | PASS |
-| 1e | open_project_context | `open_project_context` (via handleRpc) | Bounded file tree <= 80, recommended_next_tools includes create_encoded_goal | Returns structured context | PASS |
-| 1f | project_context_status | `project_context_status` (via handleRpc) | Returns context health info | Context info returned | PASS |
+1. Runs the queue reconciler to fix stale blockers
+2. Applies nine typed eligibility gates (dependency, acceptance, integration,
+   finalizer, repo concurrency, repo lock, dirty worktree, etc.)
+3. Advances the first fully-eligible item
+4. Materialises a git worktree and assigns the task to Codex
 
-**Summary**: All runtime/diagnostics/context tools function correctly. No secrets are exposed in any output.
+Key components:
+- [Queue Auto-Advance](queue-auto-advance.md) — full reference for typed gates and reconciler
+- [Task State Machine](delivery/task-state-machine.md) — state transitions
+- [Context and Worktree Contract](delivery/context-and-worktree-contract.md) — worktree lifecycle
 
----
+### 2. Codex Execution
 
-## Area 2: Tool Mode / Direct Call Security
+Codex receives the bounded execution context (`codex.entry.md` + `context.bundle.md`)
+and runs the assigned goal in the worktree. It produces:
 
-| # | Scenario | Mode | Expected | Actual | Pass |
-|---|----------|------|----------|--------|------|
-| 2a | Minimal surface | `minimal` | Only health_check, runtime_status, worker_status, open_project_context, create_encoded_goal, get_task, list_tasks; no shell_exec/handoff | 8 tools, no shell_exec/handoff | PASS |
-| 2b | Operator surface | `operator` | Diagnostic tools only; no create_agent_run, no handoff_to_agent, no run_agent_pipeline | Operator has diagnostic tools, agent/handoff absent | PASS |
-| 2c | Standard surface | `standard` | Goal/task/agent/handoff tools available; no shell_exec | Goal, task, agent, handoff tools present; shell_exec absent | PASS |
-| 2d | Codex surface | `codex` | shell_exec + write_text_file + read_events + handoff_to_agent | All execution tools present | PASS |
-| 2e | Full surface | `full` | All tools including shell_exec, schedule_service_restart; >60 tools | Full mode has all tools | PASS |
-| 2f | shell_exec denied in minimal/standard | `minimal` / `standard` | Calling shell_exec returns -32601 (Unknown tool) | Error code -32601 | PASS |
-| 2g | shell_exec available in codex/full | `codex` / `full` | shell_exec listed in tools | Listed in both modes | PASS |
+- `result.json` with status, changed_files, commit, verification evidence
+- `result.md` with markdown summary
+- Git commit of changes in the worktree branch
+- Optional `acceptance.contract.json` for contract-override profiles
 
-**Summary**: Tool mode security boundaries are correctly enforced. `minimal` is safe for P0 ChatGPT access. `operator` isolates diagnostic-only tools. `standard` exposes goal/task/agent tools safely. `codex` and `full` have full execution power.
+### 3. Verification
 
----
+`verifyTaskCompletion` (`task-verifier.mjs`) runs deterministic checks:
 
-## Area 3: Goal → Task → Codex Result
+- Syntax and import validation
+- Changed-files diff against the baseline
+- Profile-scoped verification suite (e.g. release gate for code changes)
+- Noop/readonly tasks skip heavy checks
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 3a | create_goal | `create_goal` (via handleRpc) | Returns goal.id starting with `goal_`, task.id starting with `task_`, workspace_files with goal_md | All fields present | PASS |
-| 3b | create_encoded_goal | `create_encoded_goal` (via handleRpc) | Decodes base64, writes goal.md to disk on workspace root | goal.md written with decoded content | PASS |
-| 3c | get_goal_context | `get_goal_context` (via handleRpc) | Returns goal, workspace_files, codex_instruction | Full context returned | PASS |
-| 3d | append_goal_message | `append_goal_message` (via handleRpc) | Appends message to goal conversation, returns message object | Message appended with correct role/content | PASS |
-| 3e | result contract | get_goal_context -> result_md | result.md file exists on disk and is readable | result.md initialized with content | PASS |
+Verification output feeds into the acceptance gate as `verification.findings`.
+Only findings with severity `blocker` or `major` block the pipeline.
 
-**Summary**: The goal→task→result pipeline is fully functional. Goals can be created (plain or encoded), task is assigned, context is retrievable, messages can be appended, and the result contract (result.md) is readable.
+### 4. Acceptance Gate
 
----
+The acceptance gate engine (`acceptance-gate-engine.mjs`) orchestrates:
 
-## Area 4: Agent Pipeline / Handoff
+1. **Load result** — read `result.json` from the task result
+2. **Load contract** — resolve the acceptance contract from goal, task, or
+   adjacent `acceptance.contract.json`
+3. **Verify** — run `verifyTaskCompletion`
+4. **Verify contract** — `verifyAcceptanceContract` checks all blocking requirements
+   against result evidence
+5. **Decide closure** — `decideTaskClosure` produces a closure status
+6. **Produce verdict** — `acceptance.json` artifact with status, passed, closure_decision
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 4a | run_agent_pipeline | `run_agent_pipeline` (via handleRpc) | Creates pipeline with ID, agent_runs in execution order | pipeline.id starts with `pipeline_`, agent_runs have role/status | PASS |
-| 4b | handoff_to_agent | `handoff_to_agent` (via handleRpc) | Writes plan_file, status_file, log_file to disk with correct content | All 3 files written, plan content matches | PASS |
-| 4c | read_handoff | `read_handoff` (via handleRpc) | Returns plan, status, paths from handoff | Plan content, status agent, paths all returned | PASS |
-| 4d | watch-handoff --dry-run | `node bin/gptwork.mjs watch-handoff --dry-run` | Produces output (dry-run mode) | Output produced | PASS |
-| 4e | watch-handoff --once | `node bin/gptwork.mjs watch-handoff --once` | Runs one iteration and exits | Output produced | PASS |
+Gate produces one of: `passed`, `failed`, `needs_action`.
 
-**Summary**: The agent pipeline and handoff system is complete. Pipeline runs can be created, handoff files are written to disk, handoff state is readable, and the CLI watch commands function correctly.
+Reference: [Closure and Acceptance Model](closure-acceptance.md)
 
----
+### 5. Integration Queue
 
-## Area 5: Event Log / Recent Activity
+The integration queue (`integration-queue.mjs`) serialises ff-only merges for
+mutating changes. Integration is required when:
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 5a | read_events bounded | `read_events` with limit=10 (via handleRpc) | Returns <=10 events array | Events array bounded correctly | PASS |
-| 5b | Handoff events | handoff + read_events | Events array readable after handoff creation | Events array returned | PASS |
-| 5c | Goal events | create_goal + read_events | Events array always returned | Events array returned | PASS |
+- `changed_files` has items AND a commit exists
+- `operation_kind` is NOT in `NO_MUTATION_PROFILES` (readonly, diagnostic, noop)
 
-**Summary**: The event log system correctly records bounded event arrays. Events are created during goal/agent/handoff operations. The `read_events` tool returns properly bounded results.
+Integration is satisfied when:
+- `integration.satisfied === true`, or
+- `integration.status` is `merged`, `ff_only_merged`, `skipped`, `not_required`
+- The commit is already reachable on the canonical branch (`already_integrated`)
 
----
+When integration is pending or unconfirmed, the finalizer produces
+`waiting_for_integration`. The queue reconciler blocks downstream dependants with
+`INTEGRATION_NOT_SATISFIED`.
 
-## Area 6: GitHub / Bark Integration (Dry-run / No-op)
+### 6. Finalizer
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 6a | No secrets in runtime_status | `runtime_status` (disabled github+bark) | No ghp_/gho_/github_pat_/password patterns in output | Output clean | PASS |
-| 6b | github_status disabled | `github_status` (disabled github) | No token patterns, graceful disabled state | Clean output | PASS |
-| 6c | notification_status | `notification_status` (disabled bark) | No bark_key/bark_token exposed | Clean output | PASS |
-| 6d | sync_from_github disabled | `sync_from_github` (disabled github) | Returns result gracefully without error | Content returned | PASS |
+The finalizer (`task-finalizer.mjs`, `decideTaskFinalState`) determines the task's
+terminal or non-terminal status. Decision order:
 
-**Note**: All GitHub and Bark tests are dry-run/no-op. They verify that:
-- No credentials/tokens are leaked in diagnostic output
-- Disabled integrations return graceful responses rather than errors
-- No real API calls are made to GitHub or Bark servers
+1. **Capacity failure** → `waiting_for_capacity`
+2. **Manual review blockers** → `waiting_for_review`
+3. **No-change repair completion** → immediate terminal
+4. **Terminal evidence satisfied** → `completed` with `safe_to_auto_advance`
+5. **Integration non-terminal** → `waiting_for_integration`
+6. **Repairable failures** → `waiting_for_repair`
+7. **Budget exhausted** → `waiting_for_review`
+8. **Terminal unrecoverable** → `failed` / `timed_out`
 
----
+### 7. Unified Decision
 
-## Area 7: Widget / Apps SDK Resource
+The unified decision normalizer (`codex-unified-decision.mjs`) produces a single
+`UnifiedAcceptanceDecision` from the finalizer, closure decider, gate, verification,
+and contract verification. Canonical fields include:
 
-| # | Scenario | Command / Tool | Expected | Actual | Pass |
-|---|----------|----------------|----------|--------|------|
-| 7a | resources/list | `resources/list` (via handleRpc) | Includes `ui://widget/gptwork-card-v1.html` | Widget listed | PASS |
-| 7b | resources/read returns HTML | `resources/read` URI=widget (via handleRpc) | Returns HTML with doctype, GPTWork, card structure | Complete HTML returned | PASS |
-| 7c | HTML contract | Inspect widget HTML | Has renderCard, data.status, data.summary, keyValues, data.items, data.warnings, data.errors, Show raw JSON | All required contract fields present | PASS |
-| 7d | Tool outputTemplate | Inspect tool descriptors in `standard` mode | At least 3 tools have `_meta["openai/outputTemplate"]` pointing to widget | Multiple tools have the template | PASS |
-| 7e | Widget in minimal mode | `resources/list` in `minimal` mode | Widget still visible | Widget listed | PASS |
+- `status` — completed, failed, waiting_for_review, waiting_for_repair, etc.
+- `safe_to_auto_advance` — queue may advance dependants
+- `requires_review`, `requires_repair`, `requires_integration`, `requires_restart`
+- `goal_effect` — whether to close the linked goal
+- `queue_effect` — whether to unblock dependants or hold the queue
 
-**Summary**: The widget/Apps SDK resource infrastructure is complete. The GPTWork Compact Card is registered as a resource, returns full HTML, contains all required render sections, and tool descriptors correctly reference it via `_meta["openai/outputTemplate"]`. Resources are available in all tool modes.
+Downstream consumers MUST prefer `unified_decision` over re-deriving status
+from individual decision objects when the field is present.
 
----
+## Terminal States
 
-## Additional Verification
+### Completed
+Task passed all gates and reached terminal state. Sub-types:
 
-| Check | Command | Result |
-|-------|---------|--------|
-| Syntax | `npm run check:syntax` | PASS |
-| Imports | `npm run check:imports` | PASS |
-| Unit tests | `npm test` (all tests) | PASS (600+ tests) |
-| E2E acceptance | `npm run test:e2e-acceptance` | PASS (38 tests) |
-| CLI help | `node bin/gptwork.mjs --help` | PASS |
+- `auto_completed_clean` — all gates passed, no followups
+- `auto_completed_with_followups` — all gates passed, non-blocking followups noted
 
----
+### Waiting for Repair
+Repairable failures (verification, integration, contract) with remaining budget.
+Creates a repair task with `parent_task_id` and `root_task_id`. Bound by
+`GPTWORK_MAX_REPAIR_ATTEMPTS` (default: 2).
 
-## Next Steps
+### Waiting for Review
+Non-repairable failures, semantic ambiguity, budget exhausted, or safety concerns.
+Requires human intervention.
 
-1. Commit all changes (test script + docs + README) and push to `origin/main`.
-2. Monitor the service for any regressions after deployment.
-3. For production deployment, enable GitHub token and verify sync works end-to-end.
-4. Consider adding a weekly or pre-deployment CI job that runs `npm run test:e2e-acceptance`.
+### Failed / Timed Out
+Irrecoverable terminal states: Codex error, fatal integration conflict, timeout.
 
----
+## Change-Type Terminalization
 
-## Appendix: Test Coverage by Type
+The system differentiates three change categories, each with distinct terminalization
+rules:
 
-| Type | Tests | Example |
-|------|-------|---------|
-| API (handleRpc) | 27 | Tool mode, goal pipeline, handoff, events |
-| CLI (execFileSync) | 5 | --help, doctor, watch-handoff |
-| Resource (MCP) | 5 | resources/list, resources/read, HTML contract |
-| Unit (pure functions) | 3 | normalizeToolMode, VALID_TOOL_MODES, filterToolsForMode |
+| Change Type | Integration Required | Verification | Terminalization Path |
+|-------------|---------------------|-------------|---------------------|
+| **Docs-only** | No | Syntax + imports | Skips heavy test suites. Contract profile `docs_only` relaxes `tests_present`. Completes as `auto_completed_clean` without integration requirement. |
+| **Code/config** | Yes | Full release gate | Requires ff-only merge or `already_integrated` evidence. Blocks downstream with `INTEGRATION_NOT_SATISFIED` if unintegrated. |
+| **Runtime** | Yes | Full release gate | Same as code/config, plus `requires_restart` flag. Blocks auto-completion until restart is confirmed or explicitly not required. |
+
+### Generic Terminalization Rule
+
+A task auto-completes when ALL of the following hold:
+
+1. **Accepted** — acceptance gate passed (verification passed, blocking requirements satisfied, contract verified)
+2. **Verification passed** — syntax, imports, tests clean
+3. **Commit reachable / already integrated** — commit exists on canonical branch or was ff-merged
+4. **Clean repo** — canonical repository not dirty at merge time
+5. **No restart required** — restart not needed or completed
+6. **Integration satisfied / terminal** — integrated, already-integrated, or explicitly not-required
+
+Blockers with severity `blocker` or `major` always block auto-completion.
+Non-blocking followups and quality notes do not block closure.
+
+## Restart and Deployment Boundaries
+
+### Restart
+- Runtime changes set `requires_restart: true` in the unified decision
+- Auto-completion is blocked until restart is confirmed or marked not required
+- Safe restarts use `schedule_service_restart` — writes result.json first, then
+  schedules detached restart (never inline kill-and-restart)
+- Report restart evidence via `integration.requires_restart` and `restart_completed`
+  in the task result
+
+### Deployment
+- Deployment evidence is separate from integration evidence
+- `requires_deployment_check` is a contract-level flag, not inferred from changed files
+- Health check and deployment readiness are verified separately by the release gate
+- Deployment failures require review, not auto-repair
+
+## Generic vs. Task-Specific Behavior
+
+The delivery system uses **generic** terminalization logic only. There are no
+hardcoded task-id special cases. All tasks follow the same pipeline regardless
+of topic, milestone, or task_id. The rule applies equally to:
+
+- Code-change tasks (integration required)
+- Docs-only tasks (no integration, relaxed verification)
+- Noop/sync/diagnostic tasks (no verification, no integration)
+
+## Related Documentation
+
+| Document | Content |
+|----------|---------|
+| [Closure and Acceptance Model](closure-acceptance.md) | Full architecture for acceptance, finalizer, unified decision |
+| [Queue Auto-Advance](queue-auto-advance.md) | Auto-advance tick, typed gates, reconciler |
+| [Task State Machine](delivery/task-state-machine.md) | State transitions and terminal states |
+| [Acceptance and Repair Contract](delivery/acceptance-and-repair-contract.md) | Profiles, evidence, repair loop |
+| [Release Gate](delivery/release-gate.md) | Pre-release checklist and gate script |
+| [User Delivery Flow](delivery/user-delivery-flow.md) | End-to-end user journey |
+| [Goal Queue](goal-queue.md) | Queue scheduling, eligibility, typed blocked reasons |
+
+*End of E2E delivery workflow document.*
