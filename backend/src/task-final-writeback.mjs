@@ -21,6 +21,7 @@ import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCom
 import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
 import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followup-task-planner.mjs';
 import { reconcileTaskClosure } from './closure/task-closure-reconciler.mjs';
+import { continueOnCompletedOutcome, convergeGoalFromContinuation, goalStatusFromReconciliation } from './closure/continuation-flow.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
@@ -698,6 +699,10 @@ export async function finalizeCodexTaskRun({
   // Reconcile closure_decision, finalizer_decision, and task.status so that
   // verified + integrated tasks with all evidence close deterministically.
   const reconciliationResult = reconcileTaskClosure({ taskStatus, taskResult, config });
+  // P0-AFC7: Continuation flow — when reconciliation returns a canonical
+  // goalStatus (from R0), the continuation hook is available for downstream
+  // consumers (goal convergence, queue auto-advance) to use directly.
+  let continuationFlow = null;
   if (reconciliationResult.reconciled) {
     taskStatus = reconciliationResult.taskStatus;
     taskResult = reconciliationResult.taskResult;
@@ -706,6 +711,15 @@ export async function finalizeCodexTaskRun({
     const taskWarnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
     taskResult.warnings = taskWarnings;
     taskResult.warnings.push("Reconciled: " + reconciliationResult.reason);
+
+    // Build continuation flow decision from canonical outcome.
+    // When reconciliation sets goalStatus, the completion is canonical and
+    // should drive goal convergence + queue auto-advance unconditionally.
+    continuationFlow = continueOnCompletedOutcome({
+      taskResult: reconciliationResult.taskResult,
+      task,
+      goal,
+    });
   }
 
   const result = typeof store.mutate === "function"
@@ -731,7 +745,9 @@ export async function finalizeCodexTaskRun({
   }
 
   if (goal) {
-    const goalStatus = determineGoalStatus(goal, result?.task || task, taskResult || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
+    // P0-AFC7: Consume reconciliation goalStatus when available (from R0 canonical outcome)
+    const canonicalGoalStatus = goalStatusFromReconciliation(reconciliationResult);
+    const goalStatus = canonicalGoalStatus || determineGoalStatus(goal, result?.task || task, taskResult || {}) || (taskStatus === "timed_out" ? "failed" : taskStatus);
     if (typeof store.mutate !== "function") {
       await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
     }
