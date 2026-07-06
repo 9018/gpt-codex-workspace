@@ -1,7 +1,7 @@
 /**
  * task-review-status-taxonomy.mjs — Typed review/recovery states for task finalization.
  *
- * Replaces the generic waiting_for_review catch-all with typed interrupt/recovery
+ * P0-03: Replaces the generic waiting_for_review catch-all with typed interrupt/recovery
  * states so that human review is a precise interrupt, not a default fallback for
  * machine-repairable issues.
  */
@@ -10,7 +10,18 @@
 // Typed Review / Recovery States
 // ---------------------------------------------------------------------------
 
+/** P0-03: 6 canonical review category strings for ChatGPT-addressable auto-resolution. */
+export const CANONICAL_REVIEW_CATEGORIES = Object.freeze({
+  EVIDENCE_MISSING: 'evidence_missing',
+  POLICY_UNCERTAIN: 'policy_uncertain',
+  INTEGRATION_UNCERTAIN: 'integration_uncertain',
+  REPAIR_BUDGET_EXHAUSTED: 'repair_budget_exhausted',
+  PROVIDER_UNAVAILABLE: 'provider_unavailable',
+  HUMAN_REQUIRED: 'human_required',
+});
+
 export const REVIEW_STATES = Object.freeze({
+  // --- Backward-compat existing states ---
   /** Ambiguous product decision or semantic ambiguity requiring human judgment. */
   WAITING_FOR_HUMAN_REVIEW: 'waiting_for_human_review',
   /** Missing result evidence (result.json missing, no verification output) that can be auto-repaired. */
@@ -25,10 +36,28 @@ export const REVIEW_STATES = Object.freeze({
   WAITING_FOR_MANUAL_TERMINAL_DECISION: 'waiting_for_manual_terminal_decision',
   /** Repair budget exhausted, human must decide next action. */
   HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED: 'human_interrupted_for_repair_budget_exhausted',
+  // --- P0-03: 6 canonical review states ---
+  /** Missing result/verification/evidence that can be auto-repaired. */
+  WAITING_FOR_EVIDENCE_MISSING: 'waiting_for_evidence_missing',
+  /** Policy/rules ambiguous - ChatGPT can propose a policy clarification. */
+  WAITING_FOR_POLICY_UNCERTAIN: 'waiting_for_policy_uncertain',
+  /** Integration state is uncertain (dirty repo, ambiguous merge state) - can auto-repair. */
+  WAITING_FOR_INTEGRATION_UNCERTAIN: 'waiting_for_integration_uncertain',
+  /** Repair budget exhausted - human must decide next action. */
+  WAITING_FOR_REPAIR_BUDGET_EXHAUSTED: 'waiting_for_repair_budget_exhausted',
+  /** Provider/API unavailable - can auto-retry. */
+  WAITING_FOR_PROVIDER_UNAVAILABLE: 'waiting_for_provider_unavailable',
+  /** Truly requires human judgment - the precise catch-all for non-automatable items. */
+  WAITING_FOR_HUMAN_REQUIRED: 'waiting_for_human_required',
 });
 
-/** Legacy catch-all status kept for backward compatibility. */
+/** Legacy catch-all status kept for backward compatibility (P0-03: phased out in favor of typed states). */
 export const LEGACY_WAITING_FOR_REVIEW = 'waiting_for_review';
+
+/** Canonical 6-category set (P0-03). */
+export const CANONICAL_REVIEW_STATES = Object.freeze(new Set(
+  Object.values(CANONICAL_REVIEW_CATEGORIES)
+));
 
 /** Set of all typed review/recovery states. */
 export const TYPED_REVIEW_STATES = Object.freeze(new Set(Object.values(REVIEW_STATES)));
@@ -40,15 +69,15 @@ export const TYPED_REVIEW_STATES = Object.freeze(new Set(Object.values(REVIEW_ST
 export const REVIEW_STATE_META = Object.freeze({
   [REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW]: {
     label: 'Waiting for Human Review',
-    resume_options: ['review_and_accept', 'review_and_reject', 'request_changes'],
+    resume_options: ['review_and_accept', 'review_and_reject', 'request_changes', 'auto_resolve'],
     next_action: 'human_review_required',
     machine_repairable: false,
     description: 'Ambiguous product decision or semantic ambiguity requiring human judgment.',
   },
   [REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR]: {
     label: 'Waiting for Missing Evidence Repair',
-    resume_options: ['retry_repair', 'abort_repair', 'manual_fix'],
-    next_action: 'auto_repair',
+    resume_options: ['retry_repair', 'abort_repair', 'manual_fix', 'auto_resolve'],
+    next_action: 'auto_repair_or_resolve',
     machine_repairable: true,
     description: 'Missing result evidence (result.json missing, no verification output) that can be auto-repaired.',
   },
@@ -87,6 +116,49 @@ export const REVIEW_STATE_META = Object.freeze({
     machine_repairable: false,
     description: 'Repair budget exhausted, human must decide next action.',
   },
+  // --- P0-03: 6 canonical category metadata ---
+  [REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING]: {
+    label: 'Waiting for Evidence Missing',
+    resume_options: ['retry_repair', 'abort_repair', 'manual_fix'],
+    next_action: 'auto_repair',
+    machine_repairable: true,
+    description: 'Missing result/verification/evidence that can be auto-repaired or recollected.',
+  },
+  [REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN]: {
+    label: 'Waiting for Policy Uncertain',
+    resume_options: ['propose_policy_clarification', 'accept_proposal', 'manual_review'],
+    next_action: 'chat_proposal',
+    machine_repairable: true,
+    description: 'Policy/rules are ambiguous or uncertain - ChatGPT can propose a policy clarification or resolution.',
+  },
+  [REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN]: {
+    label: 'Waiting for Integration Uncertain',
+    resume_options: ['retry_integration', 'manual_integration', 'skip_integration'],
+    next_action: 'integration_recovery',
+    machine_repairable: true,
+    description: 'Integration state is uncertain (ambiguous merge state, dirty repo) - can auto-repair or retry.',
+  },
+  [REVIEW_STATES.WAITING_FOR_REPAIR_BUDGET_EXHAUSTED]: {
+    label: 'Waiting for Repair Budget Exhausted',
+    resume_options: ['review_exhausted', 'extend_budget', 'override_status'],
+    next_action: 'human_review_of_exhausted_repairs',
+    machine_repairable: false,
+    description: 'Repair budget exhausted, human must decide next action.',
+  },
+  [REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE]: {
+    label: 'Waiting for Provider Unavailable',
+    resume_options: ['retry', 'wait', 'manual_intervention'],
+    next_action: 'auto_retry',
+    machine_repairable: true,
+    description: 'Provider or API is temporarily unavailable - can auto-retry with backoff.',
+  },
+  [REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED]: {
+    label: 'Waiting for Human Required',
+    resume_options: ['review_and_accept', 'review_and_reject', 'request_changes'],
+    next_action: 'human_review_required',
+    machine_repairable: false,
+    description: 'Truly requires human judgment - the precise catch-all for non-automatable items.',
+  },
 });
 
 // ---------------------------------------------------------------------------
@@ -118,6 +190,32 @@ export function classifyReviewState({ reason = '', blockers = [], repairBudgetEx
     };
   }
 
+  // --- P0-03: Provider unavailable ---
+  if (codes.has('provider_unavailable') || codes.has('provider_timeout') ||
+      codes.has('provider_error') || codes.has('api_unavailable') ||
+      codes.has('rate_limited') || codes.has('gateway_error') ||
+      codes.has('transient_network_error') ||
+      reasonLower.includes('provider_unavailable') || reasonLower.includes('provider_timeout') ||
+      reasonLower.includes('api_unavailable') || reasonLower.includes('rate_limit')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE],
+    };
+  }
+
+  // --- P0-03: Policy uncertain ---
+  if (codes.has('policy_uncertain') || codes.has('policy_ambiguous') ||
+      codes.has('rule_uncertain') || codes.has('procedure_uncertain') ||
+      codes.has('acceptance_policy_uncertain') ||
+      reasonLower.includes('policy_uncertain') || reasonLower.includes('policy_ambiguous') ||
+      reasonLower.includes('rule_uncertain') ||
+      (reasonLower.includes('acceptance') && reasonLower.includes('uncertain'))) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN],
+    };
+  }
+
   // --- Manual approval / state corruption / unsafe operations → human decision ---
   if (codes.has('manual_approval_required') || codes.has('state_corruption') ||
       codes.has('unsafe_operation')) {
@@ -138,11 +236,43 @@ export function classifyReviewState({ reason = '', blockers = [], repairBudgetEx
     };
   }
 
+  // --- P0-03: Integration uncertain ---
+  if (codes.has('integration_uncertain') || codes.has('integration_state_unknown') ||
+      codes.has('merge_state_ambiguous') || codes.has('repo_dirty') ||
+      reasonLower.includes('integration_uncertain') || reasonLower.includes('merge_state_ambiguous') ||
+      reasonLower.includes('repo_dirty')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN],
+    };
+  }
+
   // --- Contract/acceptance issues ---
   if (codes.has('semantic_ambiguity')) {
     return {
       reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
       metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW],
+    };
+  }
+
+  // --- P0-03: Evidence missing (explicit canonical mapping) ---
+  if (codes.has('evidence_missing') ||
+      reasonLower == 'evidence_missing' ||
+      reasonLower.includes('evidence_missing')) {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING],
+    };
+  }
+
+  // --- P0-03: Human required (explicit canonical mapping) ---
+  if (codes.has('human_required') ||
+      reasonLower == 'human_required' ||
+      reasonLower.includes('human_required') ||
+      reasonLower == 'needs_human') {
+    return {
+      reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED],
     };
   }
 
@@ -210,20 +340,20 @@ export function classifyReviewState({ reason = '', blockers = [], repairBudgetEx
     };
   }
 
-  // --- Insufficient terminal evidence / catch-all ---
+  // --- P0-03: Insufficient terminal evidence / catch-all routes to HUMAN_REQUIRED ---
   if (codes.has('insufficient_terminal_evidence') ||
       codes.has('contract_missing') ||
       reasonLower.includes('unhandled') || reasonLower.includes('insufficient')) {
     return {
-      reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
-      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW],
+      reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED,
+      metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED],
     };
   }
 
   // --- Default: true human review ---
   return {
-    reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
-    metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW],
+    reviewState: REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED,
+    metadata: REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED],
   };
 }
 

@@ -1,4 +1,4 @@
-import { REVIEW_STATES, isTypedReviewState } from '../task-review-status-taxonomy.mjs';
+import { REVIEW_STATES, isTypedReviewState, isMachineRepairableReviewState } from '../task-review-status-taxonomy.mjs';
 
 import { getTaskAcceptanceBundle } from './task-acceptance-bundle.mjs';
 import { reconcileBundle } from './review-backlog-reconciler.mjs';
@@ -20,7 +20,10 @@ function reasonForReview(bundle = {}) {
   if (bundle.closure_decision?.reason) return bundle.closure_decision.reason;
   if (bundle.blockers?.length) return 'Blocking findings require review.';
   if (bundle.missing_evidence?.length) return 'Required result or verification evidence is missing.';
-  if (bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) return 'Task is waiting for review: ' + bundle.status + '.';
+  if (bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) {
+    const tip = isMachineRepairableReviewState(bundle.status) ? ' Machine-repairable.' : ' Requires human judgment.';
+    return 'Task is waiting for review: ' + bundle.status + '.' + tip;
+  }
   if (bundle.status === 'failed') return 'Task failed and needs triage.';
   if (bundle.status === 'running' || bundle.status === 'assigned') return 'Task is still running or not finalized.';
   return 'Review packet requested.';
@@ -36,7 +39,24 @@ function recommendedNextAction(bundle = {}) {
   if (bundle.blockers?.length) {
     return { action: 'review_blockers', reason: 'Blocking findings are present in the compact evidence.' };
   }
-  if (bundle.closure_decision?.status === 'requires_review' || bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) {
+  if (bundle.status === 'waiting_for_review' || isTypedReviewState(bundle.status)) {
+    if (isMachineRepairableReviewState(bundle.status)) {
+      const map = {
+        [REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE]: { action: 'auto_retry', reason: 'Provider unavailable - auto-retry with backoff.' },
+        [REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN]: { action: 'chat_proposal', reason: 'Policy uncertain - ChatGPT can propose a resolution.' },
+        [REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING]: { action: 'auto_repair', reason: 'Evidence missing - auto-repair or recollect.' },
+        [REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN]: { action: 'integration_recovery', reason: 'Integration uncertain - auto-retry integration.' },
+        [REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR]: { action: 'auto_repair', reason: 'Missing evidence - auto-repair.' },
+        [REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY]: { action: 'integration_recovery', reason: 'Integration failure - auto-recover.' },
+        [REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR]: { action: 'auto_repair', reason: 'Contract issue - auto-repair.' },
+        [REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE]: { action: 'evidence_collection', reason: 'Noop evidence missing - recollect evidence.' },
+      };
+      const routed = map[bundle.status] || { action: 'auto_resolve', reason: 'Typed state is machine-repairable - auto-resolve.' };
+      return routed;
+    }
+    return { action: 'manual_review', reason: 'Non-repairable review state - requires human judgment.' };
+  }
+  if (bundle.closure_decision?.status === 'requires_review') {
     return { action: 'manual_review', reason: 'Closure decision requires human review.' };
   }
   if (bundle.status === 'completed' && bundle.verification?.passed === true) {

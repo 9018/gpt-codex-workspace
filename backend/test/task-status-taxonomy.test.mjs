@@ -26,8 +26,14 @@ import {
 
 const expectedStatuses = [
   'human_interrupted_for_repair_budget_exhausted',
+  'waiting_for_evidence_missing',
+  'waiting_for_human_required',
   'waiting_for_human_review',
   'waiting_for_integration_recovery',
+  'waiting_for_integration_uncertain',
+  'waiting_for_policy_uncertain',
+  'waiting_for_provider_unavailable',
+  'waiting_for_repair_budget_exhausted',
   'waiting_for_manual_terminal_decision',
   'waiting_for_missing_evidence_repair',
   'waiting_for_noop_evidence',
@@ -74,7 +80,7 @@ test('active execution statuses classify correctly', () => {
 });
 
 test('review, repair, and wait statuses classify correctly', () => {
-  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'waiting_for_review',  'waiting_for_human_review',  'waiting_for_missing_evidence_repair',  'waiting_for_integration_recovery',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
+  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'waiting_for_review',  'waiting_for_evidence_missing',  'waiting_for_human_required',  'waiting_for_human_review',  'waiting_for_integration_recovery',  'waiting_for_integration_uncertain',  'waiting_for_policy_uncertain',  'waiting_for_provider_unavailable',  'waiting_for_repair_budget_exhausted',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_missing_evidence_repair',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
   assert.deepEqual([...REPAIR_STATUSES], ['waiting_for_repair']);
   assert.deepEqual([...NON_TERMINAL_WAIT_STATUSES].sort(), [
     'waiting_for_integration',
@@ -83,9 +89,33 @@ test('review, repair, and wait statuses classify correctly', () => {
     'waiting_for_review',
   ]);
   assert.equal(isHumanReviewStatus(' WAITING_FOR_REVIEW '), true);
+  // P0-03: New canonical review states should be classified as human review statuses
+  assert.equal(isHumanReviewStatus('waiting_for_evidence_missing'), true);
+  assert.equal(isHumanReviewStatus('waiting_for_human_required'), true);
+  assert.equal(isHumanReviewStatus('waiting_for_policy_uncertain'), true);
+  assert.equal(isHumanReviewStatus('waiting_for_integration_uncertain'), true);
+  assert.equal(isHumanReviewStatus('waiting_for_provider_unavailable'), true);
+  assert.equal(isHumanReviewStatus('waiting_for_repair_budget_exhausted'), true);
+  // P0-03: New states should be recognizable as typed review states
+  assert.equal(isTypedReviewStatus('waiting_for_evidence_missing'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_human_required'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_policy_uncertain'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_integration_uncertain'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_provider_unavailable'), true);
+  assert.equal(isTypedReviewStatus('waiting_for_repair_budget_exhausted'), true);
+  // P0-03: Machine-repairable new states are not true human review
+  assert.equal(isTrueHumanReviewStatus('waiting_for_evidence_missing'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_policy_uncertain'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_integration_uncertain'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_provider_unavailable'), false);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_repair_budget_exhausted'), true);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_human_required'), true);
   assert.equal(isRepairStatus('waiting_for_repair'), true);
   assert.equal(isNonTerminalWaitStatus('waiting_for_integration'), true);
   assert.equal(isNonTerminalWaitStatus('running'), false);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_evidence_missing'), true);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_human_required'), true);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_repair_budget_exhausted'), true);
 });
 
 test('completed status classifies distinctly from terminal failures', () => {

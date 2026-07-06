@@ -64,6 +64,12 @@ export const RECONCILIATION_TYPES = Object.freeze({
   MISSING_TESTS_EVIDENCE: 'missing_tests_evidence',
   INTEGRATION_RECOVERY_REQUIRED: 'integration_recovery_required',
   TRUE_HUMAN_REVIEW_REQUIRED: 'true_human_review_required',
+  // --- P0-03: New reconciliation types ---
+  RECONCILED_BY_AUTO_RETRY: 'reconciled_by_auto_retry',
+  RECONCILED_BY_POLICY_PROPOSAL: 'reconciled_by_policy_proposal',
+  RECONCILED_BY_EVIDENCE_COLLECTION: 'reconciled_by_evidence_collection',
+  STILL_PROVIDER_UNAVAILABLE: 'still_provider_unavailable',
+  STILL_POLICY_UNCERTAIN: 'still_policy_uncertain',
 });
 
 /** Map of stale blocker codes that the reconciler can resolve. */

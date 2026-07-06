@@ -9,6 +9,9 @@ import {
   TASK_STATUSES,
   isActiveExecutionStatus,
   isKnownTaskStatus,
+  isHumanReviewStatus,
+  isTypedReviewStatus,
+  isMachineRepairableReviewState,
   normalizeTaskStatus,
 } from './task-status-taxonomy.mjs';
 
@@ -144,6 +147,17 @@ export function classifyCurrentBlockerTask(task) {
     if (isVerifiedReadOnlyResult(result)) return decision(CURRENT_WORK_DECISION_LABELS.RESOLVED_BY_OPTIONS, status, resultShape, false);
     return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, 
       verificationNormalized ? false : hasActionableReviewEvidence(result, resultShape));
+  }
+  // P0-03: Typed review states — machine-repairable states do not block current work;
+  // human-required states (WAITING_FOR_HUMAN_REQUIRED, WAITING_FOR_HUMAN_REVIEW,
+  // WAITING_FOR_MANUAL_TERMINAL_DECISION, WAITING_FOR_REPAIR_BUDGET_EXHAUSTED) do block.
+  if (isHumanReviewStatus(status) || isTypedReviewStatus(status)) {
+    if (status === TASK_STATUSES.WAITING_FOR_REVIEW) {
+      // Already handled above — skip
+    } else {
+      const machineRepairable = isMachineRepairableReviewState(status);
+      return decision(CURRENT_WORK_DECISION_LABELS.REVIEW, status, resultShape, !machineRepairable);
+    }
   }
   if (status === TASK_STATUSES.WAITING_FOR_REPAIR) {
     // P0-MA11-R1: If task has already-integrated commit with passing verification,

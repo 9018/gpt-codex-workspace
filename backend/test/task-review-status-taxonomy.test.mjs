@@ -17,16 +17,18 @@ import {
   getResumeOptions,
   getNextAction,
   createReviewStateBlock,
+  CANONICAL_REVIEW_CATEGORIES,
+  CANONICAL_REVIEW_STATES,
 } from '../src/task-review-status-taxonomy.mjs';
 
 // ===========================================================================
 // Constants and structure
 // ===========================================================================
 
-test('exports exactly 7 typed review states', () => {
+test('exports exactly 13 typed review states (7 legacy + 6 canonical P0-03)', () => {
   const values = Object.values(REVIEW_STATES);
-  assert.equal(values.length, 7);
-  assert.equal(new Set(values).size, 7, 'all values must be unique');
+  assert.equal(values.length, 13);
+  assert.equal(new Set(values).size, 13, 'all values must be unique');
 });
 
 test('each typed state has metadata in REVIEW_STATE_META', () => {
@@ -63,6 +65,13 @@ test('machine_repairable is true for evidence and integration recovery states', 
   assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY].machine_repairable, true);
   assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR].machine_repairable, true);
   assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE].machine_repairable, true);
+  // P0-03 canonical states
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING].machine_repairable, true);
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN].machine_repairable, true);
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN].machine_repairable, true);
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE].machine_repairable, true);
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_REPAIR_BUDGET_EXHAUSTED].machine_repairable, false);
+  assert.equal(REVIEW_STATE_META[REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED].machine_repairable, false);
 });
 
 test('machine_repairable is false for human review and terminal decision states', () => {
@@ -96,9 +105,9 @@ test('classifyReviewState: known blocker codes map to correct typed states', () 
   const manual = classifyReviewState({ blockers: [{ code: 'manual_approval_required' }] });
   assert.equal(manual.reviewState, REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION);
 
-  // Human review (default for unknown codes)
+  // Human required (P0-03 default for unknown codes)
   const unknown = classifyReviewState({ blockers: [{ code: 'some_unknown_code' }] });
-  assert.equal(unknown.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  assert.equal(unknown.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
 });
 
 test('classifyReviewState: repair budget exhausted takes highest priority', () => {
@@ -129,19 +138,22 @@ test('classifyReviewState: codex_failed routes to missing evidence repair (not h
   assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
 });
 
-test('classifyReviewState: insufficient_terminal_evidence defaults to human review', () => {
+test('classifyReviewState: insufficient_terminal_evidence defaults to WAITING_FOR_HUMAN_REQUIRED (P0-03)', () => {
   const result = classifyReviewState({ blockers: [{ code: 'insufficient_terminal_evidence' }] });
-  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
+  assert.equal(result.metadata.machine_repairable, false);
 });
 
-test('classifyReviewState: unhandled convergence case defaults to human review', () => {
+test('classifyReviewState: unhandled convergence case defaults to HUMAN_REQUIRED', () => {
   const result = classifyReviewState({ reason: 'unhandled convergence case', blockers: [] });
-  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
 });
 
-test('classifyReviewState: no blockers at all defaults to human review', () => {
+test('classifyReviewState: no blockers defaults to WAITING_FOR_HUMAN_REQUIRED (P0-03)', () => {
   const result = classifyReviewState({});
-  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
+  assert.equal(result.metadata.machine_repairable, false);
+  assert.equal(result.metadata.next_action, 'human_review_required');
 });
 
 // ===========================================================================
@@ -212,7 +224,7 @@ test('getResumeOptions returns correct options', () => {
 
 test('getNextAction returns correct action', () => {
   assert.equal(getNextAction(REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW), 'human_review_required');
-  assert.equal(getNextAction(REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR), 'auto_repair');
+  assert.equal(getNextAction(REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR), 'auto_repair_or_resolve');
   assert.equal(getNextAction(REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY), 'integration_recovery');
 });
 
@@ -224,7 +236,7 @@ test('createReviewStateBlock returns full metadata block', () => {
   const block = createReviewStateBlock({ blockers: [{ code: 'result_missing' }] });
   assert.equal(block.review_state, REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
   assert.ok(block.review_meta);
-  assert.equal(block.review_meta.next_action, 'auto_repair');
+  assert.equal(block.review_meta.next_action, 'auto_repair_or_resolve');
   assert.ok(Array.isArray(block.resume_options));
   assert.equal(typeof block.next_action, 'string');
   assert.equal(typeof block.machine_repairable, 'boolean');
@@ -238,10 +250,129 @@ test('createReviewStateBlock with repairBudgetExhausted includes correct metadat
   assert.equal(block.machine_repairable, false);
 });
 
-test('createReviewStateBlock empty options returns human review block', () => {
+test('createReviewStateBlock empty options returns WAITING_FOR_HUMAN_REQUIRED block', () => {
   const block = createReviewStateBlock({});
-  assert.equal(block.review_state, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+  assert.equal(block.review_state, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
   assert.equal(block.next_action, 'human_review_required');
+  assert.equal(block.machine_repairable, false);
+});
+
+
+// ===========================================================================
+// P0-03: New canonical state classification tests
+// ===========================================================================
+
+test('classifyReviewState: provider_unavailable code maps to PROVIDER_UNAVAILABLE', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'provider_unavailable' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE);
+  assert.ok(r.metadata.machine_repairable);
+  assert.equal(r.metadata.next_action, 'auto_retry');
+});
+
+test('classifyReviewState: rate_limited maps to PROVIDER_UNAVAILABLE', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'rate_limited' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE);
+});
+
+test('classifyReviewState: gateway_error maps to PROVIDER_UNAVAILABLE', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'gateway_error' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE);
+});
+
+test('classifyReviewState: policy_uncertain code maps to POLICY_UNCERTAIN', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'policy_uncertain' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN);
+  assert.ok(r.metadata.machine_repairable);
+  assert.equal(r.metadata.next_action, 'chat_proposal');
+});
+
+test('classifyReviewState: policy_ambiguous maps to POLICY_UNCERTAIN', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'policy_ambiguous' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN);
+});
+
+test('classifyReviewState: acceptance_policy_uncertain via reason maps to POLICY_UNCERTAIN', () => {
+  const r = classifyReviewState({ reason: 'acceptance_policy_uncertain', blockers: [] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN);
+});
+
+test('classifyReviewState: evidence_missing code maps to EVIDENCE_MISSING', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'evidence_missing' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING);
+  assert.ok(r.metadata.machine_repairable);
+  assert.equal(r.metadata.next_action, 'auto_repair');
+});
+
+test('classifyReviewState: evidence_missing reason maps to EVIDENCE_MISSING', () => {
+  const r = classifyReviewState({ reason: 'evidence_missing', blockers: [] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING);
+});
+
+test('classifyReviewState: human_required code maps to HUMAN_REQUIRED', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'human_required' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
+  assert.equal(r.metadata.machine_repairable, false);
+  assert.equal(r.metadata.next_action, 'human_review_required');
+});
+
+test('classifyReviewState: needs_human reason maps to HUMAN_REQUIRED', () => {
+  const r = classifyReviewState({ reason: 'needs_human', blockers: [] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
+});
+
+test('classifyReviewState: integration_uncertain code maps to INTEGRATION_UNCERTAIN', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'integration_uncertain' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN);
+  assert.ok(r.metadata.machine_repairable);
+  assert.equal(r.metadata.next_action, 'integration_recovery');
+});
+
+test('classifyReviewState: repo_dirty maps to INTEGRATION_UNCERTAIN', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'repo_dirty' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN);
+});
+
+test('classifyReviewState: merge_state_ambiguous maps to INTEGRATION_UNCERTAIN', () => {
+  const r = classifyReviewState({ blockers: [{ code: 'merge_state_ambiguous' }] });
+  assert.equal(r.reviewState, REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN);
+});
+
+test('classifyReviewState: repairBudgetExhausted still maps to legacy state (backward compat)', () => {
+  const r = classifyReviewState({ repairBudgetExhausted: true });
+  assert.equal(r.reviewState, REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED);
+  assert.equal(r.metadata.machine_repairable, false);
+});
+
+test('CANONICAL_REVIEW_CATEGORIES exports 6 categories', () => {
+  const values = Object.values(CANONICAL_REVIEW_CATEGORIES);
+  assert.equal(values.length, 6);
+  assert.equal(new Set(values).size, 6);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.EVIDENCE_MISSING);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.POLICY_UNCERTAIN);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.INTEGRATION_UNCERTAIN);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.REPAIR_BUDGET_EXHAUSTED);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.PROVIDER_UNAVAILABLE);
+  assert.ok(CANONICAL_REVIEW_CATEGORIES.HUMAN_REQUIRED);
+});
+
+test('CANONICAL_REVIEW_STATES contains all 6 canonical state values', () => {
+  for (const value of Object.values(CANONICAL_REVIEW_CATEGORIES)) {
+    assert.equal(CANONICAL_REVIEW_STATES.has(value), true);
+  }
+});
+
+test('isMachineRepairableReviewState works for P0-03 canonical states', () => {
+  // Use canonical REVIEW_STATES values (full state names)
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING), true);
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN), true);
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN), true);
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE), true);
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_REPAIR_BUDGET_EXHAUSTED), false);
+  assert.equal(isMachineRepairableReviewState(REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED), false);
+  // Also test with bare canonical string keys via isTypedReviewState
+  assert.equal(isTypedReviewState('waiting_for_evidence_missing'), true);
+  assert.equal(isTypedReviewState('waiting_for_human_required'), true);
+  assert.equal(isTypedReviewState('waiting_for_policy_uncertain'), true);
 });
 
 console.log('task-review-status-taxonomy tests loaded');

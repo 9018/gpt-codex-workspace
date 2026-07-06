@@ -11,6 +11,11 @@ import {
   isCommitAncestorOfHead,
 } from '../src/current-blocker-policy.mjs';
 
+import {
+  REVIEW_STATES,
+  CANONICAL_REVIEW_CATEGORIES,
+} from '../src/task-review-status-taxonomy.mjs';
+
 test('exports frozen canonical current-work decision labels', () => {
   assert.equal(Object.isFrozen(CURRENT_WORK_DECISION_LABELS), true);
   assert.deepEqual(CURRENT_WORK_DECISION_LABELS, {
@@ -180,6 +185,56 @@ test('isCommitAncestorOfHead falls back from stale worktree to canonical repo pa
   }
 });
 
+
+
+// ===========================================================================
+// P0-03: Typed review state handling in current blocker policy
+// ===========================================================================
+
+test('classifyCurrentBlockerTask: typed machine-repairable review states do not block', () => {
+  for (const state of [
+    REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING,
+    REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN,
+    REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN,
+    REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE,
+    REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
+    REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY,
+    REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR,
+    REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE,
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: state, result: {} });
+    assert.equal(decision.label, CURRENT_WORK_DECISION_LABELS.REVIEW);
+    assert.equal(decision.blocks_current_work, false,
+      `${state} should not block current work`);
+  }
+});
+
+test('classifyCurrentBlockerTask: typed human-required review states do block', () => {
+  for (const state of [
+    REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED,
+    REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
+    REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION,
+    REVIEW_STATES.WAITING_FOR_REPAIR_BUDGET_EXHAUSTED,
+    REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
+  ]) {
+    const decision = classifyCurrentBlockerTask({ status: state, result: {} });
+    assert.equal(decision.blocks_current_work, true,
+      `${state} should block current work`);
+  }
+});
+
+test('classifyCurrentBlockerTask: canonical REVIEW_STATES values all resolve correctly', () => {
+  // Verify that all 6 canonical categories exist as REVIEW_STATES values
+  assert.ok(REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING);
+  assert.ok(REVIEW_STATES.WAITING_FOR_POLICY_UNCERTAIN);
+  assert.ok(REVIEW_STATES.WAITING_FOR_INTEGRATION_UNCERTAIN);
+  assert.ok(REVIEW_STATES.WAITING_FOR_REPAIR_BUDGET_EXHAUSTED);
+  assert.ok(REVIEW_STATES.WAITING_FOR_PROVIDER_UNAVAILABLE);
+  assert.ok(REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED);
+  // All canonical REVIEW_STATES should be distinct from existing states
+  assert.notEqual(REVIEW_STATES.WAITING_FOR_EVIDENCE_MISSING, REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR);
+  assert.notEqual(REVIEW_STATES.WAITING_FOR_HUMAN_REQUIRED, REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW);
+});
 
 test('verified readonly review is excluded', () => {
   const d = classifyCurrentBlockerTask({ status: 'waiting_for_review', result: { summary: 'readonly validation ok', changed_files: [], verification: { passed: true } } });
