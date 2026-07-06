@@ -8,6 +8,7 @@ const NO_MUTATION_PROFILES = new Set([
   'github_sync_only',
 ]);
 import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
+import { normalizeToUnifiedDecision } from './codex-unified-decision.mjs';
 
 
 const FINALIZER_STATUSES = new Set([
@@ -338,6 +339,23 @@ function integrationEffect(evidence = {}, status) {
 function decision(evidence, { status, reason, blockers = [], repairableBlockers = [], safeToAutoAdvance = false } = {}) {
   const normalizedStatus = FINALIZER_STATUSES.has(status) ? status : "waiting_for_review";
   const reviewStateBlock = createReviewStateBlock({ reason, blockers, repairBudgetExhausted: reason === "repair_budget_exhausted" });
+  const finalizerDecisionToNormalize = {
+    status: normalizedStatus,
+    reason: String(reason || "finalizer_decision"),
+    blockers,
+    repairable_blockers: repairableBlockers || [],
+    safe_to_auto_advance: safeToAutoAdvance === true,
+    blocking_passed: (blockers || []).length === 0 && (repairableBlockers || []).length === 0,
+    integration_effect: integrationEffect(evidence, normalizedStatus),
+    goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
+    queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
+  };
+  const unifiedDecision = normalizeToUnifiedDecision({
+    finalizerDecision: finalizerDecisionToNormalize,
+    taskResult: evidence.codex_result || evidence.result || evidence.task_result || {},
+    verification: evidence.verification || {},
+    contractVerification: evidence.contract_verification || {},
+  });
   return {
     status: normalizedStatus,
     reason: reason || "finalizer_decision",
@@ -349,6 +367,7 @@ function decision(evidence, { status, reason, blockers = [], repairableBlockers 
     goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
     queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
     safe_to_auto_advance: safeToAutoAdvance === true,
+    unified_decision: unifiedDecision,
   };
 }
 
@@ -359,7 +378,38 @@ export function decideTaskFinalState(evidence = {}) {
       reason: "external_capacity_failure",
       blockers: [blocker("external_capacity_failure", "External quota or rate-limit capacity failure.", { text: textEvidence(evidence) })],
     });
-  }
+  
+  const finalizerDecisionToNormalize = {
+    status: normalizedStatus,
+    reason: String(reason || "finalizer_decision"),
+    blockers,
+    repairable_blockers: repairableBlockers || [],
+    safe_to_auto_advance: safeToAutoAdvance === true,
+    blocking_passed: (blockers || []).length === 0 && (repairableBlockers || []).length === 0,
+    integration_effect: integrationEffect(evidence, normalizedStatus),
+    goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
+    queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
+  };
+  const unifiedDecision = normalizeToUnifiedDecision({
+    finalizerDecision: finalizerDecisionToNormalize,
+    taskResult: evidence.codex_result || evidence.result || evidence.task_result || {},
+    verification: evidence.verification || {},
+    contractVerification: evidence.contract_verification || {},
+  });
+  return {
+    status: normalizedStatus,
+    reason: reason || "finalizer_decision",
+    blockers,
+    repairable_blockers: repairableBlockers,
+    non_blocking_followups: followupsFrom(evidence),
+    ...reviewStateBlock,
+    integration_effect: integrationEffect(evidence, normalizedStatus),
+    goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
+    queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
+    safe_to_auto_advance: safeToAutoAdvance === true,
+    unified_decision: unifiedDecision,
+  };
+}
 
   const semanticOrUnsafeBlockers = manualReviewBlockers(evidence);
   if (semanticOrUnsafeBlockers.some((entry) => entry.code === "semantic_ambiguity" || entry.code === "manual_approval_required" || entry.code === "state_corruption")) {
@@ -463,6 +513,8 @@ export function applyTaskFinalStateDecision({ taskStatus, taskResult = {}, final
       finalizer_decision: finalizerDecision,
       requires_review: requiresReview,
       reason: finalizerDecision.reason || taskResult.reason,
+      unified_decision: finalizerDecision.unified_decision || taskResult.unified_decision || null,
     },
   };
+
 }

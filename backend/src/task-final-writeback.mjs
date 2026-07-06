@@ -808,6 +808,7 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
     acceptance_result_path: taskResult.acceptance_result_path || null,
     closure_decision: taskResult.closure_decision || null,
     finalizer_decision: taskResult.finalizer_decision || null,
+    unified_decision: taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || null,
     no_change_repair_completion_summary: taskResult.no_change_repair_completion_summary || null,
     no_change_repair_completion: taskResult.no_change_repair_completion || null,
     failure_class: taskResult.failure_class || null,

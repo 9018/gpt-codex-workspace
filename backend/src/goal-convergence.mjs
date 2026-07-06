@@ -1,6 +1,7 @@
 import { REVIEW_STATES, createReviewStateBlock } from './task-review-status-taxonomy.mjs';
 
 import { applyLegacyResolution, findLegacySuccessor, hasCompletionEvidence as hasLegacyCompletionEvidence } from "./legacy-reconciliation.mjs";
+import { UNIFIED_STATUSES } from './codex-unified-decision.mjs';
 import {
   TASK_STATUSES,
   isHumanReviewStatus,
@@ -20,6 +21,27 @@ const SYNC_LIKE_PROFILES = new Set([
 ]);
 
 export function determineGoalStatus(goal, task, taskResult = {}) {
+
+
+  // P0: Use unified_decision when available — single source of truth for
+  // goal status derivation. This prevents contradictory conclusions between
+  // closure, finalizer, queue propagation, and goal convergence.
+  if (taskResult && taskResult.unified_decision && taskResult.unified_decision.status) {
+    const ud = taskResult.unified_decision;
+    if (ud.status === UNIFIED_STATUSES.COMPLETED && ud.blocking_passed && ud.safe_to_auto_advance) {
+      return 'completed';
+    }
+    if (ud.status === UNIFIED_STATUSES.FAILED || ud.status === UNIFIED_STATUSES.BLOCKED || ud.status === UNIFIED_STATUSES.TIMED_OUT) {
+      return ud.status;
+    }
+    if (ud.status === UNIFIED_STATUSES.WAITING_FOR_REPAIR) return 'waiting_for_repair';
+    if (ud.status === UNIFIED_STATUSES.WAITING_FOR_INTEGRATION) return 'waiting_for_integration';
+    if (ud.requires_review || ud.status === UNIFIED_STATUSES.WAITING_FOR_REVIEW || ud.status === UNIFIED_STATUSES.WAITING_FOR_HUMAN_REVIEW) {
+      return REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW;
+    }
+    // Fall through for non-terminal hold statuses
+    return null;
+  }
   if (!goal || !task) return null;
   if (TERMINAL_GOAL_STATUSES.has(goal.status)) return null;
 
