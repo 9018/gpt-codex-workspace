@@ -72,6 +72,20 @@ function makeMinimalProductData(overrides = {}) {
       agent_backend: "codex_exec",
       worker_interval_ms: 15000,
     },
+    canonical_outcome_health: {
+      tasks_with_unified_decision: 30,
+      tasks_without_unified_decision: 5,
+      canonical_outcome_counts: { completed: 28, failed: 2 },
+      tasks_with_canonical_blockers: 1,
+      tasks_degraded_outcome: 0,
+      total_codex_tasks: 60,
+    },
+    context_bundle_health: {
+      healthy: 25,
+      degraded: 3,
+      stale: 2,
+      total_codex_tasks: 60,
+    },
     next_actions: [
       { action: "Resolve blockers: 1 review, 2 repair", priority: "warning" },
       { action: "3 legacy-resolved task(s) — run retention for cleanup", priority: "info" },
@@ -215,6 +229,20 @@ test("worker stalled appears in diagnostics", () => {
 
 test("next_actions prioritization visible", () => {
   const data = makeMinimalProductData({
+    canonical_outcome_health: {
+      tasks_with_unified_decision: 30,
+      tasks_without_unified_decision: 5,
+      canonical_outcome_counts: { completed: 28, failed: 2 },
+      tasks_with_canonical_blockers: 1,
+      tasks_degraded_outcome: 0,
+      total_codex_tasks: 60,
+    },
+    context_bundle_health: {
+      healthy: 25,
+      degraded: 3,
+      stale: 2,
+      total_codex_tasks: 60,
+    },
     next_actions: [
       { action: "Commit or stash dirty worktree", priority: "blocker" },
       { action: "Resolve blockers: 1 review", priority: "warning" },
@@ -254,4 +282,39 @@ test("tool mode shown in output", () => {
   const minimalData = makeMinimalProductData({ system: { ...standardData.system, tool_mode: "minimal" } });
   const minCard = productStatusCard(minimalData);
   assert.ok(minCard.includes("minimal"), "minimal mode shown");
+});
+
+test("canonical outcome health shown in product status card", () => {
+  const data = makeMinimalProductData();
+  const card = productStatusCard(data);
+  assert.ok(card.includes("Canonical Outcome") || card.includes("canonical_outcome"), "canonical outcome section present");
+  assert.ok(card.includes("30"), "tasks with unified decision shown");
+  assert.ok(card.includes("5"), "tasks without unified decision shown");
+});
+
+test("context bundle health shown in product status card", () => {
+  const data = makeMinimalProductData();
+  const card = productStatusCard(data);
+  assert.ok(card.includes("Context Bundle") || card.includes("context_bundle"), "context bundle section present");
+  assert.ok(card.includes("25"), "healthy context bundles shown");
+  assert.ok(card.includes("3"), "degraded context bundles shown");
+  assert.ok(card.includes("2"), "stale context bundles shown");
+});
+
+test("canonical outcome health metrics match expected structure", () => {
+  const data = makeMinimalProductData();
+  assert.ok(data.canonical_outcome_health, "canonical_outcome_health exists");
+  assert.equal(typeof data.canonical_outcome_health.tasks_with_unified_decision, "number");
+  assert.equal(typeof data.canonical_outcome_health.tasks_without_unified_decision, "number");
+  assert.equal(typeof data.canonical_outcome_health.tasks_with_canonical_blockers, "number");
+  assert.equal(typeof data.canonical_outcome_health.tasks_degraded_outcome, "number");
+  assert.ok(typeof data.canonical_outcome_health.canonical_outcome_counts === "object");
+});
+
+test("context bundle health metrics match expected structure", () => {
+  const data = makeMinimalProductData();
+  assert.ok(data.context_bundle_health, "context_bundle_health exists");
+  assert.equal(typeof data.context_bundle_health.healthy, "number");
+  assert.equal(typeof data.context_bundle_health.degraded, "number");
+  assert.equal(typeof data.context_bundle_health.stale, "number");
 });

@@ -70,7 +70,7 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
   assert.deepEqual(Object.keys(bundle), [
     'task_id', 'goal_id', 'title', 'status', 'operation_kind', 'acceptance_contract_summary',
     'result_summary', 'verification', 'contract_verification', 'no_change_repair_completion_summary',
-    'closure_decision', 'integration', 'changed_files', 'report_paths', 'run_evidence', 'blockers', 'non_blocking_followups', 'quality_notes', 'missing_evidence',
+    'unified_decision', 'closure_decision', 'integration', 'changed_files', 'report_paths', 'run_evidence', 'blockers', 'non_blocking_followups', 'quality_notes', 'missing_evidence',
   ]);
   assert.equal(bundle.operation_kind, 'code_change');
   assert.equal(bundle.acceptance_contract_summary.operation_kind, 'code_change');

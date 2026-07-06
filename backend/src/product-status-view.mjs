@@ -134,6 +134,71 @@ function retentionPressure(queueCounts, state) {
   return { pressure, limit, tasks, goals, details };
 }
 
+/**
+ * Collect canonical outcome health from tasks with unified_decision.
+ * P0-AFC8: Reports the distribution of canonical outcome decisions
+ * and identifies tasks with degraded or missing canonical outcomes.
+ */
+function collectCanonicalOutcomeHealth(tasks = []) {
+  const codexTasks = tasks.filter(t => t.assignee === 'codex');
+  const withUnifiedDecision = codexTasks.filter(t => t.result?.unified_decision);
+  const withoutUnifiedDecision = codexTasks.filter(t => !t.result?.unified_decision);
+
+  const outcomeCounts = {};
+  for (const t of withUnifiedDecision) {
+    const s = t.result.unified_decision.status || 'unknown';
+    outcomeCounts[s] = (outcomeCounts[s] || 0) + 1;
+  }
+
+  const degradedTasks = withUnifiedDecision.filter(t => {
+    const ud = t.result.unified_decision;
+    return ud.status === 'completed' && (ud.requires_review === true || ud.blocking_passed === false);
+  }).length;
+
+  const canonicalBlockers = withUnifiedDecision.filter(t => {
+    const ud = t.result.unified_decision;
+    return Array.isArray(ud.blockers) && ud.blockers.length > 0;
+  }).length;
+
+  return {
+    tasks_with_unified_decision: withUnifiedDecision.length,
+    tasks_without_unified_decision: withoutUnifiedDecision.length,
+    canonical_outcome_counts: outcomeCounts,
+    tasks_with_canonical_blockers: canonicalBlockers,
+    tasks_degraded_outcome: degradedTasks,
+    total_codex_tasks: codexTasks.length,
+  };
+}
+
+/**
+ * Collect context bundle health from tasks.
+ * P0-AFC8: Reports context bundle health across goals/tasks,
+ * identifying tasks with stalled, degraded, or healthy context bundles.
+ */
+function collectContextBundleHealth(tasks = []) {
+  const codexTasks = tasks.filter(t => t.assignee === 'codex');
+  let healthy = 0;
+  let degraded = 0;
+  let stale = 0;
+
+  for (const t of codexTasks) {
+    const ud = t.result?.unified_decision;
+    const verification = t.result?.verification;
+    const resultStatus = t.result?.status;
+    const missingEvidence = (t.result?.acceptance_findings || []).length;
+
+    if (ud && verification?.passed !== null && resultStatus && missingEvidence === 0) {
+      healthy++;
+    } else if (ud && missingEvidence <= 1) {
+      degraded++;
+    } else {
+      stale++;
+    }
+  }
+
+  return { healthy, degraded, stale, total_codex_tasks: codexTasks.length };
+}
+
 // ---------------------------------------------------------------------------
 // Main collector
 // ---------------------------------------------------------------------------
@@ -236,6 +301,8 @@ export async function collectProductStatus(services) {
       total_goals: state.goals?.length || 0,
     },
     retention,
+    canonical_outcome_health: collectCanonicalOutcomeHealth(state.tasks || []),
+    context_bundle_health: collectContextBundleHealth(state.tasks || []),
     tui_provider: tuiDiagnostics ? {
       enabled: tuiDiagnostics.enabled,
       provider: tuiDiagnostics.provider,
@@ -257,6 +324,8 @@ export async function collectProductStatus(services) {
         ...(queueMetrics.current_blockers.policy_filtered > 0 ? [{ severity: "warning", message: `${queueMetrics.current_blockers.policy_filtered} current blocker(s)`, code: "current_blockers" }] : []),
         ...(retention.pressure !== "none" ? [{ severity: "info", message: `Retention pressure: ${retention.pressure}`, code: "retention_pressure" }] : []),
         ...(tuiDiagnostics?.findings || []).filter(f => f.severity === "warning").slice(0, 5),
+        ...(services.contextBundleHealth?.degraded > 0 || services.contextBundleHealth?.stale > 0
+          ? [{ severity: 'info', message: 'Context bundle health degraded - inspect context-health tools', code: 'context_bundle_health' }] : []),
         ...(workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue" || workerHealth.health?.phase === "enabled_but_not_running"
           ? [{ severity: "warning", message: `Worker health: ${workerHealth.health.phase}${workerHealth.health.reason ? ` - ${workerHealth.health.reason}` : ""}`, code: "worker_health" }] : []),
       ],
@@ -393,6 +462,27 @@ export function productStatusCard(data) {
   lines.push(formatKeyValue('policy-filtered (actionable)', cb.policy_filtered));
   lines.push(formatKeyValue('excluded by policy', cb.policy_excluded));
   lines.push(formatKeyValue('actionable review', data.review_classification.actionable_review));
+
+  // ── Canonical Outcome Health (P0-AFC8) ──
+  if (data.canonical_outcome_health) {
+    lines.push('');
+    lines.push(' Canonical Outcome:');
+    const och = data.canonical_outcome_health;
+    lines.push(formatKeyValue('with unified decision', och.tasks_with_unified_decision));
+    lines.push(formatKeyValue('without unified decision', och.tasks_without_unified_decision));
+    if (och.tasks_with_canonical_blockers > 0) lines.push(formatKeyValue('with canonical blockers', och.tasks_with_canonical_blockers));
+    if (och.tasks_degraded_outcome > 0) lines.push(formatKeyValue('degraded outcome', och.tasks_degraded_outcome));
+  }
+
+  // ── Context Bundle Health (P0-AFC8) ──
+  if (data.context_bundle_health) {
+    lines.push('');
+    lines.push(' Context Bundle:');
+    const cbh = data.context_bundle_health;
+    lines.push(formatKeyValue('healthy', cbh.healthy));
+    lines.push(formatKeyValue('degraded', cbh.degraded));
+    lines.push(formatKeyValue('stale', cbh.stale));
+  }
 
   // ── Review Classification ──
   lines.push('');

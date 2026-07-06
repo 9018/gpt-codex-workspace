@@ -80,6 +80,50 @@ function keyEvidence(bundle = {}) {
   };
 }
 
+/**
+ * Build the canonical_outcome block from the bundle's unified_decision.
+ * P0-AFC8: The canonical outcome decision is the primary status indicator,
+ * with older verifier, gate, and task-status fields as supporting evidence.
+ */
+function buildCanonicalOutcome(bundle = {}) {
+  const ud = bundle.unified_decision;
+  if (!ud || typeof ud !== 'object') return null;
+  return {
+    status: ud.status || null,
+    reason: ud.reason || null,
+    blocking_passed: ud.blocking_passed === true,
+    requires_review: ud.requires_review === true,
+    source: ud.source || null,
+    profile: ud.profile || null,
+    safe_to_auto_advance: ud.safe_to_auto_advance === true,
+    normalized_at: ud.normalized_at || null,
+  };
+}
+
+/**
+ * Build the context_bundle_health block from the acceptance bundle.
+ * P0-AFC8: Reports whether the context bundle has canonical outcome,
+ * verification evidence, and missing evidence pressure.
+ */
+function buildContextBundleHealth(bundle = {}) {
+  const hasUnifiedDecision = Boolean(bundle.unified_decision);
+  const hasVerification = Boolean(bundle.verification && bundle.verification.passed !== null);
+  const hasResult = Boolean(bundle.result_summary && bundle.result_summary.status);
+  const missingCount = bundle.missing_evidence?.length || 0;
+  const health = hasUnifiedDecision && hasVerification && hasResult && missingCount === 0
+    ? 'healthy'
+    : hasUnifiedDecision && missingCount <= 1
+      ? 'degraded'
+      : 'stale';
+  return {
+    health,
+    has_unified_decision: hasUnifiedDecision,
+    has_verification: hasVerification,
+    has_result: hasResult,
+    missing_evidence_count: missingCount,
+  };
+}
+
 export async function getTaskReviewPacket({ store, config = {}, task_id } = {}) {
   const bundle = await getTaskAcceptanceBundle({ store, config, task_id });
   const state = await store.load();
@@ -92,7 +136,10 @@ export async function getTaskReviewPacket({ store, config = {}, task_id } = {}) 
     task_id: bundle.task_id,
     goal_id: bundle.goal_id,
     title: bundle.title,
+    // P0-AFC8: Primary status is the canonical outcome decision
     status: bundle.status,
+    canonical_outcome: buildCanonicalOutcome(bundle),
+    context_bundle_health: buildContextBundleHealth(bundle),
     task_status: task?.status || bundle.status,
     reason_for_review: reasonForReview(bundle),
     compact_git_summary: compactGitSummary(bundle, taskResult),
