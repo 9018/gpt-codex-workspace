@@ -257,7 +257,7 @@ export async function collectProductStatus(services) {
         ...(queueMetrics.current_blockers.policy_filtered > 0 ? [{ severity: "warning", message: `${queueMetrics.current_blockers.policy_filtered} current blocker(s)`, code: "current_blockers" }] : []),
         ...(retention.pressure !== "none" ? [{ severity: "info", message: `Retention pressure: ${retention.pressure}`, code: "retention_pressure" }] : []),
         ...(tuiDiagnostics?.findings || []).filter(f => f.severity === "warning").slice(0, 5),
-        ...(workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue"
+        ...(workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue" || workerHealth.health?.phase === "enabled_but_not_running"
           ? [{ severity: "warning", message: `Worker health: ${workerHealth.health.phase}${workerHealth.health.reason ? ` - ${workerHealth.health.reason}` : ""}`, code: "worker_health" }] : []),
       ],
     },
@@ -276,7 +276,7 @@ function buildNextActions({ gitInfo, queueMetrics, workerHealth, reviewCategorie
   if (gitInfo.running_commit && gitInfo.repo_head && gitInfo.running_commit !== gitInfo.repo_head) {
     actions.push({ action: "Restart runtime to align running_commit with repo_head", priority: "blocker" });
   }
-  if (workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue") {
+  if (workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue" || workerHealth.health?.phase === "enabled_but_not_running") {
     actions.push({ action: `Check worker health: ${workerHealth.health.phase}`, priority: "blocker" });
   }
 
@@ -326,7 +326,7 @@ function buildSummaryLine({ gitInfo, queueMetrics, workerHealth, retention }) {
   const parts = [];
 
   const worktreeStatus = gitInfo.worktree_dirty ? "dirty" : "clean";
-  const workerStatus = workerHealth.enabled ? (workerHealth.running ? "running" : "idle") : "disabled";
+  const workerStatus = workerHealth.enabled ? (workerHealth.running ? "running" : "enabled_but_not_running") : "disabled";
   const blockers = queueMetrics.current_blockers;
 
   parts.push(`commit ${gitInfo.running_commit ? gitInfo.running_commit.slice(0, 8) : "?"}`);
@@ -370,7 +370,7 @@ export function productStatusCard(data) {
   // ── Worker Health ──
   lines.push('');
   lines.push(' Worker:');
-  lines.push(formatKeyValue('status', data.worker.enabled ? (data.worker.running ? 'running' : 'idle') : 'disabled'));
+  lines.push(formatKeyValue('status', data.worker.enabled ? (data.worker.running ? 'running' : 'enabled_but_not_running') : 'disabled'));
   lines.push(formatKeyValue('health phase', data.worker.health_phase));
   if (data.worker.last_tick_age_s != null) lines.push(formatKeyValue('last tick', `${data.worker.last_tick_age_s}s ago`));
   if (data.worker.last_error) lines.push(formatKeyValue('last error', data.worker.last_error.slice(0, 80)));

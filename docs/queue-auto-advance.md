@@ -129,3 +129,115 @@ node --test test/queue-policy.test.mjs
 # Run queue integration tests
 node --test test/goal-queue.test.mjs
 ```
+
+## Runtime Conditions for Full Auto-Advance
+
+The queue auto-advance system requires the following runtime conditions to operate without manual intervention:
+
+### 1. Worker Must Be Running
+
+The Codex worker loop (`startCodexWorker` in `codex-worker-loop.mjs`) drives the auto-advance cycle. Without it, the queue never advances.
+
+**Required environment variable:**
+- `GPTWORK_CODEX_WORKER=true` — enables the worker loop
+
+**Health verification:**
+- `product_status` output shows `worker: running` in the summary
+- Worker health phase is `running` or `enabled_but_not_running` (between ticks)
+- Worker health phase `stalled`, `overdue`, or `disabled` indicates the queue is not advancing
+
+### 2. Queue items must have `auto_start=true`
+
+Each queue item has an `auto_start` field. Items with `auto_start=false` are skipped
+by the auto-advance mechanism and must be started manually.
+
+### 3. Fresh Heartbeat and Tick Cycle
+
+The worker heartbeat is measured by the tick interval:
+- Default: 5000ms (`GPTWORK_CODEX_WORKER_INTERVAL_MS`)
+- A tick is **stalled** when the last tick finished more than 6 intervals ago
+- A tick is **overdue** when the next tick due time is more than 3 intervals in the past
+- A healthy worker shows `enabled_but_not_running` or `running` health phases
+
+### 4. Dependency Resolution is Automated
+
+The queue reconciler handles these auto-advance paths:
+
+| Scenario | Auto-Advance Mechanism |
+|---|---|
+| **queued -> assigned** | `startNextQueuedGoal` picks the first waiting item with satisfied preconditions |
+| **completed → dependent auto-start** | `autoStartNextOnTaskCompleted` is called when a task reaches a terminal completed state, and it starts dependents with satisfied dependencies |
+| **waiting_for_integration retry** | The reconciler checks `integration_required_and_missing` — when integration completes or is not required, the queue advances |
+| **accepted+verified review recovery** | Tasks in `waiting_for_review` with passing verification and acceptance are auto-resolved by the blocker manifest convergence |
+| **running queue reconciliation** | The runtime reconciler (`reconcileStaleTasks`) runs at worker startup and periodically, detecting stale blockers and advancing resolved dependencies |
+| **repair success propagation** | When a repair task completes, `propagateRepairSuccess` unblocks dependents of the repaired task automatically |
+
+### 5. Integration Requirements
+
+- Tasks requiring integration (`needs_integration: true`) must either be integrated or marked
+  `integration: { status: "not_required" }` before dependents can advance
+- The reconciler distinguishes `completed` tasks with satisfied vs unsatisfied
+  integration requirements (see `integration_required_and_missing`)
+
+### 6. No Manual Reconciliation Required
+
+When all runtime conditions are met:
+- No manual `complete_task` or `reconcile` calls are needed for the normal
+  accepted/integrated path
+- The worker's startup reconciliation runs `reconcileStaleTasks` once, then the
+  tick loop processes queued tasks automatically
+- Blocker manifest (MA11-R6) and historical convergence sweep stale states
+  without manual intervention
+
+## How to Verify
+
+### Quick Health Check
+
+```bash
+# Check worker status and queue metrics
+cd backend && node -e "
+const { createWorkerState, workerStatusExtendedSnapshot } = await import('./src/codex-worker-state.mjs');
+const state = createWorkerState();
+// Simulate started worker
+state.enabled = true;
+state.running = true;
+state.started_at = new Date().toISOString();
+state.last_tick_started_at = new Date(Date.now() - 2000).toISOString();
+const health = workerStatusExtendedSnapshot(state);
+console.log('Worker health phase:', health.health.phase);
+console.log('Worker enabled:', health.enabled);
+console.log('Worker running:', health.running);
+"
+```
+
+### Diagnostically Distinguish All Worker States
+
+The `computeWorkerHealth` function returns these phases:
+
+| State | Condition | Phase |
+|---|---|---|
+| Worker disabled | `enabled=false` | `disabled` |
+| Enabled, never started | `enabled=true, running=false, started_at=null` | `enabled_but_not_running` |
+| Enabled, between ticks | `enabled=true, running=false, tick age fresh` | `enabled_but_not_running` |
+| Running healthy | `enabled=true, running=true` | `running` |
+| Tick stalled | `last_tick_age > 6 * interval_ms` | `stalled` |
+| Tick overdue | `next_tick_due < interval_ms * 3` | `overdue` |
+
+### Run the Tests
+
+```bash
+cd backend
+
+# Worker state and health diagnostics
+node --test test/codex-worker-state.test.mjs
+
+# Queue auto-advance reconciler
+node --test test/queue-auto-advance.test.mjs
+
+# Full queue integration
+node --test test/goal-queue.test.mjs
+
+# Syntax and imports
+npm run check:syntax
+npm run check:imports
+```
