@@ -388,9 +388,33 @@ must follow standard secret management practices:
 
 ---
 
-## 9. Acceptance Procedure
+## 9. MA1-MA9 Release-Gate Evidence
 
-### 9.1 Pre-Acceptance Checklist
+The closure model was accepted after the MA1-MA9 release gate established that
+the productization path had deterministic verification, contract-aware closure,
+and operator-visible evidence. The acceptance baseline is commit
+`c4ec54cd4c74641a50fabd0c4e98ae6f70a81693`.
+
+The gate evidence covers:
+
+- Syntax and import checks for the backend delivery path.
+- Acceptance contract verification for commit, changed-files, verification,
+  integration, no-mutation, and audit requirements.
+- Finalizer and closure decisions for auto-complete, repair, review,
+  integration wait, and terminal failure cases.
+- Release delivery checks that exercise changed, docs, and fast profiles.
+- Operator artifacts including acceptance bundles, review packets, and
+  verification reports.
+
+This section is intentionally evidence-oriented: it names the release-gate
+surface that operators should trust before using the closure model for
+production task advancement.
+
+---
+
+## 10. Operator-Facing Acceptance Procedure
+
+### 10.1 Pre-Acceptance Checklist
 
 Before accepting a deployment or release, the operator verifies:
 
@@ -404,7 +428,7 @@ Before accepting a deployment or release, the operator verifies:
 - [ ] `state.json` is present (or will be created on first start)
 - [ ] Repository registry is populated (or empty for fresh start)
 
-### 9.2 Acceptance Decision
+### 10.2 Closure Criteria
 
 A task is considered accepted when:
 
@@ -422,7 +446,7 @@ The acceptance verdict is produced by `runAcceptanceGate` and stored as
 `unified_decision` (set by the finalizer via normalizeToUnifiedDecision)
 for all status and finding decisions.
 
-### 9.3 Rollback Procedure
+### 10.3 Rollback Procedure
 
 If a deployment fails acceptance:
 
@@ -432,7 +456,7 @@ If a deployment fails acceptance:
 4. Diagnose the failure from logs, acceptance artifacts, and test output
 5. Re-deploy after fix
 
-### 9.4 Normal Operations Handoff
+### 10.4 Normal Operations Handoff
 
 After acceptance, the operator should:
 
@@ -444,7 +468,7 @@ After acceptance, the operator should:
 
 ---
 
-## 10. Source Module Reference
+## 11. Source Module Reference
 
 | Module | Path | Role |
 |---|---|---|

@@ -1,5 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { verifyAcceptanceContract } from '../src/acceptance/contract-verifier.mjs';
 
@@ -106,6 +110,154 @@ test('operation-specific contracts accept file_write, restart, admin_command, di
     const verification = verifyAcceptanceContract({ contract: item.c, result: item.r, verification: { passed: true }, stateAssertions: { passed: true, assertions: [], failures: [] } });
     assert.equal(verification.acceptance_status, 'satisfied', item.kind);
     assert.equal(verification.requires_review, false, item.kind);
+  }
+});
+
+test('external sync contract accepts durable audit evidence from acceptance.evidence.json', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-contract-audit-'));
+  try {
+    const auditLogPath = join(dir, 'sync-audit.log');
+    const acceptanceEvidencePath = join(dir, 'acceptance.evidence.json');
+    writeFileSync(auditLogPath, '{"audit_id":"audit_1"}\n', 'utf8');
+    writeFileSync(acceptanceEvidencePath, JSON.stringify({
+      collected_at: '2026-07-06T19:03:15.486Z',
+      result_json: {
+        admin_evidence: {
+          audit_log_written: true,
+          audit_log_path: auditLogPath,
+          pre_state_snapshot: { file: 'docs/run-evidence.md', commit: 'before' },
+          post_state_snapshot: { file: 'docs/run-evidence.md', commit: 'after' },
+          state_delta: { files_changed: 1 },
+        },
+      },
+      acceptance_findings: [],
+    }), 'utf8');
+
+    const verification = verifyAcceptanceContract({
+      contract: contract('external_sync', {
+        blocking_requirements: [{ id: 'audit_evidence' }],
+      }),
+      result: {
+        status: 'completed',
+        summary: 'Repair acceptance evidence for docs sync',
+        operation_kind: 'external_sync',
+        tests: 'audit evidence provided, state snapshots captured',
+        verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+        evidence_paths: { acceptance_evidence_json: acceptanceEvidencePath },
+      },
+      verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+      stateAssertions: { passed: true, assertions: [], failures: [] },
+    });
+
+    assert.equal(verification.blocking_passed, true);
+    assert.equal(verification.acceptance_status, 'satisfied');
+    assert.ok(!verification.blockers.some((entry) => entry.code === 'audit_evidence_missing'));
+    assert.equal(verification.normalized_result.admin_evidence.audit_log_written, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('external sync contract rejects text-only audit claims without durable proof', () => {
+  const verification = verifyAcceptanceContract({
+    contract: contract('external_sync', {
+      blocking_requirements: [{ id: 'audit_evidence' }],
+    }),
+    result: {
+      status: 'completed',
+      summary: 'Repair acceptance evidence for docs sync',
+      operation_kind: 'external_sync',
+      tests: 'audit evidence provided, state snapshots captured',
+      verification: { passed: true, commands: [{ cmd: 'validate contract requirements', exit_code: 0 }] },
+    },
+    verification: { passed: true, commands: [{ cmd: 'validate contract requirements', exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.blocking_passed, false);
+  assert.ok(verification.blockers.some((entry) => entry.code === 'audit_evidence_missing'));
+  assert.equal(verification.normalized_result.admin_evidence.audit_log_written, false);
+});
+
+test('code-change docs repair keeps not_required integration terminal while audit evidence is normalized', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-docs-terminal-'));
+  try {
+    const acceptanceEvidencePath = join(dir, 'acceptance.evidence.json');
+    writeFileSync(acceptanceEvidencePath, JSON.stringify({
+      result_json: {
+        admin_evidence: {
+          audit_log_written: true,
+          pre_state_snapshot: { file: 'docs/run-evidence.md' },
+          post_state_snapshot: { file: 'docs/run-evidence.md' },
+        },
+      },
+    }), 'utf8');
+
+    const verification = verifyAcceptanceContract({
+      contract: contract('code_change', {
+        requirements: { requires_commit: true, requires_integration: true },
+        blocking_requirements: [{ id: 'commit_present' }, { id: 'changed_files_reported' }, { id: 'verification_report' }, { id: 'integration_completed' }, { id: 'audit_evidence' }],
+      }),
+      result: {
+        status: 'completed',
+        summary: 'docs-only repair with audit evidence',
+        operation_kind: 'code_change',
+        changed_files: ['docs/run-evidence.md'],
+        commit: '37bbf16258ce19a4c865cb3b6c702b4c97ad17eb',
+        tests: 'audit evidence provided, state snapshots captured',
+        verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+        evidence_paths: { acceptance_evidence_json: acceptanceEvidencePath },
+        integration: { status: 'not_required', required: false, terminal: true, merged: false },
+        delivery_result_recovery: { reason: 'already_integrated', recovered: true, commit_integrated: true, commit: '37bbf16258ce19a4c865cb3b6c702b4c97ad17eb' },
+      },
+      verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+      stateAssertions: { passed: true, assertions: [], failures: [] },
+    });
+
+    assert.equal(verification.blocking_passed, true);
+    assert.equal(verification.acceptance_status, 'satisfied');
+    assert.equal(verification.normalized_result.integration.status, 'not_required');
+    assert.equal(verification.normalized_result.admin_evidence.audit_log_written, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('canonical repo reachable commit can satisfy stale worktree integration evidence', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-canonical-reach-'));
+  try {
+    execFileSync('git', ['init', '-b', 'main'], { cwd: dir, stdio: 'ignore' });
+    execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: dir });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: dir });
+    writeFileSync(join(dir, 'README.md'), 'base\n', 'utf8');
+    execFileSync('git', ['add', 'README.md'], { cwd: dir });
+    execFileSync('git', ['commit', '-m', 'initial'], { cwd: dir, stdio: 'ignore' });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: dir, encoding: 'utf8' }).trim();
+
+    const verification = verifyAcceptanceContract({
+      contract: contract('code_change', {
+        requirements: { requires_commit: true, requires_integration: true },
+        blocking_requirements: [{ id: 'commit_present' }, { id: 'changed_files_reported' }, { id: 'verification_report' }, { id: 'integration_completed' }],
+      }),
+      result: {
+        status: 'completed',
+        summary: 'docs repair already integrated in canonical repo',
+        operation_kind: 'code_change',
+        changed_files: ['README.md'],
+        commit: head,
+        tests: 'check:syntax pass',
+        verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+        repo_resolution: { canonical_repo_path: dir },
+      },
+      verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+      stateAssertions: { passed: true, assertions: [], failures: [] },
+    });
+
+    assert.equal(verification.blocking_passed, true);
+    assert.equal(verification.normalized_result.integration.status, 'already_integrated');
+    assert.equal(verification.normalized_result.delivery_result_recovery.commit_integrated, true);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
 });
 

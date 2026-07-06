@@ -1,5 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 import { normalizeOperationEvidence } from '../src/evidence/evidence-normalizer.mjs';
 
@@ -113,6 +116,125 @@ test('normalizes restart, admin_command, diagnostic, and cleanup evidence profil
   });
   assert.equal(cleanup.cleanup_evidence.active_items_preserved, true);
   assert.deepEqual(cleanup.blockers, []);
+});
+
+test('normalizes durable audit evidence from acceptance.evidence.json paths', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-audit-evidence-'));
+  try {
+    const auditLogPath = join(dir, 'sync-audit.log');
+    const acceptanceEvidencePath = join(dir, 'acceptance.evidence.json');
+    writeFileSync(auditLogPath, '{"audit_id":"audit_1"}\n', 'utf8');
+    writeFileSync(acceptanceEvidencePath, JSON.stringify({
+      collected_at: '2026-07-06T19:03:15.486Z',
+      result_json: {
+        admin_evidence: {
+          audit_log_written: true,
+          audit_log_path: auditLogPath,
+          pre_state_snapshot: { file: 'docs/run-evidence.md', commit: 'before' },
+          post_state_snapshot: { file: 'docs/run-evidence.md', commit: 'after' },
+          state_delta: { files_changed: 1 },
+        },
+      },
+    }), 'utf8');
+
+    const normalized = normalizeOperationEvidence({
+      result: {
+        status: 'completed',
+        summary: 'external sync repair with durable evidence artifact',
+        operation_kind: 'external_sync',
+        changed_files: ['docs/run-evidence.md'],
+        commit: '37bbf16258ce19a4c865cb3b6c702b4c97ad17eb',
+        verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+        evidence_paths: { acceptance_evidence_json: acceptanceEvidencePath },
+      },
+    });
+
+    assert.equal(normalized.admin_evidence.audit_log_written, true);
+    assert.equal(normalized.admin_evidence.audit_log_path, auditLogPath);
+    assert.deepEqual(normalized.admin_evidence.pre_state_snapshot, { file: 'docs/run-evidence.md', commit: 'before' });
+    assert.deepEqual(normalized.blocking_evidence.admin_evidence, normalized.admin_evidence);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('normalizes command and evidence-path based audit proof without trusting tests text alone', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-audit-command-'));
+  try {
+    const verificationLogPath = join(dir, 'verification.log');
+    writeFileSync(verificationLogPath, '# Verification Evidence\nverify audit log exists: exit 0\n', 'utf8');
+
+    const normalized = normalizeOperationEvidence({
+      result: {
+        status: 'completed',
+        summary: 'external sync repair',
+        operation_kind: 'external_sync',
+        tests: 'audit evidence provided, state snapshots captured',
+        verification: { passed: true, commands: [{ cmd: 'verify audit log exists', exit_code: 0 }] },
+        evidence_paths: { verification_log: verificationLogPath },
+        pre_state_snapshot: { queued: 2 },
+        post_state_snapshot: { queued: 1 },
+      },
+    });
+
+    assert.equal(normalized.admin_evidence.audit_log_written, true);
+    assert.equal(normalized.admin_evidence.command_id, 'verify audit log exists');
+    assert.equal(normalized.admin_evidence.audit_evidence_source, 'verification_command_with_artifact');
+    assert.deepEqual(normalized.admin_evidence.pre_state_snapshot, { queued: 2 });
+
+    const textOnly = normalizeOperationEvidence({
+      result: {
+        status: 'completed',
+        summary: 'external sync repair',
+        operation_kind: 'external_sync',
+        tests: 'audit evidence provided, state snapshots captured',
+      },
+    });
+
+    assert.equal(textOnly.admin_evidence.audit_log_written, false);
+    assert.equal(textOnly.blocking_evidence.admin_evidence, undefined);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('normalizes durable audit proof discovered through events.jsonl acceptance artifact', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'gptwork-audit-events-'));
+  try {
+    const acceptanceEvidencePath = join(dir, 'acceptance.evidence.json');
+    const eventsPath = join(dir, 'events.jsonl');
+    writeFileSync(acceptanceEvidencePath, JSON.stringify({
+      result_json: {
+        admin_evidence: {
+          audit_log_written: true,
+          audit_id: 'audit_event_1',
+          pre_state_snapshot: { count: 1 },
+          post_state_snapshot: { count: 0 },
+        },
+      },
+    }), 'utf8');
+    writeFileSync(eventsPath, JSON.stringify({
+      type: 'run_evidence.acceptance_evidence',
+      artifact: { kind: 'acceptance_evidence_json', path: acceptanceEvidencePath },
+      data: { findings_count: 0 },
+    }) + '\n', 'utf8');
+
+    const normalized = normalizeOperationEvidence({
+      result: {
+        status: 'completed',
+        summary: 'external sync repair',
+        operation_kind: 'external_sync',
+        evidence_paths: { events_jsonl: eventsPath },
+        verification: { passed: true, commands: [{ cmd: 'validate contract requirements', exit_code: 0 }] },
+      },
+    });
+
+    assert.equal(normalized.admin_evidence.audit_log_written, true);
+    assert.equal(normalized.admin_evidence.audit_id, 'audit_event_1');
+    assert.equal(normalized.admin_evidence.audit_evidence_source, 'acceptance_evidence_json');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test('operation kind mismatch and ambiguity require review without blocking quality notes', () => {

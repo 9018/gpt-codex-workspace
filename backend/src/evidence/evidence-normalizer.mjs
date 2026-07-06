@@ -1,5 +1,9 @@
+import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { normalizeList } from '../acceptance/contract-schema.mjs';
 import { operationEvidenceProfile } from './operation-evidence-profiles.mjs';
+
+const MAX_ARTIFACT_READ_BYTES = 2 * 1024 * 1024;
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -9,6 +13,204 @@ function hasValue(value) {
 
 function blocker(code, message, evidence = {}) {
   return { severity: 'blocker', code, message, source: 'evidence_normalizer', evidence };
+}
+
+function asObject(value) {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+}
+
+function isPresent(value) {
+  return value !== null && value !== undefined;
+}
+
+function copyPresentFields(target, source = {}) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return target;
+  for (const [key, value] of Object.entries(source)) {
+    if (isPresent(value)) target[key] = value;
+  }
+  return target;
+}
+
+function pathExists(path) {
+  if (!hasValue(path) || typeof path !== 'string') return false;
+  try {
+    return existsSync(path);
+  } catch {
+    return false;
+  }
+}
+
+function safeReadText(path, maxBytes = MAX_ARTIFACT_READ_BYTES) {
+  if (!pathExists(path)) return null;
+  try {
+    const stats = statSync(path);
+    if (!stats.isFile() || stats.size > maxBytes) return null;
+    return readFileSync(path, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+function safeReadJson(path) {
+  const text = safeReadText(path);
+  if (!text) return null;
+  try {
+    const parsed = JSON.parse(text);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeEvidencePaths(result = {}) {
+  return asObject(result.evidence_paths || result.evidencePaths);
+}
+
+function commandText(command) {
+  if (typeof command === 'string') return command;
+  if (command && typeof command === 'object') {
+    const args = Array.isArray(command.args) ? command.args.join(' ') : '';
+    return [command.name, command.cmd || command.command, args].filter(Boolean).join(' ');
+  }
+  return '';
+}
+
+function commandPassed(command) {
+  if (typeof command === 'string') return true;
+  if (!command || typeof command !== 'object') return false;
+  if (command.passed === true) return true;
+  return command.exit_code === 0;
+}
+
+function commandIsAuditProof(command) {
+  const text = commandText(command).toLowerCase();
+  if (!text.includes('audit')) return false;
+  return /(log|evidence|written|exists|verify|check|snapshot)/i.test(text);
+}
+
+function firstPassingAuditCommand(commands = []) {
+  return normalizeCommands(commands).find((command) => commandPassed(command) && commandIsAuditProof(command)) || null;
+}
+
+function extractAdminEvidenceFromObject(value = {}) {
+  const source = asObject(value);
+  const candidates = [
+    source.admin_evidence,
+    source.blocking_evidence?.admin_evidence,
+    source.result_json?.admin_evidence,
+    source.result_json?.blocking_evidence?.admin_evidence,
+    source.result?.admin_evidence,
+    source.result?.blocking_evidence?.admin_evidence,
+    source.normalized_result?.admin_evidence,
+    source.contract_verification?.normalized_result?.admin_evidence,
+    source.verification?.contract_verification?.normalized_result?.admin_evidence,
+  ];
+  for (const candidate of candidates) {
+    if (candidate && typeof candidate === 'object' && !Array.isArray(candidate)) return candidate;
+  }
+  return {};
+}
+
+function auditEvidenceIsStructured(evidence = {}) {
+  return evidence.audit_log_written === true || hasValue(evidence.audit_id) || pathExists(evidence.audit_log_path);
+}
+
+function adminEvidenceFromArtifact(path, source) {
+  const parsed = safeReadJson(path);
+  if (!parsed) return {};
+  const evidence = { ...extractAdminEvidenceFromObject(parsed) };
+  if (!auditEvidenceIsStructured(evidence)) return {};
+  evidence.audit_log_written = true;
+  evidence.audit_evidence_source = evidence.audit_evidence_source || source;
+  evidence.audit_evidence_path = evidence.audit_evidence_path || path;
+  return evidence;
+}
+
+function artifactPathsFromEventsJsonl(path) {
+  const text = safeReadText(path);
+  if (!text) return [];
+  const paths = [];
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue;
+    let event = null;
+    try { event = JSON.parse(line); } catch { continue; }
+    const artifact = asObject(event.artifact);
+    if (hasValue(artifact.path)) paths.push({ kind: artifact.kind || 'artifact', path: artifact.path });
+    if (hasValue(event.data?.report_path)) paths.push({ kind: 'verification_log', path: event.data.report_path });
+  }
+  return paths;
+}
+
+function verificationReportHasAuditProof(path) {
+  const parsed = safeReadJson(path);
+  if (!parsed) return null;
+  const evidence = { ...extractAdminEvidenceFromObject(parsed) };
+  if (auditEvidenceIsStructured(evidence)) {
+    return {
+      ...evidence,
+      audit_log_written: true,
+      audit_evidence_source: evidence.audit_evidence_source || 'verification_report',
+      audit_evidence_path: evidence.audit_evidence_path || path,
+    };
+  }
+  const command = firstPassingAuditCommand([...(parsed.commands || []), ...(parsed.steps || [])]);
+  if (!command) return null;
+  return {
+    audit_log_written: true,
+    audit_evidence_source: 'verification_report_command',
+    audit_evidence_path: path,
+    command_id: commandText(command) || null,
+    exit_code: 0,
+  };
+}
+
+function deriveDurableAdminEvidence(result = {}, baseEvidence = {}) {
+  const evidence = {};
+  copyPresentFields(evidence, baseEvidence);
+
+  if (pathExists(evidence.audit_log_path)) {
+    evidence.audit_log_written = true;
+    evidence.audit_evidence_source = evidence.audit_evidence_source || 'admin_evidence_path';
+  }
+
+  const paths = normalizeEvidencePaths(result);
+  const artifactPaths = [];
+  for (const [kind, path] of Object.entries(paths)) {
+    if (hasValue(path)) artifactPaths.push({ kind, path });
+  }
+  for (const eventPath of [paths.events_jsonl, result.events_jsonl].filter(hasValue)) {
+    artifactPaths.push(...artifactPathsFromEventsJsonl(eventPath));
+  }
+
+  for (const artifact of artifactPaths) {
+    const kind = String(artifact.kind || '').toLowerCase();
+    const path = artifact.path;
+    if (!hasValue(path)) continue;
+    if (kind.includes('acceptance') && kind.includes('evidence')) {
+      copyPresentFields(evidence, adminEvidenceFromArtifact(path, 'acceptance_evidence_json'));
+    } else if (kind.includes('verification') || kind.includes('report')) {
+      copyPresentFields(evidence, verificationReportHasAuditProof(path) || {});
+    } else if (kind.includes('audit') && pathExists(path)) {
+      evidence.audit_log_written = true;
+      evidence.audit_log_path = evidence.audit_log_path || path;
+      evidence.audit_evidence_source = evidence.audit_evidence_source || 'audit_artifact_path';
+      evidence.audit_evidence_path = evidence.audit_evidence_path || path;
+    }
+  }
+
+  const artifactBackedAuditCommand = artifactPaths.some((artifact) => pathExists(artifact.path))
+    ? firstPassingAuditCommand(result.verification?.commands || result.commands_run || result.commands || [])
+    : null;
+  if (artifactBackedAuditCommand) {
+    evidence.audit_log_written = true;
+    evidence.command_id = evidence.command_id || commandText(artifactBackedAuditCommand) || null;
+    evidence.exit_code = typeof evidence.exit_code === 'number' ? evidence.exit_code : 0;
+    evidence.audit_evidence_source = evidence.audit_evidence_source || 'verification_command_with_artifact';
+    const artifactPath = artifactPaths.find((artifact) => pathExists(artifact.path))?.path || null;
+    if (artifactPath) evidence.audit_evidence_path = evidence.audit_evidence_path || artifactPath;
+  }
+
+  return evidence;
 }
 
 function inferOperationKind({ result = {}, contract = {} } = {}) {
@@ -97,14 +299,15 @@ function normalizeRestartEvidence(result = {}) {
 
 function normalizeAdminEvidence(result = {}) {
   const evidence = result.admin_evidence || result.blocking_evidence?.admin_evidence || {};
+  const durableEvidence = deriveDurableAdminEvidence(result, evidence);
   return {
-    ...evidence,
-    command_id: evidence.command_id || result.command_id || result.admin_action || null,
-    pre_state_snapshot: evidence.pre_state_snapshot || result.pre_state_snapshot || null,
-    post_state_snapshot: evidence.post_state_snapshot || result.post_state_snapshot || null,
-    state_delta: evidence.state_delta || result.state_delta || null,
-    audit_log_written: evidence.audit_log_written === true || result.audit_log_written === true || hasValue(result.audit_id),
-    exit_code: typeof evidence.exit_code === 'number' ? evidence.exit_code : (typeof result.exit_code === 'number' ? result.exit_code : null),
+    ...durableEvidence,
+    command_id: durableEvidence.command_id || result.command_id || result.admin_action || null,
+    pre_state_snapshot: durableEvidence.pre_state_snapshot || result.pre_state_snapshot || null,
+    post_state_snapshot: durableEvidence.post_state_snapshot || result.post_state_snapshot || null,
+    state_delta: durableEvidence.state_delta || result.state_delta || null,
+    audit_log_written: durableEvidence.audit_log_written === true || result.audit_log_written === true || hasValue(result.audit_id),
+    exit_code: typeof durableEvidence.exit_code === 'number' ? durableEvidence.exit_code : (typeof result.exit_code === 'number' ? result.exit_code : null),
   };
 }
 
@@ -230,6 +433,54 @@ function deriveIntegrationStatus(result = {}) {
   return null;
 }
 
+function gitOutput(cwd, args) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10_000 }).trim();
+  } catch {
+    return null;
+  }
+}
+
+function gitSuccess(cwd, args) {
+  try {
+    execFileSync('git', args, { cwd, stdio: 'ignore', timeout: 10_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function commitReachableFromCanonical(result = {}) {
+  if (!hasValue(result.commit)) return null;
+  const canonicalRepoPath = result.repo_resolution?.canonical_repo_path || result.canonical_repo_path || result.canonicalRepoPath || null;
+  if (!pathExists(canonicalRepoPath)) return null;
+  const commit = String(result.commit).trim();
+  if (!gitSuccess(canonicalRepoPath, ['cat-file', '-e', `${commit}^{commit}`])) return null;
+  const head = gitOutput(canonicalRepoPath, ['rev-parse', 'HEAD']);
+  if (!head) return null;
+  const status = gitOutput(canonicalRepoPath, ['status', '--porcelain']);
+  if (gitSuccess(canonicalRepoPath, ['merge-base', '--is-ancestor', commit, 'HEAD'])) {
+    return {
+      reachable: true,
+      commit,
+      canonical_repo_path: canonicalRepoPath,
+      canonical_head: head,
+      canonical_clean: status === '',
+    };
+  }
+  return {
+    reachable: false,
+    commit,
+    canonical_repo_path: canonicalRepoPath,
+    canonical_head: head,
+    canonical_clean: status === '',
+  };
+}
+
+function integrationStatusIsTerminal(status) {
+  return ['merged', 'ff_only_merged', 'skipped', 'not_required', 'already_integrated'].includes(String(status || '').toLowerCase());
+}
+
 function deriveClosureTerminalReason(result = {}) {
   const closure = result.closure_decision || {};
   if (closure.reason) return closure.reason;
@@ -325,12 +576,45 @@ export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) 
     requires_review: result.requires_review === true,
   };
 
+  if (normalized.admin_evidence?.audit_log_written === true) {
+    normalized.blocking_evidence = {
+      ...normalized.blocking_evidence,
+      admin_evidence: normalized.admin_evidence,
+    };
+  }
+
+  const canonicalReachability = commitReachableFromCanonical(result);
+  if (canonicalReachability) normalized.commit_reachability = canonicalReachability;
+  if (canonicalReachability?.reachable === true && canonicalReachability.canonical_clean === true) {
+    normalized.delivery_result_recovery = {
+      ...(normalized.delivery_result_recovery || {}),
+      reason: normalized.delivery_result_recovery?.reason || 'already_integrated',
+      recovered: normalized.delivery_result_recovery?.recovered === false ? false : true,
+      commit: normalized.delivery_result_recovery?.commit || normalized.commit,
+      commit_integrated: true,
+      canonical_repo_path: canonicalReachability.canonical_repo_path,
+      canonical_head: canonicalReachability.canonical_head,
+    };
+    if (!normalized.integration?.merged && !normalized.integration?.auto_completed && !integrationStatusIsTerminal(normalized.integration?.status)) {
+      normalized.integration = {
+        ...normalized.integration,
+        status: 'already_integrated',
+        merged: true,
+        auto_completed: false,
+        satisfied: true,
+        already_integrated: true,
+        canonical_repo_path: canonicalReachability.canonical_repo_path,
+        canonical_head: canonicalReachability.canonical_head,
+      };
+    }
+  }
+
   // P0-AutoTerm: Propagate integration evidence from delivery_result_recovery when
   // the result has an already_integrated recovery that the normalized integration
   // field does not yet reflect.  This covers the case where a task commit is
   // already on the canonical branch but integration evidence was not explicitly
   // written to taskResult.integration before normalization.
-  if (!normalized.integration?.merged && !normalized.integration?.auto_completed) {
+  if (!normalized.integration?.merged && !normalized.integration?.auto_completed && !integrationStatusIsTerminal(normalized.integration?.status)) {
     const recovery = result.delivery_result_recovery || {};
     if (recovery.reason === 'already_integrated' || recovery.commit_integrated === true) {
       normalized.integration = {
