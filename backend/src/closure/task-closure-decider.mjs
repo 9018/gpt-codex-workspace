@@ -52,7 +52,7 @@ function integrationIsSatisfied(integration = {}, result = {}) {
   if (source.satisfied === true) return true;
   if (source.merged === true || source.auto_completed === true) return true;
   const status = String(source.status || '').toLowerCase();
-  return ['merged', 'ff_only_merged', 'skipped', 'not_required'].includes(status);
+  return ['merged', 'ff_only_merged', 'skipped', 'not_required', 'already_integrated'].includes(status);
 }
 
 function postMergeVerificationPassed(integration = {}, result = {}, verification = {}) {

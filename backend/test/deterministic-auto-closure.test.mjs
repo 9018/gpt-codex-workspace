@@ -192,3 +192,120 @@ test("missing commit evidence when requires_commit is set requires review", () =
   assert.equal(decision.status, "requires_review");
   assert.ok(decision.blockers.some((b) => b.code === "commit_evidence_missing"));
 });
+
+// ---------------------------------------------------------------------------
+// P0-AFC2: Evidence classification rules
+// ---------------------------------------------------------------------------
+
+test("non_blocking_followups without unresolved blockers completes with followups", () => {
+  const decision = decide({
+    operationKind: "code_change",
+    result: { changed_files: ["src/main.mjs"], commit: "abc123" },
+    contractVerification: {
+      non_blocking_followups: [{ title: "Refactor helpers", reason: "Post-beta polish" }],
+      quality_notes: [],
+    },
+  });
+
+  // Followups are non-blocking → auto_completed (not requires_review)
+  assert.equal(decision.status, "auto_completed_with_followups");
+  assert.equal(decision.blocking_passed, true);
+  assert.equal(decision.non_blocking_followups.length, 1);
+  assert.equal(decision.quality_notes.length, 0);
+});
+
+test("quality notes without unresolved blockers completes with followups", () => {
+  const decision = decide({
+    operationKind: "diagnostic",
+    result: { diagnostic_evidence: { summary: "ok" }, repo_mutated: false },
+    contractVerification: {
+      quality_notes: ["Consider adding explicit type annotations."],
+      non_blocking_followups: [],
+    },
+  });
+
+  // Quality notes are non-blocking → auto_completed (not requires_review)
+  assert.equal(decision.status, "auto_completed_with_followups");
+  assert.equal(decision.blocking_passed, true);
+  assert.equal(decision.quality_notes.length, 1);
+  assert.equal(decision.non_blocking_followups.length, 0);
+});
+
+test("resolved findings (previously-blocking items now in followups) still complete cleanly", () => {
+  // Scenario: blockers existed previously but were resolved — they now appear
+  // only as followups, not in blockers.  Closure must not resurrect them.
+  const decision = decide({
+    operationKind: "code_change",
+    result: { changed_files: ["src/lib.mjs"], commit: "def456" },
+    contractVerification: {
+      blockers: [],  // previously-blocking findings resolved
+      non_blocking_followups: [
+        { title: "Add missing docs", reason: "Resolved: commit exists, docs optional" },
+      ],
+      quality_notes: ["Ensure inline comments are added in follow-up PR."],
+    },
+  });
+
+  assert.equal(decision.blocking_passed, true);
+  assert.equal(decision.status, "auto_completed_with_followups");
+  assert.equal(decision.blockers.length, 0);
+  // Followups and notes are both propagated
+  assert.equal(decision.non_blocking_followups.length, 1);
+  assert.equal(decision.quality_notes.length, 1);
+});
+
+test("unresolved blockers produce requires_review", () => {
+  const decision = decideTaskClosure({
+    contract: {
+      intent: { operation_kind: "code_change" },
+      requirements: { requires_commit: false, requires_integration: false },
+      completion_policy: { auto_complete_when_blocking_requirements_pass: true },
+    },
+    contractVerification: {
+      contract_valid: true,
+      blocking_passed: false,
+      acceptance_status: "unsatisfied",
+      completion_eligible: false,
+      blockers: [
+        { severity: "blocker", code: "state_assertion_failed", message: "Required test step not evidenced." },
+      ],
+      non_blocking_followups: [],
+      quality_notes: [],
+      state_assertions: { passed: true, failures: [] },
+    },
+    verification: { passed: true, findings: [], commands: [{ cmd: "check", exit_code: 0 }] },
+    result: { status: "completed", summary: "code change partial" },
+    task: { id: "task_unresolved_blockers" },
+  });
+
+  assert.equal(decision.status, "requires_review");
+  assert.equal(decision.blocking_passed, false);
+  assert.ok(decision.blockers.length > 0);
+  assert.ok(decision.blockers.some((b) => b.code === "state_assertion_failed"));
+});
+
+test("already-satisfied delivery evidence with already_integrated status completes cleanly", () => {
+  // Scenario: a code_change task has already_integrated delivery evidence
+  // (commit is already on canonical).  Even with requires_integration: true,
+  // the system must NOT produce a false review/repair state.
+  const decision = decide({
+    operationKind: "code_change",
+    contract: {
+      requirements: { requires_integration: true, requires_commit: true },
+    },
+    result: {
+      changed_files: ["src/fix.mjs"],
+      commit: "aaa111",
+      integration: {
+        status: "already_integrated",
+        merged: true,
+        satisfied: true,
+      },
+    },
+  });
+
+  assert.equal(decision.blocking_passed, true);
+  // Already-satisfied integration should not trigger requires_review
+  assert.equal(decision.status, "auto_completed_clean");
+  assert.equal(decision.blockers.length, 0);
+});
