@@ -210,8 +210,10 @@ export async function queryContextStatus(task_id, context, { config, registry, s
 
       // --- Context health diagnostics (per-goal-file status) ---
       let contextHealth = null;
-      if (goal && workspace) {
-        const goalDirPath = join(workspace.root, ".gptwork/goals/" + goal.id);
+      if (goal) {
+        const ws4health = state.workspaces.find(function(w) { return w.id === task.workspace_id; });
+        if (ws4health) {
+          const goalDirPath = join(ws4health.root, ".gptwork/goals/" + goal.id);
         const health = {};
 
         // codex.entry.md
@@ -305,6 +307,7 @@ export async function queryContextStatus(task_id, context, { config, registry, s
         health.review_packet_viable = (hasResultJson || hasResultMd) && (hasChangedFiles || hasVerification);
 
         contextHealth = health;
+        }
       }
 
       taskInfo = {
