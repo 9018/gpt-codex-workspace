@@ -177,20 +177,17 @@ cd gpt-codex-workspace
 # 2. Check out the launch baseline
 git checkout c4ec54cd4c74641a50fabd0c4e98ae6f70a81693
 
-# 3. Install dependencies
-cd backend && npm install
+# 3. Install dependencies and link CLI
+cd backend && npm install && npm link
 
-# 4. Copy and configure runtime environment
-cp .gptwork/runtime.env.example .gptwork/runtime.env
-# Edit .gptwork/runtime.env with production values
+# 4. Productized initialization (creates dirs, templates, validates)
+gptwork init
+# Run gptwork fix if issues are reported
 
-# 5. Run production initialization script
-node scripts/init-production.mjs
-
-# 6. Run release gate to confirm baseline
+# 5. Run release gate to confirm baseline
 npm run release:delivery-check
 
-# 7. Start the server (manual or systemd)
+# 6. Start the server (manual or systemd)
 # Manual:
 node src/cli.mjs
 
@@ -208,8 +205,11 @@ After starting the server, verify operational readiness:
 # Health check
 curl -s http://localhost:8787/health | jq .
 
-# Runtime status
-gptwork runtime_status
+# Full productized check
+gptwork init
+
+# Runtime diagnostics with enhanced checks
+gptwork doctor --local
 
 # Quick self-test
 gptwork self_test

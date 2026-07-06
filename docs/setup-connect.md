@@ -26,17 +26,49 @@ This guide walks you through the recommended path from clone to ChatGPT connecti
 
 ---
 
-## Quick Install
+## Quick Install (Productized Flow)
+
+### One-Step Initialization
 
 ```bash
 cd backend
 npm install
 npm link
+gptwork init
+```
+
+`gptwork init` creates all required directories, templates, and runs a full diagnostic suite:
+
+| Check | What it validates |
+|-------|-------------------|
+| Git repo | Detectable via `git rev-parse` |
+| `.gptwork/` | Directory structure (goals, reports, workflows) |
+| `runtime.env` | Exists and validated against `runtime.env.example` |
+| Project context | `.gptwork/project.md` and `.gptwork/project.env` |
+| Repo registry | `.gptwork/repos.json` format and content |
+| npm deps | `node_modules` present after install |
+| Required dirs | `data/workspaces/`, `data/logs` |
+| Git worktree | Clean or dirty state |
+| Codex CLI | Available in PATH |
+
+Initialization NEVER overwrites existing configuration. Missing items are reported with fix hints.
+
+### Automated Repair
+
+```bash
+gptwork fix
+```
+
+Creates missing directories, templates, and installs deps. Does NOT overwrite existing config.
+> **Note**: `gptwork fix` will NOT proceed if the git working tree has uncommitted changes.
+
+### Traditional Setup
+
+```bash
 gptwork setup
 ```
 
-`gptwork setup` creates `.gptwork/runtime.env` with safe defaults.
-It will **not** overwrite existing secrets. Edit the file to set your configuration.
+Creates `.gptwork/runtime.env` with safe defaults. Does not overwrite existing secrets.
 
 ### Runtime Environment Variables
 
@@ -138,7 +170,10 @@ After starting the server, run these checks:
 # Quick health check
 curl http://127.0.0.1:8787/health
 
-# Local diagnostics
+# Full productized check (recommended entry point)
+gptwork init
+
+# Local diagnostics with enhanced checks
 gptwork doctor --local
 
 # Self-test (9 check categories)

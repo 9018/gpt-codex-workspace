@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { buildRuntimeConfig } from "../src/runtime-config.mjs";
 import { StateStore } from "../src/state-store.mjs";
+let _savedOnboardingInit = null;
 import { collectWorkerQueueCounts } from "../src/worker-queue-counts.mjs";
 import { handoffToAgent, readHandoff, handoffPaths } from "../src/handoff-service.mjs";
 import { enqueueGoal, listGoalQueue, startNextQueuedGoal, cancelGoalQueueItem } from "../src/goal-queue.mjs";
@@ -13,6 +14,8 @@ const args = process.argv.slice(2);
 function usage() {
   return `gptwork commands:
   setup
+  init
+  fix
   start
   connect [--local]
   status [--local]
@@ -83,6 +86,27 @@ async function runDemoMultiTask(rest = []) {
   console.log("task_2 -> branch=gptwork/task/task_2 worktree=worktrees/default/task_2 goal=goal_2 result=.gptwork/goals/goal_2/result.json verification=.gptwork/goals/goal_2/verification.json");
   console.log("task_3 -> branch=gptwork/task/task_3 worktree=worktrees/default/task_3 goal=goal_3 result=.gptwork/goals/goal_3/result.json verification=.gptwork/goals/goal_3/verification.json");
   console.log("review: verification.passed=false enters waiting_for_review or waiting_for_repair; completed requires verification.passed=true.");
+}
+
+async function getOnboardingInit() {
+  if (!_savedOnboardingInit) {
+    _savedOnboardingInit = await import("../src/onboarding-init.mjs");
+  }
+  return _savedOnboardingInit;
+}
+
+async function printInit() {
+  const oi = await getOnboardingInit();
+  const checks = await oi.runInit();
+  console.log("");
+  oi.printInitReport(checks);
+}
+
+async function printFix() {
+  const oi = await getOnboardingInit();
+  const result = await oi.runFix();
+  console.log("");
+  oi.printFixReport(result);
 }
 
 function workspaceRoot() {
@@ -243,6 +267,30 @@ async function printDoctor() {
   if (!githubEnabled) console.log("  * Configure GitHub: set GPTWORK_GITHUB_ENABLED=true in runtime.env");
   if (!barkEnabled) console.log("  * Configure Bark: set GPTWORK_BARK_ENABLED=true in runtime.env");
   console.log("  * Run `npm run test:e2e-acceptance` for full acceptance verification");
+  // Add onboarding diagnostics
+  try {
+    const oi = await getOnboardingInit();
+    const envCheck = oi.validateRuntimeEnvAgainstExample();
+    const registryCheck = oi.checkRepoRegistry();
+    const contextCheck = oi.checkProjectContext();
+    const codexCheck = oi.checkCodexAvailability();
+    const workerCheck = oi.checkWorkerStatus(config);
+    const githubCheck = oi.checkGitHubConnectivity(config);
+
+    console.log("");
+    console.log("-- Enhanced Diagnostics --");
+    console.log(`  ${envCheck.status === "pass" ? "OK" : envCheck.status === "warn" ? "WARN" : "FAIL"} env_vs_example: ${envCheck.detail.slice(0, 80)}`);
+    console.log(`  ${registryCheck.status === "pass" ? "OK" : registryCheck.status === "warn" ? "WARN" : "FAIL"} repo_registry: ${registryCheck.detail.slice(0, 80)}`);
+    console.log(`  ${contextCheck.status === "pass" ? "OK" : "FAIL"} project_context: ${contextCheck.detail.slice(0, 80)}`);
+    console.log(`  ${codexCheck.status === "pass" ? "OK" : "WARN"} codex: ${codexCheck.detail.slice(0, 80)}`);
+    console.log(`  ${workerCheck.status === "pass" ? "OK" : "WARN"} worker: ${workerCheck.detail.slice(0, 80)}`);
+    console.log(`  ${githubCheck.status === "pass" ? "OK" : githubCheck.status === "skip" ? "--" : "WARN"} github: ${githubCheck.detail.slice(0, 80)}`);
+    console.log("");
+    console.log("  Run `gptwork init` for a full productized initialization report");
+  } catch (e) {
+    // Enhanced diagnostics are optional
+  }
+
 }
 
 async function printSelfTest() {
@@ -541,6 +589,21 @@ async function main() {
   if (command === "setup") return printSetup();
   if (command === "start") return startServer();
   if (command === "connect") return printConnect();
+  if (command === "init") {
+    if (args.includes("--help")) {
+      console.log("gptwork init -- one-step initialization and diagnostics");
+      return;
+    }
+    return printInit();
+  }
+  if (command === "fix") {
+    if (args.includes("--help")) {
+      console.log("gptwork fix -- automated repair for common initialization issues");
+      return;
+    }
+    return printFix();
+  }
+
   if (command === "status") return printStatus();
   if (command === "doctor") return printDoctor();
   if (command === "self-test") return printSelfTest();

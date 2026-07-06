@@ -39,8 +39,7 @@ GPTWork 不是部署平台，也不是 secrets 管理系统。它只协调执行
 cd backend
 npm install
 npm link
-gptwork setup
-gptwork settings set GPTWORK_TOOL_MODE standard
+gptwork init
 gptwork start
 ```
 
@@ -48,11 +47,18 @@ gptwork start
 
 ```bash
 cd backend
-gptwork doctor --local
+gptwork init        # 一键初始化+诊断
+gptwork doctor --local  # 详细诊断（含 env 校验）
 gptwork status --local
 gptwork connect --local
 gptwork self-test --local
 curl http://127.0.0.1:8787/health
+```
+
+如有缺失项，自动修复：
+
+```bash
+gptwork fix         # 自动创建缺失文件和依赖
 ```
 
 常用发布前检查：
@@ -255,10 +261,12 @@ npm run check:syntax
 npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 npm run test:e2e-acceptance
-node bin/gptwork.mjs doctor --local
+node bin/gptwork.mjs init        # 一键初始化+诊断
+node bin/gptwork.mjs doctor --local  # 详细诊断
 node bin/gptwork.mjs status --local
 node bin/gptwork.mjs connect --local
 node bin/gptwork.mjs self-test --local
+node bin/gptwork.mjs fix         # 自动修复缺失项
 ```
 
 队列相关：
