@@ -560,6 +560,72 @@ export async function getPipelineDiagnostics(store, { task_id } = {}) {
  *   typing_summary: object,
  * }>}
  */
+
+// ---------------------------------------------------------------------------
+// Pipeline gate detail: per-role provenance and legacy bypass status
+// ---------------------------------------------------------------------------
+
+/**
+ * Build detailed pipeline gate diagnostics for each blocking role.
+ * Reports required artifact, missing artifact, backend provenance,
+ * execution semantic, and legacy bypass status for every blocking gate.
+ * This is used by the runtime doctor and review packet for observability.
+ *
+ * @param {object} store - State store
+ * @param {object} options
+ * @param {string} options.task_id - Task to inspect
+ * @param {object} [config={}] - Runtime config for role backend resolution
+ * @returns {Promise<{ gates: Array<object>, legacy_bypass: boolean }>}
+ */
+export async function buildPipelineGateDetail(store, { task_id, config = {} } = {}) {
+  const { ARTIFACT_SCHEMA } = await import("./agent-artifact-contract.mjs");
+  const { ROLE_BACKEND_DEFAULTS } = await import("./agent-execution-backends.mjs");
+
+  const existing = await listAgentRuns(store, { task_id, limit: 100 });
+  const agentRuns = existing.agent_runs || [];
+
+  const taskStore = await store.load();
+  const task = (taskStore.tasks || []).find((t) => t.id === task_id) || {};
+  const legacyBypass = isLegacyTask(task) && !shouldEnforcePipelineGates(task);
+
+  const gates = [];
+
+  for (const role of BLOCKING_GATE_ROLES) {
+    const run = agentRuns.find((r) => normalizeContractRole(r.role) === role);
+    const required = Array.from(ARTIFACT_SCHEMA.required_by_role[role] || []);
+    const artifacts = [
+      ...(Array.isArray(run?.input_artifacts) ? run.input_artifacts : []),
+      ...(Array.isArray(run?.output_artifacts) ? run.output_artifacts : []),
+    ];
+    const presentKinds = new Set(artifacts.map((a) => a.kind || a).filter(Boolean));
+    const missing = required.filter((k) => !presentKinds.has(k));
+
+    const backendId = run?.backend || ROLE_BACKEND_DEFAULTS[role]?.backend || "null";
+    const semantic = run?.execution_semantic
+      || (backendId === "null" ? "auto_artifact" : "real");
+
+    gates.push({
+      contract_role: role,
+      backend: backendId,
+      execution_semantic: semantic,
+      status: run?.status || "not_created",
+      satisfied: missing.length === 0 && (run?.status === "completed" || run?.status === "skipped"),
+      required_artifacts: required,
+      missing_artifacts: missing,
+      has_agent_run: Boolean(run),
+      agent_run_id: run?.id || null,
+      completed_at: run?.completed_at || null,
+      legacy_bypass: legacyBypass,
+      backend_provenance: backendId === "codex_exec"
+        ? "real agent execution (builder/repairer path)"
+        : backendId === "local_command"
+          ? "deterministic shell command execution (verifier/reviewer path)"
+          : `auto_artifact (${role} completed from task result evidence, no external commands)`,
+    });
+  }
+
+  return { gates, legacy_bypass: legacyBypass };
+}
 export async function convergeBacklog(store, config = {}) {
   const { getTaskAcceptanceBundle } = await import('./review/task-acceptance-bundle.mjs');
   const { reconcileBundle, RECONCILIATION_TYPES } = await import('./review/review-backlog-reconciler.mjs');

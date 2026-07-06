@@ -225,6 +225,61 @@ export function isRealBackendResult(parsedResult) {
   return parsedResult?.execution_semantic === AGENT_BACKEND_SEMANTIC.REAL;
 }
 
+/**
+ * Build a compact pipeline role-backend chain for diagnostics and review docs.
+ * Clearly distinguishes real execution from auto-artifact/noop roles so users
+ * can see at a glance which roles involve independent LLM agent execution
+ * versus automatic artifact completion from evidence.
+ *
+ * Pipeline semantics:
+ * - codex_exec:     Real agent execution (builder, repairer)
+ * - local_command:  Deterministic shell command execution (verifier, reviewer)
+ * - null:           Auto-artifact completion (context_curator, planner, integrator, finalizer)
+ *   - auto_artifact:   Deterministic completion from task result evidence (default for integrator, finalizer)
+ *   - test_noop:       Test mode stub (null backend with explicit test_only reason)
+ *   - configured_null: Explicit operator choice to use null backend
+ *
+ * @param {object} [config={}] - Runtime config with potential role backend overrides
+ * @param {string[]} [roles] - Role names to include; defaults to pipeline roles
+ * @returns {{ chain: Array<{ role: string, backend: string, semantic: string, label: string }>, summary: string }}
+ */
+export function buildPipelineRoleBackendChain(config = {}, roles) {
+  const roleList = Array.isArray(roles) && roles.length > 0
+    ? roles
+    : Object.keys(ROLE_BACKEND_DEFAULTS);
+
+  const chain = roleList.map((role) => {
+    const backend = resolveAgentBackendId({ config, role, task: {} });
+    const semantic = resolveBackendSemantic(backend, { role });
+    const label = _backendLabel(backend, semantic, role);
+    return { role, backend, semantic, label };
+  });
+
+  const summary = chain.map((c) => c.label).join("\n");
+  return { chain, summary };
+}
+
+/**
+ * Produce a human-readable label for a role's backend in the pipeline chain.
+ * Used by buildPipelineRoleBackendChain to produce clear diagnostics.
+ */
+function _backendLabel(backend, semantic, role) {
+  if (backend === AGENT_BACKEND_IDS.CODEX_EXEC) {
+    return `${role} → codex_exec (real agent execution)`;
+  }
+  if (backend === AGENT_BACKEND_IDS.LOCAL_COMMAND) {
+    return `${role} → local_command (deterministic shell command)`;
+  }
+  /* null backend */
+  if (semantic === AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT) {
+    return `${role} → null/auto_artifact (auto-completed from evidence, no external commands)`;
+  }
+  if (semantic === AGENT_BACKEND_SEMANTIC.TEST_NOOP) {
+    return `${role} → null/test_noop (test mode stub, no external commands)`;
+  }
+  return `${role} → null/configured (explicit operator choice)`;
+}
+
 export class CodexExecBackend {
   constructor({ runCodexTaskFn } = {}) {
     this.id = AGENT_BACKEND_IDS.CODEX_EXEC;

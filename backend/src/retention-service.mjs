@@ -866,6 +866,80 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
  * @param {boolean} [opts.archiveBeforeDelete=true] - archive before removing
  * @returns {Promise<object>}
  */
+
+// ---------------------------------------------------------------------------
+// Retention diagnostic summary — compact doctor/release report
+// ---------------------------------------------------------------------------
+
+/**
+ * Produce a compact retention diagnostics report suitable for doctor/release output.
+ * Reports worktree, branch, and goal storage pressure with dry-run cleanup suggestions.
+ * Does NOT perform any cleanup — only reports status and provides actionable advice.
+ *
+ * @param {object} opts
+ * @param {object} opts.store - State store
+ * @param {string} opts.workspaceRoot - Workspace root path
+ * @param {number} [opts.limit=50] - Per-category retention limit for comparison
+ * @returns {Promise<{ families: Array<object>, pressure_summary: object, dry_run_suggestions: string[], healthy: boolean }>}
+ */
+export async function retentionDiagnosticSummary({ store, workspaceRoot, limit = 50 } = {}) {
+
+  const status = await retentionStatus({ store, workspaceRoot, config: {} });
+  const families = status.families || [];
+
+  // Categorize families into pressure levels
+  let highPressureCount = 0;
+  let mediumPressureCount = 0;
+  let healthyCount = 0;
+
+  const dryRunSuggestions = [];
+
+  for (const f of families) {
+    const overBy = f.terminal_count > limit ? f.terminal_count - limit : 0;
+    if (overBy > 20) {
+      highPressureCount++;
+      dryRunSuggestions.push(
+        `${f.name}: ${overBy} terminal items over limit (${f.terminal_count}/${limit}). ` +
+        `${f.proposed_action || "Consider archiving oldest terminal items."} ` +
+        `Use retentionCleanup({ dryRun: true }) to preview.`
+      );
+    } else if (overBy > 0) {
+      mediumPressureCount++;
+      dryRunSuggestions.push(
+        `${f.name}: ${overBy} terminal items over limit (${f.terminal_count}/${limit}). ` +
+        `${f.proposed_action || "Low pressure, still actionable."}`
+      );
+    } else {
+      healthyCount++;
+    }
+  }
+
+  // Add generic worktree/branch cleanup suggestions
+  const timestamp = new Date().toISOString().slice(0, 10);
+  dryRunSuggestions.push(
+    `Dry-run: \`retentionCleanup({ store, workspaceRoot, dryRun: true })\` to preview all changes without applying them.`
+  );
+  dryRunSuggestions.push(
+    `Retention limit: ${limit} terminal items per category. Override with GPTWORK_RETENTION_LIMIT env var.`
+  );
+
+  return {
+    families,
+    pressure_summary: {
+      total_families: families.length,
+      high_pressure: highPressureCount,
+      medium_pressure: mediumPressureCount,
+      healthy: healthyCount,
+      most_pressured: families.filter(f => f.terminal_count > limit)
+        .sort((a, b) => (b.terminal_count - b.current_count + limit) - (a.terminal_count - a.current_count + limit))
+        .slice(0, 3)
+        .map(f => ({ name: f.name, terminal: f.terminal_count, limit, over_by: f.terminal_count - limit })),
+    },
+    dry_run_suggestions: dryRunSuggestions,
+    healthy: highPressureCount === 0,
+    reported_at: new Date().toISOString(),
+  };
+}
 export async function retentionCleanup({
   config, store, workspaceRoot,
   limit = 50, dryRun = true, archiveBeforeDelete = true,

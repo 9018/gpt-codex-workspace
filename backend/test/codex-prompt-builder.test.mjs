@@ -457,4 +457,105 @@ test('buildCodexPrompt: preserves zvec/ZEVc quota and diagnostics behavior', () 
   assert.equal(fullPrompt.includes('reimplement zvec'), false, 'Must not contain reimplement zvec');
   assert.equal(fullPrompt.includes('Do not reimplement'), false, 'Must not reference internal tool constraints in prompt');
 });
+
+// ===========================================================================
+// P0: Context degradation signals — bundle/retrieval missing
+// ===========================================================================
+
+test('buildCodexPrompt with degradationNotes about missing bundle warns clearly', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_degraded', title: 'Degraded bundle', description: '' },
+    goal: { id: 'goal_degraded' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_degraded/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_degraded/context.bundle.md',
+      context_json: '.gptwork/goals/goal_degraded/context.json',
+      goal_md: '.gptwork/goals/goal_degraded/goal.md',
+      transcript_md: '.gptwork/goals/goal_degraded/transcript.md',
+      result_md: '.gptwork/goals/goal_degraded/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+    degradationNotes: [
+      '**WARNING: context.bundle.md is missing**. Codex will rely on codex.entry.md and explicit deep-lookup files only.',
+      'Reason: Context index unavailable — check context_status diagnostics.',
+    ],
+  });
+
+  assert.ok(fullPrompt.includes('WARNING: context.bundle.md is missing'), 'Should warn about missing bundle');
+  assert.ok(fullPrompt.includes('Context index unavailable'), 'Should mention the degradation reason');
+  // The prompt should still be entry-first
+  assert.ok(fullPrompt.includes('Start by reading only this bounded entrypoint'), 'Entry-first directive must be present even with degradation');
+  assert.ok(fullPrompt.includes('codex.entry.md'), 'codex.entry.md must still be referenced');
+});
+
+test('buildCodexPrompt with degradationNotes about retrieval failure instructs fallback', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_retrieval_fail', title: 'Retrieval failure', description: '' },
+    goal: { id: 'goal_retrieval' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_retrieval/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_retrieval/context.bundle.md',
+      context_json: '.gptwork/goals/goal_retrieval/context.json',
+      goal_md: '.gptwork/goals/goal_retrieval/goal.md',
+      transcript_md: '.gptwork/goals/goal_retrieval/transcript.md',
+      result_md: '.gptwork/goals/goal_retrieval/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+    degradationNotes: [
+      '**WARNING: Context retrieval is unavailable**. Falling back to durable sources (goal.md, result.json, task fields).',
+      'context.retrieval.json exists but contains no retrieved chunks — it is diagnostic only.',
+    ],
+  });
+
+  assert.ok(fullPrompt.includes('Context retrieval is unavailable'), 'Should warn about retrieval failure');
+  assert.ok(fullPrompt.includes('diagnostic only'), 'Should describe retrieval as diagnostic only');
+  assert.ok(fullPrompt.includes('bounded entrypoint'), 'Entry-first model preserved');
+});
+
+test('buildCodexPrompt without degradationNotes avoids degradation language', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_no_deg', title: 'Clean prompt', description: '' },
+    goal: { id: 'goal_no_deg' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_no_deg/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_no_deg/context.bundle.md',
+      context_json: '.gptwork/goals/goal_no_deg/context.json',
+      goal_md: '.gptwork/goals/goal_no_deg/goal.md',
+      transcript_md: '.gptwork/goals/goal_no_deg/transcript.md',
+      result_md: '.gptwork/goals/goal_no_deg/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+  });
+
+  assert.equal(fullPrompt.includes('WARNING'), false, 'Should not contain WARNING');
+  assert.equal(fullPrompt.includes('degradation'), false, 'Should not contain degradation language');
+});
+
+test('buildCodexPrompt degradationNotes with large transcript warns Codex about size', () => {
+  const { fullPrompt } = buildCodexPrompt({
+    task: { id: 'task_large_transcript', title: 'Large transcript', description: '' },
+    goal: { id: 'goal_large' },
+    workspaceFiles: {
+      codex_entry_md: '.gptwork/goals/goal_large/codex.entry.md',
+      context_bundle_md: '.gptwork/goals/goal_large/context.bundle.md',
+      context_json: '.gptwork/goals/goal_large/context.json',
+      goal_md: '.gptwork/goals/goal_large/goal.md',
+      transcript_md: '.gptwork/goals/goal_large/transcript.md',
+      result_md: '.gptwork/goals/goal_large/result.md',
+    },
+    workspaceRoot: '/tmp/ws',
+    defaultRepoPath: null,
+    degradationNotes: [
+      '**WARNING: Transcript is 125.0 KB (12 messages).** Large transcripts may degrade Codex reasoning quality.',
+      'Do not read transcript.md by default. Rely on context.bundle.md and codex.entry.md.',
+    ],
+  });
+
+  assert.ok(fullPrompt.includes('Transcript is 125.0 KB'), 'Should warn about transcript size');
+  assert.ok(fullPrompt.includes('Do not read transcript.md'), 'Should explicitly tell Codex not to read large transcript by default');
+});
+
 console.log("codex-prompt-builder.test.mjs loaded");

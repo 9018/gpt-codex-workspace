@@ -39,6 +39,7 @@ export function buildCodexPrompt({
   resultMdPath,
   canonicalRepoPath,
   taskWorktreePath,
+  degradationNotes,
 } = {}) {
   const separator = "=".repeat(60);
   const taskId = task?.id || "unknown";
@@ -77,6 +78,11 @@ export function buildCodexPrompt({
       ``,
       `Write final Markdown results to ${files.result_md || _resultMdPath}.`,
     ].filter(Boolean).join("\n");
+  }
+
+  // Degradation notes: when bundle/retrieval fails, add clear fallback language
+  if (Array.isArray(degradationNotes) && degradationNotes.length > 0) {
+    goalContextBlock += "\n\n" + degradationNotes.join("\n");
   }
 
   const fullPrompt = `# Task: ${task?.title || taskId}

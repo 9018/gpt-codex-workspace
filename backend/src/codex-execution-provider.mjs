@@ -19,6 +19,60 @@ export function isCodexTuiEnabled(config = {}, env = process.env) {
   return String(explicit || "").trim().toLowerCase() === "true";
 }
 
+// ---------------------------------------------------------------------------
+// Codex execution provider mode descriptions for diagnostics and docs.
+// These make it unambiguous in runtime_status / doctor output which provider
+// is the default production path and which is the manual operator fallback.
+// ---------------------------------------------------------------------------
+
+/**
+ * Describe the execution provider mode in a human-readable form.
+ * Explicitly labels codex_exec as the default production path and
+ * codex_tui_goal as the manual operator fallback.
+ *
+ * @param {string} provider - Provider identifier (codex_exec or codex_tui_goal)
+ * @returns {{ id: string, label: string, is_default: boolean, is_manual_fallback: boolean, description: string }}
+ */
+export function describeCodexExecutionProvider(provider) {
+  const p = normalizeCodexExecutionProvider(provider);
+  if (p === CODEX_EXECUTION_PROVIDERS.TUI_GOAL) {
+    return {
+      id: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+      label: "codex_tui_goal (manual operator fallback)",
+      is_default: false,
+      is_manual_fallback: true,
+      description: "Codex TUI interactive mode. This is a MANUAL OPERATOR FALLBACK, not an automatic execution path. The operator works interactively in a terminal session and must collect durable evidence (commit, tests, result.md) to enter the acceptance/verification closure loop."
+    };
+  }
+  return {
+    id: CODEX_EXECUTION_PROVIDERS.EXEC,
+    label: "codex_exec (default automatic production path)",
+    is_default: true,
+    is_manual_fallback: false,
+    description: "Codex exec automatic mode. This is the DEFAULT production execution path. Codex runs autonomously via CLI, produces structured result contracts, verification evidence, and commits. All tasks default to this provider unless explicitly configured to codex_tui_goal."
+  };
+}
+
+/**
+ * Get the execution provider mode for a task, with fallback to the default.
+ * This is used by diagnostics to explain why a task is using a particular provider.
+ *
+ * @param {object} task - Task object with optional metadata.codex_execution_provider
+ * @returns {{ provider: string, description: string }}
+ */
+export function getTaskExecutionProviderMode(task = {}) {
+  const raw = task?.metadata?.codex_execution_provider;
+  const provider = normalizeCodexExecutionProvider(raw);
+  const desc = describeCodexExecutionProvider(provider);
+  return {
+    provider,
+    explicit: raw === CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+    is_default: desc.is_default,
+    is_manual_fallback: desc.is_manual_fallback,
+    description: desc.description,
+  };
+}
+
 
 // P0-UA6-G4: Superpowers plugin preflight for TUI fallback.
 // When explicit TUI fallback is requested, verify that the Superpowers

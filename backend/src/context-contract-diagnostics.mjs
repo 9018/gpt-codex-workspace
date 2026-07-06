@@ -276,6 +276,93 @@ function checkContextIndex(contextIndexStatus = {}) {
   };
 }
 
+
+// ---------------------------------------------------------------------------
+// 9. Manifest completeness
+// ---------------------------------------------------------------------------
+
+/**
+ * Validate context.manifest.json completeness.
+ *
+ * A complete manifest must have:
+ * - Valid JSON structure with schema_version
+ * - entrypoint field
+ * - default_context_package with at least codex.entry.md
+ * - artifacts section with required artifacts marked present
+ * - lookup_policy with default_read_order defined
+ *
+ * @param {string|null} goalDir
+ * @returns {{ exists: boolean, valid: boolean, complete: boolean, issues: string[], assessment: string }}
+ */
+function checkManifestCompleteness(goalDir) {
+  const issues = [];
+  if (!goalDir) return { exists: false, valid: false, complete: false, issues: ["No goal directory available"], assessment: "missing" };
+
+  const manifestPath = join(goalDir, "context.manifest.json");
+  if (!existsSync(manifestPath)) {
+    return { exists: false, valid: false, complete: false, issues: ["context.manifest.json does not exist"], assessment: "missing" };
+  }
+
+  const manifest = readJsonIfExists(manifestPath);
+  if (!manifest || typeof manifest !== "object") {
+    return { exists: true, valid: false, complete: false, issues: ["context.manifest.json contains invalid JSON"], assessment: "invalid" };
+  }
+
+  // Check schema_version
+  if (!manifest.schema_version) {
+    issues.push("Missing schema_version in manifest");
+  }
+
+  // Check entrypoint
+  if (!manifest.entrypoint) {
+    issues.push("Missing entrypoint field in manifest");
+  }
+
+  // Check default_context_package
+  const pkg = manifest.default_context_package;
+  if (!Array.isArray(pkg) || pkg.length === 0) {
+    issues.push("Missing or empty default_context_package");
+  } else {
+    const hasEntry = pkg.some((p) => p && p.includes("codex.entry.md"));
+    const hasBundle = pkg.some((p) => p && p.includes("context.bundle.md"));
+    if (!hasEntry) issues.push("default_context_package missing codex.entry.md");
+    if (!hasBundle) issues.push("default_context_package missing context.bundle.md");
+  }
+
+  // Check artifacts section
+  const artifacts = manifest.artifacts;
+  if (!artifacts || typeof artifacts !== "object") {
+    issues.push("Missing or invalid artifacts section in manifest");
+  } else {
+    const requiredArtifacts = ["codex_entry", "context_bundle", "context_manifest"];
+    for (const key of requiredArtifacts) {
+      const artifact = artifacts[key];
+      if (!artifact) {
+        issues.push("Missing required artifact: " + key);
+      } else if (artifact.required !== false && artifact.present !== true) {
+        issues.push(`Required artifact ${key} is missing or not present`);
+      }
+    }
+  }
+
+  // Check lookup_policy
+  const lookup = manifest.lookup_policy;
+  if (!lookup || typeof lookup !== "object") {
+    issues.push("Missing or invalid lookup_policy in manifest");
+  } else if (!Array.isArray(lookup.default_read_order) || lookup.default_read_order.length === 0) {
+    issues.push("Missing or empty default_read_order in lookup_policy");
+  }
+
+  const complete = issues.length === 0;
+  return {
+    exists: true,
+    valid: true,
+    complete,
+    issues,
+    assessment: complete ? "complete" : "incomplete",
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
@@ -416,6 +503,19 @@ export async function runContextContractDiagnostics(options = {}) {
     }
   }
 
+  // 9. Manifest completeness
+  const manifestCheck = checkManifestCompleteness(goalDir);
+  checks.manifest = manifestCheck;
+  if (!manifestCheck.complete) {
+    for (const issue of manifestCheck.issues) {
+      warnings.push({
+        code: "manifest_incomplete",
+        message: "Context manifest issue: " + issue,
+        severity: manifestCheck.assessment === "missing" ? DEFAULT_WARN_SEVERITY : INFO_SEVERITY,
+      });
+    }
+  }
+
   // Overall status
   const severeWarnings = warnings.filter((w) => w.severity !== INFO_SEVERITY);
   let overallStatus;
@@ -453,4 +553,5 @@ export {
   checkCompactReviewBundle,
   checkHelperTools,
   checkContextIndex,
+  checkManifestCompleteness,
 };

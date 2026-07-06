@@ -83,3 +83,159 @@ test("collect can return ready_for_review when durable evidence is present", asy
   assert.equal(snapshot.ready_for_review, true);
   assert.deepEqual(snapshot.findings, []);
 });
+
+// ===========================================================================
+// P1-Multi-Agent: Enhanced TUI completion collector tests for acceptance contract
+// evidence mapping. These tests verify that completed TUI session evidence
+// maps to the acceptance contract required fields (result, verification, acceptance).
+// ===========================================================================
+
+test("collect maps complete acceptance contract evidence when result.md has commit and tests", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+
+  // Create session-level commit evidence
+  const store = createCodexTuiSessionStore({ workspaceRoot: repo });
+  await store.updateSession("session_1", { commit: "abc123def456", tests: "npm run check:syntax && npm run check:imports" });
+
+  // Create result.md with matching evidence
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), "Summary: TUI session completed.\n\nCommit: abc123def456\nTests: npm run check:syntax && npm run check:imports\n");
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  // Acceptance contract fields: commit is present
+  assert.equal(snapshot.commit, "abc123def456", "commit maps to acceptance contract commit field");
+  // Acceptance contract fields: tests/verification evidence is present
+  assert.equal(snapshot.tests, "npm run check:syntax && npm run check:imports", "tests maps to acceptance contract verification field");
+  // Acceptance contract fields: result.md presence = result evidence
+  assert.equal(snapshot.result_md_present, true, "result_md_present maps to acceptance contract result evidence");
+  // Acceptance contract fields: changed_files = acceptance evidence
+  assert.deepEqual(snapshot.changed_files, [], "changed_files maps to acceptance contract change evidence");
+  // Ready for review = all acceptance fields complete
+  assert.equal(snapshot.ready_for_review, true, "ready_for_review means all acceptance fields are satisfied");
+  assert.deepEqual(snapshot.findings, [], "no findings means acceptance contract is complete");
+
+  // Verify the snapshot has the required acceptance contract shape
+  assert.ok(typeof snapshot.kind === "string", "has kind field");
+  assert.ok(snapshot.session_id, "has session_id field");
+  assert.ok(snapshot.goal_id, "has goal_id field");
+  assert.ok(snapshot.task_id, "has task_id field");
+  assert.ok(Array.isArray(snapshot.changed_files), "has changed_files array");
+  assert.ok(typeof snapshot.commit === "string" || snapshot.commit === null, "has commit (can be null)");
+  assert.ok(typeof snapshot.tests === "string" || snapshot.tests === null, "has tests (can be null)");
+});
+
+
+// ===========================================================================
+// P1-Multi-Agent: Enhanced TUI completion acceptance contract evidence tests.
+// ===========================================================================
+
+test("collect returns precise review reasons when evidence is incomplete with dirty worktree", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+
+  // result.md present but no commit and no tests
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), "Summary only, no commit or tests here.\n");
+
+  // Make a non-excluded dirty change to trigger commit_missing
+  await writeFile(join(repo, "uncommitted.txt"), "dirty change\n");
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  // result.md is present
+  assert.equal(snapshot.result_md_present, true);
+  // But no commit or tests evidence
+  assert.equal(snapshot.commit, null, "no commit evidence extracted");
+  assert.equal(snapshot.tests, null, "no tests evidence extracted");
+  // Dirty worktree because of uncommitted.txt
+  assert.equal(snapshot.worktree_clean, false, "worktree is dirty with uncommitted.txt");
+  assert.equal(snapshot.ready_for_review, false, "not ready without commit and with dirty worktree");
+
+  // Verify precise review reasons
+  const commitFinding = snapshot.findings.find(f => f.code === "commit_missing");
+  const dirtyFinding = snapshot.findings.find(f => f.code === "dirty_worktree");
+  assert.ok(commitFinding, "precise review reason: commit_missing when no durable commit and dirty worktree");
+  assert.equal(commitFinding.severity, "blocker", "commit_missing is a blocker for acceptance");
+  assert.ok(dirtyFinding, "precise review reason: dirty_worktree when uncommitted changes exist");
+  assert.equal(dirtyFinding.severity, "blocker", "dirty_worktree is a blocker");
+  assert.ok(commitFinding.message.includes("Dirty work"), "commit_missing message explains evidence gap");
+  assert.ok(dirtyFinding.message.includes("uncommitted"), "dirty_worktree message explains state");
+});
+
+test("collect detects actual git commit after committed change", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+
+  // Create result.md and commit a real change
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), "Summary: Real change committed.\n\nTests: npm test\n");
+
+  // Make a real git change and commit it
+  await writeFile(join(repo, "app.js"), "console.log('TUI change');\n");
+  execFileSync("git", ["add", "app.js"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "TUI change from session"], { cwd: repo, stdio: "ignore" });
+
+  // Write session commit
+  const store = createCodexTuiSessionStore({ workspaceRoot: repo });
+  const headRef = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  await store.updateSession("session_1", { commit: headRef });
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  assert.equal(snapshot.commit, headRef, "commit is the actual git HEAD hash");
+  assert.equal(snapshot.worktree_clean, true, "worktree is clean after commit");
+  // changed_files is empty because collector tracks uncommitted changes only;
+  // the commit is already applied to the branch
+  assert.equal(snapshot.result_md_present, true, "result.md is present");
+  assert.equal(snapshot.ready_for_review, true, "ready for review with complete evidence");
+  assert.deepEqual(snapshot.findings, [], "no findings for complete evidence");
+});
+
+test("collect reports tests missing as informational (ready_for_review does not require tests)", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+
+  // Create result.md without tests field but with commit
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), "Summary: Done, no verification evidence.\n\nCommit: abc123\n");
+
+  // Session provides commit evidence
+  const store = createCodexTuiSessionStore({ workspaceRoot: repo });
+  await store.updateSession("session_1", { commit: "abc123" });
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  // Commit present, worktree clean, but tests field is null
+  assert.equal(snapshot.commit, "abc123", "commit evidence is present");
+  assert.equal(snapshot.tests, null, "tests/verification evidence is missing from result.md and session");
+  assert.equal(snapshot.worktree_clean, true, "worktree is clean");
+  // ready_for_review is true because collector only requires result.md + clean worktree + commit
+  // Tests evidence is informational, not blocking for ready_for_review
+  assert.equal(snapshot.ready_for_review, true, "ready_for_review does not require tests evidence");
+  assert.equal(snapshot.result_md_present, true, "result.md present");
+  // No findings because worktree is clean and commit is present
+  // Missing tests is informational, not a finding
+  assert.deepEqual(snapshot.findings, [], "no findings when result.md, commit, and clean worktree are present");
+});
+
+test("collect returns null tests when result.md has no test evidence", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+
+  // Create result.md without tests or commit labels
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), "Summary: No structured fields.\n");
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  assert.equal(snapshot.tests, null, "tests is null when not in result.md or session");
+  assert.equal(snapshot.commit, null, "commit is null when not in result.md or session");
+  assert.equal(snapshot.result_md_present, true, "result.md exists");
+});

@@ -208,6 +208,105 @@ export async function queryContextStatus(task_id, context, { config, registry, s
         warnings.push({ severity: "warning", code: "huge_context", message: "Approximate context size is " + formatSize(approximateContextBytes) + ". Large contexts may degrade Codex performance." });
       }
 
+      // --- Context health diagnostics (per-goal-file status) ---
+      let contextHealth = null;
+      if (goal && workspace) {
+        const goalDirPath = join(workspace.root, ".gptwork/goals/" + goal.id);
+        const health = {};
+
+        // codex.entry.md
+        const entryPath = join(goalDirPath, "codex.entry.md");
+        health.codex_entry = existsSync(entryPath) ? "present" : "missing";
+        if (health.codex_entry === "missing") {
+          warnings.push({ severity: "warning", code: "entry_missing", message: "Goal " + goal.id + " is missing codex.entry.md. Bounded context entrypoint is unavailable." });
+        }
+
+        // context.bundle.md with degradation reason
+        const bundlePath = join(goalDirPath, "context.bundle.md");
+        if (existsSync(bundlePath)) {
+          health.context_bundle = "present";
+        } else {
+          const entryMissing = !existsSync(entryPath);
+          const indexCwd = workspace.root;
+          const retrievalPath = join(goalDirPath, "context.retrieval.json");
+          let retrievalExists = false;
+          try { retrievalExists = existsSync(retrievalPath); } catch (e) {}
+          if (!entryMissing && retrievalExists) {
+            health.context_bundle = "degraded_retrieval_only";
+            health.context_bundle_reason = "Retrieval exists but bundle was not generated (index may have been unavailable or produced 0 chunks).";
+          } else {
+            health.context_bundle = "missing";
+            health.context_bundle_reason = "No context.bundle.md found. This is expected if the goal is new or context-index was unavailable.";
+          }
+        }
+
+        // context.retrieval.json diagnostics
+        const retrievalPath = join(goalDirPath, "context.retrieval.json");
+        if (existsSync(retrievalPath)) {
+          try {
+            const raw = readFileSync(retrievalPath, "utf8");
+            const retrievalData = JSON.parse(raw);
+            const chunks = retrievalData.chunks || retrievalData.cross_goal_retrieval || null;
+            if (Array.isArray(chunks) && chunks.length > 0) {
+              health.context_retrieval = "diagnostic_with_chunks";
+            } else {
+              health.context_retrieval = "diagnostic_only";
+            }
+          } catch (e) {
+            health.context_retrieval = "invalid";
+          }
+        } else {
+          health.context_retrieval = "missing";
+        }
+
+        // transcript size
+        const transcriptPath = join(goalDirPath, "transcript.md");
+        try {
+          const st = statSync(transcriptPath);
+          health.transcript_bytes = st.size;
+          health.transcript_exists = true;
+          if (st.size > 100 * 1024) {
+            health.transcript_warning = "large";
+          }
+        } catch (e) {
+          health.transcript_bytes = 0;
+          health.transcript_exists = false;
+        }
+
+        // manifest completeness
+        const manifestPath = join(goalDirPath, "context.manifest.json");
+        try {
+          if (existsSync(manifestPath)) {
+            const manifestRaw = readFileSync(manifestPath, "utf8");
+            const manifest = JSON.parse(manifestRaw);
+            const hasRequiredArtifacts = manifest.artifacts &&
+              manifest.artifacts.codex_entry &&
+              manifest.artifacts.codex_entry.present &&
+              manifest.artifacts.context_bundle &&
+              manifest.artifacts.context_bundle.present &&
+              manifest.artifacts.context_manifest &&
+              manifest.artifacts.context_manifest.present;
+            health.manifest_complete = hasRequiredArtifacts === true;
+            health.manifest_exists = true;
+          } else {
+            health.manifest_exists = false;
+            health.manifest_complete = false;
+          }
+        } catch (e) {
+          health.manifest_exists = true;
+          health.manifest_complete = false;
+        }
+
+        // Review packet viability (compact check using task result)
+        const hasResultJson = existsSync(join(goalDirPath, "result.json"));
+        const hasResultMd = existsSync(join(goalDirPath, "result.md"));
+        const hasChangedFiles = Array.isArray(task.changed_files) && task.changed_files.length > 0;
+        const hasVerification = task.result && task.result.verification && task.result.verification.passed;
+        health.review_packet_viable = (hasResultJson || hasResultMd) && (hasChangedFiles || hasVerification);
+
+        contextHealth = health;
+      }
+
       taskInfo = {
         task_id: task.id,
         task_status: task.status,
@@ -216,6 +315,7 @@ export async function queryContextStatus(task_id, context, { config, registry, s
         transcript_count: transcriptCount,
         memory_count: memoryCount,
         approximate_context_bytes: approximateContextBytes,
+        context_health: contextHealth,
       };
 
       // Context contract diagnostics (P0-C9: stress test and fallbacks)

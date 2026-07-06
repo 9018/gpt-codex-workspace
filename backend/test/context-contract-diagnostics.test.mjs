@@ -26,6 +26,7 @@ import {
   checkCompactReviewBundle,
   checkHelperTools,
   checkContextIndex,
+  checkManifestCompleteness,
 } from "../src/context-contract-diagnostics.mjs";
 
 // ---------------------------------------------------------------------------
@@ -402,6 +403,73 @@ describe("checkContextIndex", () => {
   });
 });
 
+
+describe("checkManifestCompleteness", () => {
+  it("returns complete when manifest has all required fields", () => {
+    withGoalDir((goalDir) => {
+      writeFileInDir(goalDir, "context.manifest.json", JSON.stringify({
+        schema_version: "gptwork.context_manifest.v1",
+        goal_id: "goal_test",
+        entrypoint: ".gptwork/goals/goal_test/codex.entry.md",
+        default_context_package: [".gptwork/goals/goal_test/codex.entry.md", ".gptwork/goals/goal_test/context.bundle.md"],
+        artifacts: {
+          codex_entry: { required: true, present: true },
+          context_bundle: { required: true, present: true },
+          context_manifest: { required: true, present: true },
+        },
+        lookup_policy: { default_read_order: ["codex_entry", "context_bundle"] },
+      }));
+
+      const result = checkManifestCompleteness(goalDir);
+      assert.equal(result.exists, true);
+      assert.equal(result.valid, true);
+      assert.equal(result.complete, true);
+      assert.equal(result.assessment, "complete");
+      assert.deepEqual(result.issues, []);
+    });
+  });
+
+  it("returns missing when no manifest file", () => {
+    withGoalDir((goalDir) => {
+      const result = checkManifestCompleteness(goalDir);
+      assert.equal(result.exists, false);
+      assert.equal(result.complete, false);
+      assert.equal(result.assessment, "missing");
+    });
+  });
+
+  it("returns incomplete when manifest has missing required artifacts", () => {
+    withGoalDir((goalDir) => {
+      writeFileInDir(goalDir, "context.manifest.json", JSON.stringify({
+        schema_version: "gptwork.context_manifest.v1",
+        entrypoint: ".gptwork/goals/goal_test/codex.entry.md",
+        default_context_package: [".gptwork/goals/goal_test/codex.entry.md"],
+        artifacts: {
+          codex_entry: { required: true, present: true },
+        },
+        lookup_policy: { default_read_order: ["codex_entry"] },
+      }));
+
+      const result = checkManifestCompleteness(goalDir);
+      assert.equal(result.exists, true);
+      assert.equal(result.complete, false);
+      assert.equal(result.assessment, "incomplete");
+      assert.ok(result.issues.length > 0, "should report issues for missing artifacts");
+    });
+  });
+
+  it("returns invalid for bad JSON", () => {
+    withGoalDir((goalDir) => {
+      writeFileInDir(goalDir, "context.manifest.json", "not valid json");
+      const result = checkManifestCompleteness(goalDir);
+      assert.equal(result.exists, true);
+      assert.equal(result.valid, false);
+      assert.equal(result.complete, false);
+      assert.equal(result.assessment, "invalid");
+    });
+  });
+});
+
 // ===========================================================================
 // Integration: runContextContractDiagnostics
 // ===========================================================================
@@ -417,6 +485,18 @@ describe("runContextContractDiagnostics — integration", () => {
         retrieval_mode: "auto",
       }));
       writeFileInDir(goalDir, "context.json", JSON.stringify({ memories: [] }));
+      writeFileInDir(goalDir, "context.manifest.json", JSON.stringify({
+        schema_version: "gptwork.context_manifest.v1",
+        goal_id: "goal_test",
+        entrypoint: ".gptwork/goals/goal_test/codex.entry.md",
+        default_context_package: [".gptwork/goals/goal_test/codex.entry.md", ".gptwork/goals/goal_test/context.bundle.md"],
+        artifacts: {
+          codex_entry: { required: true, present: true },
+          context_bundle: { required: true, present: true },
+          context_manifest: { required: true, present: true },
+        },
+        lookup_policy: { default_read_order: ["codex_entry", "context_bundle"] },
+      }));
       writeFileInDir(goalDir, "result.json", JSON.stringify({ status: "completed" }));
       writeFileInDir(goalDir, "transcript.md", "## msg 1\n\nContent");
 
