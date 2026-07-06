@@ -311,7 +311,7 @@ test("MA10 launch initialization document exists and has required sections", asy
   assert.match(doc, /Productization Baseline/);
   assert.match(doc, /Startup \/ Default Configuration/);
   assert.match(doc, /One-Shot Production Initialization/);
-  assert.match(doc, /c4ec54cd4c74641a50fabd0c4e98ae6f70a81693/);
+  assert.match(doc, /2d60458d37c5ea552863db85d08cd5db61c3abe1/);
   assert.ok(doc.length > 2000, "Document should be substantial");
 });
 

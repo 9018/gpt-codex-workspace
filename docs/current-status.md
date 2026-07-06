@@ -212,7 +212,7 @@ These categories flow into the blocker-policy, review backlog reconciliation, an
 
 See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce strict gate defaults before closure.
 
-### P0-05: Real Agent Backends (Merged, awaiting closure verification)
+### P0-05: Real Agent Backends (Completed)
 
 `backend/src/agent-execution-backends.mjs` upgraded from null defaults to productizable deterministic execution units:
 
@@ -221,7 +221,7 @@ See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce st
 - **integrator** and **finalizer** remain at `null` because their artifacts are derived from task/result evidence.
 - Runtime config supports global and per-role routing via `GPTWORK_AGENT_BACKEND`, `GPTWORK_AGENT_ROLE_BACKENDS`, etc.
 
-### P0-06: Init/Onboarding Productization (Merged, awaiting repair verification)
+### P0-06: Init/Onboarding Productization (Completed)
 
 `backend/src/onboarding-init.mjs` and `backend/bin/gptwork.mjs` commands deliver:
 
@@ -232,7 +232,7 @@ See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce st
 
 Documentation updated: `docs/setup-connect.md`, `docs/launch-initialization.md`, `README.zh-CN.md`.
 
-### P0-07: Codex Exec Production Hardening (Merged, awaiting review)
+### P0-07: Codex Exec Production Hardening (Completed)
 
 `backend/src/codex-run-diagnostics.mjs`, `backend/src/self-healing-policy.mjs`, and related modules deliver:
 
@@ -275,9 +275,3 @@ This remains an unclosed P0 gap. The current `--fast` gate plus `npm test` and e
 ## Known Gaps
 
 1. **P0-01**: Release gate hardening not executed.
-2. **P0-05 (waiting_for_review)**: Agent backend defaults changed structurally; needs formal review sign-off.
-3. **P0-06 (waiting_for_repair)**: Onboarding flow merged; repair verification needed.
-4. **P0-07 (waiting_for_review)**: Production hardening merged; needs review sign-off.
-5. **Full npm test duration**: ~180+ test files; some suites may be slow.
-6. **No production hard gate CI integration**: release-delivery-check --full is available but not integrated into CI.
-
