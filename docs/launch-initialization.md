@@ -4,8 +4,18 @@
 > configuration, and one-shot production initialization procedure for GPTWork.
 
 **Status:** Finalized
-**Canonical baseline:** `c4ec54cd4c74641a50fabd0c4e98ae6f70a81693`
+**Canonical baseline:** `c4ec54cd4c74641a50fabd0c4e98ae6f70a81693` (verify current with `git rev-parse HEAD`)
 **Canonical branch:** `main`
+
+> **Baseline verification:** This hash documents the baseline used during the
+> P0-MA10 deliverable. The actual deployment may be on a newer commit. To verify
+> the running commit:
+> ```bash
+> gptwork doctor --production  # shows current_head check
+> curl http://localhost:8787/health | jq .commit || git rev-parse HEAD
+> ```
+> If the current HEAD differs from the documented baseline, run
+> `gptwork init --production` to validate the production profile.
 
 ---
 
@@ -229,7 +239,59 @@ Expected health response:
 
 ---
 
-## 4. Default State Seed
+
+## 4. Production Profile Initialization
+
+### 4.1 One-Shot Production Init
+
+
+added 4 packages, and audited 5 packages in 3s
+
+found 0 vulnerabilities
+
+added 1 package, and audited 3 packages in 922ms
+
+found 0 vulnerabilities
+
+The `--production` flag enables profile checks specific to production deployments:
+
+- Worker must be enabled (`GPTWORK_CODEX_WORKER=true`)
+- Verifier/reviewer commands must be configured when using `local_command` backend
+- Codex exec timeout and concurrency must be production-appropriate
+- Default repo, workspace root, and state path should be set
+- Delivery recovery commands should be configured
+- Context vector store should be enabled
+
+### 4.2 Blocking Failures
+
+If `gptwork init --production` reports **blocker** status, those issues must be
+resolved before the server is safe to run in production. Common blockers:
+
+| Check | Blocking Condition | Fix |
+|-------|-------------------|-----|
+| `production_worker` | Worker disabled | Set `GPTWORK_CODEX_WORKER=true` |
+| `role_commands` | `local_command` without command | Set `GPTWORK_AGENT_ROLE_COMMANDS` |
+
+After resolving blockers:
+
+
+
+### 4.3 Running Production Profile Diagnostics
+
+
+
+### 4.4 Dev vs Production Defaults
+
+| Config Variable | Dev Default | Production Expected | Why |
+|---|---|---|---|
+| `GPTWORK_CODEX_WORKER` | `false` | `true` | Auto-process tasks |
+| `GPTWORK_CODEX_EXEC_TIMEOUT` | `3600` | `>= 3600` | Long-running tasks |
+| `GPTWORK_CODEX_CONCURRENCY` | `4` | `4` | Parallel task ceiling |
+| `GPTWORK_CODEX_WORKER_INTERVAL_MS` | `5000` | `5000` | Poll frequency |
+| `GPTWORK_INTEGRATION_MODE` | `auto` | `auto` | Auto or manual integration |
+| `GPTWORK_CONTEXT_VECTOR_STORE` | `auto` | `auto` | Auto-detect zvec binary |
+
+## 5. Default State Seed
 
 When starting with an empty state file, GPTWork initializes with:
 
@@ -247,7 +309,7 @@ cat data/state.example.json
 
 ---
 
-## 5. Lifecycle Integration Points
+## 6. Lifecycle Integration Points
 
 | Hook | Trigger | Purpose |
 |---|---|---|

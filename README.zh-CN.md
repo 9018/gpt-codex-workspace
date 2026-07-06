@@ -43,12 +43,37 @@ gptwork init
 gptwork start
 ```
 
+### 生产初始化
+
+对于生产部署，使用 `--production` 标志启用生产 profile 检查：
+
+```bash
+cd backend
+npm install && npm link
+gptwork init --production   # 一键初始化+生产 profile 验证
+```
+
+生产 profile 检查包括：
+- **production\_worker**（阻塞级）：Worker 必须启用（`GPTWORK_CODEX_WORKER=true`）
+- **role\_commands**（阻塞级）：当 verifier/reviewer 使用 `local_command` 后端时必须配置对应命令
+- **release\_gate\_commands**（推荐）：配置交付验证命令
+- **codex\_exec\_settings**（推荐）：超时>=3600s，并发数>=1
+- **current\_head**：对比当前 HEAD 与文档 baseline
+- **workspace\_settings**：检查 workspace root、state path、default repo 设置
+- **context\_vector\_store**：检查向量存储配置
+- **integration\_mode**：检查集成模式
+
+阻塞级检查未通过时会中断初始化并给出修复建议。
+
+### 本地检查
+
 另开终端做本地检查：
 
 ```bash
 cd backend
 gptwork init        # 一键初始化+诊断
 gptwork doctor --local  # 详细诊断（含 env 校验）
+gptwork doctor --production  # 生产 profile 诊断
 gptwork status --local
 gptwork connect --local
 gptwork self-test --local
