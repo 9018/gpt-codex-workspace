@@ -5,6 +5,25 @@ import { buildCodexTuiBootstrapMessages } from "./codex-tui-goal-prompt.mjs";
 const activeSessions = new Map();
 const sessionStores = new Map();
 
+function uniqueStrings(values = []) {
+  return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
+}
+
+function candidateWorkspaceRoots({ workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
+  return uniqueStrings([workspaceRoot, ...candidateWorkspaceRoots, process.cwd()]);
+}
+
+function isProcessAlive(pid) {
+  const n = Number(pid);
+  if (!Number.isInteger(n) || n <= 0) return false;
+  try {
+    process.kill(n, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function sessionIdFor(task, goal) {
   const taskId = String(task?.id || "task").replace(/[^A-Za-z0-9_-]/g, "_");
   const goalId = String(goal?.id || "goal").replace(/[^A-Za-z0-9_-]/g, "_");
@@ -17,10 +36,34 @@ function activeManagerForSession(sessionId) {
   throw new Error(`codex TUI session is not active: ${sessionId}`);
 }
 
-function storeForSession(sessionId) {
+async function storeForSession(sessionId, options = {}) {
   const store = sessionStores.get(sessionId);
   if (store) return store;
+
+  for (const root of candidateWorkspaceRoots(options)) {
+    const candidate = createCodexTuiSessionStore({ workspaceRoot: root });
+    try {
+      await candidate.readSession(sessionId, { maxChars: 0 });
+      sessionStores.set(sessionId, candidate);
+      return candidate;
+    } catch (err) {
+      if (err?.code !== "ENOENT") throw err;
+    }
+  }
   throw new Error(`codex TUI session is unknown: ${sessionId}`);
+}
+
+async function normalizeRecoveredSessionRecord(store, sessionId, record = null) {
+  const current = record || await store.readSession(sessionId, { maxChars: 0 });
+  if (activeSessions.has(sessionId)) return current;
+  if (current.status === "running" && current.pty_pid && !isProcessAlive(current.pty_pid)) {
+    return store.updateSession(sessionId, {
+      status: "detached",
+      detach_reason: "pty_process_not_alive",
+      detached_at: new Date().toISOString(),
+    });
+  }
+  return current;
 }
 
 export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = null, ptyAdapter = null } = {}) {
@@ -59,39 +102,50 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
   return record;
 }
 
-export async function readCodexTuiSession(sessionId, { maxChars } = {}) {
-  const store = storeForSession(sessionId);
+export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
+  const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
+  await normalizeRecoveredSessionRecord(store, sessionId);
   return store.readSession(sessionId, { maxChars });
 }
 
-export async function sendCodexTuiSessionInput(sessionId, text) {
+export async function sendCodexTuiSessionInput(sessionId, text, options = {}) {
+  await storeForSession(sessionId, options);
   const { store, ptySession } = activeManagerForSession(sessionId);
   ptySession.write(text);
   await store.appendSessionLog(sessionId, `[input] ${String(text ?? "")}`);
   return store.readSession(sessionId);
 }
 
-export async function stopCodexTuiSession(sessionId, { reason = "stopped" } = {}) {
-  const active = activeManagerForSession(sessionId);
-  active.ptySession.stop();
-  activeSessions.delete(sessionId);
-  return active.store.updateSession(sessionId, {
+export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
+  const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
+  const active = activeSessions.get(sessionId);
+  if (active?.ptySession) {
+    active.ptySession.stop();
+    activeSessions.delete(sessionId);
+  } else {
+    await normalizeRecoveredSessionRecord(store, sessionId);
+  }
+  return store.updateSession(sessionId, {
     status: "stopped",
     stop_reason: reason,
     stopped_at: new Date().toISOString(),
   });
 }
 
-export async function getCodexTuiSessionStatus(sessionId) {
-  const store = storeForSession(sessionId);
+export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
+  const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
   const active = activeSessions.get(sessionId);
-  const record = await store.readSession(sessionId, { maxChars: 0 });
+  const record = await normalizeRecoveredSessionRecord(store, sessionId);
+  const pid = active?.ptySession?.pid ?? record.pty_pid ?? null;
   return {
     id: record.id,
     status: record.status,
     task_id: record.task_id,
     goal_id: record.goal_id,
-    pid: active?.ptySession?.pid ?? record.pty_pid ?? null,
+    pid,
+    pid_alive: active ? true : isProcessAlive(pid),
+    detached: record.status === "detached",
+    detach_reason: record.detach_reason || null,
     updated_at: record.updated_at,
   };
 }

@@ -11,6 +11,7 @@ import {
   getCodexTuiSessionStatus,
   resetCodexTuiSessionManagerForTests,
 } from "../src/codex-tui-session-manager.mjs";
+import { createCodexTuiSessionStore } from "../src/codex-tui-session-store.mjs";
 import { track, afterEachHook } from "./helpers/temp-cleanup.mjs";
 
 afterEachHook(test);
@@ -92,3 +93,5 @@ test("manager sends input, reads status, and stops sessions safely", async () =>
   const stoppedStatus = await getCodexTuiSessionStatus(session.id);
   assert.equal(stoppedStatus.status, "stopped");
 });
+
+// recovery test appended by ChatGPT
