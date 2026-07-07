@@ -87,6 +87,42 @@ export function createReconciler({ store, config, github, notifyTerminalTaskIfNe
           if (logPath) appendFileSync(logPath, `[gptwork-worker] AFC-10 runtime watch error (non-fatal): ${watchErr.message}
 `);
         }
+        // ── AFC-10: Runtime Patrol Loop (diagnostic-only; never mutates) ──
+        try {
+          const { runPatrolLoop } = await import("./runtime-patrol-loop.mjs");
+          const workspaceRoot = config.defaultWorkspaceRoot;
+          const patrolResult = await runPatrolLoop({
+            store,
+            canonicalRepoPath: config.canonicalRepoPath || workspaceRoot,
+            config,
+            dryRun: true,
+          });
+
+          if (patrolResult.summary.total_findings > 0) {
+            if (logPath) {
+              appendFileSync(logPath, `[gptwork-worker] AFC-10 patrol loop: ${patrolResult.summary.total_findings} finding(s)
+`);
+              for (const [cat, count] of Object.entries(patrolResult.summary.categories || {})) {
+                appendFileSync(logPath, `[gptwork-worker]   ${cat}: ${count}
+`);
+              }
+              appendFileSync(logPath, `[gptwork-worker]   safe_actions: ${patrolResult.summary.safe_actions}, needs_review: ${patrolResult.summary.needs_review}
+`);
+              for (const action of patrolResult.recovery_actions.slice(0, 5)) {
+                appendFileSync(logPath, `[gptwork-worker]   [${action.safety}] ${action.action} — ${action.description}
+`);
+              }
+              if (patrolResult.recovery_actions.length > 5) {
+                appendFileSync(logPath, `[gptwork-worker]   ... and ${patrolResult.recovery_actions.length - 5} more action(s)
+`);
+              }
+            }
+          }
+        } catch (patrolErr) {
+          if (logPath) appendFileSync(logPath, `[gptwork-worker] AFC-10 patrol loop error (non-fatal): ${patrolErr.message}
+`);
+        }
+
 
         await reconcileRuntimeRepoLocks({ config, logPath });
         const restartVerifications = await reconcileRestartMarkers({ state, store, config, github, notifyTerminalTaskIfNeeded, logPath });
