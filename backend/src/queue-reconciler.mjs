@@ -153,6 +153,60 @@ export function resolveQueueDependencyState(state, item) {
       ? [...state.tasks].reverse().find((t) => t.goal_id === target_id && isCompletedStatus(t.status))
       : null);
 
+  // -----------------------------------------------------------------------
+  // AFC-P3: When the prerequisite task's result contains a canonical
+  // unified_decision with queue_effect, use it as the primary source of
+  // truth instead of re-deriving from individual evidence fields.
+  //
+  // This guarantees that the finalizer's terminal semantics are the sole
+  // gate for queue propagation — the queue no longer re-checks
+  // already_integrated, not_required, satisfied, or completed from
+  // scattered evidence fields.
+  // -----------------------------------------------------------------------
+  const taskUnifiedDecision = task?.result?.unified_decision || null;
+  if (taskUnifiedDecision && taskUnifiedDecision.queue_effect) {
+    const ud = taskUnifiedDecision;
+    const queueEffect = ud.queue_effect || {};
+    const integrationEffect = ud.integration_effect || {};
+
+    // Determine effective completion from queue_effect.unblock_dependents
+    const effectiveCompleted = queueEffect.unblock_dependents === true;
+    const effectiveFailed = !effectiveCompleted && (
+      ud.status === "failed" || ud.status === "timed_out" || ud.status === "blocked"
+    );
+
+    // Determine if integration is required and still missing
+    const integrationRequiredAndMissing =
+      ud.requires_integration === true && integrationEffect.terminal !== true;
+
+    // Readonly when integration_effect.required is false or not set
+    const readonlyOperation = ud.status === "completed"
+      && integrationEffect.required === false;
+
+    // Repair successor: unified_decision says completed via repair
+    const isRepairSuccessor = ud.status === "completed"
+      && task?.result?.repair_outcome === "repaired";
+
+    const detail = buildUnifiedDecisionDetail(ud, effectiveCompleted, effectiveFailed, integrationRequiredAndMissing);
+
+    return {
+      status: ud.status,
+      kind,
+      target_id,
+      effective_completed: effectiveCompleted,
+      effective_failed: effectiveFailed,
+      integration_required_and_missing: integrationRequiredAndMissing,
+      readonly_operation: readonlyOperation,
+      is_repair_successor: isRepairSuccessor,
+      detail,
+    };
+  }
+
+  // -----------------------------------------------------------------------
+  // Fallback: when no unified_decision exists, use evidence-based derivation
+  // (backward-compatible path for tasks finalized before AFC-P3).
+  // -----------------------------------------------------------------------
+
   // Check if the task's result indicates a readonly/non-mutating operation
   const isReadonly =
     task?.result?.operation_kind === "readonly_validation" ||
@@ -230,6 +284,29 @@ export function resolveQueueDependencyState(state, item) {
     is_repair_successor: isRepairSuccessor,
     detail,
   };
+}
+
+/**
+ * Build detail string from unified_decision fields (AFC-P3).
+ */
+function buildUnifiedDecisionDetail(ud, effectiveCompleted, effectiveFailed, integrationRequiredAndMissing) {
+  const status = ud.status || unknown;
+  const unblock = ud.queue_effect?.unblock_dependents;
+  const hold = ud.queue_effect?.hold_queue;
+
+  if (integrationRequiredAndMissing) {
+    return 'unified_decision: status=' + status + ' requires_integration=true integration_effect.terminal=false — integration still required and not yet satisfied; dependent blocked until integrated';
+  }
+  if (effectiveCompleted) {
+    return 'unified_decision: status=' + status + ' queue_effect.unblock_dependents=' + unblock + ' — terminal completed, can advance';
+  }
+  if (effectiveFailed) {
+    return 'unified_decision: status=' + status + ' queue_effect.hold_queue=' + hold + ' — terminal failed, dependent blocked';
+  }
+  if (ud.status === "completed" && !effectiveCompleted) {
+    return 'unified_decision: status=' + status + ' queue_effect.unblock_dependents=' + unblock + ' queue_effect.hold_queue=' + hold + ' — terminal completed but queue_effect blocks propagation';
+  }
+  return 'unified_decision: status=' + status + ' queue_effect.unblock_dependents=' + unblock + ' queue_effect.hold_queue=' + hold + ' — not terminal, waiting';
 }
 
 function buildDetailString({
