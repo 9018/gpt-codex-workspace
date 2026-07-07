@@ -1,6 +1,6 @@
 # GPTWork Current Status
 
-Last reviewed for current main: 2026-07-07.
+Last reviewed for current main: 2026-07-07 (docs-only repair verification).
 
 This document describes code-backed capabilities that are present in the repository. It does not assert that a particular production process has been restarted onto the latest commit; use `runtime_status.running_commit` for that check.
 
@@ -392,6 +392,12 @@ drift repair (AFC6), continuation flow (AFC7), review packet status (AFC8), clos
 to final project verification (AFC10). Every task produces passing tests in its commit, and the
 combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline
 end to end.
+
+### AFC-07: Docs Status Consistency (Repair Verified)
+
+The docs-only acceptance profile has been verified for the AFC-07 documentation update. Only
+documentation files are modified (`docs/current-status.md`), confirming the docs-only contract
+is satisfied without incidental code or test file changes.
 
 ### P0-01: Release Gate Hardening (Addressed via CI Workflow)
 
