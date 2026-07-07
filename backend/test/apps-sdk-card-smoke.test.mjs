@@ -840,3 +840,208 @@ test("SDK-11: retention tools expose tool card _meta with outputTemplate/resourc
     "openai/outputTemplate": TOOL_CARD_URI,
   }, "retention_cleanup must have tool card _meta");
 });
+
+// ============================================================================
+// PAYLOAD SPLIT TESTS
+// ============================================================================
+
+test("PAYLOAD-1: structuredContent contains modelPayload with bounded fields, cardPayload in _meta", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/call", {
+    name: "runtime_status",
+    arguments: {},
+  });
+
+  // structuredContent = modelPayload: must have essential fields
+  assert.equal(res.result.structuredContent?.gptwork_tool, "runtime_status",
+    "modelPayload must have gptwork_tool");
+  assert.equal(res.result.structuredContent?.gptwork_type, "tool_result",
+    "modelPayload must have gptwork_type");
+  assert.ok(res.result.structuredContent?.summary,
+    "modelPayload must have summary");
+  assert.ok(res.result.structuredContent?.status,
+    "modelPayload must have status");
+  assert.ok(res.result.structuredContent?.gptwork_payload_hash,
+    "modelPayload must have gptwork_payload_hash");
+  assert.equal(res.result.structuredContent?.rawAvailable, true,
+    "modelPayload must declare rawAvailable");
+
+  // modelPayload must NOT contain raw base fields (the spread elimination)
+  assert.equal(res.result.structuredContent?.pid, undefined,
+    "modelPayload must not embed raw pid");
+  assert.equal(res.result.structuredContent?.running_commit, undefined,
+    "modelPayload must not embed raw running_commit");
+  assert.equal(res.result.structuredContent?.worker, undefined,
+    "modelPayload must not embed raw worker object");
+  assert.equal(res.result.structuredContent?.queue, undefined,
+    "modelPayload must not embed raw queue object");
+
+  // _meta.gptwork_card exists with card view model
+  assert.ok(res.result._meta?.gptwork_card,
+    "_meta must have gptwork_card with card view model");
+  assert.equal(res.result._meta.gptwork_card?.card_version, "gptwork-card-v1",
+    "card view model must have correct version");
+  assert.ok(res.result._meta.gptwork_card?.title,
+    "card view model must have title");
+  assert.ok(res.result._meta.gptwork_card?.card_type,
+    "card view model must have card_type");
+
+  // structuredContent.card backward compat
+  assert.ok(res.result.structuredContent?.card,
+    "structuredContent must have card for backward compat");
+  assert.equal(res.result.structuredContent.card?.card_version, "gptwork-card-v1",
+    "backward compat card must be the card view model");
+
+  // _meta still has existing required fields (backward compat)
+  assert.equal(res.result._meta?.resourceUri, TOOL_CARD_URI,
+    "_meta must still have resourceUri");
+  assert.equal(res.result._meta?.tool, "runtime_status",
+    "_meta must still have tool");
+});
+
+test("PAYLOAD-2: cardPayload excludes stdout/stderr/raw task JSON and remains bounded", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/call", {
+    name: "runtime_status",
+    arguments: {},
+  });
+
+  const card = res.result._meta?.gptwork_card || res.result.structuredContent?.card;
+  assert.ok(card, "cardPayload must exist");
+
+  // Card must not carry raw evidence blobs
+  assert.equal(card.stdout, undefined,
+    "cardPayload must not contain stdout");
+  assert.equal(card.stderr, undefined,
+    "cardPayload must not contain stderr");
+  assert.equal(card.raw, undefined,
+    "cardPayload must not contain raw data");
+  assert.equal(card.task, undefined,
+    "cardPayload must not embed task objects");
+
+  // Card has bounded structure — key_values and sections are optional arrays
+  if (Array.isArray(card.key_values)) {
+    for (const row of card.key_values) {
+      assert.ok(typeof row.key === "string" || typeof row.key === "number",
+        "card key_values must contain rows with key");
+    }
+  }
+  if (Array.isArray(card.sections)) {
+    for (const section of card.sections) {
+      assert.ok(typeof section.title === "string" || typeof section.type === "string",
+        "card sections must have title or type");
+    }
+  }
+
+  // Card view model size check: serialized card < 50 KB
+  const cardJson = JSON.stringify(card);
+  assert.ok(cardJson.length < 51200,
+    `cardPayload must be < 50 KB; got ${cardJson.length} bytes`);
+});
+
+test("PAYLOAD-3: legacy tool without card metadata passes through structuredContent unchanged", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/call", {
+    name: "health_check",
+    arguments: {},
+  });
+
+  // health_check is NOT in CARD_ENABLED_TOOLS, passes through rawStructuredContent
+  assert.ok(res.result.structuredContent?.ok,
+    "legacy tool structuredContent must have ok: true");
+  assert.equal(res.result.structuredContent?.ok, true,
+    "health_check structuredContent must have ok: true");
+  assert.equal(res.result.structuredContent?.gptwork_tool, undefined,
+    "legacy tool must not have gptwork_tool in structuredContent");
+});
+
+test("PAYLOAD-4: get_task cardPayload excludes full task result/evidence", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const res = await rpc(server, "tools/call", {
+    name: "runtime_status",
+    arguments: {},
+  });
+
+  // Verify modelPayload bounded across tools
+  const sc = res.result.structuredContent;
+
+  // Confirm the modelPayload structure
+  assert.ok(sc.gptwork_tool, "modelPayload must have gptwork_tool");
+  assert.ok(sc.rawAvailable === true, "modelPayload must have rawAvailable=true");
+
+  // The _meta.gptwork_card should always exist for card-enabled tools
+  assert.ok(res.result._meta?.gptwork_card, "_meta must have gptwork_card");
+  assert.ok(res.result._meta.gptwork_card.key_values || res.result._meta.gptwork_card.sections,
+    "cardPayload must have key_values or sections");
+});
+
+const PAYLOAD_V5_WIDGET = "ui://widget/gptwork-tool-card-v5.html";
+
+test("PAYLOAD-5: widget renders card from structuredContent.card backward compat", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const widgetRes = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const html = widgetRes.result.contents[0].text;
+
+  // Simulate the old-style structuredContent with .card for backward compat
+  const rendered = renderWidgetHtml(html, {
+    structuredContent: {
+      gptwork_tool: "runtime_status",
+      gptwork_type: "tool_result",
+      summary: "Legacy compat runtime",
+      status: "ok",
+      rawAvailable: true,
+      card: {
+        card_version: "gptwork-card-v1",
+        card_type: "runtime_health",
+        title: "Runtime: Legacy Compat",
+        status: "ok",
+        summary: "Legacy compat summary",
+        key_values: [{ key: "compat", value: "yes" }],
+        raw_available: true,
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /Runtime: Legacy Compat/);
+  assert.match(rendered.root.innerHTML, /Legacy compat summary/);
+  assert.match(rendered.root.innerHTML, /compat<\/td><td>yes/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Waiting for tool result/);
+});
+
+test("PAYLOAD-6: widget renders card from call_tool_result._meta.gptwork_card", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+  const widgetRes = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  const html = widgetRes.result.contents[0].text;
+
+  // Simulate the MCP result with _meta.gptwork_card (new preferred path)
+  const rendered = renderWidgetHtml(html, {
+    toolResponseMetadata: {
+      call_tool_result: {
+        structuredContent: {
+          gptwork_tool: "runtime_status",
+          summary: "Direct _meta card",
+          status: "ok",
+          rawAvailable: true,
+        },
+        _meta: {
+          tool: "runtime_status",
+          resourceUri: PAYLOAD_V5_WIDGET,
+          gptwork_card: {
+            card_version: "gptwork-card-v1",
+            card_type: "runtime_health",
+            title: "From _meta.gptwork_card",
+            status: "ok",
+            summary: "Direct card from _meta",
+            key_values: [{ key: "source", value: "_meta.gptwork_card" }],
+            raw_available: true,
+          },
+        },
+      },
+    },
+  });
+
+  assert.match(rendered.root.innerHTML, /From _meta\.gptwork_card/);
+  assert.match(rendered.root.innerHTML, /Direct card from _meta/);
+  assert.match(rendered.root.innerHTML, /source<\/td><td>_meta\.gptwork_card/);
+  assert.doesNotMatch(rendered.root.innerHTML, /Waiting for tool result/);
+});

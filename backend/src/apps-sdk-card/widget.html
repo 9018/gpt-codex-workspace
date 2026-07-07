@@ -153,6 +153,9 @@ function findPayloadFromGlobals(){
   var state=readState(openai);
   var metadata=openai.toolResponseMetadata||{};
   var candidates=[
+    // Prefer _meta.gptwork_card for direct v5 card view model access
+    {source:'call_tool_result._meta.gptwork_card',value:metadata.call_tool_result&&metadata.call_tool_result._meta&&metadata.call_tool_result._meta.gptwork_card},
+    {source:'mcp_tool_result._meta.gptwork_card',value:metadata.mcp_tool_result&&metadata.mcp_tool_result._meta&&metadata.mcp_tool_result._meta.gptwork_card},
     {source:'toolOutput',value:openai.toolOutput},
     {source:'toolResponseMetadata',value:metadata.mcp_tool_result&&metadata.mcp_tool_result.structuredContent},
     {source:'toolResponseMetadata',value:metadata.call_tool_result},
@@ -256,6 +259,9 @@ function renderViewModelCard(card,source){
 }
 function renderCard(data,source){
   if(!isObject(data)) return renderFallback();
+  // Direct v5 card view model from _meta.gptwork_card
+  if(data.card_version==='gptwork-card-v1') return renderViewModelCard(data,source);
+  // Legacy card embedded in .card property (backward compat)
   if(isObject(data.card)) return renderViewModelCard(data.card,source);
   var parts=[];var title=data.title||data.summary||data.name||data.gptwork_title||'GPTWork Result';
   parts.push('<div class="section"><div class="title">'+esc(title));
