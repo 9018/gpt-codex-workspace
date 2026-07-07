@@ -87,6 +87,13 @@ function shouldPreferAutoIntegrationEvidence(taskResult = {}) {
 }
 
 function closureAllowsQueuePropagation(taskResult = {}) {
+  // P0-AFC3: Check unified_decision first as canonical source of truth
+  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
+  if (unifiedDecision.queue_effect?.unblock_dependents === true) return true;
+  if (unifiedDecision.safe_to_auto_advance === true) return true;
+  if (unifiedDecision.integration_effect?.satisfied === true) return true;
+
+  // Fallback to closure_decision status
   const status = taskResult.closure_decision?.status;
   return status === "auto_completed_clean" || status === "auto_completed_with_followups";
 }
@@ -94,12 +101,23 @@ function closureAllowsQueuePropagation(taskResult = {}) {
 function integrationVerifiedForQueuePropagation(taskResult = {}) {
   const integration = taskResult.integration || {};
   const autoCompletion = taskResult.auto_integration_completion || {};
-  const merged = integration.merged === true || ["merged", "ff_only_merged", "skipped"].includes(String(integration.status || ""));
+
+  // P0-AFC3: Check unified_decision first
+  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
+  if (unifiedDecision.integration_effect?.satisfied === true) return true;
+
+  // P0-AFC3: Include already_integrated, not_required in terminal integration statuses
+  const merged = integration.merged === true
+    || integration.satisfied === true
+    || ["merged", "ff_only_merged", "skipped", "already_integrated", "not_required"].includes(String(integration.status || ""));
   const report = autoCompletion.verification_report || {};
   const autoCompleted = autoCompletion.completed === true
     && report.passed !== false
     && report.dirty !== true
     && autoCompletion.canonical_clean_after !== false;
+
+  // P0-AFC3: For satisfied integration (not_required, already_integrated, skipped), bypass auto-completion check
+  if (integration.satisfied === true || ["already_integrated", "not_required", "skipped"].includes(String(integration.status || ""))) return true;
   return merged && autoCompleted;
 }
 
@@ -107,6 +125,12 @@ function shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult = {} } 
   if (taskStatus !== "completed") return false;
   if (taskResult.requires_review === true) return false;
   if (!acceptedByAcceptanceAgent(taskResult)) return false;
+
+  // P0-AFC3: Check unified_decision as canonical source of truth
+  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
+  if (unifiedDecision.queue_effect?.unblock_dependents === true) return true;
+  if (unifiedDecision.safe_to_auto_advance === true) return true;
+
   if (!closureAllowsQueuePropagation(taskResult)) return false;
   if (!integrationVerifiedForQueuePropagation(taskResult)) return false;
   if (taskResult.contract_verification?.blocking_passed === false) return false;
@@ -917,7 +941,9 @@ function normalizeCompletedDeliveryState({ taskStatus, taskResult = {} } = {}) {
 function hasIntegratedCommitEvidence(taskResult = {}) {
   const integration = taskResult.integration || {};
   if (integration.merged === true) return true;
-  if (["merged", "skipped"].includes(integration.status)) return true;
+  if (integration.satisfied === true) return true;
+  // P0-AFC3: Include already_integrated, not_required as terminal statuses
+  if (["merged", "skipped", "already_integrated", "not_required"].includes(integration.status)) return true;
   if (taskResult.auto_integration_completion?.completed === true) return true;
   if (taskResult.delivery_result_recovery?.commit_integrated === true) return true;
   return false;
