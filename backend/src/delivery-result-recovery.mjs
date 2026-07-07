@@ -136,6 +136,10 @@ function hasRecoverableFile(files = []) {
     if (ignored.has(lower.split("/").pop())) return false;
     if (lower.startsWith(".gptwork/goals/") || lower.includes("/.gptwork/goals/")) return false;
     if (lower.startsWith(".git/")) return false;
+    // P0-AFC: Filter out generated temp files (.bak, .tmp, .log) that are not
+    // real source/test/doc changes. These are artifacts from codex execution
+    // or editor backups, not meaningful changed_files for delivery recovery.
+    if (/\.bak$/i.test(lower) || /\.(tmp|log)$/i.test(lower)) return false;
     return /(^|\/)(src|test|tests|scripts|backend|frontend|docs|config|lib|bin|packages|app|public)\//.test(lower)
       || /\.(mjs|js|cjs|ts|tsx|jsx|json|md|yml|yaml|toml|lock|css|html|sh|sql|py|rb|go|rs|java|kt|swift|c|cc|cpp|h|hpp)$/.test(lower)
       || ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "dockerfile", "makefile"].includes(lower);

@@ -214,21 +214,36 @@ function deriveDurableAdminEvidence(result = {}, baseEvidence = {}) {
 }
 
 function inferOperationKind({ result = {}, contract = {} } = {}) {
+  // 1. Most authoritative: explicit operation_kind from the result itself
   if (hasValue(result.operation_kind)) return String(result.operation_kind);
   if (hasValue(result.operationKind)) return String(result.operationKind);
-  if (hasValue(contract.intent?.operation_kind)) return String(contract.intent.operation_kind);
+
+  // 2. Evidence-based inference (P0-AFC: changed_files overrides no-mutation profiles)
+  const changedFiles = normalizeList(result.changed_files || result.changedFiles);
+  // Filter out generated temp files (.bak, .tmp, .log) that should not
+  // trigger code_change classification
+  const realChangedFiles = changedFiles.filter(
+    (f) => !/\.bak$/i.test(f) && !/\.(tmp|log)$/i.test(f)
+  );
+  const hasChangedFiles = realChangedFiles.length > 0;
+
   if (result.restart_evidence || result.restart_state || result.restart_verified_at) return 'restart';
   if (result.admin_evidence || result.admin_action || result.audit_id) return 'admin_command';
-  if (result.diagnostic_evidence || result.repo_mutated === false) return 'diagnostic';
-  if (result.cleanup_evidence || result.dry_run_summary || result.apply_summary) return 'cleanup';
-  if (result.file_evidence) return 'file_write';
-  if (result.validation_evidence || result.validation_summary) return 'readonly_validation';
-  if (result.already_integrated_evidence || result.noop_integration_evidence) return 'already_integrated';
-  if (result.noop === true || result.kind === 'noop') return 'noop';
+  if (!hasChangedFiles) {
+    if (result.diagnostic_evidence || result.repo_mutated === false) return 'diagnostic';
+    if (result.cleanup_evidence || result.dry_run_summary || result.apply_summary) return 'cleanup';
+    if (result.file_evidence) return 'file_write';
+    if (result.validation_evidence || result.validation_summary) return 'readonly_validation';
+    if (result.already_integrated_evidence || result.noop_integration_evidence) return 'already_integrated';
+    if (result.noop === true || result.kind === 'noop') return 'noop';
+  }
   if (result.integration_only || result.integration_evidence?.ff_only_merged) return 'integration';
   if (result.repair_evidence || result.repair_marker) return 'repair';
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
-  if (normalizeList(result.changed_files).length > 0 || hasValue(result.commit)) return 'code_change';
+  if (hasChangedFiles || hasValue(result.commit)) return 'code_change';
+
+  // 3. Least authoritative: contract intent (fallback when no evidence)
+  if (hasValue(contract.intent?.operation_kind)) return String(contract.intent.operation_kind);
   return 'unknown';
 }
 
@@ -491,7 +506,7 @@ function deriveClosureTerminalReason(result = {}) {
 }
 
 function isNoopLikeOperation(operationKind) {
-  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'restart', 'admin_command', 'cleanup', 'file_write', 'queue_admin', 'sync', 'docs_only', 'docs_only', 'docs_only'].includes(operationKind);
+  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'restart', 'admin_command', 'cleanup', 'file_write', 'queue_admin', 'sync', 'docs_only'].includes(operationKind);
 }
 
 function deriveTypedRecoveryReason({ operationKind, changedFiles, commit, tests, verification, testsDerived }) {

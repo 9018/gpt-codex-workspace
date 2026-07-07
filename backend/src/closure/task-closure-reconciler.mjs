@@ -30,8 +30,15 @@ import { CLOSURE_STATUSES } from './auto-progress-policy.mjs';
 // Evidence helpers
 // ---------------------------------------------------------------------------
 
-function integrationIsSatisfied(integration = {}, needsIntegration) {
+function integrationIsSatisfied(integration = {}, needsIntegration, taskResult = {}) {
   if (!integration || typeof integration !== 'object') return !needsIntegration;
+  // P0-AFC: Prefer current canonical commit reachability over stale integration
+  // evidence. If the task's commit is reachable from canonical HEAD, the commit
+  // is effectively integrated regardless of what the integration field says.
+  const reachability = (taskResult || {}).commit_reachability || {};
+  if (reachability.reachable === true && reachability.canonical_clean !== false) {
+    return true;
+  }
   if (integration.satisfied === true || integration.merged === true || integration.auto_completed === true) return true;
   const status = String(integration.status || '').toLowerCase();
   return ['merged', 'ff_only_merged', 'skipped', 'not_required', 'already_integrated'].includes(status);
@@ -48,6 +55,23 @@ function verificationPassed(verification = {}) {
 }
 
 function worktreeClean(taskResult = {}) {
+  // P0-AFC: Prefer current canonical reachability evidence over historical
+  // dirty snapshots. If the commit is reachable from canonical HEAD with
+  // a clean repo, the task is effectively clean regardless of historical
+  // canonial_dirty/worktree_dirty fields.
+  const reachability = taskResult.commit_reachability || {};
+  const recovery = taskResult.delivery_result_recovery || {};
+
+  // If delivery recovery succeeded or commit is already integrated,
+  // the historical dirtiness is no longer relevant
+  if (recovery.recovered === true || recovery.reason === 'already_integrated') {
+    if (reachability.reachable !== false) return true;
+  }
+  if (reachability.reachable === true && reachability.canonical_clean !== false) {
+    return true;
+  }
+
+  // Fall back to historical fields (stale but used when no current evidence)
   const dirty = taskResult.canonical_dirty === true
     || taskResult.worktree_dirty === true
     || taskResult.verification?.dirty === true
@@ -165,7 +189,7 @@ export function reconcileTaskClosure({ taskStatus, taskResult = {}, config = {} 
     closureDecision.blocking_passed === true;
 
   const verificationOk = verificationPassed(verification);
-  const integrationOk = integrationIsSatisfied(integration, taskResult.needs_integration);
+  const integrationOk = integrationIsSatisfied(integration, taskResult.needs_integration, taskResult);
   const findingOk = noUnresolvedBlockingFindings(findings);
   const worktreeOk = worktreeClean(taskResult);
 
