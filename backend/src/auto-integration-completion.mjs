@@ -221,10 +221,18 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   // actual code mutation occurred.  These fields are set by
   // applyLegacyNoChangeCompatibility in task-general-processor.mjs for tasks
   // that complete with changed_files=[], verification.passed=true, and no commit.
-  const isDiagnosticNoMutation = NO_MUTATION_PROFILES.has(taskResult.operation_kind)
+  // P0-AFC: When changed_files is non-empty, no-mutation profile inference is overridden.
+  // A result with real source/test/doc changed_files is not a no-mutation task even
+  // if the original profile says diagnostic/noop/readonly/already_integrated.
+  const realChangedFiles = (Array.isArray(taskResult.changed_files) ? taskResult.changed_files : []).filter(
+    (f) => f && typeof f === 'string' && !/\.bak$/i.test(f) && !/\.(tmp|log)$/i.test(f) && !f.includes('/.gptwork/')
+  );
+  const hasRealChangedFiles = realChangedFiles.length > 0;
+  const isDiagnosticNoMutation = !hasRealChangedFiles
+    && (NO_MUTATION_PROFILES.has(taskResult.operation_kind)
     || NO_MUTATION_PROFILES.has(taskResult.acceptance_profile)
     || NO_MUTATION_PROFILES.has(taskResult.acceptance_contract?.intent?.operation_kind)
-    || taskResult.mutation_scope === 'none';
+    || taskResult.mutation_scope === 'none');
   const hasNoMutationEvidence = changedFiles.length === 0
     && (taskResult.no_mutation === true || taskResult.repo_mutated === false);
   const isNoChangeCompletion = noChangeRepairEligible || isDiagnosticNoMutation || hasNoMutationEvidence;

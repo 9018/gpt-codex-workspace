@@ -400,6 +400,10 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
       parent.result.repair_attempts = (parent.result.repair_attempts || 0) + 1;
       parent.result.repair_status = "completed";
       parent.result.last_repaired_at = new Date().toISOString();
+      // P0-AFC: Mark the parent task as resolved by this successor so the
+      // review backlog reconciler knows the original task is no longer blocked.
+      parent.resolved_by_task_id = completedTask.id;
+      parent.result.resolved_by_task_id = completedTask.id;
 
       // If parent has a worktree, trigger re-integration
       // Otherwise, mark as completed directly

@@ -270,7 +270,38 @@ export async function verifyTaskCompletion({
   const rawResult = parsed.result;
   const contract = await loadAcceptanceContract({ goal, result: rawResult, resultJsonPath });
   const result = rawResult && contract ? normalizeOperationEvidence({ result: rawResult, contract }) : rawResult;
+  // P0-AFC: When the normalized result's operation_kind does not match the
+  // contract intent, re-infer the contract profile to match. This ensures
+  // that tasks with real changed_files are not evaluated against a noop/
+  // diagnostic/readonly contract, which would incorrectly skip commit and
+  // integration checks.
   const findings = [...parsed.findings, ...validateResult(result, { contract })];
+  
+  // If operation kind was reclassified from the original contract intent,
+  // find the matching profile for verification
+  const resultKind = result.operation_kind;
+  const contractKind = contract?.intent?.operation_kind;
+  if (contractKind && resultKind && resultKind !== 'unknown' && resultKind !== contractKind) {
+    // Load the correct profile for the result's kind
+    const { getDefaultAcceptanceContractProfile } = await import('./acceptance/contract-profiles.mjs');
+    const reInferred = getDefaultAcceptanceContractProfile(resultKind);
+    if (reInferred && reInferred.blocking_requirements) {
+      // Merge: use re-inferred blocking requirements in addition to original
+      contract.blocking_requirements = [
+        ...(contract.blocking_requirements || []),
+        ...reInferred.blocking_requirements.filter(
+          (br) => !(contract.blocking_requirements || []).find(
+            (existing) => existing.id === br.id
+          )
+        ),
+      ];
+      // Also update requirements
+      if (reInferred.requirements) {
+        if (reInferred.requirements.requires_commit) contract.requirements.requires_commit = true;
+        if (reInferred.requirements.requires_integration) contract.requirements.requires_integration = true;
+      }
+    }
+  }
 
   if (repoPath) {
     commands.push(await runCommand('git diff --check', { cwd: repoPath, timeout: 30_000, config }));
