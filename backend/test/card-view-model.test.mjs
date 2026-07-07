@@ -2,7 +2,7 @@ import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCardViewModel, legacyFieldsFromCard } from "../src/card-view-model.mjs";
+import { buildCardViewModel, legacyFieldsFromCard, isCardViewModelEnabledTool } from "../src/card-view-model.mjs";
 import { renderCardText } from "../src/card-render-text.mjs";
 
 test("buildCardViewModel builds runtime_status card with worker and queue summary", () => {
@@ -228,4 +228,63 @@ test("legacyFieldsFromCard derives keyValues and items for old widget compatibil
   assert.ok(legacy.keyValues.some((row) => row.key === "worker"));
   assert.ok(Array.isArray(legacy.items));
   assert.ok(legacy.items.some((item) => item.includes("Queue")));
+});
+
+test("isCardViewModelEnabledTool returns true for read_handoff", () => {
+  assert.ok(isCardViewModelEnabledTool("read_handoff"), "read_handoff should be card-enabled");
+});
+
+test("isCardViewModelEnabledTool returns true for show_changes", () => {
+  assert.ok(isCardViewModelEnabledTool("show_changes"), "show_changes should be card-enabled");
+});
+
+test("isCardViewModelEnabledTool returns true for gptwork_doctor", () => {
+  assert.ok(isCardViewModelEnabledTool("gptwork_doctor"), "gptwork_doctor should be card-enabled");
+});
+
+test("isCardViewModelEnabledTool returns true for gptwork_self_test", () => {
+  assert.ok(isCardViewModelEnabledTool("gptwork_self_test"), "gptwork_self_test should be card-enabled");
+});
+
+test("isCardViewModelEnabledTool returns true for list_goals", () => {
+  assert.ok(isCardViewModelEnabledTool("list_goals"), "list_goals should be card-enabled");
+});
+
+test("isCardViewModelEnabledTool returns true for start_next_queued_goal", () => {
+  assert.ok(isCardViewModelEnabledTool("start_next_queued_goal"), "start_next_queued_goal should be card-enabled");
+});
+
+test("buildCardViewModel handles read_handoff via generic card", () => {
+  const card = buildCardViewModel("read_handoff", {
+    status: { agent: "builder", status: "completed", goal_id: "goal_123" },
+    plan: "Step 1\nStep 2\nStep 3",
+  });
+  assert.ok(card.summary, "card should have summary");
+  assert.ok(card.status, "card should have status");
+  assert.ok(card.key_values, "card should have key_values");
+});
+
+test("buildCardViewModel handles show_changes via generic card", () => {
+  const card = buildCardViewModel("show_changes", {
+    summary: "3 files changed",
+    staged_count: 2,
+    unstaged_count: 1,
+    changed_files: [{ path: "src/foo.mjs" }, { path: "src/bar.mjs" }],
+  });
+  assert.ok(card.summary, "card should have summary");
+  assert.equal(card.summary, "3 files changed");
+  assert.ok(card.key_values, "card should have key_values");
+});
+
+test("buildCardViewModel handles gptwork_doctor via generic card", () => {
+  const card = buildCardViewModel("gptwork_doctor", {
+    running_commit: "abc123def456",
+    runtime_env_loaded: true,
+    repository_registry_count: 3,
+    worktree_dirty: false,
+    summary: "GPTWork Doctor OK",
+  });
+  assert.ok(card.summary, "card should have summary");
+  assert.equal(card.summary, "GPTWork Doctor OK");
+  assert.ok(card.key_values, "card should have key_values");
 });

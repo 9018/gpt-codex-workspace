@@ -10,6 +10,12 @@ import {
 
 const CARD_VERSION = "gptwork-card-v1";
 const CARD_ENABLED_TOOLS = new Set([
+  "gptwork_doctor",
+  "gptwork_self_test",
+  "show_changes",
+  "read_handoff",
+  "list_goals",
+  "start_next_queued_goal",
   "runtime_status",
   "worker_status",
   "list_tasks",
