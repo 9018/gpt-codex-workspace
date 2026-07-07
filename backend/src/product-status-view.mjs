@@ -254,6 +254,26 @@ export async function collectProductStatus(services) {
     // Non-fatal: retention status unavailable
   }
 
+  // 5b. Recent retention cleanup history
+  let recentRetentionCleanups = null;
+  try {
+    const { getRecentRetentionCleanups } = await import("./retention-service.mjs");
+    const wsRoot = config.defaultWorkspaceRoot || config.workspaceRoot || ".";
+    const history = await getRecentRetentionCleanups({ workspaceRoot: wsRoot, maxRecords: 5 });
+    if (history && history.count > 0) {
+      recentRetentionCleanups = history.cleanups.map(c => ({
+        audit_id: c.audit_id,
+        timestamp: c.timestamp,
+        dry_run: c.dry_run,
+        applied: c.applied,
+        summary: c.summary,
+        changes_count: c.changes_count,
+      }));
+    }
+  } catch {
+    // Non-fatal
+  }
+
   // 6. TUI diagnostics
   let tuiDiagnostics = null;
   try {
@@ -332,6 +352,10 @@ export async function collectProductStatus(services) {
     },
     retention,
     retention_families: retentionFamilies,
+    retention_recent_cleanups: recentRetentionCleanups,
+    retention_last_cleanup: recentRetentionCleanups && recentRetentionCleanups.length > 0
+      ? recentRetentionCleanups[0].timestamp
+      : null,
     canonical_outcome_health: collectCanonicalOutcomeHealth(state.tasks || []),
     context_bundle_health: contextBundleHealth,
     tui_provider: tuiDiagnostics ? {
@@ -549,6 +573,17 @@ export function productStatusCard(data) {
     }
     if (data.retention_families.length > 10) {
       lines.push(formatKeyValue('  ...', data.retention_families.length + ' total families'));
+    }
+  }
+
+  // ── Recent Retention Cleanups ──
+  if (data.retention_recent_cleanups && data.retention_recent_cleanups.length > 0) {
+    lines.push('');
+    lines.push(' Recent Cleanups:');
+    for (const c of data.retention_recent_cleanups.slice(0, 3)) {
+      const type = c.dry_run ? 'dry-run' : (c.applied ? 'apply' : 'unknown');
+      const ts = c.timestamp ? new Date(c.timestamp).toLocaleString() : '?';
+      lines.push(formatKeyValue('  ' + ts, type + ' - ' + (c.summary || 'no summary')));
     }
   }
 

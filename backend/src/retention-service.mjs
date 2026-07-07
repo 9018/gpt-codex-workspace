@@ -1641,3 +1641,73 @@ export async function retentionCleanup({
       : `Applied ${changes.length} retention change(s), skipped ${skipped.length} category(-ies).`,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Recent retention cleanup history (from admin-audit log)
+// ---------------------------------------------------------------------------
+
+/**
+ * Read recent retention cleanup records from the admin audit log.
+ * Filters for retention_cleanup actions and returns the most recent ones.
+ *
+ * @param {object} options
+ * @param {string} options.workspaceRoot
+ * @param {number} [options.maxRecords=10] - Max records to return
+ * @returns {Promise<{cleanups: Array<object>, count: number}>}
+ */
+export async function getRecentRetentionCleanups({ workspaceRoot, maxRecords = 10 } = {}) {
+  if (!workspaceRoot) return { cleanups: [], count: 0 };
+
+  const { readFile } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+
+  const auditPath = join(workspaceRoot, ".gptwork", "admin-audit.jsonl");
+  if (!existsSync(auditPath)) {
+    return { cleanups: [], count: 0 };
+  }
+
+  try {
+    const content = await readFile(auditPath, "utf8");
+    const lines = content.split("\n").filter(Boolean);
+    const cleanups = [];
+
+    // Parse lines from newest to oldest
+    for (let i = lines.length - 1; i >= 0 && cleanups.length < maxRecords; i--) {
+      try {
+        const parsed = JSON.parse(lines[i]);
+        if (!parsed || parsed.tool !== "retention_cleanup") continue;
+        cleanups.push({
+          audit_id: parsed.audit_id || null,
+          timestamp: parsed.timestamp || null,
+          dry_run: parsed.dry_run === true,
+          applied: parsed.apply === true,
+          limit: parsed.limit ?? null,
+          archive_before_delete: parsed.archive_before_delete === true,
+          result: parsed.result || null,
+          summary: parsed.summary || null,
+          elapsed_ms: parsed.elapsed_ms ?? null,
+          changes_count: _parseChangesCount(parsed.summary),
+        });
+      } catch {
+        // Skip malformed lines
+      }
+    }
+
+    return {
+      cleanups,
+      count: cleanups.length,
+    };
+  } catch {
+    return { cleanups: [], count: 0 };
+  }
+}
+
+/**
+ * Parse the changes count from a retention summary string like
+ * "changes=3 skipped=5 elapsed=123ms"
+ */
+function _parseChangesCount(summary) {
+  if (!summary) return null;
+  const m = String(summary).match(/changes=(\d+)/);
+  return m ? parseInt(m[1], 10) : null;
+}
