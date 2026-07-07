@@ -58,6 +58,10 @@ export function createCodexTuiToolsGroup({
 } = {}) {
   const metadata = tuiToolMetadata();
 
+  function sessionWorkspaceRoots() {
+    return [config?.defaultRepoPath, config?.defaultWorkspaceRoot].filter(Boolean);
+  }
+
   async function resolveGoalForTask(task, context) {
     const state = await store.load();
     const existing = task.goal_id
@@ -145,21 +149,21 @@ export function createCodexTuiToolsGroup({
       description: "Read status for an active or recorded Codex TUI session.",
       inputSchema: schema({ session_id: "string" }, ["session_id"]),
       ...metadata,
-      handler: async ({ session_id }) => getCodexTuiSessionStatusFn(session_id),
+      handler: async ({ session_id }) => getCodexTuiSessionStatusFn(session_id, { candidateWorkspaceRoots: sessionWorkspaceRoots() }),
     }),
     codex_tui_read: tool({
       name: "codex_tui_read",
       description: "Read durable log output for a Codex TUI session.",
       inputSchema: schema({ session_id: "string", max_chars: "integer" }, ["session_id"]),
       ...metadata,
-      handler: async ({ session_id, max_chars }) => readCodexTuiSessionFn(session_id, { maxChars: max_chars }),
+      handler: async ({ session_id, max_chars }) => readCodexTuiSessionFn(session_id, { maxChars: max_chars, candidateWorkspaceRoots: sessionWorkspaceRoots() }),
     }),
     codex_tui_send: tool({
       name: "codex_tui_send",
       description: "Send text input to an active Codex TUI session.",
       inputSchema: schema({ session_id: "string", text: "string" }, ["session_id", "text"]),
       ...metadata,
-      handler: async ({ session_id, text }) => sendCodexTuiSessionInputFn(session_id, text),
+      handler: async ({ session_id, text }) => sendCodexTuiSessionInputFn(session_id, text, { candidateWorkspaceRoots: sessionWorkspaceRoots() }),
     }),
     codex_tui_stop: tool({
       name: "codex_tui_stop",
@@ -168,8 +172,8 @@ export function createCodexTuiToolsGroup({
       ...metadata,
       handler: async ({ session_id }) => {
         let before = null;
-        try { before = await readCodexTuiSessionFn(session_id, { maxChars: 0 }); } catch {}
-        const stopped = await stopCodexTuiSessionFn(session_id, { reason: "manual_stop" });
+        try { before = await readCodexTuiSessionFn(session_id, { maxChars: 0, candidateWorkspaceRoots: sessionWorkspaceRoots() }); } catch {}
+        const stopped = await stopCodexTuiSessionFn(session_id, { reason: "manual_stop", candidateWorkspaceRoots: sessionWorkspaceRoots() });
         if (before?.cwd && before?.task_id) {
           try { await releaseRepoLockFn(config.defaultWorkspaceRoot, before.cwd, before.task_id); } catch {}
         }
