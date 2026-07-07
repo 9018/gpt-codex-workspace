@@ -105,6 +105,25 @@ function integrationVerifiedForQueuePropagation(taskResult = {}) {
 
 function shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult = {} } = {}) {
   if (taskStatus !== "completed") return false;
+
+  // AFC-P3: When unified_decision.queue_effect.unblock_dependents is true,
+  // trust it as the canonical signal and skip individual evidence re-checks.
+  const ud = taskResult.unified_decision || {};
+  if (ud.queue_effect?.unblock_dependents === true) {
+    return true;
+  }
+
+  // When unified_decision explicitly says hold_queue, do not propagate.
+  if (ud.queue_effect?.hold_queue === true) {
+    return false;
+  }
+
+  // When unified_decision status is terminal-non-completed, do not propagate.
+  if (ud.status === "failed" || ud.status === "timed_out" || ud.status === "blocked") {
+    return false;
+  }
+
+  // Fallback: individual evidence checks (backward compat for tasks without unified_decision).
   if (taskResult.requires_review === true) return false;
   if (!acceptedByAcceptanceAgent(taskResult)) return false;
   if (!closureAllowsQueuePropagation(taskResult)) return false;

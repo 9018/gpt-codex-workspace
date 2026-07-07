@@ -392,3 +392,277 @@ test("queue-reconciler: computeWorkerHealth distinguishes all required states", 
   assert.equal(stalled.phase, "stalled");
   assert.ok(stalled.reason.includes("last tick"));
 });
+
+// ===========================================================================
+// AFC-P3: Queue Auto-Advance Safe Terminal Semantics
+//
+// These tests verify that the queue consumes unified_decision fields
+// (status, safe_to_auto_advance, integration_effect, queue_effect)
+// as the canonical source of truth, instead of re-deriving terminal
+// completion from individual evidence fields.
+// ===========================================================================
+
+// ---------------------------------------------------------------------------
+// P3-T1: already_integrated unified_decision unblocks dependent
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: already_integrated unified_decision unblocks dependent via resolveQueueDependencyState", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_already_integrated", "completed", {
+    goal_id: "goal_already_integrated",
+    result: {
+      unified_decision: {
+        status: "completed",
+        blocking_passed: true,
+        safe_to_auto_advance: true,
+        requires_integration: false,
+        requires_repair: false,
+        requires_review: false,
+        integration_effect: { required: false, status: "already_integrated", satisfied: true, terminal: true },
+        queue_effect: { unblock_dependents: true, hold_queue: false },
+      },
+    },
+  });
+  addQueueItem(state, "queue_dep_on_ai", "goal_dep", 1, "waiting", {
+    depends_on_task_id: "task_already_integrated",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  assert.equal(depState.effective_completed, true, "already_integrated should be effective_completed");
+  assert.equal(depState.effective_failed, false, "should not be effective_failed");
+  assert.equal(depState.integration_required_and_missing, false, "should not have integration_required_and_missing");
+  assert.ok(depState.detail.includes("unified_decision"), "detail should reference unified_decision");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T2: not_required unified_decision unblocks dependent
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: integration_not_required unified_decision unblocks dependent", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_not_required", "completed", {
+    goal_id: "goal_not_required",
+    result: {
+      unified_decision: {
+        status: "completed",
+        blocking_passed: true,
+        safe_to_auto_advance: true,
+        requires_integration: false,
+        requires_repair: false,
+        integration_effect: { required: false, status: "not_required", satisfied: true, terminal: true },
+        queue_effect: { unblock_dependents: true, hold_queue: false },
+      },
+    },
+  });
+  addQueueItem(state, "queue_dep_on_nr", "goal_dep", 1, "waiting", {
+    depends_on_task_id: "task_not_required",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  assert.equal(depState.effective_completed, true, "not_required should be effective_completed");
+  assert.equal(depState.detail.includes("unblock_dependents=true"), true, "detail should show unblock_dependents=true");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T3: failed dependency remains blocked unless resolved_by successor
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: failed unified_decision keeps dependent blocked", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_failed_ud", "failed", {
+    goal_id: "goal_failed_ud",
+    result: {
+      unified_decision: {
+        status: "failed",
+        blocking_passed: false,
+        safe_to_auto_advance: false,
+        requires_repair: false,
+        integration_effect: { required: false, terminal: false },
+        queue_effect: { unblock_dependents: false, hold_queue: true },
+      },
+    },
+  });
+  addQueueItem(state, "queue_dep_on_fail", "goal_dep", 1, "blocked", {
+    depends_on_task_id: "task_failed_ud",
+    blocked_reason: "upstream failed",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  assert.equal(depState.effective_completed, false, "failed should not be effective_completed");
+  assert.equal(depState.effective_failed, true, "failed should be effective_failed");
+  assert.equal(depState.integration_required_and_missing, false, "no integration required");
+  assert.ok(depState.detail.includes("failed"), "detail should mention failed status");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T4: resolved_by_successor (repair successor) with unified_decision unblocks
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: repair successor with unified_decision queue_effect.unblock_dependents=true unblocks dependent", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_repaired", "completed", {
+    goal_id: "goal_repaired",
+    result: {
+      repair_outcome: "repaired",
+      unified_decision: {
+        status: "completed",
+        blocking_passed: true,
+        safe_to_auto_advance: true,
+        requires_integration: false,
+        integration_effect: { required: false, status: "not_required", satisfied: true, terminal: true },
+        queue_effect: { unblock_dependents: true, hold_queue: false },
+      },
+    },
+  });
+  addQueueItem(state, "queue_dep_on_repair", "goal_dep", 1, "blocked", {
+    depends_on_task_id: "task_repaired",
+    blocked_reason: "waiting for repair success",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  assert.equal(depState.effective_completed, true, "repair successor should unblock");
+  assert.equal(depState.is_repair_successor, true, "should be repair successor");
+  assert.ok(depState.detail.includes("unblock_dependents=true"), "detail should show unblock_dependents=true");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T5: stale blocked reason repaired — detectStaleBlockers with unified_decision
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: detectStaleBlockers identifies resolved dependency via unified_decision", async () => {
+  const { detectStaleBlockers } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_now_completed", "completed", {
+    goal_id: "goal_now_completed",
+    result: {
+      unified_decision: {
+        status: "completed",
+        blocking_passed: true,
+        safe_to_auto_advance: true,
+        integration_effect: { required: false, terminal: true },
+        queue_effect: { unblock_dependents: true, hold_queue: false },
+      },
+    },
+  });
+  addQueueItem(state, "queue_stale_blocked", "goal_stale", 1, "blocked", {
+    depends_on_task_id: "task_now_completed",
+    blocked_reason: "old stale reason",
+  });
+
+  const stale = detectStaleBlockers(state);
+  const itemStale = stale.find(s => s.queue_id === "queue_stale_blocked");
+
+  assert.ok(itemStale, "stale blocker should be detected");
+  assert.equal(itemStale.stale_type, "dependency_resolved", "stale type should be dependency_resolved");
+  assert.ok(itemStale.recommendation.includes("unblock"), "recommendation should suggest unblock");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T6: checkTypedEligibility gates pass with unified_decision unblock_dependents
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: checkTypedEligibility gates pass with unified_decision unblock_dependents", async () => {
+  const { checkTypedEligibility } = await import("../src/goal-queue.mjs");
+
+  const state = makeState();
+  addTask(state, "task_dep_met", "completed", {
+    goal_id: "goal_dep_met",
+    result: {
+      unified_decision: {
+        status: "completed",
+        blocking_passed: true,
+        safe_to_auto_advance: true,
+        integration_effect: { required: false, terminal: true },
+        queue_effect: { unblock_dependents: true, hold_queue: false },
+      },
+    },
+  });
+  addQueueItem(state, "queue_eligible", "goal_eligible", 1, "waiting", {
+    depends_on_task_id: "task_dep_met",
+    auto_start: true,
+  });
+
+  const item = state.goal_queue[0];
+  const eligibility = await checkTypedEligibility(state, item, {}, {});
+
+  // The dependency-related gates should pass since unified_decision says unblock
+  const depGate = (eligibility.gates || []).find(g => g.gate === "dependency");
+  if (depGate) {
+    assert.equal(depGate.passed, true, "dependency gate should pass");
+  }
+  const acceptGate = (eligibility.gates || []).find(g => g.gate === "acceptance_gate");
+  if (acceptGate) {
+    assert.equal(acceptGate.passed, true, "acceptance gate should pass");
+  }
+});
+
+// ---------------------------------------------------------------------------
+// P3-T7: resolveQueueDependencyState handles running dependency correctly
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: resolveQueueDependencyState handles running dependency correctly (non-terminal)", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_running_dep", "running", {
+    goal_id: "goal_running_dep",
+  });
+  addQueueItem(state, "queue_dep_on_running", "goal_dep", 1, "blocked", {
+    depends_on_task_id: "task_running_dep",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  // No unified_decision on a running task, so it falls through to evidence-based logic.
+  // A running task is not terminal, so effective_completed=false.
+  assert.equal(depState.effective_completed, false, "running dependency not effective_completed");
+  assert.equal(depState.effective_failed, false, "running dependency not effective_failed");
+});
+
+// ---------------------------------------------------------------------------
+// P3-T8: no unified_decision falls back to evidence-based derivation (backward compat)
+// ---------------------------------------------------------------------------
+
+test("AFC-P3: no unified_decision falls back to evidence-based backward-compatible derivation", async () => {
+  const { resolveQueueDependencyState } = await import("../src/queue-reconciler.mjs");
+
+  const state = makeState();
+  addTask(state, "task_completed_no_ud", "completed", {
+    goal_id: "goal_no_ud",
+    result: {
+      verification: { passed: true },
+      reviewer_decision: { decision: { passed: true, status: "accepted" } },
+      integration: { status: "merged", merged: true },
+      needs_integration: false,
+    },
+  });
+  addQueueItem(state, "queue_no_ud", "goal_dep", 1, "waiting", {
+    depends_on_task_id: "task_completed_no_ud",
+  });
+
+  const item = state.goal_queue[0];
+  const depState = resolveQueueDependencyState(state, item);
+
+  // Without unified_decision, the evidence-based path should still work
+  assert.equal(depState.effective_completed, true, "evidence-based path should derive completed");
+  assert.equal(depState.effective_failed, false, "should not be failed");
+});
+

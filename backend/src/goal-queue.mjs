@@ -657,7 +657,11 @@ export async function autoStartNextOnTaskCompleted(store, config, completedTask)
   // Acceptance-aware auto-advance: if the completed task finished
   // with a failed/unaccepted status, dependent queue items that
   // directly depend on this task are blocked.
- const taskPassedAcceptance = isTerminalCompleted(completedTask.status);
+ // AFC-P3: Use unified_decision.queue_effect.unblock_dependents as primary gate;
+  // fall back to isTerminalCompleted() for tasks without unified_decision (backward compat).
+  const taskUD = completedTask.result?.unified_decision || null;
+  const taskPassedAcceptance = taskUD?.queue_effect?.unblock_dependents === true
+    || isTerminalCompleted(completedTask.status);
 
   // Find queue items that depend on this task or its goal
   const taskId = completedTask.id;
@@ -803,13 +807,31 @@ export async function checkTypedEligibility(state, item, config = {}, opts = {})
       // not when data is simply absent (e.g., task result only has commit+needs_integration).
       if (prStatus === 'completed') {
         const prResult = prerequisiteTask.result || {};
-        const accExplicitlyFailed = prResult.acceptance_gate?.passed === false
-          || (prResult.verification?.passed === false && !prResult.auto_integration_completion?.completed)
-          || prResult.requires_review === true
-          || (prResult.acceptance_findings && Array.isArray(prResult.acceptance_findings) && prResult.acceptance_findings.some(f => f.severity === 'blocker' || f.severity === 'major'));
-        if (accExplicitlyFailed) {
-          gates.push({ gate: 'acceptance_gate', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' completed but acceptance not satisfied' });
+
+        // AFC-P3: Check unified_decision first — queue_effect.unblock_dependents
+        // is the canonical signal. When present, it overrides individual evidence fields.
+        const prUD = prResult.unified_decision || {};
+        if (prUD.queue_effect?.unblock_dependents === true) {
+          // Unified decision says it's safe to unblock — skip individual evidence checks
+          gates.push({ gate: 'acceptance_gate', passed: true, detail: 'prerequisite task ' + prerequisiteTask.id + ' unified_decision.queue_effect.unblock_dependents=true' });
+        } else if (prUD.queue_effect?.hold_queue === true) {
+          // Unified decision says hold — block
+          gates.push({ gate: 'acceptance_gate', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' unified_decision.queue_effect.hold_queue=true' });
           return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED, gates };
+        } else if (prUD.status === 'failed' || prUD.status === 'timed_out' || prUD.status === 'blocked') {
+          // Unified decision says terminal-failed
+          gates.push({ gate: 'acceptance_gate', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' unified_decision.status=' + prUD.status });
+          return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED, gates };
+        } else {
+          // No canonical signal — fall back to individual evidence (backward compat)
+          const accExplicitlyFailed = prResult.acceptance_gate?.passed === false
+            || (prResult.verification?.passed === false && !prResult.auto_integration_completion?.completed)
+            || prResult.requires_review === true
+            || (prResult.acceptance_findings && Array.isArray(prResult.acceptance_findings) && prResult.acceptance_findings.some(f => f.severity === 'blocker' || f.severity === 'major'));
+          if (accExplicitlyFailed) {
+            gates.push({ gate: 'acceptance_gate', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' completed but acceptance not satisfied' });
+            return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.ACCEPTANCE_NOT_SATISFIED, gates };
+          }
         }
       }
     }
@@ -827,13 +849,26 @@ export async function checkTypedEligibility(state, item, config = {}, opts = {})
       // For completed prerequisites, also check finalizer terminal state
       if (prerequisiteTask && prerequisiteTask.status === 'completed') {
         const prResult = prerequisiteTask.result || {};
-        const fd = prResult.finalizer_decision || {};
-        const isTermFinalized = fd.safe_to_auto_advance === true
-          || fd.queue_effect?.unblock_dependents === true
-          || (prResult.closure_decision?.status && String(prResult.closure_decision.status).startsWith('auto_completed'));
-        if (!isTermFinalized) {
-          gates.push({ gate: 'finalizer_terminal', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' finalizer safe_to_auto_advance not set' });
+
+        // AFC-P3: Use unified_decision as the primary signal.
+        const prUD = prResult.unified_decision || {};
+        if (prUD.queue_effect?.unblock_dependents === true) {
+          // Canonical signal says unblock — skip finalizer gate
+        } else if (prUD.queue_effect?.hold_queue === true || prUD.status === 'failed' || prUD.status === 'timed_out' || prUD.status === 'blocked') {
+          gates.push({ gate: 'finalizer_terminal', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' unified_decision blocks propagation' });
           return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.FINALIZER_NOT_TERMINAL, gates };
+        } else if (prUD.safe_to_auto_advance === true) {
+          // unified_decision says safe but no explicit queue_effect — trust it
+        } else {
+          // Fallback: check finalizer_decision and closure_decision (backward compat)
+          const fd = prResult.finalizer_decision || {};
+          const isTermFinalized = fd.safe_to_auto_advance === true
+            || fd.queue_effect?.unblock_dependents === true
+            || (prResult.closure_decision?.status && String(prResult.closure_decision.status).startsWith('auto_completed'));
+          if (!isTermFinalized) {
+            gates.push({ gate: 'finalizer_terminal', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' finalizer safe_to_auto_advance not set' });
+            return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.FINALIZER_NOT_TERMINAL, gates };
+          }
         }
       }
       return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.DEPENDENCY_NOT_TERMINAL, gates };
