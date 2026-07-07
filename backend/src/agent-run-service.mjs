@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { DEFAULT_AGENT_PIPELINE, normalizeAgentRole, validateAgentRoles } from "./subagent-policy.mjs";
 import { ARTIFACT_SCHEMA, AGENT_ROLE_ENUM, normalizeContractRole, validateAgentArtifactContract } from "./agent-artifact-contract.mjs";
+import { missingAgentRunEvidence } from "./evidence/operation-evidence-profiles.mjs";
 
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
@@ -240,6 +241,16 @@ export function evaluateAgentGates(agentRuns = []) {
     const completedRun = runs.find((r) => r.status === "completed");
     const skippedRun = runs.find((r) => r.status === "skipped");
     const artifactValidation = completedRun ? validateAgentArtifactContract(completedRun) : null;
+    const roleEvidenceValidation = completedRun ? missingAgentRunEvidence(completedRun) : [];
+
+    const missingEvidence = [
+
+      ...(artifactValidation?.missing_artifacts || []),
+
+      ...roleEvidenceValidation.map(e => e.evidence_field || e.artifact_kind || e.code),
+
+    ];
+
     const satisfied = Boolean(skippedRun || (completedRun && artifactValidation.valid));
 
     if (completedRun) lastCompletedRole = completedRun.role || role;

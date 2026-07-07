@@ -183,30 +183,32 @@ TUI 会话不能启动，`codex_exec` 保持为回退 provider。
 
 | 角色 | 默认后端 | 执行语义 | 证据来源 | 说明 |
 |------|---------|---------|---------|------|
-| context_curator | `null` | `auto_artifact` | `null (auto_artifact — no external commands)` | 从任务元数据自动准备 context bundle |
-| planner | `null` | `auto_artifact` | `null (auto_artifact — no external commands)` | 从 context/prompt 文件自动确定计划 |
+| context_curator | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行 context bundle 准备 |
+| planner | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行计划生成 |
 | builder | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 自动执行代码变更 |
-| verifier | `local_command` | `real` | `local_command (deterministic shell command)` | 本地 shell 命令确定性验证 |
-| reviewer | `local_command` | `real` | `local_command (deterministic shell command)` | 本地 shell 命令确定性审查 |
-| integrator | `null` | `auto_artifact` | `null (auto_artifact — no external commands)` | 从集成结果证据自动完成 |
-| finalizer | `null` | `auto_artifact` | `null (auto_artifact — no external commands)` | 从任务结果证据自动完成 |
+| verifier | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行验证（仍可通过 `agentRoleBackends.verifier=local_command` 切换为 shell 命令） |
+| reviewer | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行审查（仍可通过 `agentRoleBackends.reviewer=local_command` 切换为 shell 命令） |
+| integrator | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行集成（仍可通过 `agentRoleBackends.integrator=null` 启用自动完成） |
+| finalizer | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 执行终结（仍可通过 `agentRoleBackends.finalizer=null` 启用自动完成） |
 | repairer | `codex_exec` | `real` | `codex_exec (real agent execution)` | Codex CLI 自动修复尝试 |
 
 `repairer` 是恢复分支（recovery branch），不属于主线默认 pipeline（`DEFAULT_AGENT_PIPELINE`）。
 主线 pipeline 执行顺序：`context_curator → planner → builder → verifier → reviewer → integrator → finalizer`。
 
-**关键语义总结**：
-- 只有 builder 和 repairer 使用真实的 Codex LLM agent 执行（`codex_exec` / `real`）
-- verifier 和 reviewer 使用本地 shell 命令确定性执行（`local_command` / `real` — 注意这也属于 `real` 语义）
-- context_curator、planner、integrator、finalizer 使用 `null` 后端（`auto_artifact` — 从已有证据自动完成，不执行外部命令）
+**关键语义总结**（产品默认值）：
+- 所有 pipeline 角色默认使用 `codex_exec` 后端（`real` 语义），通过 Codex CLI 执行
+- `local_command` 后端不再是任何角色的默认值；用户可以通过 `agentRoleBackends.<role>=local_command` 显式切换为 shell 命令执行
+- `null` 后端不再是任何角色的默认值；用户可以通过 `agentRoleBackends.<role>=null` 显式配置。配置为 null 的自动完成角色（`context_curator`、`planner`、`integrator`、`finalizer`）仍然保持 `auto_artifact` 执行语义
 
 ### 后端覆盖顺序
 
 `resolveAgentBackendId()` 的优先级（`agent-execution-backends.mjs`）：
 1. **任务级**：`task.agent_backend` / `task.metadata.agent_backend`
-2. **角色级配置**：`config.agentRoleBackends` / `config.agentBackendByRole`
-3. **全局配置**：`config.agentBackend` / `config.agentBackendDefault`
-4. **角色默认值**：`ROLE_BACKEND_DEFAULTS`（上表所列）
+2. **角色级配置**：`config.agentRoleBackends` / `config.agentBackendByRole`（用户显式配置值）
+3. **全局产品默认值**：`config.agentBackend` / `config.agentBackendDefault`（如 `GPTWORK_AGENT_BACKEND=codex_exec`）
+4. **角色回退默认值**：`ROLE_BACKEND_DEFAULTS` — 所有角色均为 `codex_exec`（仅当以上均未配置时生效）
+
+> **产品默认值 vs 用户显式配置**：在正式环境中，`GPTWORK_AGENT_BACKEND=codex_exec` 使所有角色统一使用 `codex_exec`。用户在 `agentRoleBackends` 中的显式配置（如 `GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command`）会覆盖产品默认值。`ROLE_BACKEND_DEFAULTS` 仅当全局配置也未设置时作为最终回退使用。
 
 ## Product Status Dashboard 中的 Provider 信息
 
