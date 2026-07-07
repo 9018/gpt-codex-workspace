@@ -17,7 +17,7 @@ const emptyDescriptor = { metadata: {} };
 
 /** Helper to run tagToolResult with a tool name and optional name in descriptor. */
 function tag(name, payload, descriptor) {
-  return tagToolResult(name, descriptor || emptyDescriptor, payload);
+  return tagToolResult(name, descriptor || emptyDescriptor, payload).modelPayload;
 }
 
 // ---------------------------------------------------------------------------
@@ -137,19 +137,25 @@ test("tagToolResult: count-based summary with active and queue", () => {
 test("tagToolResult: wraps array payloads", () => {
   const res = tag("list_tasks", ["task1", "task2"]);
   assert.equal(res.gptwork_type, "tool_result");
-  assert.ok(res.value !== undefined, "array payload should be wrapped in {value: ...}");
-  assert.ok(Array.isArray(res.value));
+  assert.equal(res.rawAvailable, true);
+  assert.equal(res.value, undefined);
+  assert.ok(typeof res.gptwork_tool === "string");
 });
 
 test("tagToolResult: wraps string payloads", () => {
   const res = tag("echo", "hello world");
-  assert.equal(res.value, "hello world");
+  // modelPayload is bounded — raw value is not propagated
+  assert.equal(res.value, undefined);
+  assert.equal(res.rawAvailable, true);
   assert.ok(res.summary !== undefined, "string payload should still have summary");
+  assert.equal(res.gptwork_title, "echo");
 });
 
 test("tagToolResult: wraps null payloads", () => {
   const res = tag("returns_null", null);
-  assert.equal(res.value, null);
+  assert.equal(res.value, undefined);
+  assert.equal(res.rawAvailable, true);
+  assert.equal(res.gptwork_tool, "returns_null");
 });
 
 test("tagToolResult: wraps undefined/empty payloads", () => {
@@ -311,8 +317,15 @@ test("tagToolResult: summary does not expose raw values", () => {
   assert.equal(res.summary, "secret_tool: 1 PASS");
   assert.ok(!res.summary.includes("sk-abc123"));
   assert.ok(!res.summary.includes("super-secret"));
-  // But raw values remain accessible via the base payload (not in summary)
-  assert.equal(res.api_key, "sk-abc123def456");
+  // Under the v5 bounded contract, raw values like api_key, password, token
+  // are NOT propagated into the modelPayload. Only bounded fields are present.
+  assert.equal(res.api_key, undefined);
+  assert.equal(res.password, undefined);
+  assert.equal(res.token, undefined);
+  assert.equal(res.rawAvailable, true);
+  assert.equal(res.gptwork_tool, "secret_tool");
+  assert.equal(res.gptwork_type, "tool_result");
+  assert.ok(Array.isArray(res.results));
 });
 
 test("tagToolResult: no large payload dumps in summary", () => {
