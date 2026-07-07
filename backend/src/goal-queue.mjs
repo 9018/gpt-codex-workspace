@@ -830,7 +830,9 @@ export async function checkTypedEligibility(state, item, config = {}, opts = {})
         const fd = prResult.finalizer_decision || {};
         const isTermFinalized = fd.safe_to_auto_advance === true
           || fd.queue_effect?.unblock_dependents === true
-          || (prResult.closure_decision?.status && String(prResult.closure_decision.status).startsWith('auto_completed'));
+          || (prResult.closure_decision?.status && String(prResult.closure_decision.status).startsWith('auto_completed'))
+          || (prResult.unified_decision?.safe_to_auto_advance === true)
+          || (prResult.unified_decision?.queue_effect?.unblock_dependents === true);
         if (!isTermFinalized) {
           gates.push({ gate: 'finalizer_terminal', passed: false, detail: 'prerequisite task ' + prerequisiteTask.id + ' finalizer safe_to_auto_advance not set' });
           return { eligible: false, blocked_reason: BLOCKED_REASON_TYPES.FINALIZER_NOT_TERMINAL, gates };
