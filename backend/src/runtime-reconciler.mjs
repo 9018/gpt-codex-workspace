@@ -57,6 +57,37 @@ export function createReconciler({ store, config, github, notifyTerminalTaskIfNe
           if (logPath) appendFileSync(logPath, `[gptwork-worker] historical convergence error (non-fatal): ${convErr.message}\n`);
         }
 
+
+        // ── AFC-10: Runtime Watch Diagnostics (non-mutating) ──
+        try {
+          const { runWatchWithRecovery } = await import("./runtime-watch-diagnostics.mjs");
+          const workspaceRoot = config.defaultWorkspaceRoot;
+          const watchResult = await runWatchWithRecovery({
+            store,
+            workspaceRoot,
+            config,
+            dryRun: true, // Always diagnostic-only in the reconciler; recovery is explicit
+          });
+
+          if (watchResult.diagnostics.summary.total_findings > 0) {
+            if (logPath) {
+              appendFileSync(logPath, `[gptwork-worker] AFC-10 runtime watch: ${watchResult.diagnostics.summary.total_findings} finding(s)
+`);
+              for (const action of watchResult.diagnostics.recovery_actions.slice(0, 5)) {
+                appendFileSync(logPath, `[gptwork-worker]   [${action.safety}] ${action.action} — ${action.description}
+`);
+              }
+              if (watchResult.diagnostics.recovery_actions.length > 5) {
+                appendFileSync(logPath, `[gptwork-worker]   ... and ${watchResult.diagnostics.recovery_actions.length - 5} more action(s)
+`);
+              }
+            }
+          }
+        } catch (watchErr) {
+          if (logPath) appendFileSync(logPath, `[gptwork-worker] AFC-10 runtime watch error (non-fatal): ${watchErr.message}
+`);
+        }
+
         await reconcileRuntimeRepoLocks({ config, logPath });
         const restartVerifications = await reconcileRestartMarkers({ state, store, config, github, notifyTerminalTaskIfNeeded, logPath });
         await store.save();
