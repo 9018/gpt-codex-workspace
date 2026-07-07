@@ -172,6 +172,7 @@ export function resolveQueueDependencyState(state, item) {
   const isIntegrated =
     task?.result?.integration?.merged === true ||
     task?.result?.integration?.status === "merged" ||
+    task?.result?.integration?.status === "already_integrated" ||
     task?.result?.auto_integration_completion?.completed === true ||
     status === "integrated";
 
