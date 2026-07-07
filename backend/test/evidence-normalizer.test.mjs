@@ -699,3 +699,70 @@ test('P0-AFC10: docs_only isNoopLikeOperation returns true for docs_only', () =>
   // for docs-only (docs_only is in isNoopLikeOperation fallback set)
   assert.equal(normalized.operation_kind, 'docs_only');
 });
+
+// ============================================================
+// P0-MA22: Verification-Only / No-Mutation Integration Not Required
+// ============================================================
+
+test('P0-MA22: verification_only operation_kind sets integration_not_required=true', () => {
+
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'verification-only',
+      operation_kind: 'verification_only',
+      changed_files: [],
+      verification: { passed: true },
+    },
+  });
+  assert.equal(normalized.operation_kind, 'verification_only');
+  assert.equal(normalized.integration_not_required, true, 'verification_only should set integration_not_required=true');
+  assert.equal(normalized.verification_only_result, true, 'verification_only_result boolean should be true');
+});
+
+test('P0-MA22: sync_only operation_kind sets integration_not_required=true', () => {
+
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'sync-only',
+      operation_kind: 'sync_only',
+      changed_files: [],
+      verification: { passed: true },
+    },
+  });
+  assert.equal(normalized.operation_kind, 'sync_only');
+  assert.equal(normalized.integration_not_required, true, 'sync_only should set integration_not_required=true');
+});
+
+test('P0-MA22: github_sync_only operation_kind sets integration_not_required=true', () => {
+
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'github-sync',
+      operation_kind: 'github_sync_only',
+      changed_files: [],
+      verification: { passed: true },
+    },
+  });
+  assert.equal(normalized.operation_kind, 'github_sync_only');
+  assert.equal(normalized.integration_not_required, true, 'github_sync_only should set integration_not_required=true');
+});
+
+test('P0-MA22: code_change operation_kind still sets integration_not_required=false', () => {
+
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'code change',
+      operation_kind: 'code_change',
+      changed_files: ['src/app.mjs'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+  });
+  assert.equal(normalized.operation_kind, 'code_change');
+  assert.equal(normalized.integration_not_required, false, 'code_change should keep integration_not_required=false');
+  assert.equal(normalized.verification_only_result, false, 'verification_only_result should be false for code_change');
+});

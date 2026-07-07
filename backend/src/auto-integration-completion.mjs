@@ -237,10 +237,10 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
   if (!taskBranch && !isNoChangeCompletion) {
     blockers.push(blocker('task_branch_missing', 'Task branch evidence is missing.'));
   }
-  if (resolvedRepo?.worktree_lifecycle?.mode !== 'git_worktree' && !noChangeRepairEligible) {
+  if (resolvedRepo?.worktree_lifecycle?.mode !== 'git_worktree' && !noChangeRepairEligible && !isDiagnosticNoMutation) {
     blockers.push(blocker('worktree_mode_not_git_worktree', 'Auto completion requires git_worktree lifecycle mode.'));
   }
-  if (!taskWorktreePath && !noChangeRepairEligible) {
+  if (!taskWorktreePath && !noChangeRepairEligible && !isDiagnosticNoMutation) {
     blockers.push(blocker('task_worktree_missing', 'Task worktree path is missing.'));
   }
   if (!canonicalRepoPath) {
@@ -261,6 +261,7 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
     canonical_repo_path: canonicalRepoPath,
     no_change_repair: noChangeRepair,
     has_no_mutation_evidence: hasNoMutationEvidence,
+    is_diagnostic_no_mutation: isDiagnosticNoMutation,
   };
 }
 
@@ -398,7 +399,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       evidence.blockers.push(blocker('canonical_repo_missing', 'Canonical repo path does not exist.'));
       return evidence;
     }
-    if (candidate.no_change_repair?.completion_eligible !== true && !candidate.has_no_mutation_evidence && !existsSync(candidate.task_worktree_path)) {
+    if (candidate.no_change_repair?.completion_eligible !== true && !candidate.has_no_mutation_evidence && candidate.is_diagnostic_no_mutation !== true && !existsSync(candidate.task_worktree_path)) {
       evidence.reason = 'task_worktree_missing';
       evidence.blockers.push(blocker('task_worktree_missing', 'Task worktree path does not exist.'));
       return evidence;
@@ -411,7 +412,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       return evidence;
     }
 
-    if (candidate.no_change_repair?.completion_eligible === true || candidate.has_no_mutation_evidence === true) {
+    if (candidate.no_change_repair?.completion_eligible === true || candidate.has_no_mutation_evidence === true || candidate.is_diagnostic_no_mutation === true) {
       evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
       if (!evidence.canonical_clean_before) {
         evidence.reason = 'canonical_dirty';
@@ -441,7 +442,7 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       };
       evidence.completed = true;
       evidence.eligible = true;
-      evidence.reason = candidate.has_no_mutation_evidence
+      evidence.reason = candidate.is_diagnostic_no_mutation ? 'verification_only_completed' : candidate.has_no_mutation_evidence
         ? 'verification_only_completed'
         : 'no_change_repair_already_integrated_and_verified';
       return evidence;
