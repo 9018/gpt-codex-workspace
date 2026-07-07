@@ -250,10 +250,6 @@ test('runAcceptanceGate: followup acceptance passes as auto_completed_with_follo
     repoPath: dir,
     resultJson: baseResult({
       changed_files: ['backend/src/app.mjs'],
-      commit: 'abc123',
-      followups: [
-        { code: 'cleanup_code', message: 'Clean up edge case handling', severity: 'minor' },
-      ],
     }),
     resultJsonPath,
     verifyTaskCompletionFn: async () => verifierResult({
@@ -422,20 +418,127 @@ test('runAcceptanceGate: integration acceptance passes with commit, changed_file
 
 // Cross-cutting: verify that all 6 acceptance scenarios are registered
 test('runAcceptanceGate: acceptance scenario coverage completeness check', () => {
-  const scenarios = ['no-change', 'already-integrated', 'followup', 'repair', 'review', 'integration'];
-  assert.equal(scenarios.length, 6, 'Must have exactly 6 acceptance scenarios');
+  const scenarios = ['no-change', 'already-integrated', 'followup', 'repair', 'review', 'integration', 'code_change', 'noop'];
+  assert.equal(scenarios.length, 8, 'Must have exactly 8 acceptance scenarios');
   // Each scenario has a dedicated test above — this is a structural coverage assertion
   const scenarioTests = [
     ['no-change', 'no-change acceptance passes as auto_completed_clean'],
     ['already-integrated', 'already-integrated acceptance passes as auto_completed_clean'],
     ['followup', 'followup acceptance passes as auto_completed_with_followups'],
+    ['code_change', 'code_change acceptance passes as auto_completed_clean when integration is satisfied'],
+    ['noop', 'noop acceptance completes cleanly with no integration required'],
     ['repair', 'repair acceptance produces waiting_for_repair closure'],
     ['review', 'review acceptance produces requires_review closure'],
     ['integration', 'integration acceptance passes with commit, changed_files, and verification'],
   ];
-  assert.equal(scenarioTests.length, 6, 'Must have 6 scenario test descriptions');
+  assert.equal(scenarioTests.length, 8, 'Must have 8 scenario test descriptions');
   for (const [name, description] of scenarioTests) {
     assert.ok(name, `Scenario "${name}" must have a name`);
     assert.ok(description, `Scenario "${name}" must have a test description`);
   }
+});
+
+// Regression test: code_change profile with requires_integration:true and integration evidence
+test('runAcceptanceGate: code_change acceptance passes as auto_completed_clean when integration is satisfied', async (t) => {
+  const { dir, resultJsonPath } = await makeGoalDir(t);
+
+  const gate = await runAcceptanceGate({
+    task: { id: 'task_code_change' },
+    goal: {
+      id: 'goal_code_change',
+      acceptance_contract: baseContract({
+        intent: { operation_kind: 'code_change', mutation_scope: 'repo', execution_mode: 'worktree', semantic_confidence: 'high' },
+        requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
+      }),
+    },
+    repoPath: dir,
+    resultJson: baseResult({
+      status: 'completed',
+      summary: 'Implemented feature with proper integration',
+      changed_files: ['backend/src/feature.mjs', 'backend/test/feature.test.mjs'],
+      commit: 'code123456789abcdef',
+      integration: {
+        required: true,
+        status: 'ff_only_merged',
+        satisfied: true,
+        terminal: true,
+        merged: true,
+        merge_commit: 'code123456789abcdef',
+        remote_head: 'code123456789abcdef',
+      },
+      verification: { passed: true, commands: [{ cmd: 'npm test', exit_code: 0 }] },
+    }),
+    resultJsonPath,
+    verifyTaskCompletionFn: async () => verifierResult({
+      passed: true,
+      contract_verification: {
+        contract_valid: true,
+        blocking_passed: true,
+        acceptance_status: 'satisfied',
+        completion_eligible: true,
+        requires_review: false,
+        blockers: [],
+        non_blocking_followups: [],
+        quality_notes: [],
+        state_assertions: { passed: true, assertions: [], failures: [] },
+      },
+    }),
+    now: () => '2026-07-01T00:00:00.000Z',
+  });
+
+  assert.equal(gate.status, 'passed', 'Code_change acceptance should pass');
+  assert.equal(gate.passed, true, 'Code_change gate should be passed');
+  assert.equal(gate.task_status, 'completed', 'Code_change should complete');
+  assert.equal(gate.closure_decision.status, 'auto_completed_clean', 'Code_change should be auto_completed_clean');
+  assert.equal(gate.closure_decision.reason, 'blocking_gate_passed_clean', 'Code_change should report blocking_gate_passed_clean');
+  assert.equal(gate.findings.length, 0, 'Code_change should have zero findings');
+});
+
+// Regression test: noop profile with requires_integration:false and no changes
+test('runAcceptanceGate: noop acceptance completes cleanly with no integration required', async (t) => {
+  const { dir, resultJsonPath } = await makeGoalDir(t);
+
+  const gate = await runAcceptanceGate({
+    task: { id: 'task_noop_regression' },
+    goal: {
+      id: 'goal_noop_regression',
+      acceptance_contract: baseContract({
+        intent: { operation_kind: 'noop', mutation_scope: 'none', execution_mode: 'readonly', semantic_confidence: 'high' },
+        requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+      }),
+    },
+    repoPath: dir,
+    resultJson: baseResult({
+      status: 'completed',
+      summary: 'No action required \u2014 verification only',
+      changed_files: [],
+      commit: null,
+      noop: true,
+      noop_reason: 'No code changes were required.',
+      no_mutation: true,
+    }),
+    resultJsonPath,
+    verifyTaskCompletionFn: async () => verifierResult({
+      passed: true,
+      contract_verification: {
+        contract_valid: true,
+        blocking_passed: true,
+        acceptance_status: 'satisfied',
+        completion_eligible: true,
+        requires_review: false,
+        blockers: [],
+        non_blocking_followups: [],
+        quality_notes: [],
+        state_assertions: { passed: true, assertions: ['no_mutation'], failures: [] },
+      },
+    }),
+    now: () => '2026-07-01T00:00:00.000Z',
+  });
+
+  assert.equal(gate.status, 'passed', 'Noop acceptance should pass');
+  assert.equal(gate.passed, true, 'Noop gate should be passed');
+  assert.equal(gate.task_status, 'completed', 'Noop should complete');
+  assert.equal(gate.closure_decision.status, 'auto_completed_clean', 'Noop should be auto_completed_clean');
+  assert.equal(gate.closure_decision.reason, 'blocking_gate_passed_clean', 'Noop should report blocking_gate_passed_clean');
+  assert.equal(gate.findings.length, 0, 'Noop should have zero findings');
 });
