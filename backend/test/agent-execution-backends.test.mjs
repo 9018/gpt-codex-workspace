@@ -169,14 +169,25 @@ test("resolveBackendSemantic returns auto_artifact for null backend with auto_ar
   assert.equal(resolveBackendSemantic("null", { nullReason: NULL_REASON.AUTO_ARTIFACT }), AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
 });
 
-test("resolveBackendSemantic infers auto_artifact from integrator/finalizer defaults", async () => {
-  const { resolveBackendSemantic, AGENT_BACKEND_SEMANTIC, ROLE_BACKEND_DEFAULTS } = await import("../src/agent-execution-backends.mjs");
+test("resolveBackendSemantic infers auto_artifact for integrator/finalizer when null is explicitly configured", async () => {
+  const { resolveBackendSemantic, AGENT_BACKEND_SEMANTIC } = await import("../src/agent-execution-backends.mjs");
 
-  const integratorSemantic = resolveBackendSemantic(ROLE_BACKEND_DEFAULTS.integrator.backend, { role: "integrator" });
+  // When null backend is explicitly passed, auto-artifact roles should still get auto_artifact semantic
+  const integratorSemantic = resolveBackendSemantic("null", { role: "integrator" });
   assert.equal(integratorSemantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
 
-  const finalizerSemantic = resolveBackendSemantic(ROLE_BACKEND_DEFAULTS.finalizer.backend, { role: "finalizer" });
+  const finalizerSemantic = resolveBackendSemantic("null", { role: "finalizer" });
   assert.equal(finalizerSemantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
+
+  const contextCuratorSemantic = resolveBackendSemantic("null", { role: "context_curator" });
+  assert.equal(contextCuratorSemantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
+
+  const plannerSemantic = resolveBackendSemantic("null", { role: "planner" });
+  assert.equal(plannerSemantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
+
+  // Non-auto-artifact roles with null should get configured semantic
+  const builderSemantic = resolveBackendSemantic("null", { role: "builder" });
+  assert.equal(builderSemantic, AGENT_BACKEND_SEMANTIC.CONFIGURED);
 });
 
 test("normalizeBackendResult includes execution_semantic and evidence_source for codex_exec", async () => {
@@ -295,37 +306,96 @@ test("NullBackend.run with finalizer role defaults to auto_artifact semantic", a
   assert.equal(result.parsedResult.null_reason, "auto_artifact");
 });
 
-test("resolveAgentBackendId uses ROLE_BACKEND_DEFAULTS for verifier when no config", async () => {
+test("resolveAgentBackendId uses ROLE_BACKEND_DEFAULTS for all roles when no config", async () => {
   const { resolveAgentBackendId, AGENT_BACKEND_IDS } = await import("../src/agent-execution-backends.mjs");
 
-  // With no config, verifier should resolve to local_command from ROLE_BACKEND_DEFAULTS
+  // With no config, ALL roles should resolve to codex_exec from ROLE_BACKEND_DEFAULTS
   const verifierBackend = resolveAgentBackendId({ config: {}, role: "verifier", task: {} });
-  assert.equal(verifierBackend, AGENT_BACKEND_IDS.LOCAL_COMMAND);
+  assert.equal(verifierBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
 
-  // reviewer should also resolve to local_command
   const reviewerBackend = resolveAgentBackendId({ config: {}, role: "reviewer", task: {} });
-  assert.equal(reviewerBackend, AGENT_BACKEND_IDS.LOCAL_COMMAND);
+  assert.equal(reviewerBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
 
-  // integrator should resolve to null
   const integratorBackend = resolveAgentBackendId({ config: {}, role: "integrator", task: {} });
-  assert.equal(integratorBackend, AGENT_BACKEND_IDS.NULL);
+  assert.equal(integratorBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
 
-  // finalizer should resolve to null
   const finalizerBackend = resolveAgentBackendId({ config: {}, role: "finalizer", task: {} });
-  assert.equal(finalizerBackend, AGENT_BACKEND_IDS.NULL);
+  assert.equal(finalizerBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
+
+  const builderBackend = resolveAgentBackendId({ config: {}, role: "builder", task: {} });
+  assert.equal(builderBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
+
+  const repairerBackend = resolveAgentBackendId({ config: {}, role: "repairer", task: {} });
+  assert.equal(repairerBackend, AGENT_BACKEND_IDS.CODEX_EXEC);
 });
 
-test("ROLE_BACKEND_DEFAULTS reflects product defaults for all pipeline roles", async () => {
+test("ROLE_BACKEND_DEFAULTS defaults all roles to codex_exec", async () => {
   const { ROLE_BACKEND_DEFAULTS, AGENT_BACKEND_IDS, AGENT_BACKEND_SEMANTIC } = await import("../src/agent-execution-backends.mjs");
 
-  assert.equal(ROLE_BACKEND_DEFAULTS.verifier.backend, AGENT_BACKEND_IDS.LOCAL_COMMAND);
-  assert.equal(ROLE_BACKEND_DEFAULTS.verifier.semantic, AGENT_BACKEND_SEMANTIC.REAL);
-  assert.equal(ROLE_BACKEND_DEFAULTS.reviewer.backend, AGENT_BACKEND_IDS.LOCAL_COMMAND);
-  assert.equal(ROLE_BACKEND_DEFAULTS.reviewer.semantic, AGENT_BACKEND_SEMANTIC.REAL);
-  assert.equal(ROLE_BACKEND_DEFAULTS.integrator.backend, AGENT_BACKEND_IDS.NULL);
-  assert.equal(ROLE_BACKEND_DEFAULTS.integrator.semantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
-  assert.equal(ROLE_BACKEND_DEFAULTS.finalizer.backend, AGENT_BACKEND_IDS.NULL);
-  assert.equal(ROLE_BACKEND_DEFAULTS.finalizer.semantic, AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT);
-  assert.equal(ROLE_BACKEND_DEFAULTS.builder.backend, AGENT_BACKEND_IDS.CODEX_EXEC);
-  assert.equal(ROLE_BACKEND_DEFAULTS.repairer.backend, AGENT_BACKEND_IDS.CODEX_EXEC);
+  // Product default: all pipeline roles default to codex_exec
+  for (const role of Object.keys(ROLE_BACKEND_DEFAULTS)) {
+    assert.equal(ROLE_BACKEND_DEFAULTS[role].backend, AGENT_BACKEND_IDS.CODEX_EXEC,
+      `${role} should default to codex_exec`);
+    assert.equal(ROLE_BACKEND_DEFAULTS[role].semantic, AGENT_BACKEND_SEMANTIC.REAL,
+      `${role} should have REAL semantic`);
+  }
+});
+// ===========================================================================
+// AFC-01: Pipeline backend default semantics alignment tests
+// ===========================================================================
+
+test("with product default agentBackend=codex_exec, all roles resolve to codex_exec", async () => {
+  const { resolveAgentBackendId, AGENT_BACKEND_IDS } = await import("../src/agent-execution-backends.mjs");
+
+  // Product default config: agentBackend set to codex_exec
+  const config = { agentBackend: "codex_exec" };
+  const roles = ["builder", "repairer", "verifier", "reviewer", "integrator", "finalizer", "context_curator", "planner"];
+
+  for (const role of roles) {
+    const backend = resolveAgentBackendId({ config, role, task: {} });
+    assert.equal(backend, AGENT_BACKEND_IDS.CODEX_EXEC,
+      `${role} should resolve to codex_exec with default product config`);
+  }
+});
+
+test("individual role override takes effect before product default", async () => {
+  const { resolveAgentBackendId, AGENT_BACKEND_IDS } = await import("../src/agent-execution-backends.mjs");
+
+  // Product default with per-role override
+  const config = {
+    agentBackend: "codex_exec",
+    agentRoleBackends: {
+      reviewer: "local_command",
+      integrator: "null",
+    },
+  };
+
+  // Globally overridden role
+  assert.equal(resolveAgentBackendId({ config, role: "reviewer", task: {} }), AGENT_BACKEND_IDS.LOCAL_COMMAND,
+    "reviewer should use local_command from agentRoleBackends");
+
+  // Role overridden to null
+  assert.equal(resolveAgentBackendId({ config, role: "integrator", task: {} }), AGENT_BACKEND_IDS.NULL,
+    "integrator should use null from agentRoleBackends");
+
+  // Default role (not in agentRoleBackends)
+  assert.equal(resolveAgentBackendId({ config, role: "builder", task: {} }), AGENT_BACKEND_IDS.CODEX_EXEC,
+    "builder should use global default codex_exec");
+
+  assert.equal(resolveAgentBackendId({ config, role: "verifier", task: {} }), AGENT_BACKEND_IDS.CODEX_EXEC,
+    "verifier should use global default codex_exec (not overridden)");
+});
+
+test("task metadata overrides product default and role-specific config", async () => {
+  const { resolveAgentBackendId, AGENT_BACKEND_IDS } = await import("../src/agent-execution-backends.mjs");
+
+  const config = {
+    agentBackend: "codex_exec",
+    agentRoleBackends: { verifier: "local_command" },
+  };
+  const task = { metadata: { agent_backend: "null" } };
+
+  // Task metadata should override both product default and role-specific config
+  assert.equal(resolveAgentBackendId({ config, role: "verifier", task }), AGENT_BACKEND_IDS.NULL,
+    "task metadata should override role config and product default");
 });
