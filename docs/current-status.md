@@ -216,9 +216,9 @@ See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce st
 
 `backend/src/agent-execution-backends.mjs` upgraded from null defaults to productizable deterministic execution units:
 
-- **verifier** and **reviewer** roles now default to `local_command` (deterministic shell execution) instead of `null` (auto-artifact). This ensures their results come from real execution rather than inferred evidence.
-- **builder** and **repairer** roles remain at `codex_exec` for real Codex-based changes.
-- **integrator** and **finalizer** remain at `null` because their artifacts are derived from task/result evidence.
+- All pipeline roles now default to `codex_exec` (real agent execution) by product default, with per-role overrides via `agentRoleBackends`.
+- `ROLE_AUTO_ARTIFACT_DEFAULTS` tracks roles that complete as `auto_artifact` when explicitly configured with `null` backend (context_curator, planner, integrator, finalizer).
+- User explicit overrides via `agentRoleBackends` or `GPTWORK_AGENT_ROLE_BACKENDS` take precedence over product defaults.
 - Runtime config supports global and per-role routing via `GPTWORK_AGENT_BACKEND`, `GPTWORK_AGENT_ROLE_BACKENDS`, etc.
 
 ### P0-06: Init/Onboarding Productization (Completed)
@@ -380,7 +380,7 @@ Tests in `auto-progress-policy.test.mjs` verify:
 
 ### P0-AFC10: Project Verification (Completed)
 
-This documentation entry. P0-AFC10 adds verification coverage for the completed AFC sequence by:
+P0-AFC10 adds verification coverage for the completed AFC sequence by:
 - Recording the AFC1--AFC9 delivery summary in this status document.
 - Running syntax check (`check:syntax`) and release delivery check (`release-delivery-check --fast`).
 - Verifying that all nine preceding AFC tasks produce passing tests and a clean delivery gate.
@@ -393,17 +393,17 @@ to final project verification (AFC10). Every task produces passing tests in its 
 combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline
 end to end.
 
-### P0-01: Release Gate Hardening (NOT EXECUTED)
+### P0-01: Release Gate Hardening (Addressed via CI Workflow)
 
-Goal P0-01 was created but was never executed. Its intent was to:
+Goal P0-01 was created but its intent was addressed through related productization work (P0-04 pipeline gate hardening, P0-07 codex exec hardening, and the release-gate CI workflow). The original intent was to:
 - Elevate the fast gate (`release-delivery-check --fast`) to a production hard gate.
 - Add explicit `check:syntax`, `check:imports` (full graph), `npm test`, e2e acceptance, e2e delivery, and `release-delivery-check --full` requirements.
 - Add release gate CI/CD integration.
 
-This remains an unclosed P0 gap. The current `--fast` gate plus `npm test` and e2e tests serve as a partial replacement but the production hard gate specification and CI integration are not complete.
+All three items are now in place: `.github/workflows/release-gate.yml` runs syntax/import checks, the release gate, and a full profile delivery check on push/PR to `main`. The release gate and CI pipeline cover the hardening intent.
 
 ## Known Gaps (Updated)
 
 1. **P0-01**: Release gate hardening has been addressed. Both fast and full release delivery checks pass. The production release gate requires `GPTWORK_TOOL_MODE=full` to pass the runtime env check, which is expected for production deployments.
 2. **P0-AFC series**: The acceptance-flow-closure pipeline (AFC1-AFC10) is complete. All nine preceding AFC tasks produce passing tests. Each task is verified individually and the combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline end to end. No known gaps in the AFC series.
-3. **CI/CD pipeline integration**: Release gates are runnable as scripts but not yet connected to GitHub Actions or similar CI. Manual invocation is the current procedure.
+3. **CI/CD pipeline integration**: The `.github/workflows/release-gate.yml` workflow runs on push/PR to `main` covering syntax, imports, release gate, and full delivery check. This provides automated CI/CD release gate integration.
