@@ -399,3 +399,119 @@ test("task metadata overrides product default and role-specific config", async (
   assert.equal(resolveAgentBackendId({ config, role: "verifier", task }), AGENT_BACKEND_IDS.NULL,
     "task metadata should override role config and product default");
 });
+
+// ===========================================================================
+// AFC-P1: Agent Backend Source of Truth tests
+// ===========================================================================
+
+test("resolveBackendSource returns product_default when no config or task metadata", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const result = resolveBackendSource({ config: {}, role: "builder", task: {} });
+  assert.equal(result.source, "product_default");
+  assert.ok(result.label.includes("Product default"));
+});
+
+test("resolveBackendSource returns explicit_role_override when agentRoleBackends sets the role", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const result = resolveBackendSource({
+    config: { agentRoleBackends: { verifier: "local_command" } },
+    role: "verifier",
+    task: {},
+  });
+  assert.equal(result.source, "explicit_role_override");
+  assert.ok(result.label.includes("agentRoleBackends"));
+});
+
+test("resolveBackendSource returns explicit_global_override when agentBackend is set", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const result = resolveBackendSource({
+    config: { agentBackend: "local_command" },
+    role: "builder",
+    task: {},
+  });
+  assert.equal(result.source, "explicit_global_override");
+  assert.ok(result.label.includes("agentBackend"));
+});
+
+test("resolveBackendSource returns explicit_task_override when task metadata specifies backend", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const result = resolveBackendSource({
+    config: {},
+    role: "builder",
+    task: { metadata: { agent_backend: "null" } },
+  });
+  assert.equal(result.source, "explicit_task_override");
+  assert.ok(result.label.includes("task-level"));
+});
+
+test("formatBackendChainSummary returns single-line default when all roles use product defaults", async () => {
+  const { formatBackendChainSummary } = await import("../src/agent-execution-backends.mjs");
+
+  const result = formatBackendChainSummary({});
+  assert.equal(result.text, "All pipeline roles → codex_exec (product default)");
+  assert.ok(result.entries.every((e) => e.source === "product_default"));
+  assert.ok(result.entries.every((e) => e.backend === "codex_exec"));
+});
+
+test("formatBackendChainSummary shows override entries when role config differs from default", async () => {
+  const { formatBackendChainSummary } = await import("../src/agent-execution-backends.mjs");
+
+  const result = formatBackendChainSummary({
+    agentRoleBackends: { reviewer: "local_command" },
+  });
+
+  // Most roles should still show product_default
+  const defaultEntries = result.entries.filter((e) => e.source === "product_default");
+  assert.ok(defaultEntries.length > 0, "most roles should be product_default");
+
+  // The overridden role should show as explicit_role_override
+  const reviewerEntry = result.entries.find((e) => e.role === "reviewer");
+  assert.equal(reviewerEntry.source, "explicit_role_override");
+  assert.equal(reviewerEntry.backend, "local_command");
+  assert.notEqual(result.text, "All pipeline roles → codex_exec (product default)");
+});
+
+test("getBackendConfigSummary returns correct default summary", async () => {
+  const { getBackendConfigSummary } = await import("../src/agent-execution-backends.mjs");
+
+  const defaultSummary = getBackendConfigSummary({});
+  assert.equal(defaultSummary, "All pipeline roles → codex_exec (product default)");
+
+  // With explicit global override
+  const overrideSummary = getBackendConfigSummary({ agentBackend: "local_command" });
+  assert.ok(overrideSummary.includes("local_command"));
+  assert.ok(overrideSummary.includes("Explicit"));
+});
+
+test("resolveBackendSource per-role override does not affect other roles", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const config = {
+    agentRoleBackends: { reviewer: "local_command" },
+  };
+
+  // Overridden role
+  const reviewer = resolveBackendSource({ config, role: "reviewer" });
+  assert.equal(reviewer.source, "explicit_role_override");
+
+  // Non-overridden roles still product_default
+  const builder = resolveBackendSource({ config, role: "builder" });
+  assert.equal(builder.source, "product_default");
+
+  const finalizer = resolveBackendSource({ config, role: "finalizer" });
+  assert.equal(finalizer.source, "product_default");
+});
+
+test("resolveBackendSource with empty config returns product_default for all roles", async () => {
+  const { resolveBackendSource } = await import("../src/agent-execution-backends.mjs");
+
+  const roles = ["builder", "repairer", "verifier", "reviewer", "integrator", "finalizer", "context_curator", "planner"];
+  for (const role of roles) {
+    const result = resolveBackendSource({ config: {}, role });
+    assert.equal(result.source, "product_default", `${role} should be product_default`);
+  }
+});

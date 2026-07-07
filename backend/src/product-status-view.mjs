@@ -258,6 +258,15 @@ export async function collectProductStatus(services) {
   let tuiDiagnostics = null;
   try {
     const { collectCodexTuiRuntimeDiagnostics } = await import("./codex-tui-runtime-diagnostics.mjs");
+
+  // 6b. Agent backend chain diagnostics (canonical source)
+  let roleBackends = null;
+  try {
+    const { formatBackendChainSummary } = await import("./agent-execution-backends.mjs");
+    roleBackends = formatBackendChainSummary(config);
+  } catch { /* non-fatal */ }
+
+
     tuiDiagnostics = await collectCodexTuiRuntimeDiagnostics({ workspaceRoot: config.defaultWorkspaceRoot, store, config });
   } catch { /* non-fatal */ }
 
@@ -337,9 +346,11 @@ export async function collectProductStatus(services) {
       bark_enabled: bark?.isEnabled?.() || false,
       github_enabled: github?.enabled || false,
       agent_backend: config.agentBackend || "codex_exec",
+      agent_role_backends: config.agentRoleBackends || {},
       worker_interval_ms: workerHealth.interval_ms || null,
     },
     next_actions: nextActions,
+    role_backends: roleBackends,
     _diagnostics: {
       warnings: [
         ...(gitInfo.worktree_dirty ? [{ severity: "warning", message: `Dirty worktree (${(gitInfo.dirty_paths || []).length} files)`, code: "worktree_dirty" }] : []),
@@ -557,6 +568,12 @@ export function productStatusCard(data) {
   lines.push(formatKeyValue('bark', data.config.bark_enabled ? 'enabled' : 'disabled'));
   lines.push(formatKeyValue('github', data.config.github_enabled ? 'enabled' : 'disabled'));
   lines.push(formatKeyValue('agent backend', data.config.agent_backend));
+  // Backend chain from canonical source (shows per-role product defaults vs overrides)
+  if (data.role_backends && data.role_backends.text) {
+    lines.push(formatKeyValue('backend chain', data.role_backends.text));
+  } else {
+    lines.push(formatKeyValue('all roles', 'codex_exec (product default)'));
+  }
 
   // ── Diagnostics ──
   const diagnostics = data._diagnostics?.warnings || [];

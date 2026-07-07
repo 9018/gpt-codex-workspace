@@ -71,6 +71,39 @@ const BACKEND_ALIASES = Object.freeze({
   none: AGENT_BACKEND_IDS.NULL,
   null: AGENT_BACKEND_IDS.NULL,
 });
+
+/**
+ * Determine if a role's resolved backend comes from a product default or an explicit override.
+ * Returns "product_default" when the effective backend matches ROLE_BACKEND_DEFAULTS and
+ * no explicit config or task metadata is present.
+ * Returns "explicit_role_override" when agentRoleBackends or agentBackendByRole sets the backend.
+ * Returns "explicit_global_override" when a global agentBackend/agentBackendDefault is set.
+ * Returns "explicit_task_override" when task metadata or fields set the backend.
+ *
+ * @param {object} options
+ * @param {object} [options.config={}]
+ * @param {string} [options.role="builder"]
+ * @param {object} [options.task={}]
+ * @returns {{ source: string, label: string }}
+ */
+export function resolveBackendSource({ config = {}, role = "builder", task = {} } = {}) {
+  const hasTaskBackend = taskBackend(task);
+  if (hasTaskBackend) {
+    return { source: "explicit_task_override", label: "Explicit task-level override" };
+  }
+  const hasRoleBackend = roleValue(config.agentRoleBackends, role) || roleValue(config.agentBackendByRole, role);
+  if (hasRoleBackend) {
+    return { source: "explicit_role_override", label: "Explicit role-level override (agentRoleBackends)" };
+  }
+  const hasGlobalBackend = config.agentBackend || config.agentBackendDefault || config.defaultAgentBackend;
+  if (hasGlobalBackend) {
+    return { source: "explicit_global_override", label: "Explicit global override (agentBackend)" };
+  }
+  return { source: "product_default", label: "Product default (ROLE_BACKEND_DEFAULTS)" };
+}
+
+/**
+});
 /**
  * Resolve the execution semantic for a resolved backend id and role context.
  *
@@ -278,6 +311,58 @@ export function buildPipelineRoleBackendChain(config = {}, roles) {
   const summary = chain.map((c) => c.label).join("\n");
   return { chain, summary };
 }
+
+/**
+ * Build a human-readable summary line for the pipeline role-backend chain,
+ * suitable for doctor/runtime_status output.  This is the single canonical
+ * formatter for backend chain diagnostics.
+ *
+ * Each role is shown as:
+ *   <role> → <backend> (product default|explicit override)
+ *
+ * When all roles use product defaults the summary collapses to a single line.
+ *
+ * @param {object} [config={}] - Runtime config
+ * @param {string[]} [roles] - Role names; defaults to ROLE_BACKEND_DEFAULTS keys
+ * @returns {{ text: string, entries: Array<{ role: string, backend: string, source: string, label: string }> }}
+ */
+export function formatBackendChainSummary(config = {}, roles) {
+  const { chain } = buildPipelineRoleBackendChain(config, roles);
+  const entries = chain.map((entry) => {
+    const source = resolveBackendSource({ config, role: entry.role });
+    return {
+      role: entry.role,
+      backend: entry.backend,
+      semantic: entry.semantic,
+      source: source.source,
+      label: `${entry.role} → ${entry.backend} (${source.label})`,
+    };
+  });
+
+  const allDefault = entries.every((e) => e.source === "product_default");
+  let text;
+  if (allDefault) {
+    text = `All pipeline roles → codex_exec (product default)`;
+  } else {
+    text = entries.map((e) => e.label).join("\n");
+  }
+
+  return { text, entries };
+}
+
+/**
+ * Build a compact one-line summary of agent backend configuration
+ * for use in product_status and runtime_status.
+ *
+ * @param {object} [config={}] - Runtime config
+ * @returns {string}
+ */
+export function getBackendConfigSummary(config = {}) {
+  const { text } = formatBackendChainSummary(config);
+  return text;
+}
+
+/**
 
 /**
  * Produce a human-readable label for a role's backend in the pipeline chain.

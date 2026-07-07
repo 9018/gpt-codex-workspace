@@ -464,3 +464,67 @@ test("collectContextBundleHealth handles tasks with many acceptance findings as 
   assert.equal(result.degraded, 0, "missingEvidence=2 > 1 → not degraded");
   assert.equal(result.stale, 1, "missingEvidence=2 → stale");
 });
+
+// ===========================================================================
+// AFC-P1: Agent Backend Source of Truth — product status tests
+// ===========================================================================
+
+test("productStatusCard shows backend chain from canonical source when available", () => {
+  const data = makeMinimalProductData({
+    role_backends: {
+      text: "All pipeline roles → codex_exec (product default)",
+      entries: [
+        { role: "builder", backend: "codex_exec", semantic: "real", source: "product_default", label: "builder → codex_exec (Product default)" },
+      ],
+    },
+  });
+  const card = productStatusCard(data);
+  assert.ok(card.includes("backend chain"), "backend chain label present");
+  assert.ok(card.includes("product default"), "product default shown in chain");
+});
+
+test("productStatusCard shows backend chain with overrides when role_backends has explicit entries", () => {
+  const data = makeMinimalProductData({
+    role_backends: {
+      text: "reviewer → local_command (Explicit role-level override (agentRoleBackends))\nbuilder → codex_exec (Product default (ROLE_BACKEND_DEFAULTS))",
+      entries: [
+        { role: "reviewer", backend: "local_command", semantic: "real", source: "explicit_role_override", label: "reviewer → local_command (Explicit role-level override)" },
+        { role: "builder", backend: "codex_exec", semantic: "real", source: "product_default", label: "builder → codex_exec (Product default)" },
+      ],
+    },
+  });
+  const card = productStatusCard(data);
+  assert.ok(card.includes("backend chain"), "backend chain label present");
+  assert.ok(card.includes("local_command"), "override backend shown");
+  assert.ok(card.includes("codex_exec"), "default backend shown");
+});
+
+test("productStatusCard falls back to all roles default when role_backends is null", () => {
+  const data = makeMinimalProductData({ role_backends: null });
+  const card = productStatusCard(data);
+  assert.ok(card.includes("all roles"), "fallback 'all roles' shown");
+  assert.ok(card.includes("codex_exec"), "default backend shown in fallback");
+});
+
+test("productStatusCard correctly shows agent_backend config value", () => {
+  const data = makeMinimalProductData({ config: { ...makeMinimalProductData().config, agent_backend: "local_command" } });
+  const card = productStatusCard(data);
+  assert.ok(card.includes("local_command"), "agent backend config value shown");
+});
+
+test("productStatusCard shows backend chain when codex_exec is product default, not a warning", () => {
+  // Test that all-codex_exec default does NOT trigger warning diagnostics
+  const data = makeMinimalProductData({
+    role_backends: {
+      text: "All pipeline roles → codex_exec (product default)",
+      entries: [],
+    },
+  });
+  const card = productStatusCard(data);
+  assert.ok(card.includes("backend chain"), "backend chain present");
+  assert.ok(card.includes("product default"), "labeled as product default");
+  // The warnings should not mention codex_exec as an issue
+  const warnings = data._diagnostics?.warnings || [];
+  const backendWarnings = warnings.filter(w => w.message.includes("codex_exec") || w.message.includes("backend"));
+  assert.equal(backendWarnings.length, 0, "no warnings about codex_exec default");
+});
