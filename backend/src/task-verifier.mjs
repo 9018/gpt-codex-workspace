@@ -277,11 +277,11 @@ export async function verifyTaskCompletion({
   // integration checks.
   const findings = [...parsed.findings, ...validateResult(result, { contract })];
   
-  // If operation kind was reclassified from the original contract intent,
-  // find the matching profile for verification
-  const resultKind = result.operation_kind;
+  // Guard: skip re-inference when result is null (missing/invalid data).
+  // Cannot reclassify operation_kind without a valid result object.
+  const resultKind = result?.operation_kind;
   const contractKind = contract?.intent?.operation_kind;
-  if (contractKind && resultKind && resultKind !== 'unknown' && resultKind !== contractKind) {
+  if (result && contractKind && resultKind && resultKind !== 'unknown' && resultKind !== contractKind) {
     // Load the correct profile for the result's kind
     const { getDefaultAcceptanceContractProfile } = await import('./acceptance/contract-profiles.mjs');
     const reInferred = getDefaultAcceptanceContractProfile(resultKind);
