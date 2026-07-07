@@ -107,6 +107,16 @@ const SWEEP_NO_MUTATION_PROFILES = new Set([
   'docs_only',
 ]);
 
+function isCodexTuiTask(task, result = {}) {
+  const metadata = task?.metadata || {};
+  return metadata.codex_execution_provider === 'codex_tui_goal'
+    || metadata.execution_backend === 'codex_tui_superpowers'
+    || result.provider === 'codex_tui_goal'
+    || result.execution_backend === 'codex_tui_superpowers'
+    || result.kind === 'codex_tui_session_started'
+    || typeof result.session_id === 'string';
+}
+
 /**
  * Check whether the task result contains at least one reliable structured
  * evidence that the work is genuinely done.
@@ -233,6 +243,12 @@ function sweepWaitingForReview(task, currentTime, staleFor, staleThresholdMs) {
 
   // Rule 4: Stale with no progress → escalate (P0-UA1: only for non-code_change profiles)
   if (staleFor > staleThresholdMs * 3 && blockerFindings.length === 0) {
+    // TUI sessions are long-lived execution records. A started session without
+    // durable result/test/commit evidence must stay reviewable instead of being
+    // force-completed by age alone. This prevents codex_tui_goal tasks from
+    // looking completed when the TUI provider only opened a session.
+    if (isCodexTuiTask(task, result) && !hasEvidence) return actions;
+
     // code_change tasks must remain blocking even when stale (requirement 3)
     if (profile !== 'code_change') {
       actions.push({
