@@ -1,21 +1,137 @@
-# GPTWork Tool Card v2
+# GPTWork Tool Card v5
 
 ## Overview
 
-The GPTWork Apps SDK Tool Card v2 transforms structured tool results into compact, visually-readable HTML cards for the ChatGPT UI. It uses the ChatGPT Apps SDK widget protocol to render runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.
+The GPTWork Apps SDK Tool Card v5 transforms structured tool results into compact, visually-readable HTML cards for the ChatGPT UI. It uses the ChatGPT Apps SDK widget protocol to render runtime status, task results, queue items, diff summaries, handoff plans, and shell transcripts in a compact, readable card.
+
+## Three-Layer Contract
+
+GPTWork implements a strict three-layer data contract to keep card payloads bounded and prevent accidental data leakage.
+
+### Layer 1: ChatGPT Query Summary/Detail (modelPayload)
+
+The `structuredContent` field in every MCP tool result contains the **modelPayload** — a bounded set of fields that the language model sees to reason about the result. This is NOT the raw tool output.
+
+```json
+{
+  "structuredContent": {
+    "gptwork_tool": "runtime_status",
+    "gptwork_title": "Runtime status",
+    "gptwork_type": "tool_result",
+    "gptwork_payload_hash": "a1b2c3d4e5f67890",
+    "gptwork_card_instance_id": "runtime_status:a1b2c3d4e5f67890",
+    "summary": "Worker running, 0 active tasks",
+    "status": "ok",
+    "rawAvailable": true
+  }
+}
+```
+
+The modelPayload explicitly **excludes** raw base fields such as `pid`, `running_commit`, `worker`, `queue`, `stdout`, `stderr`, task results, or any deep inspection data. It includes:
+
+| Field | Type | Description |
+|---|---|---|
+| `gptwork_tool` | string | Tool name that produced the result |
+| `gptwork_title` | string | Human-readable display title |
+| `gptwork_type` | string | Always `"tool_result"` |
+| `gptwork_payload_hash` | string | Semantic hash to detect changes in underlying data |
+| `gptwork_card_instance_id` | string | Instance identifier combining tool name and hash |
+| `summary` | string | One-line result summary |
+| `status` | string | Result status (ok, warning, error, info) |
+| `rawAvailable` | boolean | Always `true` — signals that deep data can be fetched via explicit tools |
+| `card` | object | **Backward compat**: embedded card view model (see Layer 2) |
+
+The `card` field inside `structuredContent` exists for backward compatibility with v2 clients that expect the card model inside the structured content. New code should prefer `_meta.gptwork_card`.
+
+### Layer 2: V5 User Card View (cardPayload)
+
+The `_meta.gptwork_card` field in every MCP tool result contains the **cardPayload** — the full card view model rendered by the widget HTML. This is the data the ChatGPT Apps SDK card actually displays.
+
+```json
+{
+  "_meta": {
+    "resourceUri": "ui://widget/gptwork-tool-card-v5.html",
+    "tool": "runtime_status",
+    "gptwork_card": {
+      "card_version": "gptwork-card-v1",
+      "card_type": "runtime_health",
+      "title": "Runtime status",
+      "status": "ok",
+      "severity": "ok",
+      "summary": "Worker running, 0 active tasks",
+      "identity": {
+        "tool": "runtime_status",
+        "payload_hash": "a1b2c3d4e5f67890",
+        "card_instance_id": "runtime_status:a1b2c3d4e5f67890"
+      },
+      "key_values": [
+        { "key": "PID", "value": "12345" },
+        { "key": "Commit", "value": "6ce329f" }
+      ],
+      "sections": [],
+      "actions": [],
+      "diagnostics": [],
+      "raw_available": true
+    }
+  }
+}
+```
+
+The widget reads from `_meta.gptwork_card` first (v5 preferred path), falls back to `structuredContent.card` (backward compat), then legacy `structuredContent` key/value lists.
+
+The cardPayload **excludes** all raw evidence blobs:
+
+| Excluded Field | Reason |
+|---|---|
+| `stdout` | Raw STDOUT is deep inspection, not card data |
+| `stderr` | Raw STDERR is deep inspection, not card data |
+| `raw` | Raw tool result JSON is deep inspection |
+| `task` | Full task object contains evidence, handoff data, and debug output |
+| `queue` | Raw queue object with task-level policy detail |
+
+### Layer 3: Explicit Deep Inspection
+
+The `rawAvailable: true` flag in the modelPayload signals that deep data exists but must be fetched through explicit tool calls. This prevents the card and the model from accidentally seeing data that belongs only in dedicated inspection tools.
+
+Deep inspection tools (not card data):
+
+- `get_task` — full task result with evidence, verification detail, stdout/stderr
+- `show_changes` — full diff with file contents
+- `read_handoff` — complete handoff transcript
+- `gptwork_doctor` — runtime diagnostics with environment detail
+- `runtime_status` — full runtime object with queue policy detail
+
+These tools return cardPayload for quick reference AND modelPayload with `rawAvailable: true`, but the deep data remains accessible only through their dedicated `content[0].text` or additional tool-specific accessors.
+
+## Widget Version vs Card Schema Version
+
+GPTWork maintains two separate version tracks:
+
+| Concept | Identifier | Location | Purpose |
+|---|---|---|---|
+| **Widget version** | `gptwork-tool-card-v5` | Resource URI (`ui://widget/gptwork-tool-card-v5.html`) | Cache-busting identifier for the HTML widget served to ChatGPT Apps SDK. Incremented when the widget rendering code, DOM structure, or CSS changes. |
+| **Card schema version** | `gptwork-card-v1` | Inside card view model (`card_version` field) | Data schema version of the card payload structure. Incremented when the JSON contract (required/optional fields, type changes) changes. |
+
+The widget version is what the MCP connector sees as the resource URI — it determines whether the client re-fetches the HTML or uses a cached copy. The card schema version is what the widget JavaScript sees inside the payload — it determines how the renderer interprets the data.
+
+Legacy widget resource URIs remain readable for cached clients:
+
+| URI | Status |
+|---|---|
+| `ui://widget/gptwork-tool-card-v5.html` | **Current** — primary cache-busted URI |
+| `ui://widget/gptwork-tool-card-v4.html` | Legacy alias |
+| `ui://widget/gptwork-tool-card-v3.html` | Legacy alias |
+| `ui://widget/gptwork-tool-card-v2.html` | Legacy alias |
+| `ui://widget/gptwork-tool-card-v1.html` | Legacy alias |
+| `ui://widget/gptwork-card-v2.html` | Legacy v2 card alias |
+| `ui://widget/gptwork-card-v1.html` | Legacy v1 card alias |
+
+All legacy URIs redirect to the same v5 widget HTML. There is no separate v2/v3/v4 widget — the version in the URI is purely a cache-busting signal.
 
 ## Resource URI
 
 ```text
-ui://widget/gptwork-tool-card-v2.html
-```
-
-Legacy aliases remain available at:
-
-```text
-ui://widget/gptwork-card-v1.html
-ui://widget/gptwork-card-v2.html
-ui://widget/gptwork-tool-card-v1.html
+ui://widget/gptwork-tool-card-v5.html
 ```
 
 ## Resource Metadata
@@ -24,8 +140,8 @@ Exposed via `resources/list` for ChatGPT Apps SDK discovery:
 
 | Field | Value |
 |---|---|
-| `uri` | `ui://widget/gptwork-tool-card-v2.html` |
-| `name` | `GPTWork Apps SDK Card (v2)` |
+| `uri` | `ui://widget/gptwork-tool-card-v5.html` |
+| `name` | `GPTWork Apps SDK Card (v5)` |
 | `mimeType` | `text/html;profile=mcp-app` |
 | `openai/widgetDescription` | Description of the card's rendering purpose |
 | `openai/widgetPrefersBorder` | `true` |
@@ -39,38 +155,75 @@ Tools that return structured results use two properties in their MCP tool descri
 ```json
 {
   "_meta": {
-    "openai/outputTemplate": "ui://widget/gptwork-tool-card-v2.html",
+    "openai/outputTemplate": "ui://widget/gptwork-tool-card-v5.html",
     "ui": {
-      "resourceUri": "ui://widget/gptwork-tool-card-v2.html"
+      "resourceUri": "ui://widget/gptwork-tool-card-v5.html"
     }
   }
 }
 ```
 
-Both properties point to the v2 card URI. The `ui.resourceUri` conforms to the Apps SDK resource reference convention.
+Both properties point to the v5 card URI. The `ui.resourceUri` conforms to the Apps SDK resource reference convention.
 
-## Structured Content Contract
+## Tool Result Metadata
 
-The v2 card reads the following fields from `structuredContent`. On first load and reopen it hydrates from `window.openai.widgetState.lastToolResult`, `window.openai.toolOutput`, `window.openai.toolResponseMetadata`, `window.openai.structuredContent`, compatibility aliases, or raw text content fallback. Successful renders save a compact non-secret snapshot with `window.openai.setWidgetState(...)` so a second open can render without waiting for another tool-result event.
+Every card-enabled tool call returns structured content and card metadata:
+
+```json
+{
+  "content": [
+    { "type": "text", "text": "compact text summary..." }
+  ],
+  "structuredContent": {
+    "gptwork_tool": "...",
+    "gptwork_title": "...",
+    "gptwork_type": "tool_result",
+    "gptwork_payload_hash": "...",
+    "gptwork_card_instance_id": "...",
+    "summary": "...",
+    "status": "...",
+    "rawAvailable": true,
+    "card": { "card_version": "gptwork-card-v1", ... }
+  },
+  "_meta": {
+    "tool": "...",
+    "resourceUri": "ui://widget/gptwork-tool-card-v5.html",
+    "gptwork_card": { "card_version": "gptwork-card-v1", ... }
+  },
+  "isError": false
+}
+```
+
+## Card View Model Schema (gptwork-card-v1)
+
+When `cardPayload` is present, it uses the following view model structure:
 
 | Field | Type | Description |
 |---|---|---|
-| `title` | string | Card headline (falls back to `summary` / `name`) |
-| `status` | string | Rendered as a colored badge |
-| `summary` | string | Subtitle or one-line summary |
-| `keyValues` / `key_values` | Array or Object | Key-value table |
-| `items` / `list` | Array | Item list |
-| `changed_files` | Array | File path list (limit 20) |
-| `staged_count` | number | Staged file count (diff stats) |
-| `unstaged_count` | number | Unstaged file count (diff stats) |
-| `total_changes` | number | Total change count |
-| `diff_excerpt` | string | Diff excerpt preview (limit 1200 chars) |
-| `diff_truncated` | boolean | Whether diff was truncated |
-| `warnings` | Array | Warning messages |
-| `errors` | Array | Error messages |
-| other fields | any | Raw JSON fallback (collapsible) |
+| `card_version` | string | Fixed: `"gptwork-card-v1"` |
+| `card_type` | string | Card type identifier (e.g. `runtime_health`, `task_execution`, `task_list`, `generic`) |
+| `title` | string | Card headline |
+| `subtitle` | string | Optional secondary heading |
+| `status` | string | Status badge label (ok, warning, fail, info, cancelled) |
+| `severity` | string | Mapped severity from status (ok, warning, error, info) |
+| `summary` | string | One-line display summary |
+| `identity` | object | `{ tool, payload_hash, card_instance_id }` — identity tracking |
+| `progress` | object | Optional stage progress: `{ current_stage, stages: [{key, label, status}] }` |
+| `key_values` | Array | Key-value table rows: `[{key: string, value: any}]` |
+| `sections` | Array | Content sections: `[{title, type (checklist/logs/diff), items[]}]` |
+| `actions` | Array | Action buttons: `[{label, tool, args}]` |
+| `diagnostics` | Array | Diagnostic messages: `[{severity, message, code}]` |
+| `raw_available` | boolean | Whether raw data is accessible via explicit tools |
 
-## Badge Color Mapping
+### Section Types
+
+| Type | Description | Item Shape |
+|---|---|---|
+| `checklist` | Task checklist items | `[{key, label, status}]` |
+| `logs` | Timestamped log entries | `[{time, text}]` |
+| `diff` | File diff sections | `[{path, status, diff}]` |
+
+### Badge Color Mapping
 
 | CSS Class | Status Values |
 |---|---|
@@ -80,32 +233,76 @@ The v2 card reads the following fields from `structuredContent`. On first load a
 | `.badge.cancelled` | cancelled, skipped, timeout, timed_out |
 | `.badge.info` | waiting_for_lock, waiting_for_review (default) |
 
-## Tools Using v2 Card
+## Widget Payload Resolution Order
 
-At least 10 high-frequency tools use the v2 card:
+The v5 widget JavaScript resolves rendering data in this order:
 
-- `runtime_status`
-- `gptwork_doctor`
-- `gptwork_self_test`
-- `show_changes`
-- `get_task`
-- `list_tasks`
-- `create_encoded_goal`
-- `get_goal_context`
-- `list_goals`
-- `read_handoff`
-- `list_goal_queue`
-- `start_next_queued_goal`
+1. `_meta.gptwork_card` from `call_tool_result` response metadata (preferred v5 path)
+2. `structuredContent.card` from tool result (backward compat path)
+3. `structuredContent` from tool result key/value fields (legacy v2 path)
+4. `toolOutput` from `window.openai` (legacy widget protocol)
+5. `toolResponseMetadata.mcp_tool_result.structuredContent` (metadata path)
+6. `widgetState` from rehydrated snapshot (second-open optimization)
+7. Raw text content fallback
+8. Visible fallback: "GPTWork card loaded. Waiting for tool result..."
 
-All tool descriptors include both `openai/outputTemplate` and `ui.resourceUri` pointing to `ui://widget/gptwork-tool-card-v2.html`.
+## Tools Using v5 Card
 
-## Compatibility
+At least 21 high-frequency tools use the v5 card:
 
-The v1 card (`ui://widget/gptwork-card-v1.html`) is preserved and unchanged. Legacy Apps SDK URIs (`ui://widget/gptwork-card-v2.html` and `ui://widget/gptwork-tool-card-v1.html`) remain readable for cached clients, but current tool descriptors point to `ui://widget/gptwork-tool-card-v2.html`.
+| Tool | Card Type |
+|---|---|
+| `runtime_status` | runtime_health |
+| `worker_status` | runtime_health |
+| `gptwork_doctor` | runtime_health |
+| `gptwork_self_test` | self_test |
+| `show_changes` | changes |
+| `get_task` | task_execution |
+| `list_tasks` | task_list |
+| `create_encoded_goal` | task_execution |
+| `get_goal_context` | goal_context |
+| `list_goals` | goal_list |
+| `read_handoff` | handoff |
+| `context_status` | context_health |
+| `project_context_status` | context_health |
+| `product_status` | product_health |
+| `preview_codex_context` | codex_context |
+| `list_goal_queue` | queue_list |
+| `get_goal_queue` | queue_list |
+| `start_next_queued_goal` | queue_action |
+| `enqueue_goal` | queue_action |
+| `update_goal_queue_item` | queue_action |
+| `cancel_goal_queue_item` | queue_action |
+
+All tool descriptors include both `openai/outputTemplate` and `ui.resourceUri` pointing to `ui://widget/gptwork-tool-card-v5.html`.
+
+## Tool Mode Visibility
+
+The card and its tools are available across tool modes:
+
+| Mode | Queue Tools | Card Metadata |
+|---|---|---|
+| `minimal` | Hidden | Card enabled for visible tools (health_check, runtime_status, worker_status) |
+| `standard` | All six visible | Full card metadata on all card-enabled tools |
+| `operator` | Read-only (list/get) | Card metadata on visible tools |
+| `codex` | All six visible | Full card metadata on all card-enabled tools |
+| `full` | All six visible | Full card metadata on all card-enabled tools |
 
 ## Raw JSON Fallback
 
-If `structuredContent` has no recognized fields (status, summary, keyValues, items, changed_files, errors, warnings, staged_count, diff_excerpt), the card displays the complete JSON object as a formatted code block. Otherwise, the raw JSON is available via a "Show raw JSON" toggle button.
+If the card receives no recognized view model or structured content, it renders a visible fallback message:
+
+> GPTWork card loaded. Waiting for tool result...
+
+If `structuredContent` has no recognized fields (status, summary, keyValues, items, changed_files, errors, warnings, staged_count, diff_excerpt, card), the card displays the complete JSON object as a formatted code block. Otherwise, the raw JSON is available via a "Show raw JSON" toggle button.
+
+## Error Handling
+
+The v5 widget includes an explicit error boundary. If payload access throws an exception, the card renders:
+
+> Renderer error: \<error message\>
+
+This prevents a blank card when the data is malformed.
 
 ## Source
 
@@ -115,25 +312,31 @@ The current tool card HTML is served from:
 backend/src/apps-sdk-card/widget.html
 ```
 
-The v1 card HTML is inline in:
+The card view model construction is in:
 
 ```text
-backend/src/mcp-tooling.mjs (readResource function)
+backend/src/card-view-model.mjs
+```
+
+The payload split logic (modelPayload/cardPayload separation) is in:
+
+```text
+backend/src/apps-sdk-card/tool-result.mjs
 ```
 
 ## Troubleshooting: Card Not Displaying in ChatGPT
 
-If the v2 card doesn't display in ChatGPT:
+If the v5 card doesn't display in ChatGPT:
 
 1. **Reconnect the MCP connector**: Refresh/reconnect the ChatGPT MCP connector to force re-initialization.
 2. **Check tool descriptor `_meta`**: Call `tools/list` and verify high-frequency tools have:
-   - `_meta["openai/outputTemplate"] === "ui://widget/gptwork-tool-card-v2.html"`
-   - `_meta.ui.resourceUri === "ui://widget/gptwork-tool-card-v2.html"`
-3. **Check resource registration**: Call `resources/list` and verify v2 card is present with:
-   - `uri === "ui://widget/gptwork-tool-card-v2.html"`
+   - `_meta["openai/outputTemplate"] === "ui://widget/gptwork-tool-card-v5.html"`
+   - `_meta.ui.resourceUri === "ui://widget/gptwork-tool-card-v5.html"`
+3. **Check resource registration**: Call `resources/list` and verify v5 card is present with:
+   - `uri === "ui://widget/gptwork-tool-card-v5.html"`
    - `mimeType === "text/html;profile=mcp-app"`
-4. **Check resource content**: Call `resources/read` with `uri: "ui://widget/gptwork-tool-card-v2.html"` and verify it returns valid HTML with `mimeType: "text/html;profile=mcp-app"`.
-5. **Verify structured content**: When calling a tool, the response should include `structuredContent` at the top level of the result object (alongside `content` and `isError`).
+4. **Check resource content**: Call `resources/read` with `uri: "ui://widget/gptwork-tool-card-v5.html"` and verify it returns valid HTML with `mimeType: "text/html;profile=mcp-app"`.
+5. **Verify structured content**: When calling a tool, the response should include `structuredContent` at the top level and `_meta.gptwork_card` for the card view model.
 6. **ChatGPT Apps SDK support**: Ensure your ChatGPT client supports Apps SDK widget rendering. The `text/html;profile=mcp-app` mime type with the `io.modelcontextprotocol/ui` extension capability is required for card recognition.
 7. **Fallback**: Even if the card doesn't render, tools should still return `content[0].text` with a readable text summary.
 
