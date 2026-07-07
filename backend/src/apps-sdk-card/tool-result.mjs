@@ -130,9 +130,35 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     rawAvailable: true,
   };
 
-  // Include essential fields the model needs to reason about results
+  // Include essential fields the model needs to reason about results.
+  // Keep this selective: model-facing query payloads get the compact control
+  // fields they need, while the v5 card still receives the full cardPayload
+  // through _meta instead of leaking raw tool results by default.
   if (base.ok !== undefined) modelPayload.ok = base.ok;
   if (base.results !== undefined) modelPayload.results = base.results;
+
+  if (name === "workflow_advance") {
+    const workflowAdvanceFields = [
+      "workflow_id",
+      "needs_gptchat_decision",
+      "auto_accepted",
+      "auto_finalized",
+      "created_task_id",
+      "advanced_task_id",
+      "proposal",
+      "task",
+      "runtime",
+      "worktree",
+      "repo_locks",
+      "runtime_handler_commit",
+      "workflow_advance_handler_version",
+      "acceptance",
+      "next_steps",
+    ];
+    for (const key of workflowAdvanceFields) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+  }
 
   // Legacy compat fields — bounded, sourced from card view model, never raw base
   if (legacy.keyValues) {
