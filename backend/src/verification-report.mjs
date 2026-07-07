@@ -33,6 +33,7 @@ const COMMAND_ALIASES = Object.freeze({
     'node scripts/release-delivery-check.mjs --profile docs',
     'node scripts/release-delivery-check.mjs --profile changed',
     'node scripts/release-delivery-check.mjs --fast',
+    'release-delivery-check --fast',
   ],
   'check:syntax': ['check:syntax', 'npm run check:syntax', 'npm --prefix backend run check:syntax'],
   'check:imports': ['check:imports', 'npm run check:imports', 'npm --prefix backend run check:imports'],

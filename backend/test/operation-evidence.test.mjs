@@ -6,6 +6,7 @@ import { buildAcceptanceContract } from '../src/acceptance/contract-builder.mjs'
 import { verifyAcceptanceContract } from '../src/acceptance/contract-verifier.mjs';
 import { validateContractSemantics } from '../src/acceptance/semantics.mjs';
 import { getDefaultAcceptanceContractProfile } from '../src/acceptance/contract-profiles.mjs';
+import { operationEvidenceProfile } from '../src/evidence/operation-evidence-profiles.mjs';
 
 // ---------------------------------------------------------------------------
 // Operation Kind Registration
@@ -400,3 +401,60 @@ test("normalizeOperationEvidence does not overwrite explicit integration with in
   assert.equal(normalized.integration.satisfied, undefined, "integration.satisfied should not be set when recovery does not apply");
   assert.equal(normalized.blockers.length, 0, "should have no blockers");
 });
+
+// ===========================================================================
+// P0-AFC10: Docs-only operation kind profile and evidence
+// ===========================================================================
+
+test('P0-AFC10: docs_only is a known operation kind', () => {
+  const profile = getDefaultAcceptanceContractProfile('docs_only');
+  assert.equal(profile.intent.operation_kind, 'docs_only');
+  assert.equal(profile.intent.mutation_scope, 'repo');
+  assert.equal(profile.intent.execution_mode, 'worktree');
+  assert.equal(profile.requirements.requires_commit, true);
+  assert.equal(profile.requirements.requires_integration, true);
+});
+
+test('P0-AFC10: docs_only contract built from user request with documentation keywords', () => {
+  const contract = buildAcceptanceContract({
+    user_request: 'Update documentation and README',
+    mode: 'builder',
+  });
+  assert.equal(contract.intent.operation_kind, 'docs_only');
+  assert.equal(contract.verification_plan.profile, 'docs');
+  assert.deepEqual(contract.verification_plan.required_commands, ['docs_check']);
+});
+
+test('P0-AFC10: docs_only contract verification with syntax check passes', () => {
+  const contract = buildAcceptanceContract({
+    user_request: 'Update documentation',
+    mode: 'builder',
+  });
+  const verifierResult = verifyAcceptanceContract({
+    contract,
+    result: {
+      status: 'completed',
+      summary: 'update docs',
+      changed_files: ['docs/current-status.md'],
+      commit: 'abc1234',
+      verification: { passed: true, profile: 'changed', commands: [{ cmd: 'node scripts/release-delivery-check.mjs --fast', exit_code: 0, passed: true }] },
+    },
+    verification: { passed: true, commands: [{ cmd: 'node scripts/release-delivery-check.mjs --fast', exit_code: 0, passed: true }] },
+  });
+
+  // The docs_only contract with verification plan requiring docs_check
+  // can now be satisfied via release-delivery-check alias.
+  assert.equal(verifierResult.operation_kind, 'docs_only');
+  // blockers may include integration_completed_missing since requires_integration=true
+  // but should not include verification_command_missing:docs_check
+  const docsCheckMissing = verifierResult.blockers.filter((b) => b.code === 'verification_command_missing');
+  assert.equal(docsCheckMissing.length, 0, 'docs_check should be satisfied via release-delivery-check alias');
+});
+
+test('P0-AFC10: docs_only operation evidence profile entries', () => {
+  const profile = operationEvidenceProfile('docs_only');
+  assert.ok(profile, 'docs_only profile exists');
+  assert.deepEqual(profile.evidence_fields, ['changed_files', 'commit', 'verification']);
+  assert.deepEqual(profile.required_when_completed, ['changed_files', 'commit', 'verification']);
+});
+

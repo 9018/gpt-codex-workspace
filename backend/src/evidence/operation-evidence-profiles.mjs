@@ -44,7 +44,7 @@ function integrationSatisfied(result = {}) {
   const integration = result.integration || {};
   if (integration.merged === true || integration.auto_completed === true) return true;
   const status = String(integration.status || '').toLowerCase();
-  return ['merged', 'ff_only_merged', 'not_required', 'skipped'].includes(status);
+  return ['merged', 'ff_only_merged', 'not_required', 'skipped', 'already_integrated'].includes(status);
 }
 
 function verificationProvided(result = {}) {
@@ -177,6 +177,13 @@ export const OPERATION_EVIDENCE_PROFILES = Object.freeze({
   code_change: {
     evidence_fields: ['changed_files', 'commit', 'verification', 'integration'],
     required_when_completed: ['changed_files', 'commit', 'verification', 'integration'],
+  },
+  docs_only: {
+    // P0-AFC10: Docs-only tasks need changed_files, commit, and verification
+    // but do NOT require integration (docs changes verified via syntax /
+    // delivery-check evidence, not ff-only merge).
+    evidence_fields: ['changed_files', 'commit', 'verification'],
+    required_when_completed: ['changed_files', 'commit', 'verification'],
   },
   file_write: {
     evidence_fields: ['file_evidence', 'changed_files', 'commit'],

@@ -5,7 +5,7 @@ import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs
 const NO_MUTATION_PROFILES = new Set([
   'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
   'repair_noop', 'network_retry', 'verification_only', 'sync_only',
-  'github_sync_only',
+  'github_sync_only', 'docs_only', 'docs_only',
 ]);
 import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
 import { normalizeToUnifiedDecision } from './codex-unified-decision.mjs';
@@ -58,7 +58,7 @@ const REPAIRABLE_FAILURE_CLASSES = new Set([
 ]);
 
 const REPAIRABLE_INTEGRATION_STATUSES = new Set(["conflict", "check_failed", "push_failed", "pr_failed"]);
-const TERMINAL_INTEGRATION_STATUSES = new Set(["merged", "ff_only_merged", "skipped", "not_required"]);
+const TERMINAL_INTEGRATION_STATUSES = new Set(["merged", "ff_only_merged", "skipped", "not_required", "already_integrated"]);
 const NON_TERMINAL_INTEGRATION_STATUSES = new Set(["branch_pushed", "pr_opened", "pending", "queued", "locked", "waiting"]);
 
 function asObject(value) {

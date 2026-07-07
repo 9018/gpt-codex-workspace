@@ -761,3 +761,34 @@ test('P0-MA2: classifyClosure with already_integrated_result completes correctly
   assert.equal(result.closurePath.path, CLOSURE_PATHS.COMPLETE);
   assert.equal(result.needsIntegration, false);
 });
+
+// ===========================================================================
+// P0-AFC10: Docs-only closure tests
+// ===========================================================================
+
+test('P0-AFC10: docs_only result is classified as code_change type (has changed_files)', () => {
+  const taskType = classifyTaskType({
+    operation_kind: 'docs_only',
+    changed_files: ['docs/current-status.md'],
+    commit: 'abc123',
+    verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+  });
+  assert.equal(taskType.type, TASK_TYPES.CODE_CHANGE);
+  assert.equal(taskType.typeLabel, 'code change');
+});
+
+test('P0-AFC10: docs_only determination completes with explicit integration_not_required', () => {
+  const result = determineClosurePath(
+    {
+      operation_kind: 'docs_only',
+      integration_not_required: true,
+      changed_files: ['docs/current-status.md'],
+      commit: 'abc123',
+      status: 'completed',
+      verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+    },
+    { status: 'completed' }
+  );
+  assert.equal(result.path, CLOSURE_PATHS.COMPLETE);
+});
+

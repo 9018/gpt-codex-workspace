@@ -34,7 +34,7 @@ function integrationIsSatisfied(integration = {}, needsIntegration) {
   if (!integration || typeof integration !== 'object') return !needsIntegration;
   if (integration.satisfied === true || integration.merged === true || integration.auto_completed === true) return true;
   const status = String(integration.status || '').toLowerCase();
-  return ['merged', 'ff_only_merged', 'skipped', 'not_required'].includes(status);
+  return ['merged', 'ff_only_merged', 'skipped', 'not_required', 'already_integrated'].includes(status);
 }
 
 function noUnresolvedBlockingFindings(findings = []) {

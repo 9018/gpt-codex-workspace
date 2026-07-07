@@ -20,6 +20,7 @@ const NO_MUTATION_PROFILES = new Set([
   'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
   'repair_noop', 'network_retry', 'verification_only', 'sync_only',
   'github_sync_only',
+  'docs_only',
 ]);
 
 export const CURRENT_WORK_DECISION_LABELS = Object.freeze({

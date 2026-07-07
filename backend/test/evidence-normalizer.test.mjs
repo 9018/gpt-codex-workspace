@@ -599,3 +599,103 @@ test('P0-MA2: has_verification_commands false when commands empty', () => {
 
   assert.equal(normalized.has_verification_commands, false);
 });
+
+// ===========================================================================
+// P0-AFC10: Docs-only evidence normalization
+// ===========================================================================
+
+test('P0-AFC10: docs_only operation_kind from contract intent', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'updated project status document',
+      changed_files: ['docs/current-status.md'],
+      commit: 'def456',
+      verification: { passed: true, commands: [{ cmd: 'node scripts/release-delivery-check.mjs --fast', exit_code: 0, passed: true }] },
+    },
+    contract: { id: 'docs-contract', intent: { operation_kind: 'docs_only' } },
+  });
+
+  assert.equal(normalized.operation_kind, 'docs_only');
+  assert.equal(normalized.integration_not_required, true);
+  assert.equal(normalized.noop_result, false);
+  assert.equal(normalized.readonly_result, false);
+  assert.equal(normalized.already_integrated_result, false);
+  assert.equal(normalized.has_changed_files, true);
+  assert.equal(normalized.has_commit, true);
+});
+
+test('P0-AFC10: docs_only with commit sets has_commit and uses changed_files', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'updated project status document',
+      changed_files: ['docs/current-status.md'],
+      commit: 'def456',
+      verification: { passed: true, commands: [{ cmd: 'node scripts/release-delivery-check.mjs --fast', exit_code: 0, passed: true }] },
+    },
+    contract: { id: 'docs-contract', intent: { operation_kind: 'docs_only' } },
+  });
+
+  assert.equal(normalized.operation_kind, 'docs_only');
+  assert.equal(normalized.integration_not_required, true);
+  assert.equal(normalized.has_changed_files, true);
+  assert.equal(normalized.has_commit, true);
+  assert.equal(normalized.commit, 'def456');
+  assert.deepEqual(normalized.changed_files, ['docs/current-status.md']);
+  assert.equal(normalized.integration.merged, false);
+});
+
+test('P0-AFC10: docs_only no profile-level blockers', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'docs update',
+      changed_files: ['docs/readme.md'],
+      commit: 'ghi789',
+      verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0, passed: true }] },
+    },
+    contract: { id: 'docs-contract-2', intent: { operation_kind: 'docs_only' } },
+  });
+
+  const profileBlockers = normalized.blockers.filter(
+    (b) => b.code === 'integration_missing' || b.code === 'changed_files_missing' || b.code === 'commit_missing'
+  );
+  assert.equal(profileBlockers.length, 0);
+});
+
+test('P0-AFC10: docs_only operation_kind not mismatched with contract', () => {
+  // When the contract says docs_only and the normalizer infers docs_only,
+  // there should be NO operation_kind_mismatch blocker.
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'update documentation',
+      changed_files: ['docs/guide.md'],
+      commit: 'jkl012',
+      verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+    },
+    contract: { id: 'docs-3', intent: { operation_kind: 'docs_only' } },
+  });
+
+  const mismatchBlockers = normalized.blockers.filter((b) => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatchBlockers.length, 0);
+  assert.equal(normalized.operation_kind, 'docs_only');
+});
+
+test('P0-AFC10: docs_only isNoopLikeOperation returns true for docs_only', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      summary: 'docs only',
+      changed_files: ['docs/changelog.md'],
+      commit: 'mno345',
+      verification: { passed: true },
+    },
+    contract: { id: 'docs-4', intent: { operation_kind: 'docs_only' } },
+  });
+
+  // Recovery reason should not include needs_repair for changed_files missing
+  // for docs-only (docs_only is in isNoopLikeOperation fallback set)
+  assert.equal(normalized.operation_kind, 'docs_only');
+});

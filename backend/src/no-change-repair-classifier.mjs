@@ -1,11 +1,11 @@
-const TERMINAL_INTEGRATION_STATUSES = new Set(['merged', 'ff_only_merged', 'skipped', 'not_required']);
+const TERMINAL_INTEGRATION_STATUSES = new Set(['merged', 'ff_only_merged', 'skipped', 'not_required', 'already_integrated']);
 
 // P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
 // legitimate terminal state (sync-only, verification-only, diagnostic, etc.).
 const NO_MUTATION_PROFILES = new Set([
   'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
   'repair_noop', 'network_retry', 'verification_only', 'sync_only',
-  'github_sync_only',
+  'github_sync_only', 'docs_only',
 ]);
 
 function asObject(value) {

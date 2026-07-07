@@ -491,7 +491,7 @@ function deriveClosureTerminalReason(result = {}) {
 }
 
 function isNoopLikeOperation(operationKind) {
-  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'restart', 'admin_command', 'cleanup', 'file_write', 'queue_admin', 'sync'].includes(operationKind);
+  return ['noop', 'readonly_validation', 'already_integrated', 'diagnostic', 'restart', 'admin_command', 'cleanup', 'file_write', 'queue_admin', 'sync', 'docs_only', 'docs_only', 'docs_only'].includes(operationKind);
 }
 
 function deriveTypedRecoveryReason({ operationKind, changedFiles, commit, tests, verification, testsDerived }) {
@@ -538,7 +538,7 @@ export function normalizeOperationEvidence({ result = {}, contract = {} } = {}) 
     noop_result: result.noop === true || result.kind === 'noop' || operationKind === 'noop',
     readonly_result: operationKind === 'readonly_validation',
     already_integrated_result: operationKind === 'already_integrated',
-    integration_not_required: operationKind === 'already_integrated' || operationKind === 'readonly_validation' || operationKind === 'diagnostic' || operationKind === 'noop' || operationKind === 'sync',
+    integration_not_required: operationKind === 'already_integrated' || operationKind === 'readonly_validation' || operationKind === 'diagnostic' || operationKind === 'noop' || operationKind === 'sync' || operationKind === 'docs_only',
     // VCS evidence
     acceptance_contract_id: result.acceptance_contract_id || result.acceptanceContractId || contract?.id || contract?.contract_id || null,
     changed_files: normalizeList(result.changed_files || result.changedFiles).map(String),
