@@ -1,6 +1,6 @@
 # GPTWork Setup and Connection Guide
 
-> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → gate → complete) is **productized** with P0/P1 convergence. The acceptance gate engine (verification + contract verification + closure decision) auto-closes passing tasks. The goal queue auto-advances dependents when upstream tasks complete. Agent execution backends default to `codex_exec` (builder/repairer) and `local_command` (verifier/reviewer). Codex TUI is an explicit operator fallback — never automatic. Production init (`gptwork init --production`) validates worker, role commands, exec settings, and workspace configuration before the first run.
+> **Delivery System Status**: The core delivery pipeline (create → queue → worktree → execute → verify → gate → complete) is **productized** with P0/P1 convergence. The acceptance gate engine (verification + contract verification + closure decision) auto-closes passing tasks. The goal queue auto-advances dependents when upstream tasks complete. Agent execution backends default to `codex_exec` for all pipeline roles. This is the product default — all roles use automatic Codex CLI execution. Role-specific overrides (via `GPTWORK_AGENT_ROLE_BACKENDS`) are still respected for explicit configuration. Codex TUI is an explicit operator fallback — never automatic. Production init (`gptwork init --production`) validates worker, role commands, exec settings, and workspace configuration before the first run.
 
 ---
 
