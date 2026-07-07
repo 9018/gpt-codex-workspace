@@ -12,7 +12,6 @@
 import "./helpers/env-isolation.mjs";
 import test from "node:test";
 import assert from "node:assert/strict";
-import { productStatusCard, collectProductStatus } from "../src/product-status-view.mjs";
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -317,4 +316,151 @@ test("context bundle health metrics match expected structure", () => {
   assert.equal(typeof data.context_bundle_health.healthy, "number");
   assert.equal(typeof data.context_bundle_health.degraded, "number");
   assert.equal(typeof data.context_bundle_health.stale, "number");
+});
+
+// ===========================================================================
+// collectContextBundleHealth tests
+// ===========================================================================
+
+import { collectContextBundleHealth, productStatusCard, collectProductStatus } from "../src/product-status-view.mjs";
+
+/**
+ * Build minimal codex task fixtures with the given result shape.
+ */
+function codexTask(id, resultOverrides = {}) {
+  return {
+    id,
+    assignee: "codex",
+    status: resultOverrides.status || "completed",
+    result: {
+      status: "completed",
+      summary: "test task",
+      changed_files: ["test.mjs"],
+      verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+      unified_decision: { status: "completed", blocking_passed: true, requires_review: false },
+      acceptance_findings: [],
+      ...resultOverrides,
+    },
+  };
+}
+
+test("collectContextBundleHealth counts healthy tasks correctly", () => {
+  const tasks = [
+    codexTask("t1", { status: "completed", verification: { passed: true } }),
+    codexTask("t2", { status: "completed", verification: { passed: false } }),
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 2, "both tasks should be healthy");
+  assert.equal(result.degraded, 0);
+  assert.equal(result.stale, 0);
+  assert.equal(result.total_codex_tasks, 2);
+});
+
+test("collectContextBundleHealth counts tasks without verification as degraded/stale", () => {
+  // Task without any verification object — should NOT be healthy
+  const tasks = [
+    codexTask("t1", { status: "completed", verification: undefined }),
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0, "no verification → not healthy");
+  assert.equal(result.degraded, 1, "no verification, missingEvidence=0, ud exists → degraded");
+  assert.equal(result.stale, 0);
+});
+
+test("collectContextBundleHealth counts tasks with verification.passed=null as degraded", () => {
+  // Task where verification exists but passed is null — should NOT be healthy
+  const tasks = [
+    codexTask("t1", { status: "completed", verification: { passed: null } }),
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0, "verification.passed=null → not healthy");
+  assert.equal(result.degraded, 1, "verification.passed=null, missingEvidence=0, ud exists → degraded");
+  assert.equal(result.stale, 0);
+});
+
+test("collectContextBundleHealth counts tasks with acceptance findings as degraded", () => {
+  // Task with 1 acceptance finding — should be degraded (not healthy)
+  const tasks = [
+    codexTask("t1", {
+      status: "completed",
+      verification: { passed: true },
+      acceptance_findings: [{ code: "report_paths_missing" }],
+    }),
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0, "missing evidence → not healthy");
+  assert.equal(result.degraded, 1, "missingEvidence=1, ud exists → degraded");
+  assert.equal(result.stale, 0);
+});
+
+test("collectContextBundleHealth counts tasks without unified_decision as stale", () => {
+  const tasks = [
+    {
+      id: "t1",
+      assignee: "codex",
+      status: "running",
+      result: {
+        status: "running",
+        summary: "task still running",
+        changed_files: [],
+        verification: { passed: true },
+        acceptance_findings: [],
+        // no unified_decision
+      },
+    },
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0, "no ud → not healthy");
+  assert.equal(result.degraded, 0, "no ud → not degraded");
+  assert.equal(result.stale, 1, "no ud → stale");
+});
+
+test("collectContextBundleHealth ignores non-codex tasks", () => {
+  const tasks = [
+    { id: "t1", assignee: "human", status: "completed" },
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0);
+  assert.equal(result.degraded, 0);
+  assert.equal(result.stale, 0);
+  assert.equal(result.total_codex_tasks, 0);
+});
+
+test("collectContextBundleHealth returns zeros for empty tasks", () => {
+  const result = collectContextBundleHealth([]);
+  assert.deepEqual(result, { healthy: 0, degraded: 0, stale: 0, total_codex_tasks: 0 });
+});
+
+test("collectContextBundleHealth handles mixed health states", () => {
+  const tasks = [
+    codexTask("t1", { verification: { passed: true } }),                          // healthy
+    codexTask("t2", { verification: undefined }),                                  // degraded (no verification, missingEvidence=0)
+    codexTask("t3", { verification: { passed: null } }),                           // degraded (passed=null, missingEvidence=0)
+    codexTask("t4", { verification: { passed: true }, acceptance_findings: [{}] }),// degraded (missingEvidence=1)
+    {
+      id: "t5",
+      assignee: "codex",
+      status: "running",
+      result: { status: "running", changed_files: [], verification: {}, acceptance_findings: [] },
+    },                                                                             // stale (no ud)
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 1, "only t1 should be healthy");
+  assert.equal(result.degraded, 3, "t2, t3, t4 should be degraded");
+  assert.equal(result.stale, 1, "t5 should be stale");
+  assert.equal(result.total_codex_tasks, 5);
+});
+
+test("collectContextBundleHealth handles tasks with many acceptance findings as stale", () => {
+  // Task with 2+ acceptance findings — should be stale (not healthy, not degraded)
+  const tasks = [
+    codexTask("t1", {
+      verification: { passed: true },
+      acceptance_findings: [{ code: "a" }, { code: "b" }],
+    }),
+  ];
+  const result = collectContextBundleHealth(tasks);
+  assert.equal(result.healthy, 0, "missingEvidence=2 → not healthy");
+  assert.equal(result.degraded, 0, "missingEvidence=2 > 1 → not degraded");
+  assert.equal(result.stale, 1, "missingEvidence=2 → stale");
 });

@@ -175,7 +175,7 @@ function collectCanonicalOutcomeHealth(tasks = []) {
  * P0-AFC8: Reports context bundle health across goals/tasks,
  * identifying tasks with stalled, degraded, or healthy context bundles.
  */
-function collectContextBundleHealth(tasks = []) {
+export function collectContextBundleHealth(tasks = []) {
   const codexTasks = tasks.filter(t => t.assignee === 'codex');
   let healthy = 0;
   let degraded = 0;
@@ -187,7 +187,7 @@ function collectContextBundleHealth(tasks = []) {
     const resultStatus = t.result?.status;
     const missingEvidence = (t.result?.acceptance_findings || []).length;
 
-    if (ud && verification?.passed !== null && resultStatus && missingEvidence === 0) {
+    if (ud && verification && verification.passed !== null && resultStatus && missingEvidence === 0) {
       healthy++;
     } else if (ud && missingEvidence <= 1) {
       degraded++;
@@ -249,6 +249,7 @@ export async function collectProductStatus(services) {
 
   // 8. Summary line
   const summary = buildSummaryLine({ gitInfo, queueMetrics, workerHealth, retention });
+  const contextBundleHealth = collectContextBundleHealth(state.tasks || []);
 
   return {
     scanned_at: new Date().toISOString(),
@@ -302,7 +303,7 @@ export async function collectProductStatus(services) {
     },
     retention,
     canonical_outcome_health: collectCanonicalOutcomeHealth(state.tasks || []),
-    context_bundle_health: collectContextBundleHealth(state.tasks || []),
+    context_bundle_health: contextBundleHealth,
     tui_provider: tuiDiagnostics ? {
       enabled: tuiDiagnostics.enabled,
       provider: tuiDiagnostics.provider,
@@ -324,7 +325,7 @@ export async function collectProductStatus(services) {
         ...(queueMetrics.current_blockers.policy_filtered > 0 ? [{ severity: "warning", message: `${queueMetrics.current_blockers.policy_filtered} current blocker(s)`, code: "current_blockers" }] : []),
         ...(retention.pressure !== "none" ? [{ severity: "info", message: `Retention pressure: ${retention.pressure}`, code: "retention_pressure" }] : []),
         ...(tuiDiagnostics?.findings || []).filter(f => f.severity === "warning").slice(0, 5),
-        ...(services.contextBundleHealth?.degraded > 0 || services.contextBundleHealth?.stale > 0
+        ...(contextBundleHealth.degraded > 0 || contextBundleHealth.stale > 0
           ? [{ severity: 'info', message: 'Context bundle health degraded - inspect context-health tools', code: 'context_bundle_health' }] : []),
         ...(workerHealth.health?.phase === "stalled" || workerHealth.health?.phase === "overdue" || workerHealth.health?.phase === "enabled_but_not_running"
           ? [{ severity: "warning", message: `Worker health: ${workerHealth.health.phase}${workerHealth.health.reason ? ` - ${workerHealth.health.reason}` : ""}`, code: "worker_health" }] : []),
