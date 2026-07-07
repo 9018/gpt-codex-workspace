@@ -34,17 +34,30 @@ export const NULL_REASON = Object.freeze({
   CONFIGURED: "configured_null",
 });
 
-// Backend default documentation -- used by diagnostics and codex.entry.md
+// Product default: all pipeline roles default to codex_exec (real agent execution).
+// Per-role overrides (agentRoleBackends) always take precedence.
+// Roles that default to auto-artifact when a null backend IS explicitly configured
+// are tracked separately in ROLE_AUTO_ARTIFACT_DEFAULTS.
 export const ROLE_BACKEND_DEFAULTS = Object.freeze({
-  context_curator: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: null, doc: "Context bundle prepared from task metadata." },
-  planner: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: null, doc: "Plan determined from context/prompt files." },
-  builder: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Actual Codex execution for code changes." },
-  verifier: { backend: AGENT_BACKEND_IDS.LOCAL_COMMAND, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Deterministic local command execution for verification." },
-  reviewer: { backend: AGENT_BACKEND_IDS.LOCAL_COMMAND, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Deterministic local command execution for review." },
-  integrator: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: NULL_REASON.AUTO_ARTIFACT, doc: "Auto-completed from integration result evidence." },
-  finalizer: { backend: AGENT_BACKEND_IDS.NULL, semantic: AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT, reason: NULL_REASON.AUTO_ARTIFACT, doc: "Auto-completed from task result evidence." },
-  repairer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Actual Codex execution for repair attempts." },
+  context_curator: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for context curation." },
+  planner: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for planning." },
+  builder: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for code changes." },
+  verifier: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for verification." },
+  reviewer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for review." },
+  integrator: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for integration." },
+  finalizer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for finalization." },
+  repairer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for repair attempts." },
+});;
+
+// Roles whose default execution semantic is auto_artifact when the null backend
+// is explicitly configured (via agentRoleBackends or task metadata).
+export const ROLE_AUTO_ARTIFACT_DEFAULTS = Object.freeze({
+  context_curator: true,
+  planner: true,
+  integrator: true,
+  finalizer: true,
 });
+
 
 
 
@@ -61,6 +74,11 @@ const BACKEND_ALIASES = Object.freeze({
 /**
  * Resolve the execution semantic for a resolved backend id and role context.
  *
+ * - Non-null backends (codex_exec, local_command) always resolve to REAL.
+ * - Null backend resolves based on nullReason or role default:
+ *   auto_artifact for roles completing from evidence (integrator, finalizer, etc.),
+ *   test_noop for test stubs, configured for explicit operator choice.
+ *
  * @param {string} backendId - Resolved backend identifier
  * @param {object} [options={}]
  * @param {string} [options.role] - Agent role to check against defaults
@@ -74,11 +92,8 @@ export function resolveBackendSemantic(backendId, { role = "builder", nullReason
   if (nullReason === NULL_REASON.TEST_ONLY) return AGENT_BACKEND_SEMANTIC.TEST_NOOP;
   if (nullReason === NULL_REASON.CONFIGURED) return AGENT_BACKEND_SEMANTIC.CONFIGURED;
   if (nullReason === NULL_REASON.AUTO_ARTIFACT) return AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT;
-  // Infer from defaults
-  const defaults = ROLE_BACKEND_DEFAULTS[role];
-  if (defaults && defaults.backend === AGENT_BACKEND_IDS.NULL) {
-    return defaults.semantic;
-  }
+  // Infer from auto-artifact role defaults when null backend is used without explicit nullReason
+  if (ROLE_AUTO_ARTIFACT_DEFAULTS[role]) return AGENT_BACKEND_SEMANTIC.AUTO_ARTIFACT;
   return AGENT_BACKEND_SEMANTIC.CONFIGURED;
 }
 
@@ -148,6 +163,9 @@ export function resolveAgentBackendId({ config = {}, role = "builder", task = {}
   const globalBackend = config.agentBackend || config.agentBackendDefault || config.defaultAgentBackend;
   if (globalBackend) return normalizeBackendId(globalBackend);
   // Fallback to role defaults
+  // Note: ROLE_BACKEND_DEFAULTS now has all roles as codex_exec.
+  // Previous per-role distinction (null for integrator/finalizer, local_command for verifier/reviewer)
+  // has been consolidated: product default is codex_exec for every role.
   const roleDefault = ROLE_BACKEND_DEFAULTS[role];
   if (roleDefault) return roleDefault.backend;
   return AGENT_BACKEND_IDS.CODEX_EXEC;
@@ -162,6 +180,7 @@ export function normalizeBackendResult({ backendId, task = {}, goal = null, role
 
   // Determine execution semantic and null reason
   const backend = normalizeBackendId(backendId);
+  // defaultInfo overrides role defaults; ROLE_BACKEND_DEFAULTS always codex_exec
   const info = defaultInfo || ROLE_BACKEND_DEFAULTS[role] || null;
   const nullReason = explicitNullReason
     || (backend === AGENT_BACKEND_IDS.NULL
@@ -226,15 +245,16 @@ export function isRealBackendResult(parsedResult) {
 }
 
 /**
- * Build a compact pipeline role-backend chain for diagnostics and review docs.
- * Clearly distinguishes real execution from auto-artifact/noop roles so users
- * can see at a glance which roles involve independent LLM agent execution
- * versus automatic artifact completion from evidence.
+ * Build a compact pipeline role-backend chain for diagnostics.
+ * By product default all roles are codex_exec (real agent execution).
+ * When a user explicitly configures a role to null (via agentRoleBackends),
+ * the semantic switches to auto_artifact / test_noop / configured accordingly.
  *
  * Pipeline semantics:
- * - codex_exec:     Real agent execution (builder, repairer)
- * - local_command:  Deterministic shell command execution (verifier, reviewer)
- * - null:           Auto-artifact completion (context_curator, planner, integrator, finalizer)
+ * - codex_exec:     Real agent execution (all roles by product default)
+ * - local_command:  Deterministic shell command execution (when explicitly configured)
+ * - null:           Auto-artifact completion when explicitly configured for
+ *                   context_curator, planner, integrator, finalizer
  *   - auto_artifact:   Deterministic completion from task result evidence (default for integrator, finalizer)
  *   - test_noop:       Test mode stub (null backend with explicit test_only reason)
  *   - configured_null: Explicit operator choice to use null backend
@@ -262,6 +282,12 @@ export function buildPipelineRoleBackendChain(config = {}, roles) {
 /**
  * Produce a human-readable label for a role's backend in the pipeline chain.
  * Used by buildPipelineRoleBackendChain to produce clear diagnostics.
+ *
+ * With product defaults, all roles show as:
+ *   <role> / codex_exec (real agent execution)
+ *
+ * When null backend is configured, the label shows the null reason:
+ *   integrator / null/auto_artifact (auto-completed from evidence, no external commands)
  */
 function _backendLabel(backend, semantic, role) {
   if (backend === AGENT_BACKEND_IDS.CODEX_EXEC) {
@@ -330,11 +356,12 @@ export class NullBackend {
     const { config = {}, task = {}, goal = null, role = "builder", nullReason: explicitNullReason } = args;
     const cr = { stdout: "", stderr: "", returncode: 0, timed_out: false };
 
-    // Determine null reason: explicit > config > defaults
-    const defaultInfo = ROLE_BACKEND_DEFAULTS[role] || null;
+    // Determine null reason: explicit > config > auto-artifact role defaults
+    // ROLE_AUTO_ARTIFACT_DEFAULTS marks roles that auto-complete from evidence
+    // when explicitly configured with a null backend.
     const nullReason = explicitNullReason
       || config.agentNullReason
-      || defaultInfo?.reason
+      || (ROLE_AUTO_ARTIFACT_DEFAULTS[role] ? NULL_REASON.AUTO_ARTIFACT : null)
       || null;
     const semantic = resolveBackendSemantic(AGENT_BACKEND_IDS.NULL, { role, nullReason });
 
@@ -344,7 +371,6 @@ export class NullBackend {
       goal,
       role,
       output: cr,
-      defaultInfo,
       nullReason,
       parsed: {
         status: "completed",
