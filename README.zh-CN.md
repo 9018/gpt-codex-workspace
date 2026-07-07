@@ -29,7 +29,7 @@ GPTWork 不是部署平台，也不是 secrets 管理系统。它只协调执行
 - Zvec context-index：可选使用 `@zvec/zvec` 做可重建上下文索引；不可用时可回退本地 JSON store。
 - GitHub Issues fallback：没有可被 ChatGPT 访问的 HTTPS MCP 入口时，可用 GitHub Issues 作为任务下发和结果同步通道。
 - 运维诊断：`open_project_context`、`project_context_status` / `context_status`、`runtime_status`、`worker_status`、`gptwork_doctor`、safe restart、retention/recovery 工具。
-- **Agent 执行后端**：builder/repairer 默认 `codex_exec`（自动 Codex 执行）；verifier/reviewer 默认 `local_command`（确定性本地命令）；integrator/finalizer 自动由证据推断，无需 Agent 执行。
+- **Agent 执行后端**：所有 pipeline 角色默认 `codex_exec`（自动 Codex 执行）。可通过 `GPTWORK_AGENT_ROLE_BACKENDS` 为特定角色配置 `local_command` 或 `null` 后端。
 - **Worker runtime gate**：生产环境必须启用 worker（`GPTWORK_CODEX_WORKER=true`），否则任务无法自动推进。
 - **自我修复与交付恢复**：超时、脏 worktree、changed_files 误判等场景有专用自我修复路径和交付恢复机制。
 - **Pipeline gate 硬性门禁**：新 builder-mode 任务在关闭前必须通过 pipeline gate 检查（verification、reviewer_decision、integration 等 artifact 必须存在）。
@@ -72,7 +72,7 @@ gptwork init --production   # 一键初始化+生产 profile 验证
 
 ### Agent 执行后端
 
-生产默认执行后端是 `codex_exec`（自动 Codex 执行路径），适用于 builder 和 repairer 角色。verifier 和 reviewer 角色默认使用 `local_command` 后端，在本地运行确定性命令（如 `npm test`）。integrator 和 finalizer 使用 `null` 后端，其 artifact 完全从任务结果证据推导，无需 Agent 执行。
+生产默认执行后端是 `codex_exec`（自动 Codex 执行路径），适用于所有 pipeline 角色。verifier、reviewer、integrator、finalizer 等角色默认也使用 `codex_exec`，但可通过 `GPTWORK_AGENT_ROLE_BACKENDS` 显式切换为 `local_command` 或 `null` 后端。
 
 `codex_tui_goal` 是 **显式 Operator fallback**——仅操作员手动选择，不会自动降级到 TUI。Operator 需要在终端会话中交互式工作，并写入 durable evidence（result.json，建议同时包含 commit、tests、result.md）；result.json 被收集后会规范化为标准 taskResult，继续进入与 `codex_exec` 相同的 verifier、acceptance、integration、finalizer 和 queue auto-start 闭环。
 
@@ -365,20 +365,20 @@ MIT
 
 | Goal | 状态 | 能力 |
 |---|---|---|
-| P0-01 Release Gate Hardening | ⚠️ **未执行** | 将 fast gate 提升为产品级 hard gate，含全量 syntax/import/test/e2e |
+| P0-01 Release Gate Hardening | ✅ **已处理（CI Workflow）** | 通过 CI workflow 和 release-gate.md 文档落地，含全量 syntax/import/test/e2e 发布门禁 |
 | P0-02 Retention Cleanup Productization | ✅ **已完成** | git_branches/git_worktrees 保留族、storage_pressure、分支修剪 |
 | P0-03 Review State Auto-Resolution | ✅ **已完成** | 6 种规范 review 分类（evidence_missing/policy_uncertain/...） |
 | P0-04 Pipeline Gate Hardening | ✅ **已完成** | 新 builder-mode 任务强 gate 检查，旧任务兼容 |
 | P0-05 Real Agent Backends | ✅ **已合并** | verifier/reviewer 默认改为 local_command 确定性执行 |
 | P0-06 Init Onboarding Productization | ✅ **已合并** | `gptwork init/doctor/fix` 产品化开机流程 |
-| P0-07 Codex Exec Production Hardening | ⏳ 等待 review | timeout/无输出/脏 worktree/changed_files 误判自愈 |
+| P0-07 Codex Exec Production Hardening | ✅ **已完成** | timeout/无输出/脏 worktree/changed_files 误判自愈 |
 | P1-08 Codex TUI Operator Fallback | ✅ 完成 | codex_exec 默认生产，codex_tui 显式 fallback |
 | P1-09 Operator Dashboard Status | ✅ 完成 | `product_status` 一站式仪表盘 |
-| **P1-10 最终收敛（本任务）** | **进行中** | 全局文档/验收/门禁检查 |
+| **P1-10 最终收敛（本任务）** | ✅ **已完成** | 全局文档/验收/门禁检查 — 文档状态已统一 |
 
 ### 产品边界明确划分
 
-- **codex_exec**: 默认生产执行模式，适用于 builder/repairer 角色。
+- **codex_exec**: 默认生产执行模式，适用于所有 pipeline 角色。
 - **codex_tui**: 显式 Operator fallback，仅操作员手动选择，不自动降级。
 - **多 Agent 角色**: context_curator → planner → builder → verifier → reviewer → integrator → finalizer + repairer（recovery 分支）。
 - **Review 自动归宿**: 6 种规范分类，blocker-policy 和 review packet 内置。
