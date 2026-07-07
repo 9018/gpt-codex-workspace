@@ -185,13 +185,13 @@ A pipeline of agent roles executes sequentially for builder-mode tasks. Each rol
 
 | Role | Default Backend | Execution Semantic | Evidence Source | Description |
 |---|---|---|---|---|
-| context_curator | `null` | `auto_artifact` | auto-completed from task metadata | Prepare context bundle and manifest |
-| planner | `null` | `auto_artifact` | auto-completed from context files | Determine plan from entry/bundle |
+| context_curator | `codex_exec` | `real` | Codex CLI agent execution | Prepare context bundle and manifest |
+| planner | `codex_exec` | `real` | Codex CLI agent execution | Determine plan from entry/bundle |
 | builder | `codex_exec` | `real` | Codex CLI agent execution | Execute code changes |
-| verifier | `local_command` | `real` | Deterministic shell command | Run verification suite |
-| reviewer | `local_command` | `real` | Deterministic shell command | Run structured review |
-| integrator | `null` | `auto_artifact` | auto-completed from integration evidence | Complete integration handoff |
-| finalizer | `null` | `auto_artifact` | auto-completed from task result evidence | Evaluate safe_to_auto_advance |
+| verifier | `codex_exec` | `real` | Codex CLI agent execution | Run verification suite (can be switched to `local_command` via `agentRoleBackends`) |
+| reviewer | `codex_exec` | `real` | Codex CLI agent execution | Run structured review (can be switched to `local_command` via `agentRoleBackends`) |
+| integrator | `codex_exec` | `real` | Codex CLI agent execution | Complete integration handoff (can be switched to `null`/auto_artifact via `agentRoleBackends`) |
+| finalizer | `codex_exec` | `real` | Codex CLI agent execution | Evaluate safe_to_auto_advance (can be switched to `null`/auto_artifact via `agentRoleBackends`) |
 | repairer | `codex_exec` | `real` | Codex CLI agent execution | Recovery branch for failed tasks |
 
 **Pipeline execution order**: `context_curator -> planner -> builder -> verifier -> reviewer -> integrator -> finalizer`
@@ -210,10 +210,10 @@ A pipeline of agent roles executes sequentially for builder-mode tasks. Each rol
 Both `codex_exec` and `local_command` are `real` executions -- the former runs a Codex LLM agent, the latter runs a deterministic shell command. Both produce side effects.
 
 **Backend resolution precedence** (`resolveAgentBackendId()`):
-1. Task-level: `task.agent_backend` / `task.metadata.agent_backend`
-2. Role-level config: `config.agentRoleBackends` / `config.agentBackendByRole`
-3. Global config: `config.agentBackend` / `config.agentBackendDefault`
-4. Role default: `ROLE_BACKEND_DEFAULTS` (table above)
+1. Task-level: `task.agent_backend` / `task.metadata.agent_backend` (highest priority)
+2. Role-level config: `config.agentRoleBackends` / `config.agentBackendByRole` (user explicit override)
+3. Global config / product default: `config.agentBackend` / `config.agentBackendDefault` (e.g. `GPTWORK_AGENT_BACKEND=codex_exec`)
+4. Role fallback: `ROLE_BACKEND_DEFAULTS` — all roles are `codex_exec` by product default (only when none of the above is set)
 
 **Gate enforcement flow:**
 
@@ -413,7 +413,7 @@ Path: `backend/src/agent-execution-backends.mjs`
 
 Assigned agent tasks execute through a small backend abstraction before result parsing and final writeback. Supported backends:
 
-- `codex_exec` (default for builder/repairer): Real Codex CLI execution.
+- `codex_exec` (default for all pipeline roles by product default): Real Codex CLI execution.
 - `local_command` (default for verifier/reviewer): Deterministic shell command execution.
 - `null` (default for integrator/finalizer/context_curator/planner): Auto-artifact from result evidence.
 

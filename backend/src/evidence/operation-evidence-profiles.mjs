@@ -1,4 +1,5 @@
 import { normalizeList } from '../acceptance/contract-schema.mjs';
+import { AGENT_ROLE_ENUM } from '../agent-artifact-contract.mjs';
 
 function hasValue(value) {
   if (Array.isArray(value)) return value.length > 0;
@@ -55,6 +56,28 @@ function verificationProvided(result = {}) {
   return false;
 }
 
+
+function reviewerDecisionProvided(result = {}) {
+  const decision = result.reviewer_decision
+    || result.result?.reviewer_decision
+    || result.contract_verification?.normalized_result?.reviewer_decision
+    || {};
+  if (decision.passed === true) return true;
+  if (decision.decision === 'accepted') return true;
+  if (decision.status === 'accepted') return true;
+  return false;
+}
+
+function integrationArtifactProvided(result = {}) {
+  const integration = result.integration
+    || result.result?.integration
+    || result.contract_verification?.normalized_result?.integration
+    || {};
+  if (integration.merged === true) return true;
+  if (['merged', 'ff_only_merged', 'not_required', 'skipped', 'already_integrated'].includes(String(integration.status || '').toLowerCase())) return true;
+  if (integration.auto_completed === true) return true;
+  return false;
+}
 const GENERIC_REQUIREMENTS = Object.freeze({
   commit_present: {
     code: 'commit_present_missing',
@@ -108,6 +131,16 @@ const GENERIC_REQUIREMENTS = Object.freeze({
     code: 'runtime_health_evidence_missing',
     message: 'Blocking contract requires runtime health evidence.',
     satisfied: (result) => healthPassed(restartEvidence(result).health_check || result.health_check || result.runtime?.health_check),
+  },
+  reviewer_decision: {
+    code: 'reviewer_decision_missing',
+    message: 'Blocking contract requires reviewer decision evidence.',
+    satisfied: reviewerDecisionProvided,
+  },
+  integration_artifact: {
+    code: 'integration_artifact_missing',
+    message: 'Blocking contract requires integration artifact evidence.',
+    satisfied: integrationArtifactProvided,
   },
   pre_state_snapshot: {
     code: 'pre_state_snapshot_missing',
@@ -234,5 +267,168 @@ export function getRequirementCheck(id) {
 export function operationEvidenceProfile(operationKind) {
   return OPERATION_EVIDENCE_PROFILES[String(operationKind || '')] || null;
 }
+
+/**
+ * ROLE_EVIDENCE_PROFILES — Maps each pipeline role to its required evidence fields.
+ *
+ * This is the per-role evidence contract that defines which evidence fields each
+ * pipeline agent role must produce. Unlike OPERATION_EVIDENCE_PROFILES which
+ * is keyed by operation_kind, these profiles are keyed by pipeline role name.
+ *
+ * Each profile lists:
+ *   evidence_fields: All possible evidence fields the role can produce
+ *   required_when_completed: Subset of fields that must be present when the role completes
+ *   artifact_kinds: Artifact kinds from ARTIFACT_SCHEMA.required_by_role that this role needs
+ */
+export const ROLE_EVIDENCE_PROFILES = Object.freeze({
+  context_curator: {
+    evidence_fields: ['context_bundle', 'context_retrieval', 'context_manifest'],
+    required_when_completed: ['context_bundle'],
+    artifact_kinds: ['context_bundle'],
+  },
+  planner: {
+    evidence_fields: ['plan'],
+    required_when_completed: ['plan'],
+    artifact_kinds: ['plan'],
+  },
+  builder: {
+    evidence_fields: ['change_summary', 'changed_files', 'commit', 'verification'],
+    required_when_completed: ['change_summary', 'changed_files', 'commit', 'verification'],
+    artifact_kinds: ['change_summary'],
+  },
+  verifier: {
+    evidence_fields: ['verification'],
+    required_when_completed: ['verification'],
+    artifact_kinds: ['verification'],
+  },
+  repairer: {
+    evidence_fields: ['repair', 'change_summary', 'changed_files', 'commit', 'verification'],
+    required_when_completed: ['repair'],
+    artifact_kinds: ['repair'],
+  },
+  reviewer: {
+    evidence_fields: ['reviewer_decision'],
+    required_when_completed: ['reviewer_decision'],
+    artifact_kinds: ['reviewer_decision'],
+  },
+  finalizer: {
+    evidence_fields: ['result', 'changed_files', 'commit', 'verification', 'integration'],
+    required_when_completed: ['result'],
+    artifact_kinds: ['result'],
+  },
+  integrator: {
+    evidence_fields: ['integration'],
+    required_when_completed: ['integration'],
+    artifact_kinds: ['integration'],
+  },
+});
+
+/**
+ * Get the role evidence profile for a given pipeline role.
+ *
+ * @param {string} role - Pipeline role name (canonical)
+ * @returns {object|null} Evidence profile or null if not found
+ */
+export function roleEvidenceProfile(role) {
+  if (!role || typeof role !== 'string') return null;
+  return ROLE_EVIDENCE_PROFILES[role] || null;
+}
+
+/**
+ * Check a normalized result for missing role evidence.
+ * For each role in the provided list, checks that the required_when_completed
+ * evidence fields are present in the result or its agent runs.
+ *
+ * @param {object} normalized - Normalized result
+ * @param {string[]} [roles] - Roles to check; defaults to all AGENT_ROLE_ENUM
+ * @returns {Array<object>} Blockers for missing role evidence
+ */
+export function missingRoleEvidence(normalized = {}, roles = []) {
+  const checkRoles = Array.isArray(roles) && roles.length > 0 ? roles : AGENT_ROLE_ENUM;
+  const blockers = [];
+  for (const role of checkRoles) {
+    const profile = roleEvidenceProfile(role);
+    if (!profile || normalized.status !== 'completed') continue;
+    for (const field of profile.required_when_completed) {
+      if (hasRoleEvidenceField(normalized, field)) continue;
+      blockers.push({
+        severity: 'blocker',
+        code: 'role_' + role + '_' + field + '_missing',
+        message: 'Completed role "' + role + '" requires "' + field + '" evidence.',
+        source: 'role_evidence_profiles',
+        role: role,
+        evidence_field: field,
+      });
+    }
+  }
+  return blockers;
+}
+
+/**
+ * Check a completed agent run against its role evidence profile.
+ * Returns blockers if required artifact kinds are missing from the run output.
+ *
+ * @param {object} agentRun - Completed agent run object
+ * @returns {Array<object>} Blockers for missing artifact evidence
+ */
+export function missingAgentRunEvidence(agentRun = {}) {
+  const role = agentRun.contract_role || agentRun.role;
+  const profile = roleEvidenceProfile(role);
+  if (!profile || agentRun.status !== 'completed') return [];
+  const artifacts = [
+    ...(Array.isArray(agentRun.output_artifacts) ? agentRun.output_artifacts : []),
+    ...(Array.isArray(agentRun.input_artifacts) ? agentRun.input_artifacts : []),
+  ];
+  const artifactKinds = new Set(
+    artifacts.map((a) => (a && typeof a === 'object' ? a.kind : a)).filter(Boolean)
+  );
+  return profile.artifact_kinds
+    .filter((kind) => !artifactKinds.has(kind))
+    .map((kind) => ({
+      severity: 'blocker',
+      code: 'agent_run_' + role + '_' + kind + '_missing',
+      message: 'Completed ' + role + ' agent run missing required artifact kind: ' + kind,
+      source: 'role_evidence_profiles',
+      role: role,
+      artifact_kind: kind,
+    }));
+}
+
+/**
+ * Check if a value or data structure has a given role evidence field.
+ * Searches result, nested sub-results, and agent run artifact kinds.
+ *
+ * @param {object} result - Normalized or raw result
+ * @param {string} field - Evidence field name
+ * @returns {boolean}
+ */
+function hasRoleEvidenceField(result, field) {
+  if (typeof result !== 'object' || result === null) return false;
+  const direct = result[field];
+  if (direct && typeof direct === 'object' && !Array.isArray(direct) && Object.keys(direct).length > 0) return true;
+  if (direct === true) return true;
+  if (Array.isArray(direct) && direct.length > 0) return true;
+  if (typeof direct === 'string' && direct.trim()) return true;
+  // Check nested sub-results (result.result, contract_verification.normalized_result)
+  const nested = result.result || (result.contract_verification && result.contract_verification.normalized_result) || {};
+  if (nested && typeof nested === 'object' && nested !== result) {
+    const nestedField = nested[field];
+    if (nestedField && typeof nestedField === 'object' && !Array.isArray(nestedField) && Object.keys(nestedField).length > 0) return true;
+    if (nestedField === true) return true;
+  }
+  // Check agent run output artifact kinds
+  const agentRuns = result.agent_runs || result.runs || [];
+  if (Array.isArray(agentRuns)) {
+    for (const run of agentRuns) {
+      const artifacts = [...(run.output_artifacts || []), ...(run.input_artifacts || [])];
+      for (const artifact of artifacts) {
+        const kind = artifact && typeof artifact === 'object' ? artifact.kind : artifact;
+        if (typeof kind === 'string' && kind === field) return true;
+      }
+    }
+  }
+  return false;
+}
+
 
 export { integrationSatisfied, healthPassed, verificationProvided };

@@ -33,11 +33,16 @@ Tmp commands:
   tmp status
   tmp cleanup [--dry-run|--apply]
 
-Goals commands:
-  goals storage-status
-  goals cleanup [--dry-run|--apply]
-
-Queue commands:
+ Goals commands:
+   goals storage-status
+   goals cleanup [--dry-run|--apply]
+   goals rotate-events [--keep-days <n>] [--dry-run|--apply]
+ 
+ Retention commands:
+   retention status
+   retention cleanup [--dry-run|--apply] [--limit <n>] [--archive|--no-archive]
+ 
+ Queue commands:
   queue list [--status <s>]
   queue start-next [--dry-run]
   queue enqueue <goal_id> [--depends-on-goal <gid>] [--depends-on-task <tid>]
@@ -511,33 +516,59 @@ async function handleTmp() {
   if (subcommand === "status") {
     const { scanManagedTmp, scanSystemTmp, getInodePressure } = await import("../src/gptwork-tmp.mjs");
     const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
-    const managed = await scanManagedTmp({ workspaceRoot });
-    const systemTmp = await scanSystemTmp();
-    const inodePressure = await getInodePressure();
-    console.log("GPTWork /tmp Status");
-    console.log("=".repeat(60));
-    console.log("Managed tmp (.gptwork/tmp/):");
-    console.log("  files:", managed.fileCount);
-    console.log("  bytes:", managed.totalBytesH);
-    console.log("System /tmp:");
-    console.log("  files:", systemTmp.file_count);
-    console.log("  bytes:", systemTmp.total_bytes_h);
-    if (inodePressure) {
-      console.log("Inode pressure:");
-      console.log("  used:", inodePressure.used_pct);
-      console.log("  free:", inodePressure.free_inodes);
+  const managed = await scanManagedTmp({ workspaceRoot });
+  const systemTmp = await scanSystemTmp();
+  const inodePressure = await getInodePressure();
+  const gptworkFiles = managed.files.filter(f => f.gptwork_owned).length;
+  const nonGptworkFiles = managed.fileCount - gptworkFiles;
+  const filesOlder24h = managed.files.filter(f => f.ageMs >= 86400000).length;
+  const topLargest = [...managed.files].sort((a, b) => b.size - a.size).slice(0, 5);
+  
+  console.log("GPTWork /tmp Status");
+  console.log("=".repeat(60));
+  console.log("Managed tmp (.gptwork/tmp/):");
+  console.log("  files:", managed.fileCount, `(gptwork-owned: ${gptworkFiles}, other: ${nonGptworkFiles})`);
+  console.log("  bytes:", managed.totalBytesH);
+  if (managed.files.length > 0) {
+    console.log("  oldest:", managed.files[managed.files.length - 1].name, `(${managed.files[managed.files.length - 1].ageH}h)`, managed.files[managed.files.length - 1].size_h);
+    console.log("  newest:", managed.files[0].name, `(${managed.files[0].ageH}h)`, managed.files[0].size_h);
+    if (filesOlder24h > 0) console.log("  older than 24h:", filesOlder24h);
+    if (topLargest.length > 0) {
+      console.log("  top 5 largest:");
+      for (const f of topLargest) {
+        console.log(`    ${f.name.padEnd(40)} ${f.size_h.padEnd(10)} ${f.ageH}h old`);
+      }
     }
+  }
+  console.log("");
+  console.log("System /tmp:");
+  console.log("  files:", systemTmp.file_count);
+  console.log("  bytes:", systemTmp.total_bytes_h);
+  if (systemTmp.oldest) console.log("  oldest:", systemTmp.oldest.name, systemTmp.oldest.mtime);
+  if (systemTmp.newest) console.log("  newest:", systemTmp.newest.name, systemTmp.newest.mtime);
+  console.log("");
+  if (inodePressure) {
+    console.log("Inode pressure (tmpfs):");
+    console.log("  used:", inodePressure.used_pct, `(${inodePressure.used_inodes}/${inodePressure.total_inodes})`);
+    console.log("  free:", inodePressure.free_inodes);
+    if (inodePressure.used_pct && parseInt(inodePressure.used_pct) > 80) {
+      console.log("  WARNING: inode usage above 80%, consider cleanup");
+    }
+  }
   } else if (subcommand === "cleanup") {
     const dryRun = rest.includes("--dry-run") || !rest.includes("--apply");
     const { cleanupManagedTmp, cleanupSystemTmp } = await import("../src/gptwork-tmp.mjs");
+    const maxAgeMs = (function(){ const i = rest.indexOf("--max-age-ms"); return i >= 0 ? Number(rest[i+1]) : undefined; })();
+    const maxBytes = (function(){ const i = rest.indexOf("--max-bytes"); return i >= 0 ? Number(rest[i+1]) : undefined; })();
+    const maxCount = (function(){ const i = rest.indexOf("--max-count"); return i >= 0 ? Number(rest[i+1]) : undefined; })();
     const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
-    const managedResult = await cleanupManagedTmp({ workspaceRoot, dryRun });
-    const systemResult = await cleanupSystemTmp({ dryRun });
+    const managedResult = await cleanupManagedTmp({ workspaceRoot, dryRun, maxAgeMs, maxBytes, maxCount });
+    const systemResult = await cleanupSystemTmp({ dryRun, maxAgeMs, maxBytes, maxCount });
     console.log("GPTWork /tmp Cleanup");
     console.log("=".repeat(60));
-    console.log(managedResult.dryRun ? "[dry-run]" : "[applied]");
-    console.log("Managed tmp:", managedResult.deleted, "deleted,", managedResult.skipped, "skipped");
-    console.log("System /tmp:", systemResult.deleted, "deleted,", systemResult.skipped, "skipped");
+    console.log("  Mode:           " + (dryRun ? "dry-run (no changes)" : "applied"));
+    console.log("  Managed tmp:    " + managedResult.deleted + " deleted, " + managedResult.skipped + " kept" + (managedResult.deletedBytes ? " (" + managedResult.deletedBytesH + " freed)" : ""));
+    console.log("  System /tmp:    " + systemResult.deleted + " deleted, " + systemResult.skipped + " kept" + (systemResult.deleted_bytes ? " (" + systemResult.deleted_bytes_h + " freed)" : ""));
   } else {
     console.log("Usage: gptwork tmp status|cleanup [--dry-run|--apply]");
   }
@@ -546,39 +577,203 @@ async function handleTmp() {
 async function handleGoals() {
   const { store, config } = await localStore();
   const [ subcommand, ...rest ] = args.slice(1);
+  const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+
   if (subcommand === "storage-status") {
     const { scanGoals, scanEvents } = await import("../src/goal-storage-service.mjs");
-    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
     const gs = await scanGoals(workspaceRoot);
     const es = await scanEvents(workspaceRoot);
+    const retCfg = { enabled: true, limit: Number(process.env.GPTWORK_RETENTION_LIMIT) || 50 };
     console.log("GPTWork Goal Storage");
     console.log("=".repeat(60));
-    console.log("Goal dirs:", gs.goal_dir_count);
-    console.log("Total files:", gs.total_files);
-    console.log("Total bytes:", gs.total_bytes_h);
-    if (gs.oldest_goal) console.log("Oldest:", gs.oldest_goal.name, gs.oldest_goal.age_days + " days");
-    if (gs.newest_goal) console.log("Newest:", gs.newest_goal.name, gs.newest_goal.age_days + " days");
-    console.log("Status:", JSON.stringify(gs.status_breakdown));
+    console.log("  Goal dirs:        " + gs.goal_dir_count);
+    console.log("  Total files:      " + gs.total_files);
+    console.log("  Total bytes:      " + gs.total_bytes_h);
+    console.log("  Retention limit:  " + retCfg.limit + " terminal dirs");
+    if (gs.oldest_goal) console.log("  Oldest:           " + gs.oldest_goal.name + " (" + gs.oldest_goal.age_days + " days)");
+    if (gs.newest_goal) console.log("  Newest:           " + gs.newest_goal.name + " (" + gs.newest_goal.age_days + " days)");
+    console.log("");
+    console.log("  Status breakdown:");
+    for (const [st, cnt] of Object.entries(gs.status_breakdown || {}).sort((a, b) => b[1] - a[1])) {
+      console.log("    " + st.padEnd(20) + " " + cnt);
+    }
+    if (gs.top_largest && gs.top_largest.length > 0) {
+      console.log("  Top largest (by bytes):");
+      for (const g of gs.top_largest) {
+        console.log("    " + g.name.padEnd(30) + " " + g.total_bytes_h.padEnd(10) + " " + g.status.padEnd(20) + " " + g.file_count + " files");
+      }
+    }
+    if (gs.top_by_file_count && gs.top_by_file_count.length > 0) {
+      console.log("  Top by file count:");
+      for (const g of gs.top_by_file_count) {
+        console.log("    " + g.name.padEnd(30) + " " + g.file_count + " files  " + g.total_bytes_h.padEnd(10) + " " + g.status);
+      }
+    }
     console.log("");
     console.log("Events:");
-    console.log("  files:", es.file_count, "bytes:", es.total_bytes_h);
+    console.log("  files: " + es.file_count + "  bytes: " + es.total_bytes_h);
+
   } else if (subcommand === "cleanup") {
     const dryRun = rest.includes("--dry-run") || !rest.includes("--apply");
     const { cleanupGoals } = await import("../src/goal-storage-service.mjs");
-    const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
-    const result = await cleanupGoals({ workspaceRoot, dryRun });
+    const maxAgeDays = (function(){ const i = rest.indexOf("--max-age-days"); return i >= 0 ? Number(rest[i+1]) : null; })();
+    const maxGoalDirs = (function(){ const i = rest.indexOf("--max-goal-dirs"); return i >= 0 ? Number(rest[i+1]) : null; })();
+    const archive = !rest.includes("--no-archive");
+    const opts = { workspaceRoot, dryRun, archive };
+    if (maxAgeDays !== null) opts.maxAgeMs = maxAgeDays * 86400000;
+    if (maxGoalDirs !== null) opts.maxGoalDirs = maxGoalDirs;
+    const result = await cleanupGoals(opts);
+
     console.log("GPTWork Goal Cleanup");
     console.log("=".repeat(60));
-    console.log(dryRun ? "[dry-run]" : "[applied]");
-    console.log("Eligible:", result.eligible);
-    console.log("Skipped:", result.skipped);
-    console.log("Freed:", result.freed_bytes_h);
-    console.log(result.message);
+    console.log("  Mode:           " + (dryRun ? "dry-run (no changes)" : "applied"));
+    console.log("  Eligible:       " + result.eligible + " terminal goal(s)");
+    console.log("  Skipped:        " + result.skipped + " goal(s) preserved");
+    console.log("  Total:          " + result.total_goal_dirs + " goal dir(s)");
+    console.log("  Files before:   " + result.total_files);
+    console.log("  Freed:          " + result.freed_bytes_h);
+    console.log("  Archived:       " + result.archived);
+    if (result.details && result.details.length > 0) {
+      console.log("");
+      console.log("  Eligible goals:");
+      for (const d of result.details) {
+        console.log("    " + d.name.padEnd(30) + " " + d.status.padEnd(20) + " age=" + d.age_days + "d files=" + d.file_count + " " + d.total_bytes_h);
+      }
+    }
+    console.log("");
+    console.log("  " + result.message);
+
+  } else if (subcommand === "rotate-events") {
+    const keepDays = (function(){ const i = rest.indexOf("--keep-days"); return i >= 0 ? Number(rest[i+1]) : 7; })();
+    const apply = rest.includes("--apply");
+    if (apply) {
+      const { rotateEvents } = await import("../src/goal-storage-service.mjs");
+      const result = await rotateEvents(workspaceRoot, keepDays);
+      console.log("GPTWork Event Rotation");
+      console.log("=".repeat(60));
+      console.log("  Deleted: " + result.deleted + " file(s)");
+      console.log("  Kept:    " + result.kept + " file(s)");
+      console.log("  " + result.message);
+    } else {
+      const { scanEvents } = await import("../src/goal-storage-service.mjs");
+      const es = await scanEvents(workspaceRoot);
+      console.log("GPTWork Event Rotation (dry-run)");
+      console.log("=".repeat(60));
+      console.log("  Current: " + es.file_count + " file(s), " + es.total_bytes_h);
+      console.log("  Would keep: last " + keepDays + " day(s)");
+      console.log("  Use --apply to rotate.");
+    }
+
   } else {
-    console.log("Usage: gptwork goals storage-status|cleanup [--dry-run|--apply]");
+    console.log("Usage:");
+    console.log("  gptwork goals storage-status");
+    console.log("  gptwork goals cleanup [--dry-run|--apply] [--max-age-days <n>] [--max-goal-dirs <n>] [--archive|--no-archive]");
+    console.log("  gptwork goals rotate-events [--keep-days <n>] [--apply]");
   }
 }
 
+
+async function handleRetention() {
+  const { store, config } = await localStore();
+  const [ subcommand, ...rest ] = args.slice(1);
+  const workspaceRoot = config.defaultWorkspaceRoot || config.workspaceRoot;
+  const { retentionStatus, retentionCleanup, getRetentionConfig } = await import("../src/retention-service.mjs");
+  const retCfg = getRetentionConfig();
+
+  if (subcommand === "status") {
+    const result = await retentionStatus({ config, store, workspaceRoot });
+    const families = result.families || [];
+    console.log("GPTWork Retention Status");
+    console.log("=".repeat(60));
+    console.log("  Retention:            " + (retCfg.enabled ? "enabled" : "disabled"));
+    console.log("  Dry-run default:      " + retCfg.dryRunDefault);
+    console.log("  Archive before delete: " + retCfg.archiveBeforeDelete);
+    console.log("  Per-category limit:    " + retCfg.limit);
+    console.log("  Families:             " + families.length);
+    console.log("");
+
+    const stateFamilies = families.filter((f) => f.type === "state" || !f.type);
+    const fsFamilies = families.filter((f) => f.type === "filesystem");
+
+    console.log("  State Record Families:");
+    console.log("    " + "Name".padEnd(20) + " " + "Cnt".padEnd(5) + " " + "Act".padEnd(5) + " " + "Term".padEnd(6) + " " + "Action");
+    console.log("    " + "-".repeat(20) + " " + "-".repeat(5) + " " + "-".repeat(5) + " " + "-".repeat(6) + " " + "-".repeat(28));
+    for (const f of stateFamilies) {
+      const proposedAction = f.proposed_action || f.proposedAction || "none";
+      console.log("    " + f.name.padEnd(20) + " " + String(f.current_count).padEnd(5) + " " + String(f.active_count).padEnd(5) + " " + String(f.terminal_count).padEnd(6) + " " + proposedAction.slice(0, 28).padEnd(28));
+    }
+
+    if (fsFamilies.length > 0) {
+      console.log("");
+      console.log("  Filesystem Families:");
+      console.log("    " + "Name".padEnd(20) + " " + "Cnt".padEnd(5) + " " + "Bytes".padEnd(10));
+      for (const f of fsFamilies) {
+        console.log("    " + f.name.padEnd(20) + " " + String(f.current_count).padEnd(5) + " " + (f.bytes_h || "0 B").padEnd(10) + "  " + (f.proposed_action || ""));
+      }
+    }
+
+    console.log("");
+    console.log("  Use  to preview cleanup.");
+
+  } else if (subcommand === "cleanup") {
+    const dryRun = rest.includes("--dry-run") || !rest.includes("--apply");
+    const limit = (function(){ const i = rest.indexOf("--limit"); return i >= 0 ? Number(rest[i+1]) : 50; })();
+    const archive = !rest.includes("--no-archive");
+
+    const result = await retentionCleanup({
+      config, store, workspaceRoot,
+      limit, dryRun, archiveBeforeDelete: archive,
+    });
+
+    console.log("GPTWork Retention Cleanup");
+    console.log("=".repeat(60));
+    console.log("  Mode:           " + (dryRun ? "dry-run (no changes)" : "applied"));
+    console.log("  Limit:          " + limit);
+    console.log("  Archive:        " + (archive ? "yes" : "no"));
+    console.log("  Changes:        " + result.changes_count);
+    console.log("  Skipped:        " + result.skipped_count);
+    console.log("");
+
+    if (result.before) {
+      console.log("  Before: tasks=" + result.before.tasks + " goals=" + result.before.goals);
+    }
+    if (result.after) {
+      console.log("  After:  tasks=" + result.after.tasks + " goals=" + result.after.goals);
+    }
+
+    if (result.changes && result.changes.length > 0) {
+      console.log("");
+      console.log("  Changes:");
+      for (const c of result.changes.slice(0, 30)) {
+        console.log("    " + c.category.padEnd(20) + " " + c.action.padEnd(18) + " " + (c.description || "").slice(0, 60));
+      }
+      if (result.changes.length > 30) {
+        console.log("    ... and " + (result.changes.length - 30) + " more");
+      }
+    }
+
+    if (result.skipped && result.skipped.length > 0) {
+      console.log("");
+      console.log("  Skipped (preserved):");
+      for (const s of result.skipped.slice(0, 15)) {
+        console.log("    " + s.category.padEnd(20) + " " + s.reason.padEnd(18) + " " + (s.description || "").slice(0, 60));
+      }
+      if (result.skipped.length > 15) {
+        console.log("    ... and " + (result.skipped.length - 15) + " more");
+      }
+    }
+
+    console.log("");
+    console.log("  Audit ID:       " + (result.audit_id || "none"));
+    console.log("  Elapsed:        " + result.elapsed_ms + "ms");
+    console.log("  " + result.message);
+
+  } else {
+    console.log("Usage:");
+    console.log("  gptwork retention status");
+    console.log("  gptwork retention cleanup [--dry-run|--apply] [--limit <n>] [--archive|--no-archive]");
+  }
+}
 
 async function main() {
   const [command, subcommand, ...rest] = args;
@@ -745,6 +940,8 @@ async function main() {
     return handleTmp();
   } else if (command === "goals") {
     return handleGoals();
+  } else if (command === "retention") {
+    return handleRetention();
   }
   throw new Error(`Unknown command: ${command} ${subcommand}\n${usage()}`);
 }

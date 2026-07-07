@@ -231,8 +231,28 @@ export async function collectProductStatus(services) {
   const codexTasks = (state.tasks || []).filter(t => t.assignee === "codex");
   const reviewCategories = categorizeReviewQueue(codexTasks);
 
-  // 5. Retention pressure
+  // 5. Retention pressure (with full diagnostic status)
   const retention = retentionPressure(queueCounts, state);
+  let retentionFamilies = null;
+  try {
+    const { retentionStatus } = await import("./retention-service.mjs");
+    const wsRoot = config.defaultWorkspaceRoot || config.workspaceRoot || ".";
+    const retentionData = await retentionStatus({ config, store, workspaceRoot: wsRoot });
+    if (retentionData && Array.isArray(retentionData.families)) {
+      retentionFamilies = retentionData.families.map(f => ({
+        name: f.name,
+        type: f.type,
+        current_count: f.current_count,
+        active_count: f.active_count,
+        terminal_count: f.terminal_count,
+        bytes_h: f.bytes_h || "0 B",
+        proposed_action: f.proposed_action || null,
+        cleanup_safe: f.cleanup_safe,
+      }));
+    }
+  } catch (e) {
+    // Non-fatal: retention status unavailable
+  }
 
   // 6. TUI diagnostics
   let tuiDiagnostics = null;
@@ -302,6 +322,7 @@ export async function collectProductStatus(services) {
       total_goals: state.goals?.length || 0,
     },
     retention,
+    retention_families: retentionFamilies,
     canonical_outcome_health: collectCanonicalOutcomeHealth(state.tasks || []),
     context_bundle_health: contextBundleHealth,
     tui_provider: tuiDiagnostics ? {
@@ -508,6 +529,17 @@ export function productStatusCard(data) {
   lines.push(formatKeyValue('goals', data.retention.goals));
   lines.push(formatKeyValue('limit', data.retention.limit));
   if (data.retention.details.length > 0) lines.push(formatKeyValue('details', data.retention.details.join('; ')));
+  if (data.retention_families && data.retention_families.length > 0) {
+    // Show first few families
+    const shown = data.retention_families.slice(0, 10);
+    for (const f of shown) {
+      const hint = f.terminal_count > 0 ? '(' + f.active_count + ' active, ' + f.terminal_count + ' term)' : '';
+      lines.push(formatKeyValue('  ' + f.name, f.current_count + ' ' + hint + ' ' + f.bytes_h));
+    }
+    if (data.retention_families.length > 10) {
+      lines.push(formatKeyValue('  ...', data.retention_families.length + ' total families'));
+    }
+  }
 
   // ── TUI Provider ──
   if (data.tui_provider) {
