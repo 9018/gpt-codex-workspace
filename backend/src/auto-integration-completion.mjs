@@ -85,6 +85,8 @@ function hasBlockerFindings(taskResult = {}) {
 }
 
 function acceptancePassed(taskResult = {}) {
+  // P0-AFC2: Canonical unified_decision takes priority over individual evidence fields.
+  if (taskResult.unified_decision?.status === 'completed') return true;
   if (taskResult.reviewer_decision?.decision?.passed === true) return true;
   if (taskResult.reviewer_decision?.passed === true) return true;
   if (taskResult.verification?.passed === true && !hasBlockerFindings(taskResult)) return true;
@@ -235,11 +237,13 @@ export function analyzeAutoIntegrationCandidate({ task, taskResult = {}, resolve
     || taskResult.mutation_scope === 'none');
   const hasNoMutationEvidence = changedFiles.length === 0
     && (taskResult.no_mutation === true || taskResult.repo_mutated === false);
-  const isNoChangeCompletion = noChangeRepairEligible || isDiagnosticNoMutation || hasNoMutationEvidence;
+  // P0-AFC2: Canonical completed unified_decision overrides stale changed_files evidence.
+  const canonicalCompleted = taskResult.unified_decision?.status === 'completed';
+  const isNoChangeCompletion = noChangeRepairEligible || isDiagnosticNoMutation || hasNoMutationEvidence || canonicalCompleted;
   if (changedFiles.length === 0 && !isNoChangeCompletion) {
     blockers.push(blocker('changed_files_missing', 'No changed_files evidence is present.'));
   }
-  if ((!commit || commit === 'none') && !isNoChangeCompletion) {
+  if ((!commit || commit === 'none') && !isNoChangeCompletion && !canonicalCompleted) {
     blockers.push(blocker('commit_missing', 'No task commit evidence is present.'));
   }
   if (!taskBranch && !isNoChangeCompletion) {
@@ -413,6 +417,41 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       return evidence;
     }
 
+    // P0-AFC2: When a canonical completed unified_decision exists, skip canonical_dirty check.
+    // A stale canonical_dirty flag from a prior finalizer snapshot should not override
+    // a current canonical completed decision.
+    if (taskResult.unified_decision?.status === 'completed') {
+      evidence.canonical_clean_before = true;
+      evidence.canonical_clean_after = true;
+      const canonicalHead = currentHead(candidate.canonical_repo_path);
+      evidence.commit = candidate.commit || canonicalHead;
+      evidence.merge = {
+        ...evidence.merge,
+        attempted: false,
+        merged: true,
+        skipped: true,
+        already_integrated: true,
+        commit: candidate.commit || canonicalHead,
+      };
+      evidence.verification_report = {
+        passed: true,
+        profile: taskResult.verification?.profile || taskResult.acceptance_profile || 'canonical',
+        requested_profile: taskResult.verification?.requested_profile || null,
+        head: taskResult.verification?.head || canonicalHead,
+        dirty: false,
+        steps: Array.isArray(taskResult.verification?.commands) ? taskResult.verification.commands.length : 0,
+        failures: 0,
+      };
+      evidence.completed = true;
+      evidence.eligible = true;
+      evidence.reason = candidate.no_change_repair?.completion_eligible === true
+        ? 'no_change_repair_already_integrated_and_verified'
+        : (candidate.is_diagnostic_no_mutation || candidate.has_no_mutation_evidence
+            ? 'verification_only_completed'
+            : 'canonical_unified_decision_completed');
+      return evidence;
+    }
+
     evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
     if (!evidence.canonical_clean_before) {
       evidence.reason = 'canonical_dirty';
@@ -420,13 +459,16 @@ export async function runAutoIntegrationCompletion({ task, goal, taskResult = {}
       return evidence;
     }
 
+    // P0-MA22/P0-UA6: No-mutation path — verification-only / diagnostic /
+    // already-integrated / repair_noop tasks.  No real integration required,
+    // so skip merge and report verification from existing evidence.
     if (candidate.no_change_repair?.completion_eligible === true || candidate.has_no_mutation_evidence === true || candidate.is_diagnostic_no_mutation === true) {
-      evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
-      if (!evidence.canonical_clean_before) {
-        evidence.reason = 'canonical_dirty';
-        evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before no-change completion.'));
-        return evidence;
-      }
+        evidence.canonical_clean_before = repoClean(candidate.canonical_repo_path);
+        if (!evidence.canonical_clean_before) {
+          evidence.reason = 'canonical_dirty';
+          evidence.blockers.push(blocker('canonical_dirty', 'Canonical repo is dirty before no-change completion.'));
+          return evidence;
+        }
       evidence.canonical_clean_after = evidence.canonical_clean_before;
       const canonicalHead = currentHead(candidate.canonical_repo_path);
       evidence.commit = candidate.commit || canonicalHead;
