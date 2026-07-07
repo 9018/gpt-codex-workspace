@@ -61,13 +61,12 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
   }),
   docs_only: profile({
     intent: { operation_kind: "docs_only", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
-    requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
+    requirements: { requires_commit: true, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "docs", fallback_profile: "changed", required_commands: ["docs_check"], required_reports: ["changed_files", "commit"] },
     blocking_requirements: [
       req("docs_changed", "Documentation-only files changed as requested.", ["changed_files"]),
       req("commit_present", "A commit hash for the documentation update is reported.", ["commit"]),
       req("docs_verification", "A lightweight docs verification or rationale is reported.", ["tests", "verification.commands"]),
-      req("integration_completed", "Required local integration or ff-only handoff is completed when applicable.", ["integration", "remote_head"])
     ]
   }),
   config_change: profile({
