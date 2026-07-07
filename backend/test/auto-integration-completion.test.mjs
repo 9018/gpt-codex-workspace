@@ -606,3 +606,136 @@ test('runAutoIntegrationCompletion fails if report head does not match canonical
     rmSync(fixture.root, { recursive: true, force: true });
   }
 });
+
+// ============================================================
+// P0-MA22 / P0-UA6: Verification-Only / No-Mutation Closure
+// ============================================================
+
+test('analyzeAutoIntegrationCandidate verification_only + changed_files=[] + commit=none + verification passed → is_diagnostic_no_mutation=true, no commit_missing blocker', () => {
+  const taskResult = {
+    status: 'completed',
+    summary: 'verification-only task',
+    operation_kind: 'verification_only',
+    changed_files: [],
+    commit: 'none',
+    local_head: null,
+    verification: { passed: true, findings: [] },
+    reviewer_decision: { decision: { passed: true, status: 'accepted' } },
+    acceptance_findings: [],
+  };
+  const integrationResult = { ok: true, status: 'branch_pushed', merged: false, pushed: true };
+  const resolvedRepo = {
+    repo_id: 'github.com/acme/repo',
+    canonical_repo_path: '/tmp/fake-canonical',
+    task_worktree_path: null,
+    worktree_lifecycle: { mode: 'non_worktree', ok: true, worktree_path: null, branch_name: null, base_sha: null },
+  };
+
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_verification_only', goal_id: 'goal_verification_only' },
+    taskResult,
+    resolvedRepo,
+    integrationResult,
+  });
+
+  // Should be eligible (no blockers for changed_files_missing, commit_missing, worktree)
+  assert.equal(candidate.is_diagnostic_no_mutation, true, 'should identify as diagnostic no-mutation');
+  assert.equal(candidate.has_no_mutation_evidence, false, 'no explicit no_mutation flag is set');
+  assert.equal(candidate.eligible, true, 'should be eligible for auto integration completion');
+
+  // Verify no changed_files_missing or commit_missing blockers
+  const blockerCodes = candidate.blockers.map(b => b.code);
+  assert.equal(blockerCodes.includes('changed_files_missing'), false, 'should not block on changed_files_missing for verification_only');
+  assert.equal(blockerCodes.includes('commit_missing'), false, 'should not block on commit_missing for verification_only');
+  assert.equal(blockerCodes.includes('worktree_mode_not_git_worktree'), false, 'should not block on worktree mode for verification_only');
+  assert.equal(blockerCodes.includes('task_worktree_missing'), false, 'should not block on missing worktree for verification_only');
+});
+
+test('analyzeAutoIntegrationCandidate code_change + changed_files non-empty + commit missing → commit_missing blocker', () => {
+  const taskResult = {
+    status: 'completed',
+    summary: 'code change task',
+    operation_kind: 'code_change',
+    changed_files: ['src/app.mjs'],
+    commit: null,
+    local_head: null,
+    verification: { passed: true },
+    reviewer_decision: { decision: { passed: true, status: 'accepted' } },
+    acceptance_findings: [],
+  };
+  const integrationResult = { ok: true, status: 'branch_pushed', merged: false };
+  const resolvedRepo = {
+    repo_id: 'github.com/acme/repo',
+    canonical_repo_path: '/tmp/fake-canonical',
+    task_worktree_path: '/tmp/fake-worktree',
+    worktree_lifecycle: { mode: 'git_worktree', ok: true, worktree_path: '/tmp/fake-worktree', branch_name: 'gptwork/task/code', base_sha: 'abc123' },
+  };
+
+  const candidate = analyzeAutoIntegrationCandidate({
+    task: { id: 'task_code_change', goal_id: 'goal_code_change' },
+    taskResult,
+    resolvedRepo,
+    integrationResult,
+  });
+
+  assert.equal(candidate.is_diagnostic_no_mutation, false, 'should NOT be diagnostic no-mutation');
+  assert.equal(candidate.eligible, false, 'should NOT be eligible');
+  const blockerCodes = candidate.blockers.map(b => b.code);
+  assert.equal(blockerCodes.includes('commit_missing'), true, 'should block on commit_missing for code_change');
+  assert.equal(blockerCodes.includes('changed_files_missing'), false, 'should not block on changed_files_missing because changed_files is non-empty');
+});
+
+test('runAutoIntegrationCompletion verification_only + changed_files=[] + commit=none + verification passed → verification_only_completed without commit required', async () => {
+  const { mkdtempSync, writeFileSync, mkdirSync } = await import('node:fs');
+  const { join } = await import('node:path');
+  const { tmpdir } = await import('node:os');
+  const { execFileSync } = await import('node:child_process');
+
+  // Create minimal git repo for canonical path
+  const root = mkdtempSync(join(tmpdir(), 'gptwork-verification-only-'));
+  const canonical = join(root, 'canonical');
+  mkdirSync(canonical, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: canonical, encoding: 'utf8', stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'test@example.com'], { cwd: canonical, encoding: 'utf8', stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: canonical, encoding: 'utf8', stdio: 'ignore' });
+  const base = execFileSync('git', ['commit', '--allow-empty', '-m', 'base'], { cwd: canonical, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+
+  try {
+    const result = await runAutoIntegrationCompletion({
+      task: { id: 'task_verification_only_run', goal_id: 'goal_verification_only_run' },
+      goal: { id: 'goal_verification_only_run' },
+      taskResult: {
+        status: 'completed',
+        summary: 'verification-only run',
+        operation_kind: 'verification_only',
+        changed_files: [],
+        commit: 'none',
+        local_head: null,
+        verification: { passed: true, commands: [{ cmd: 'check:syntax', exit_code: 0, passed: true }], profile: 'verification_only', findings: [] },
+        reviewer_decision: { decision: { passed: true, status: 'accepted' } },
+        acceptance_findings: [],
+      },
+      resolvedRepo: {
+        repo_id: 'github.com/acme/repo',
+        canonical_repo_path: canonical,
+        task_worktree_path: null,
+        worktree_lifecycle: { mode: 'non_worktree', ok: true, worktree_path: null, branch_name: null, base_sha: base },
+      },
+      integrationResult: { ok: true, status: 'branch_pushed', merged: false },
+      config: {},
+      runCommandFn: async () => ({ returncode: 0, stdout: '', stderr: '' }),
+    });
+
+    assert.equal(result.attempted, true, 'should be attempted');
+    assert.equal(result.completed, true, 'should complete without a real commit');
+    assert.equal(result.reason, 'verification_only_completed', 'reason should be verification_only_completed');
+    assert.equal(result.eligible, true, 'should be eligible');
+    assert.equal(result.merge.skipped, true, 'merge should be skipped (no real integration needed)');
+    assert.equal(result.merge.merged, true, 'merge should report as merged (no-op)');
+    assert.equal(result.verification_report.passed, true, 'verification report should be passed');
+    assert.equal(result.verification_report.profile, 'verification_only', 'verification profile should be verification_only');
+    assert.equal(result.blockers.length, 0, 'should have no blockers');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
