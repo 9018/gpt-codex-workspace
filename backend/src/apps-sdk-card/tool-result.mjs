@@ -117,9 +117,9 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     if (base.status) card.status = base.status;
   }
   const legacy = card ? legacyFieldsFromCard(card) : {};
-  return {
-    ...base,
-    ...(card ? { card } : {}),
+
+  // Build modelPayload — bounded data for ChatGPT, NOT the raw base spread
+  const modelPayload = {
     gptwork_tool: name,
     gptwork_title: title,
     summary: card?.summary || base.summary || auto.summary,
@@ -127,8 +127,30 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     gptwork_type: "tool_result",
     gptwork_payload_hash: hash,
     gptwork_card_instance_id: `${name}:${hash}`,
-    ...(legacy.keyValues ? { keyValues: base.keyValues || legacy.keyValues } : {}),
-    ...(legacy.items ? { items: base.items || legacy.items } : {}),
+    rawAvailable: true,
+  };
+
+  // Include essential fields the model needs to reason about results
+  if (base.ok !== undefined) modelPayload.ok = base.ok;
+  if (base.results !== undefined) modelPayload.results = base.results;
+
+  // Legacy compat fields — bounded, sourced from card view model, never raw base
+  if (legacy.keyValues) {
+    modelPayload.keyValues = base.keyValues || legacy.keyValues;
+  }
+  if (legacy.items) {
+    modelPayload.items = base.items || legacy.items;
+  }
+
+  // Backward compat: embed card inside modelPayload for v5 widget
+  if (card) {
+    modelPayload.card = card;
+  }
+
+  return {
+    modelPayload,
+    cardPayload: card || null,
+    rawAvailable: true,
   };
 }
 
@@ -141,20 +163,32 @@ export function toolResultMeta(name, toolDescriptor) {
 }
 
 export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, summarizeToolResult }) {
-  const structuredContent = toolResultMeta(name, toolDescriptor)
+  const tagged = toolResultMeta(name, toolDescriptor)
     ? tagToolResult(name, toolDescriptor, rawStructuredContent)
-    : rawStructuredContent;
+    : null;
+
+  const modelPayload = tagged ? tagged.modelPayload : rawStructuredContent;
+  const cardPayload = tagged ? tagged.cardPayload : undefined;
+
   const summary = typeof summarizeToolResult === "function"
-    ? summarizeToolResult(name, structuredContent)
-    : structuredContent?.card
-      ? renderCardText(structuredContent.card)
-      : JSON.stringify(structuredContent);
+    ? summarizeToolResult(name, modelPayload)
+    : modelPayload?.card
+      ? renderCardText(modelPayload.card)
+      : JSON.stringify(modelPayload);
+
   const result = {
     content: [{ type: "text", text: summary }],
-    structuredContent,
+    structuredContent: modelPayload,
     isError: false,
   };
+
   const meta = toolResultMeta(name, toolDescriptor);
-  if (meta) result._meta = meta;
+  if (meta) {
+    result._meta = {
+      ...meta,
+      ...(cardPayload ? { gptwork_card: cardPayload } : {}),
+    };
+  }
+
   return result;
 }
