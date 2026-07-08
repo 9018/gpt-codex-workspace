@@ -85,7 +85,7 @@ GPTWork routes execution through configurable backends per agent role. The defau
 | context_curator | `null` | auto_artifact | Context bundle prepared from task metadata. |
 | planner | `null` | auto_artifact | Plan determined from context/prompt files. |
 
-`codex_tui_goal` is available as an **explicit operator fallback** only — never automatic. When enabled, the operator works interactively in a terminal session and must collect durable evidence (commit, tests, result.md) before the acceptance gate can close the task.
+`codex_tui_goal` is available as an **explicit operator fallback** only — never automatic. When enabled, the operator works interactively in a terminal session and must write durable `result.json` evidence, with commit/tests/result.md evidence where applicable. Once `result.json` is collected, the worker normalizes it into a standard taskResult and continues through the same verifier, acceptance, integration, finalizer, and queue auto-start path as `codex_exec`.
 
 ### Runtime Environment Variables
 

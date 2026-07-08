@@ -95,7 +95,7 @@ AGENT_BACKEND_SEMANTIC 将每个角色的后端执行分为四种层级（`agent
 
 ## 概述
 
-`codex_tui_goal` 是 **人工 operator fallback** 模式，不是全自动执行替代品。与 `codex_exec` 不同，TUI 模式启动一个交互式终端会话，由人工 operator 在终端中逐步工作。
+`codex_tui_goal` 是 **人工 operator fallback** 模式，不是全自动执行替代品。与 `codex_exec` 不同，TUI 模式启动一个交互式终端会话，由人工 operator 在终端中逐步工作；operator 写入 durable evidence 后，worker 会把 TUI evidence 规范化为标准 taskResult，并继续进入与 `codex_exec` 相同的 verifier、acceptance gate、integration、finalizer、queue auto-start 闭环。
 
 ## 模式语义对比
 
@@ -103,32 +103,37 @@ AGENT_BACKEND_SEMANTIC 将每个角色的后端执行分为四种层级（`agent
 |------|--------------------------|-------------------------------|
 | 自动化程度 | 全自动，无需人工干预 | 人工驱动，operator 在终端中操作 |
 | 启动方式 | `codex exec` CLI 自动执行 | 交互式 PTY 会话 |
-| 证据收集 | 自动产生结构化 result.json/result.md | 需要 operator 主动写入 result.md |
-| 验收闭环 | 自动进入 closure/acceptance 流程 | 需要先收集 durable evidence |
+| 证据收集 | 自动产生结构化 result.json/result.md | 需要 operator 主动写入 result.json，建议同时写 result.md |
+| 验收闭环 | 自动进入 closure/acceptance 流程 | result.json 收集后自动进入同一 closure/acceptance/integration/finalizer 流程 |
 | 适用场景 | 标准编码/验证任务 | 复杂调试、人工审查、实验性操作 |
 
 ## 从 TUI evidence 回到验收闭环的路径
 
-TUI 模式完成工作需要以下 durable evidence 才能进入验收闭环：
+TUI 模式完成工作需要以下 durable evidence 才能进入统一验收闭环：
 
-1. **result.md**: 必须存在于 `.gptwork/goals/{goal_id}/result.md`，包含任务摘要
-2. **commit**: 可通过 result.md 的 `Commit:` 字段或 session 元数据提供
-3. **Tests**: 可通过 result.md 的 `Tests:` 或 `Verification:` 字段提供
-4. **Clean worktree**: 所有变更应已提交，worktree 无未跟踪更改
+1. **result.json**: 必须存在于 `.gptwork/goals/{goal_id}/result.json`，优先作为标准 taskResult 输入
+2. **result.md**: 建议存在于 `.gptwork/goals/{goal_id}/result.md`，作为人工可读摘要和补充证据
+3. **commit**: 可通过 result.json、result.md 的 `Commit:` 字段或 session 元数据提供
+4. **Tests**: 可通过 result.json、result.md 的 `Tests:` 或 `Verification:` 字段提供
+5. **Clean worktree**: 所有变更应已提交，worktree 无未跟踪更改
 
-当 `collectCodexTuiCompletion()` 返回 `ready_for_review=true` 时，表示 evidence 链完整，可以进入验收流程。
+当 evidence cycle 收集到有效 `result.json` 时，worker 不再以 TUI collection result 作为终态提前返回，而是调用 TUI evidence adapter 补齐 `status`、`summary`、`changed_files`、`tests`、`commit`、`verification`、`execution_backend`、`provider`、`session_id`、`tui_phase`，然后继续执行标准 result contract validation、acceptance agent、integration queue、finalizer 和 queue auto-start。
 
 ### Evidence 链检查点
 
 ```
 TUI 会话完成 → collectCodexTuiCompletion()
-  ├─ result.md 存在？→ 继续
+  ├─ result.json 存在且有效？→ 继续统一闭环
+  ├─ result.md 存在？→ 补充人工可读证据
   ├─ worktree clean？→ 继续
   ├─ commit 证据存在？→ 继续
-  └─ ready_for_review=true → 进入验收闭环
+  └─ evidence_ready=true → verifier/acceptance/integration/finalizer
 ```
 
-如果 evidence 不完整（例如缺少 commit 或 dirty worktree），`findings` 会包含精确的 blocking reason：
+如果缺少 `result.json`，任务进入 `waiting_for_review`，并保留 `session_id`、`expected_result_json`、`finding`、`collect_result` 以便 operator 继续补证；repo lock 会释放，避免永久锁死。如果 evidence 已收集但包含 dirty worktree 等 blocker，任务会通过统一 acceptance/finalizer 路径进入 blocker/review，而不是绕过验收。
+
+常见 blocking reason：
+- `tui_result_json_missing`: result.json 不存在，等待 operator 补证
 - `result_md_missing`: result.md 不存在
 - `dirty_worktree`: TUI worktree 有未提交变更
 - `commit_missing`: 存在 dirty work 但没有 commit 证据

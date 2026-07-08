@@ -74,7 +74,7 @@ gptwork init --production   # 一键初始化+生产 profile 验证
 
 生产默认执行后端是 `codex_exec`（自动 Codex 执行路径），适用于 builder 和 repairer 角色。verifier 和 reviewer 角色默认使用 `local_command` 后端，在本地运行确定性命令（如 `npm test`）。integrator 和 finalizer 使用 `null` 后端，其 artifact 完全从任务结果证据推导，无需 Agent 执行。
 
-`codex_tui_goal` 是 **显式 Operator fallback**——仅操作员手动选择，不会自动降级到 TUI。Operator 需要在终端会话中交互式工作，并收集可提交的 evidence（commit、tests、result.md）才能进入验收/关闭循环。
+`codex_tui_goal` 是 **显式 Operator fallback**——仅操作员手动选择，不会自动降级到 TUI。Operator 需要在终端会话中交互式工作，并写入 durable evidence（result.json，建议同时包含 commit、tests、result.md）；result.json 被收集后会规范化为标准 taskResult，继续进入与 `codex_exec` 相同的 verifier、acceptance、integration、finalizer 和 queue auto-start 闭环。
 
 ### 本地检查
 
@@ -386,4 +386,3 @@ MIT
 - **Init/Onboarding**: `gptwork init / doctor --local / fix` 产品化流程。
 - **Retention**: `retentionCleanup` 支持 git 分支修剪、worktree 诊断、storage_pressure 门禁。
 - **Status Dashboard**: `product_status` 单命令面板。
-
