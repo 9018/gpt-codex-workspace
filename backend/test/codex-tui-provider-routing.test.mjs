@@ -205,6 +205,7 @@ test("codex_tui_goal missing result.json remains waiting_for_review with recover
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-missing-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
 
+
   const result = await processGeneralTaskWithDeps(store, { defaultWorkspaceRoot: root, defaultRepoPath: root, enableTaskWorktrees: true, codexTuiEnabled: true }, store.state.tasks[0], {}, {}, baseDeps(root, {
     startCodexTuiGoalSessionFn: async (args) => ({ id: "session_missing", task_id: args.task.id, goal_id: args.goal.id, cwd: args.cwd, status: "running" }),
   }));
