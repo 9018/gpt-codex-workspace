@@ -555,11 +555,26 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       return pluginMissingResult;
     }
 
+    // Acquire repo lock before starting TUI session
+    const tuiLockPath = executionCwd || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath;
+    let tuiLockAcquired = false;
+    if (tuiLockPath) {
+      const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, tuiLockPath, {
+        taskId: task.id,
+        runId: null,
+        mode: task.mode || "tui",
+      });
+      if (lockResult.acquired) {
+        tuiLockAcquired = true;
+        repoLockPath = tuiLockPath;
+      }
+    }
+
     const session = await startCodexTuiGoalSessionFn({
       task,
       goal,
       cwd: executionCwd,
-      repoLockId: null,
+      repoLockId: tuiLockAcquired ? repoLockPath : null,
     });
 
     const sessionStartedResult = {
@@ -608,6 +623,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     });
 
     if (!collected?.evidence_ready) {
+      // Release repo lock on evidence failure
+      if (tuiLockAcquired && tuiLockPath) {
+        try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch { /* non-fatal */ }
+      }
       await updateTaskFn(store, task.id, (item) => {
         item.status = "waiting_for_review";
         item.result = {

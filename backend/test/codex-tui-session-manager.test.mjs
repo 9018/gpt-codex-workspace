@@ -33,6 +33,8 @@ function makeFakeAdapter() {
     async spawn(options) {
       spawns.push(options);
       onData = options.onData;
+      // Emit a ready signal so waitForTuiOutput can detect TUI readiness
+      setTimeout(() => onData?.("TUI ready \x1b[1m$\x1b[0m "), 10);
       return {
         pid: 99,
         write(text) { writes.push(text); },
@@ -56,15 +58,17 @@ test("start creates session, spawns codex, sends bootstrap messages, and logs ou
   assert.equal(session.status, "running");
   assert.equal(session.task_id, "task_1");
   assert.equal(session.goal_id, "goal_1");
+  assert.ok(session.first_output_at, "first_output_at should be set when TUI produces output");
   assert.equal(fakeAdapter.spawns.length, 1);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
+  // Bootstrap flow: writes[0]=/goal msg, writes[1]=\n, writes[2]=followup, writes[3]=\n
   assert.match(fakeAdapter.writes[0], /^\/goal /);
   assert.match(fakeAdapter.writes[0], /goal_id=goal_1/);
-  assert.match(fakeAdapter.writes[1], /codex\.entry\.md/);
+  assert.match(fakeAdapter.writes[1], /^\n$/);
+  assert.match(fakeAdapter.writes[2], /codex\.entry\.md/);
 
-  fakeAdapter.emitData("hello from tui");
   const read = await readCodexTuiSession(session.id);
-  assert.match(read.log, /hello from tui/);
+  assert.match(read.log, /TUI ready/);
 });
 
 test("manager sends input, reads status, and stops sessions safely", async () => {

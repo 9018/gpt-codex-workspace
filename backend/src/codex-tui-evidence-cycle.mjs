@@ -40,9 +40,12 @@ export async function runCodexTuiEvidenceCycle({
     return {
       evidence_ready: false,
       reason: "tui_result_json_missing",
+      status: "not_ready",
       session_id: sessionId,
       goal_id: goal.id,
       task_id: task?.id || null,
+      expected_result_json: resultJsonPath,
+      expected_result_md: join(workspaceRoot, ".gptwork", "goals", goal.id, "result.md"),
       finding: {
         severity: "major",
         code: "tui_result_json_missing",
@@ -55,6 +58,7 @@ export async function runCodexTuiEvidenceCycle({
   return {
     evidence_ready: true,
     reason: "tui_result_json_collected",
+    status: "ready",
     session_id: sessionId,
     goal_id: goal.id,
     task_id: task?.id || null,
