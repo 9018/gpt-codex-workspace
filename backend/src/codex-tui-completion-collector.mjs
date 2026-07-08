@@ -60,6 +60,15 @@ function resultMarkdownEvidence(text) {
   };
 }
 
+function parseResultJson(text) {
+  if (!text) return { value: null, error: null };
+  try {
+    return { value: JSON.parse(text), error: null };
+  } catch (err) {
+    return { value: null, error: err?.message || "invalid JSON" };
+  }
+}
+
 export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {}) {
   if (!sessionId) throw new Error("sessionId is required");
   if (!workspaceRoot) throw new Error("workspaceRoot is required");
@@ -69,9 +78,13 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const cwd = session.cwd || workspaceRoot;
   const goalId = session.goal_id || null;
   const taskId = session.task_id || null;
+  const resultJsonPath = goalId ? join(workspaceRoot, ".gptwork", "goals", goalId, "result.json") : null;
   const resultMdPath = goalId ? join(workspaceRoot, ".gptwork", "goals", goalId, "result.md") : null;
+  const resultJsonPresent = resultJsonPath ? await fileExists(resultJsonPath) : false;
   const resultMdPresent = resultMdPath ? await fileExists(resultMdPath) : false;
+  const resultJsonText = resultJsonPresent ? await readFile(resultJsonPath, "utf8") : "";
   const resultMdText = resultMdPresent ? await readFile(resultMdPath, "utf8") : "";
+  const parsedResultJson = parseResultJson(resultJsonText);
   const resultEvidence = resultMarkdownEvidence(resultMdText);
 
   const statusLines = gitLines(cwd, ["status", "--short"]);
@@ -79,12 +92,15 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const diffFiles = gitLines(cwd, ["diff", "--name-only"]);
   const changedFiles = [...new Set([...statusChangedFiles, ...diffFiles].filter((path) => !isInternalEvidencePath(path)))].sort();
   const worktreeClean = changedFiles.length === 0;
-  const commit = session.commit || session.metadata?.commit || resultEvidence.commit || null;
-  const tests = session.tests || session.metadata?.tests || resultEvidence.tests || null;
+  const commit = session.commit || session.metadata?.commit || parsedResultJson.value?.commit || resultEvidence.commit || null;
+  const tests = session.tests || session.metadata?.tests || parsedResultJson.value?.tests || parsedResultJson.value?.verification?.commands || resultEvidence.tests || null;
 
   const findings = [];
   if (!resultMdPresent) {
     findings.push({ code: "result_md_missing", severity: "blocker", message: "result.md is not present for the TUI goal." });
+  }
+  if (resultJsonPresent && parsedResultJson.error) {
+    findings.push({ code: "result_json_invalid", severity: "blocker", message: parsedResultJson.error });
   }
   if (!worktreeClean) {
     findings.push({ code: "dirty_worktree", severity: "blocker", message: "The TUI worktree has uncommitted changes." });
@@ -101,7 +117,13 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     changed_files: changedFiles,
     tests,
     commit,
+    result_json: parsedResultJson.value,
+    result_json_present: resultJsonPresent,
+    result_json_valid: resultJsonPresent ? !parsedResultJson.error : false,
+    result_json_error: parsedResultJson.error,
+    result_json_path: resultJsonPath,
     result_md_present: resultMdPresent,
+    result_md_path: resultMdPath,
     worktree_clean: worktreeClean,
     ready_for_review: resultMdPresent && worktreeClean && Boolean(commit) && findings.length === 0,
     findings,
