@@ -191,10 +191,40 @@ test("CLI connect --local shows connection options", () => {
 
 test("package.json contains release:check script", () => {
   const pkg = JSON.parse(readFileSync(join(BACKEND_ROOT, "package.json"), "utf8"));
-  assert.ok(pkg.scripts["release:check"], "release:check script must exist");
-  assert.ok(pkg.scripts["release:check"].includes("check:syntax"), "must include check:syntax");
-  assert.ok(pkg.scripts["release:check"].includes("check:imports"), "must include check:imports");
-  assert.ok(pkg.scripts["release:check"].includes("test:e2e-acceptance"), "must include test:e2e-acceptance");
+  const releaseCheck = pkg.scripts["release:check"] || "";
+  assert.ok(releaseCheck, "release:check script must exist");
+  for (const requiredScript of [
+    "check:syntax",
+    "check:imports",
+    "test:release-scripts",
+    "release:gate",
+    "test:p0-ma9",
+    "test:p0-p5",
+    "release:p5:gate",
+  ]) {
+    assert.ok(releaseCheck.includes(requiredScript), `must include ${requiredScript}`);
+  }
+});
+
+test("package release scripts reference existing scripts and tests", () => {
+  const pkg = JSON.parse(readFileSync(join(BACKEND_ROOT, "package.json"), "utf8"));
+  assert.ok(pkg.scripts["test:release-scripts"], "test:release-scripts script must exist");
+
+  for (const [name, command] of Object.entries(pkg.scripts)) {
+    if (!/^(check|release|test:)/.test(name)) continue;
+
+    const scriptRefs = [...command.matchAll(/\bnode\s+(?:--check\s+)?(?:[^\s]+\s+)*scripts\/[^\s'"]+/g)]
+      .map(match => match[0].split(/\s+/).at(-1));
+    const testRefs = [...command.matchAll(/\btest\/[A-Za-z0-9._/-]+\.mjs\b/g)].map(match => match[0]);
+
+    for (const relativePath of [...scriptRefs, ...testRefs]) {
+      if (relativePath.includes("*")) continue;
+      assert.ok(
+        existsSync(join(BACKEND_ROOT, relativePath)),
+        `${name} references missing file ${relativePath}`,
+      );
+    }
+  }
 });
 
 // ── 8. CLI doctor --local shows key info ───────────────────────────
