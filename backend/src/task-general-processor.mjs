@@ -22,6 +22,7 @@ import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergence.mjs";
 import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
 import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
+import { runCodexTuiEvidenceCycle } from "./codex-tui-evidence-cycle.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
@@ -467,9 +468,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       cwd: executionCwd,
       repoLockId: null,
     });
-    const startedResult = {
+
+    const sessionStartedResult = {
       kind: "codex_tui_session_started",
       provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+      execution_backend: "codex_tui_superpowers",
+      tui_phase: "session_started",
       status: "waiting_for_review",
       task_id: task.id,
       goal_id: goal.id,
@@ -478,13 +482,22 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       commit: "none",
       changed_files: [],
       tests: null,
-      followup: "Use codex_tui_status/read/send/stop to drive the session, then codex_tui_collect to gather durable completion evidence.",
+      verification: {
+        passed: false,
+        findings: [{
+          severity: "major",
+          code: "tui_evidence_missing",
+          message: "Codex TUI session started, but durable result evidence has not been collected yet.",
+        }],
+      },
     };
+
     await updateTaskFn(store, task.id, (item) => {
       item.status = "waiting_for_review";
-      item.result = startedResult;
+      item.result = sessionStartedResult;
       item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal session started: ${session.id}` });
     });
+
     if (goal) {
       await appendGoalMessageFn(store, config, {
         goal_id: goal.id,
@@ -492,7 +505,44 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         content: `[worker] Codex TUI goal session started for task ${task.id}: ${session.id}`,
       }, context);
     }
-    return startedResult;
+
+    // P2: Evidence collect loop — wait for result.json, then collect durable evidence.
+    const collected = await runCodexTuiEvidenceCycle({
+      task,
+      goal,
+      sessionId: session.id,
+      workspaceRoot: config.defaultWorkspaceRoot,
+      maxWaitMs: config.codexTuiEvidenceWaitMs ?? 120_000,
+    });
+
+    if (!collected?.evidence_ready) {
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = "waiting_for_review";
+        item.result = {
+          ...sessionStartedResult,
+          tui_phase: "blocked_missing_evidence",
+          verification: {
+            passed: false,
+            findings: [collected?.finding || {
+              severity: "major",
+              code: "tui_result_json_missing",
+              message: "Result evidence not collected after TUI session start.",
+            }],
+          },
+          collect_result: collected,
+        };
+        item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal evidence missing: ${collected?.reason || "unknown"}` });
+      });
+      return {
+        kind: "codex_tui_awaiting_evidence",
+        status: "waiting_for_review",
+        session_id: session.id,
+        reason: collected?.reason || "result evidence missing",
+      };
+    }
+
+    // Evidence collected — continue through normal acceptance/finalizer path.
+    return collected;
   }
 
   if (goal) {

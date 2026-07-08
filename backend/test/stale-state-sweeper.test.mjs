@@ -735,3 +735,31 @@ test("sweeper: applySweepActions handles empty sweep actions", async () => {
   assert.equal(result.applied, 0);
   assert.equal(result.errors.length, 0);
 });
+
+test("sweeper: TUI session-started task without durable evidence is not force-completed", () => {
+  const staleThresholdMs = 300_000;
+  const now = Date.now();
+  const actions = sweepStaleTaskStates({
+    tasks: [{
+      id: "review_stale_tui_session_only",
+      status: "waiting_for_review",
+      updated_at: new Date(now - staleThresholdMs * 4).toISOString(),
+      metadata: {
+        codex_execution_provider: "codex_tui_goal",
+        execution_backend: "codex_tui_superpowers",
+      },
+      result: {
+        kind: "codex_tui_session_started",
+        provider: "codex_tui_goal",
+        session_id: "goal_x_task_y",
+        changed_files: [],
+        tests: null,
+        commit: "none",
+      },
+    }],
+    now,
+    staleThresholdMs,
+  });
+
+  assert.equal(actions.length, 0);
+});

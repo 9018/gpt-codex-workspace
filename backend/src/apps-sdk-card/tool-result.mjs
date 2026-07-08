@@ -162,10 +162,10 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
 
   // Legacy compat fields — bounded, sourced from card view model, never raw base
   if (legacy.keyValues) {
-    modelPayload.keyValues = base.keyValues || legacy.keyValues;
+    modelPayload.keyValues = legacy.keyValues;
   }
   if (legacy.items) {
-    modelPayload.items = base.items || legacy.items;
+    modelPayload.items = legacy.items;
   }
 
   // Backward compat: embed card inside modelPayload for v5 widget

@@ -3,6 +3,11 @@ export const CODEX_EXECUTION_PROVIDERS = Object.freeze({
   TUI_GOAL: "codex_tui_goal",
 });
 
+export const AGENT_TUI_PROVIDERS = Object.freeze({
+  CODEX: "codex_tui_goal",
+  CLAUDE: "claude_tui_goal",
+});
+
 export function normalizeCodexExecutionProvider(value) {
   const provider = String(value || "").trim();
   if (provider === CODEX_EXECUTION_PROVIDERS.TUI_GOAL) return CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
@@ -17,6 +22,16 @@ export function taskUsesCodexTuiGoal(task) {
 export function isCodexTuiEnabled(config = {}, env = process.env) {
   const explicit = config.codexTuiEnabled ?? config.codex_tui_enabled ?? env.GPTWORK_CODEX_TUI_ENABLED;
   return String(explicit || "").trim().toLowerCase() === "true";
+}
+
+export function isClaudeTuiEnabled(config = {}, env = process.env) {
+  const explicit = config.claudeTuiEnabled ?? config.claude_tui_enabled ?? env.GPTWORK_CLAUDE_TUI_ENABLED;
+  return String(explicit || "").trim().toLowerCase() === "true";
+}
+
+export function getClaudeTuiConfig(config = {}, env = process.env) {
+  const command = config.claudeTuiCommand || env.GPTWORK_CLAUDE_TUI_COMMAND || "claude";
+  return { command };
 }
 
 // ---------------------------------------------------------------------------

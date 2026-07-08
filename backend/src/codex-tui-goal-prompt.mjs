@@ -10,22 +10,34 @@ export function buildCodexTuiGoalObjective({ goalId, taskTitle } = {}) {
   const id = String(goalId || "").trim();
   if (!id) throw new Error("goalId is required");
   const title = compactText(taskTitle || "Codex TUI goal", 260);
-  const objective = [
+  return [
     `goal_id=${id}`,
     `task=${title}`,
-    `Read .gptwork/goals/${id}/codex.entry.md first. Execute that bounded entrypoint exactly, write result.json/result.md, and print the legacy STATUS/SUMMARY/CHANGED_FILES/TESTS/COMMIT/REMOTE_HEAD report.`,
-  ].join(" | ");
-  return objective.length < MAX_GOAL_OBJECTIVE_CHARS ? objective : objective.slice(0, MAX_GOAL_OBJECTIVE_CHARS - 1);
+    "",
+    "Use Superpowers for this task.",
+    `Read .gptwork/goals/${id}/codex.entry.md before planning or editing.`,
+    "",
+    "Execution contract:",
+    `- Write .gptwork/goals/${id}/result.json`,
+    `- Write .gptwork/goals/${id}/result.md`,
+    "- Include changed_files, tests, verification, blockers, and commit if any.",
+    "- Do not declare completion until verification-before-completion has been performed.",
+    "- For non-trivial implementation, use Superpowers planning/TDD/subagent/review workflows.",
+    "",
+    "When done, print a concise STATUS/SUMMARY/CHANGED_FILES/TESTS/COMMIT report.",
+  ].join("\n");
 }
 
 export function buildCodexTuiFollowupInstruction({ goalId } = {}) {
   const id = String(goalId || "").trim();
   if (!id) throw new Error("goalId is required");
   return [
-    `Continue goal_id=${id}.`,
-    `Before planning or editing, read .gptwork/goals/${id}/codex.entry.md and follow its execution contract.`,
-    `Write .gptwork/goals/${id}/result.json and result.md when complete.`,
-  ].join(" ");
+    `Continue GPTWork goal_id=${id}.`,
+    "Use Superpowers.",
+    `The entrypoint remains .gptwork/goals/${id}/codex.entry.md.`,
+    `The durable result contract remains .gptwork/goals/${id}/result.json and result.md.`,
+    "If context was compacted, re-read the entrypoint and continue from the current repository state.",
+  ].join("\n");
 }
 
 export function buildCodexTuiBootstrapMessages({ goalId, taskTitle } = {}) {
