@@ -20,6 +20,7 @@ const CARD_ENABLED_TOOLS = new Set([
   "worker_status",
   "list_tasks",
   "get_task",
+  "create_task",
   "create_encoded_goal",
   "preview_codex_context",
   "context_status",
@@ -663,6 +664,7 @@ export function buildCardViewModel(tool, data, meta = {}) {
       return buildListTasksCard(tool, payload, meta);
     case "get_task":
       return buildTaskCard(tool, payload, meta);
+    case "create_task":
     case "create_encoded_goal":
       return buildGoalCreatedCard(tool, payload, meta);
     case "preview_codex_context":
