@@ -66,6 +66,24 @@ async function normalizeRecoveredSessionRecord(store, sessionId, record = null) 
   return current;
 }
 
+function waitForTuiOutput(store, sessionId, readyTimeoutMs = 5_000) {
+  const start = Date.now();
+  const deadline = start + readyTimeoutMs;
+  return new Promise((resolve) => {
+    const poll = () => {
+      if (Date.now() >= deadline) { resolve(null); return; }
+      store.readSession(sessionId, { maxChars: 200 }).then((rec) => {
+        if (rec.log && rec.log.length > 10) {
+          resolve(new Date().toISOString());
+        } else {
+          setTimeout(poll, 300);
+        }
+      }).catch(() => setTimeout(poll, 300));
+    };
+    poll();
+  });
+}
+
 export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = null, ptyAdapter = null } = {}) {
   if (!cwd) throw new Error("cwd is required");
   if (!goal?.id) throw new Error("goal.id is required");
@@ -91,15 +109,24 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
 
   activeSessions.set(sessionId, { store, ptySession });
 
+  // Wait briefly for TUI ready signal before sending bootstrap
+  const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
+
   const messages = buildCodexTuiBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
-  for (const message of messages) ptySession.write(message);
+  const bootstrapSentAt = new Date().toISOString();
+  for (const message of messages) {
+    ptySession.write(message);
+    ptySession.write("\n");
+  }
 
   record = await store.updateSession(sessionId, {
     status: "running",
     pty_pid: ptySession.pid ?? null,
-    started_at: new Date().toISOString(),
+    started_at: bootstrapSentAt,
+    bootstrap_sent_at: bootstrapSentAt,
+    first_output_at: firstOutputAt,
   });
-  return record;
+  return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt };
 }
 
 export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
@@ -116,7 +143,7 @@ export async function sendCodexTuiSessionInput(sessionId, text, options = {}) {
   return store.readSession(sessionId);
 }
 
-export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
+export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots = [], releaseLockFn = null } = {}) {
   const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
   const active = activeSessions.get(sessionId);
   if (active?.ptySession) {
@@ -124,6 +151,10 @@ export async function stopCodexTuiSession(sessionId, { reason = "stopped", works
     activeSessions.delete(sessionId);
   } else {
     await normalizeRecoveredSessionRecord(store, sessionId);
+  }
+  // Release repo lock if a release function was provided
+  if (typeof releaseLockFn === "function") {
+    try { await releaseLockFn(); } catch { /* non-fatal */ }
   }
   return store.updateSession(sessionId, {
     status: "stopped",

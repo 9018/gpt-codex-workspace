@@ -84,6 +84,25 @@ async function normalizeRecoveredSessionRecord(store, sessionId, record = null) 
   return current;
 }
 
+/**
+ * Wait briefly for the TUI process to produce output (indicating it is ready).
+ * Returns the ISO timestamp of first detected output, or null if timed out.
+ */
+async function waitForTuiOutput(sessionId, store, readyTimeoutMs = 5_000) {
+  const start = Date.now();
+  const deadline = start + readyTimeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const record = await store.readSession(sessionId, { maxChars: 200 });
+      if (record.log && record.log.length > 10) {
+        return new Date().toISOString();
+      }
+    } catch { /* session may not have log yet */ }
+    await new Promise((r) => setTimeout(r, 300));
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // Factory
 // ---------------------------------------------------------------------------
@@ -105,7 +124,7 @@ export function createAgentTuiSessionManager({
   if (!createPtyAdapter) throw new Error("createPtyAdapter is required");
   if (!buildBootstrapMessages) throw new Error("buildBootstrapMessages is required");
 
-  const startGoalSession = async ({ task, goal, cwd, repoLockId = null, ptyAdapter = null } = {}) => {
+  const startGoalSession = async ({ task, goal, cwd, repoLockId = null, ptyAdapter = null, releaseLockFn = null } = {}) => {
     if (!cwd) throw new Error("cwd is required");
     if (!goal?.id) throw new Error("goal.id is required");
     const store = createCodexTuiSessionStore({ workspaceRoot: cwd });
@@ -131,15 +150,24 @@ export function createAgentTuiSessionManager({
 
     activeSessions.set(sessionId, { store, ptySession });
 
+    // Wait briefly for TUI to be ready (first output), then send bootstrap
+    const firstOutputAt = await waitForTuiOutput(sessionId, store, 5_000);
+
     const messages = buildBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
-    for (const message of messages) ptySession.write(message);
+    const bootstrapSentAt = new Date().toISOString();
+    for (const message of messages) {
+      ptySession.write(message);
+      ptySession.write("\n");
+    }
 
     record = await store.updateSession(sessionId, {
       status: "running",
       pty_pid: ptySession.pid ?? null,
-      started_at: new Date().toISOString(),
+      started_at: bootstrapSentAt,
+      bootstrap_sent_at: bootstrapSentAt,
+      first_output_at: firstOutputAt,
     });
-    return record;
+    return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt };
   };
 
   const resumeSession = async (sessionId, { workspaceRoot = null, candidateWorkspaceRoots: extraRoots = [], ptyAdapter = null, taskTitle = null } = {}) => {
@@ -192,7 +220,7 @@ export function createAgentTuiSessionManager({
     return store.readSession(sessionId);
   };
 
-  const stopSession = async (sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots: extraRoots = [] } = {}) => {
+  const stopSession = async (sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots: extraRoots = [], releaseLockFn = null } = {}) => {
     const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots: extraRoots });
     const active = activeSessions.get(sessionId);
     if (active?.ptySession) {
@@ -200,6 +228,10 @@ export function createAgentTuiSessionManager({
       activeSessions.delete(sessionId);
     } else {
       await normalizeRecoveredSessionRecord(store, sessionId);
+    }
+    // Release repo lock if a release function was provided
+    if (typeof releaseLockFn === "function") {
+      try { await releaseLockFn(); } catch { /* non-fatal */ }
     }
     return store.updateSession(sessionId, {
       status: "stopped",
