@@ -1,6 +1,6 @@
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
-import { buildCodexTuiBootstrapMessages } from "./codex-tui-goal-prompt.mjs";
+import { buildCodexTuiGoalObjective, buildCodexTuiFollowupInstruction } from "./codex-tui-goal-prompt.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -100,24 +100,26 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
     repoLockId,
   });
 
+  const objective = buildCodexTuiGoalObjective({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
+
+  // Spawn codex with the goal objective as the initial PROMPT argument.
+  // This tells codex what to work on immediately, without needing /goal via stdin.
   const ptySession = await adapter.spawn({
     cwd,
     onData: (chunk) => {
       store.appendSessionLog(sessionId, chunk).catch(() => {});
     },
+    args: [objective],
   });
 
   activeSessions.set(sessionId, { store, ptySession });
 
-  // Wait briefly for TUI ready signal before sending bootstrap
+  // Wait briefly for TUI ready signal before sending follow-up
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
 
-  const messages = buildCodexTuiBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
+  // Send follow-up instruction via stdin (not the full /goal, which was passed as args)
   const bootstrapSentAt = new Date().toISOString();
-  for (const message of messages) {
-    ptySession.write(message);
-    ptySession.write("\n");
-  }
+  ptySession.write(buildCodexTuiFollowupInstruction({ goalId: goal.id }) + "\n");
 
   record = await store.updateSession(sessionId, {
     status: "running",

@@ -141,24 +141,32 @@ export function createAgentTuiSessionManager({
       metadata: { provider: providerName },
     });
 
+    // Build the goal objective for the initial spawn prompt
+    const messages = buildBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
+    const objective = Array.isArray(messages) && messages.length > 0
+      ? messages[0].replace(/^\/goal\s*/i, "").trim()
+      : `goal_id=${goal.id} task=${task?.id || goal.id}`;
+
+    // Spawn with the objective as initial PROMPT argument so codex starts
+    // working immediately instead of relying on /goal via stdin.
     const ptySession = await adapter.spawn({
       cwd,
       onData: (chunk) => {
         store.appendSessionLog(sessionId, chunk).catch(() => {});
       },
+      args: [objective],
     });
 
     activeSessions.set(sessionId, { store, ptySession });
 
-    // Wait briefly for TUI to be ready (first output), then send bootstrap
+    // Wait briefly for TUI to be ready, then send follow-up
     const firstOutputAt = await waitForTuiOutput(sessionId, store, 5_000);
-
-    const messages = buildBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
     const bootstrapSentAt = new Date().toISOString();
-    for (const message of messages) {
-      ptySession.write(message);
-      ptySession.write("\n");
-    }
+    // Send the follow-up instruction via stdin (not the full bootstrap)
+    const followup = Array.isArray(messages) && messages.length > 1
+      ? messages[1]
+      : `Continue goal_id=${goal.id}.`;
+    ptySession.write(followup + "\n");
 
     record = await store.updateSession(sessionId, {
       status: "running",
