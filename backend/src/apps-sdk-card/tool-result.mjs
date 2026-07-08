@@ -97,6 +97,20 @@ function generateAutoSummary(name, base) {
   return result;
 }
 
+function addCreateTaskModelFields(modelPayload, base) {
+  const task = base?.task || {};
+  const goal = base?.goal || {};
+  const conversation = base?.conversation || {};
+
+  if (task.id !== undefined) modelPayload.task_id = task.id;
+  if (goal.id !== undefined || task.goal_id !== undefined) {
+    modelPayload.goal_id = goal.id || task.goal_id;
+  }
+  if (conversation.id !== undefined) modelPayload.conversation_id = conversation.id;
+  if (task.status !== undefined) modelPayload.task_status = task.status;
+  if (task.title !== undefined) modelPayload.title = task.title;
+}
+
 export function payloadHash(value) {
   return createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 16);
 }
@@ -158,6 +172,10 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     for (const key of workflowAdvanceFields) {
       if (base[key] !== undefined) modelPayload[key] = base[key];
     }
+  }
+
+  if (name === "create_task") {
+    addCreateTaskModelFields(modelPayload, base);
   }
 
   // Legacy compat fields — bounded, sourced from card view model, never raw base

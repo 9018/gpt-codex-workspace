@@ -499,3 +499,40 @@ test("CONTRACT-8: forbidden deep-data fields absent from all card payloads", asy
     }
   }
 });
+
+// =========================================================================
+// CONTRACT-6: create_task exposes shallow ids without raw object dump
+// =========================================================================
+
+test("CONTRACT-6: create_task exposes shallow ids without raw task dump", async () => {
+  const server = await makeServer({ toolMode: "standard" });
+
+  const res = await rpc(server, "tools/call", {
+    name: "create_task",
+    arguments: {
+      title: "SMOKE-TUI-01 Real TUI Evidence Collection",
+      description: "Smoke task",
+      assignee: "codex",
+      workspace_id: "hosted-default",
+      metadata: {
+        codex_execution_provider: "codex_tui_goal",
+        execution_backend: "codex_tui_superpowers",
+        smoke: true,
+      },
+    },
+  });
+
+  const sc = res.result.structuredContent;
+
+  // modelPayload must identify the tool
+  assert.equal(sc.gptwork_tool, "create_task");
+
+  // modelPayload must expose shallow ids
+  assert.ok(sc.task_id, "create_task must expose task_id");
+  assert.ok(sc.goal_id, "create_task must expose goal_id");
+
+  // modelPayload must NOT embed raw task/goal/conversation objects
+  assert.equal(sc.task, undefined, "modelPayload must not embed raw task");
+  assert.equal(sc.goal, undefined, "modelPayload must not embed raw goal");
+  assert.equal(sc.conversation, undefined, "modelPayload must not embed raw conversation");
+});
