@@ -107,3 +107,50 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     findings,
   };
 }
+
+/**
+ * Normalize raw TUI evidence into a structured evidence object with clear
+ * evidence_ready semantics. Major findings (missing result.json) mean
+ * evidence_ready=false; minor findings (missing result.md) are non-blocking.
+ */
+export function normalizeCodexTuiEvidence({ sessionId, goalId, resultJson, resultMd, gitEvidence } = {}) {
+  const findings = [];
+
+  if (!resultJson) {
+    findings.push({
+      severity: "major",
+      code: "tui_result_json_missing",
+      message: "Codex TUI did not write result.json.",
+    });
+  }
+
+  if (!resultMd) {
+    findings.push({
+      severity: "minor",
+      code: "tui_result_md_missing",
+      message: "Codex TUI did not write result.md.",
+    });
+  }
+
+  const tests = resultJson?.tests || resultJson?.verification?.commands || null;
+  const commit = resultJson?.commit || gitEvidence?.commit || "none";
+  const changedFiles = Array.isArray(resultJson?.changed_files)
+    ? resultJson.changed_files
+    : (gitEvidence?.changed_files || []);
+
+  return {
+    kind: "codex_tui_evidence",
+    provider: "codex_tui_goal",
+    execution_backend: "codex_tui_superpowers",
+    session_id: sessionId,
+    goal_id: goalId,
+    evidence_ready: findings.every((f) => f.severity !== "major"),
+    changed_files: changedFiles,
+    tests,
+    commit,
+    verification: {
+      passed: findings.every((f) => f.severity !== "major") && Boolean(tests),
+      findings,
+    },
+  };
+}
