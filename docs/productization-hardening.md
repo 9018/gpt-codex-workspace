@@ -20,3 +20,41 @@ Verification run:
 Known remaining risk:
 
 - Full `backend/test/task-final-writeback.test.mjs` still has four existing failures unrelated to this task's P0 fixes: dependent queue unblock assertions, dirty auto integration queue blocking, queue item sync for `waiting_for_repair`, and goal status wording for missing evidence. These failures were present before the await fixes were applied and should be handled as a separate closure/queue consistency task.
+
+## 2026-07-10 Closure State Machine Convergence -- Second Repair
+
+Fixed the convergence bug that left Closure repair tasks stuck in `waiting_for_repair` when the existing repair task was terminal (failed/no-change) and repair budget remained.
+
+### Problem
+
+A parent task in `waiting_for_repair` had its child repair task complete with a terminal outcome (failed or no-change). `handleRepairCompletion` was only called when `taskStatus === "completed"` and always passed `passed: true`. This meant:
+- Failed repair children never triggered `handleRepairCompletion` -- the parent's stale `repair_goal_id`/`repair_task_id` metadata remained intact.
+- `hasRepairPath()` in the finalizer kept returning `true` based on the stale metadata.
+- `repairAttemptsRemaining()` defaulted to `true` when no explicit budget info was present.
+- The finalizer kept returning `waiting_for_repair`, creating an infinite loop with no new repair task created.
+
+### Fix (3 files changed)
+
+**1. `backend/src/repair-loop.mjs` -- `handleRepairCompletion`:**
+- On `!passed`: check remaining repair budget before deciding parent status.
+  - Budget remains (`can_continue`): keep parent in `waiting_for_repair`, increment `repair_attempt`, clear stale `repair_goal_id`/`repair_task_id`/`repair_goal` from parent result, let the worker loop schedule the next repair attempt.
+  - Budget exhausted: move to `human_interrupted_for_repair_budget_exhausted` (explicit human-review terminal state, not plain `failed`).
+- On `passed`: also clear stale repair path metadata from parent result so `hasRepairPath()` re-evaluates cleanly.
+
+**2. `backend/src/task-final-writeback.mjs` -- repair completion hook:**
+- Moved `handleRepairCompletion` call outside the `taskStatus === "completed"` guard.
+- Now fires for ANY terminal child outcome (`completed`, `failed`, `cancelled`).
+- `passed` is computed correctly: `taskStatus === "completed" && verification?.passed === true && no blocker findings`.
+
+**3. `backend/src/task-finalizer.mjs` -- `hasRepairPath`:**
+- Added stale-path guard: if `result.repair_outcome` exists with a known terminal value (`repaired`, `continued`, `budget_exhausted`, `failed`) or `result.repair_status === "completed"`, return `false`.
+- Prevents the finalizer from re-entering `waiting_for_repair` on metadata that was already processed by `handleRepairCompletion`.
+
+### Behavior Changes
+
+| Scenario | Before | After |
+|----------|--------|-------|
+| Repair child failed, budget remains | Parent marked `failed` | Parent stays `waiting_for_repair`, next attempt created |
+| Repair child failed, budget exhausted | Parent marked `failed` | Parent moved to `human_interrupted_for_repair_budget_exhausted` |
+| Repair child passed (repaired) | Parent updated, metadata lingers | Parent updated, stale path cleared, finalizer re-evaluates cleanly |
+| Finalizer sees already-repaired parent | Infinite loop `waiting_for_repair` | `hasRepairPath` returns `false`, proceeds to terminal or review |

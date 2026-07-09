@@ -370,16 +370,45 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
       }
 
       if (!passed) {
-        // Repair task failed — mark parent as failed too
-        parent.status = "failed";
+        // Compute remaining repair budget.
+        const parentMaxAttempts_ = parent.max_attempts || parent.maxAttempts || 2;
+        const parentAttemptSoFar_ = Number(parent.repair_attempt || parent.attempt || 0);
+        const budgetRemaining_ = parentAttemptSoFar_ < parentMaxAttempts_;
+        const nextAttempt_ = parentAttemptSoFar_ + 1;
+
         parent.result = parent.result || {};
-        parent.result.kind = "repair_failed";
-        parent.result.summary = `Repair task ${completedTask.id} failed; parent task ${parentTaskId} marked as failed.`;
-        parent.result.repair_outcome = "failed";
+
+        if (budgetRemaining_) {
+          // Budget remains: keep parent in waiting_for_repair for next attempt
+          parent.repair_attempt = nextAttempt_;
+          parent.attempt = nextAttempt_;
+          parent.status = "waiting_for_repair";
+          parent.result.kind = "repair_attempt_exhausted_no_change";
+          parent.result.repair_outcome = "continued";
+          parent.result.repair_attempts = (parent.result.repair_attempts || 0) + 1;
+          parent.result.summary = `Repair task ${completedTask.id} completed without advancing closure; ${nextAttempt_}/${parentMaxAttempts_} -- creating next repair attempt.`;
+          // Clear stale repair path metadata so the finalizer re-evaluates.
+          delete parent.result.repair_goal_id;
+          delete parent.result.repair_task_id;
+          delete parent.result.repair_goal;
+          parent.updated_at = new Date().toISOString();
+          if (!Array.isArray(parent.logs)) parent.logs = [];
+          parent.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Repair task ${completedTask.id} terminal; parent ${parentTaskId} stays waiting_for_repair for next attempt ${nextAttempt_}/${parentMaxAttempts_}` });
+          return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "waiting_for_repair", repair_outcome: "continued", next_attempt: nextAttempt_ };
+        }
+
+        // Budget exhausted - move to explicit human-review terminal state
+        delete parent.result.repair_goal_id;
+        delete parent.result.repair_task_id;
+        delete parent.result.repair_goal;
+        parent.status = "human_interrupted_for_repair_budget_exhausted";
+        parent.result.kind = "repair_budget_exhausted";
+        parent.result.repair_outcome = "budget_exhausted";
+        parent.result.summary = `Repair task ${completedTask.id} failed; repair budget exhausted (${parentAttemptSoFar_}/${parentMaxAttempts_}). Requires human review.`;
         parent.result.completed_at = new Date().toISOString();
         parent.updated_at = new Date().toISOString();
         if (!Array.isArray(parent.logs)) parent.logs = [];
-        parent.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Repair task ${completedTask.id} failed; parent ${parentTaskId} marked failed` });
+        parent.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Repair task ${completedTask.id} failed; parent ${parentTaskId} -- budget exhausted (${parentAttemptSoFar_}/${parentMaxAttempts_}). Requires human review.` });
 
         // Update goal status too
         if (completedTask.goal_id) {
@@ -389,13 +418,17 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
             goal.updated_at = new Date().toISOString();
           }
         }
-        return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "failed", repair_outcome: "failed" };
+        return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "human_interrupted_for_repair_budget_exhausted", repair_outcome: "budget_exhausted" };
 
       }
 
       // Repair task passed — re-verify parent
       parent.result = parent.result || {};
       parent.result.repair_outcome = "repaired";
+      // Clear stale repair path so finalizer re-evaluates without old metadata
+      delete parent.result.repair_goal_id;
+      delete parent.result.repair_task_id;
+      delete parent.result.repair_goal;
       parent.result.repaired_by_task_id = completedTask.id;
       parent.result.repair_attempts = (parent.result.repair_attempts || 0) + 1;
       parent.result.repair_status = "completed";
