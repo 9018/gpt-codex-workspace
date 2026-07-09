@@ -344,3 +344,23 @@ If the v5 card doesn't display in ChatGPT:
 7. **Fallback**: Even if the card doesn't render, tools should still return `content[0].text` with a readable text summary.
 
 If all checks pass but the card still doesn't display, the issue is likely on the ChatGPT platform side (e.g., Apps SDK widget rendering not enabled for your session). In this case, the text fallback in `content[0].text` provides a readable summary.
+
+## ChatGPT巡检修复：bounded modelPayload 契约回归
+
+本轮巡检发现 Query/Card repair 任务虽然已有 branch-pushed commit 和局部测试证据，但当前 main 上 `runtime_status`、`get_task`、`create_task` 的模型可见 `structuredContent` 重新暴露了 `worker`/`queue`/`task`/`goal` 对象，违反 v5 card 的 bounded modelPayload 契约。
+
+修复原则：
+
+- `modelPayload` 只保留 ChatGPT 推进任务所需的浅层 id、状态、标题和标量诊断字段。
+- 原始或近似原始的 `worker`、`queue`、`task`、`goal` 对象只允许进入 card view/_meta，不进入模型可见 payload。
+- `runtime_status` 如需给 ChatGPT 判断队列和 worker，只暴露 `worker_enabled`、`worker_running`、`worker_health`、`queue_*` 这类 bounded scalar 字段。
+
+验证命令：
+
+```bash
+cd backend && node --test --test-reporter=dot   test/tool-result.test.mjs   test/card-payload-contract.test.mjs   test/card-view-model.test.mjs   test/card-utils.test.mjs   test/apps-sdk-card-smoke.test.mjs
+cd backend && find src -name '*.mjs' -type f -print0 | sort -z | xargs -0 -r -n 1 -P 8 node --check
+```
+
+预期结果：card/query 契约测试全通过，源码语法检查通过。
+

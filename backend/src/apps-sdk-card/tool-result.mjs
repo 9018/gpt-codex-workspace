@@ -131,10 +131,7 @@ function addCreateTaskModelFields(modelPayload, base) {
   if (conversation.id !== undefined) modelPayload.conversation_id = conversation.id;
   if (task.status !== undefined) modelPayload.task_status = task.status;
   if (task.title !== undefined) modelPayload.title = task.title;
-  modelPayload.task = pickTaskForModel(task);
-  if (goal && typeof goal === "object") {
-    modelPayload.goal = { id: goal.id, title: goal.title, status: goal.status };
-  }
+  // Keep modelPayload shallow: expose ids/status/title above, not task/goal objects.
 }
 
 export function payloadHash(value) {
@@ -205,10 +202,6 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
   }
 
 
-  if (name === "get_task" && base.task) {
-    modelPayload.task = pickTaskForModel(base.task);
-  }
-
   if (name === "run_assigned_codex_tasks" && Array.isArray(base.tasks)) {
     modelPayload.tasks = base.tasks.map((item) => ({
       task_id: item.task_id,
@@ -238,10 +231,22 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
 
 
   if (name === "runtime_status") {
+    if (base.worker && typeof base.worker === "object") {
+      if (base.worker.enabled !== undefined) modelPayload.worker_enabled = base.worker.enabled;
+      if (base.worker.running !== undefined) modelPayload.worker_running = base.worker.running;
+      if (base.worker.health && base.worker.health.phase !== undefined) modelPayload.worker_health = base.worker.health.phase;
+    }
+    if (base.queue && typeof base.queue === "object") {
+      if (base.queue.assigned !== undefined) modelPayload.queue_assigned = base.queue.assigned;
+      if (base.queue.queued !== undefined) modelPayload.queue_queued = base.queue.queued;
+      if (base.queue.running !== undefined) modelPayload.queue_running = base.queue.running;
+      if (base.queue.waiting_for_review !== undefined) modelPayload.queue_waiting_for_review = base.queue.waiting_for_review;
+      if (base.queue.waiting_for_repair !== undefined) modelPayload.queue_waiting_for_repair = base.queue.waiting_for_repair;
+      if (base.queue.current_blockers !== undefined) modelPayload.queue_current_blockers = base.queue.current_blockers;
+      if (base.queue.actionable_review !== undefined) modelPayload.queue_actionable_review = base.queue.actionable_review;
+    }
     for (const key of [
       "repo_locks",
-      "worker",
-      "queue",
       "config_sources",
       "config",
       "bark",
