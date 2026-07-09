@@ -1489,6 +1489,23 @@ test("task-final-writeback: repairable acceptance blockers create traceable foll
     createdPayload = payload;
     return { goal: { id: "goal_acceptance_followup" }, task: { id: "task_acceptance_followup" } };
   };
+  args.shouldAttemptRepairFn = async () => ({ should_repair: true, reason: "Repair attempt 1/2" });
+  args.createRepairGoalFromFindingsFn = async ({ task, goal, findings, repairProposals }) => ({
+    id: "repair_acceptance_async",
+    parent_task_id: task.id,
+    root_task_id: task.root_task_id || task.id,
+    repair_attempt: 1,
+    attempt: 1,
+    repair_of_attempt: 0,
+    repair_of_goal_id: goal.id,
+    repair_of_task_id: task.id,
+    workspace_id: task.workspace_id,
+    mode: task.mode,
+    user_request: "Repair: acceptance blocker",
+    goal_prompt: "Fix the blocking acceptance finding.",
+    findings,
+    repairProposals,
+  });
   args.writeFileFn = async (path, content) => {
     if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
   };
@@ -1509,6 +1526,87 @@ test("task-final-writeback: repairable acceptance blockers create traceable foll
   assert.equal(savedState.tasks[0].result.followup_processing.blockers[0].code, "diff_reported_missing");
   assert.equal(fallbackJson.followup_processing.source_task_id, "task_acceptance_repair");
   assert.equal(fallbackJson.followup_processing.followup_task_id, "task_acceptance_followup");
+});
+
+test("task-final-writeback: integration repair awaits async repair helpers", async () => {
+  let savedTask = null;
+  let createdPayload = null;
+  const args = makeMinimalArgs("waiting_for_integration");
+  args.task = {
+    id: "task_integration_async_repair",
+    goal_id: args.goal.id,
+    title: "Integration async repair",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    mode: "builder",
+    logs: [],
+  };
+  args.goal = { id: "goal_integration_async_repair", workspace_id: "hosted-default", title: "Integration async repair" };
+  args.store = {
+    mutate: async (updater) => {
+      const state = {
+        tasks: [{ ...args.task, logs: [] }],
+        goals: [args.goal],
+        goal_queue: [{ queue_id: "queue_integration_async_repair", goal_id: args.goal.id, task_id: args.task.id, status: "running", auto_start: true }],
+        activities: [],
+      };
+      const result = await updater(state);
+      savedTask = result.task;
+      return result;
+    },
+  };
+  args.resolvedRepo = {
+    repo_id: "github.com/acme/repo",
+    canonical_repo_path: "/tmp/canonical",
+    task_worktree_path: "/tmp/worktree",
+    worktree_lifecycle: { mode: "git_worktree", ok: true, branch_name: "gptwork/task/test" },
+  };
+  args.runIntegrationQueueFn = async () => ({
+    ok: false,
+    status: "conflict",
+    error: "merge conflict",
+    conflict_files: ["src/app.mjs"],
+  });
+  args.shouldAttemptRepairFn = async () => ({ should_repair: true, reason: "Repair attempt 1/2" });
+  args.createRepairGoalFromFindingsFn = async ({ task, goal, findings, repairProposals }) => ({
+    id: "repair_integration_async",
+    parent_task_id: task.id,
+    root_task_id: task.root_task_id || task.id,
+    repair_attempt: 1,
+    attempt: 1,
+    repair_of_attempt: 0,
+    repair_of_goal_id: goal.id,
+    repair_of_task_id: task.id,
+    workspace_id: task.workspace_id,
+    mode: task.mode,
+    user_request: "Repair: integration conflict",
+    goal_prompt: "Fix integration conflict.",
+    findings,
+    repairProposals,
+  });
+  args.createGoalFn = async (store, config, payload) => {
+    createdPayload = payload;
+    return { goal: { id: "goal_integration_repair" }, task: { id: "task_integration_repair" } };
+  };
+  args.verifyTaskCompletionFn = async () => ({
+    passed: true,
+    status: "completed",
+    commands: [],
+    changed_files: [],
+    reason_no_tests: null,
+    failure_class: null,
+    requires_review: false,
+    findings: [],
+  });
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "waiting_for_repair");
+  assert.equal(savedTask.status, "waiting_for_repair");
+  assert.equal(savedTask.result.repair_goal_id, "goal_integration_repair");
+  assert.equal(savedTask.result.repair_task_id, "task_integration_repair");
+  assert.equal(savedTask.result.repair_goal.parent_task_id, "task_integration_async_repair");
+  assert.equal(createdPayload.repair_of_task_id, "task_integration_async_repair");
 });
 
 test("task-final-writeback: repeat verification failure after max attempts waits for review", async () => {

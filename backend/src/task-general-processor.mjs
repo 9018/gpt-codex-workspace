@@ -245,6 +245,10 @@ function recoveryCommandListFromConfig(config = {}) {
   return null;
 }
 
+function uniqueStrings(values = []) {
+  return [...new Set((Array.isArray(values) ? values : []).filter((value) => typeof value === "string" && value.length > 0))];
+}
+
 function clearResolvedDeliveryFindings(findings = []) {
   const resolvedCodes = new Set(["commit_missing", "dirty_worktree_after_codex"]);
   return findings.map((finding) => resolvedCodes.has(finding?.code)
