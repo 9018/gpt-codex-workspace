@@ -70,6 +70,8 @@ npm run release:check
 ## Important Docs
 
 - [Root README](../README.md)
+  - [Closed-Loop Automation](../docs/closed-loop-automation.md) — Goal → Task → Agent → Evidence → Acceptance → Replan/Continue/Stop 闭环设计
+  - [Closure and Acceptance](../docs/closure-acceptance.md) — 验收门、合同验证、闭环节点判定详解
 - [Chinese main README](../README.zh-CN.md)
 - [Release gate](../docs/delivery/release-gate.md)
 - [Architecture](../docs/architecture.md)

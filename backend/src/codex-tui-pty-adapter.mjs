@@ -1,4 +1,4 @@
-import { spawn as spawnChild } from "node:child_process";
+import { spawn as spawnChild, execFileSync } from "node:child_process";
 
 export function createCodexTuiUnavailableError(cause) {
   const err = new Error("PTY support is unavailable for codex_tui_goal sessions. Install node-pty, provide a PTY adapter implementation, or ensure the system script(1) command is available for the fallback adapter.");
@@ -65,7 +65,7 @@ function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], c
 export function createCodexTuiPtyAdapter({
   pty = undefined,
   loadPty = loadNodePty,
-  allowScriptFallback = true,
+  allowScriptFallback = false,
   spawnImpl = spawnChild,
   command: defaultCommand = "codex",
 } = {}) {
@@ -78,10 +78,68 @@ export function createCodexTuiPtyAdapter({
   });
 }
 
+
+/**
+ * Proactively check whether PTY support is available for the current
+ * runtime environment.  Returns a structured availability report.
+ *
+ * The report includes:
+ *  - node_pty:   whether node-pty can be imported (preferred)
+ *  - script:     whether script(1) fallback is available on PATH
+ *  - available:  whether any PTY mechanism is usable
+ *  - diagnostic: human-readable explanation if unavailable
+ *  - detail:     resolution hints
+ */
+export async function checkPtyAvailability() {
+  const result = {
+    node_pty: false,
+    node_pty_error: null,
+    script: false,
+    script_error: null,
+    available: false,
+    diagnostic: null,
+    detail: null,
+  };
+
+  // Check node-pty
+  try {
+    const { createRequire } = await import("node:module");
+    const req = createRequire(import.meta.url);
+    req("node-pty");
+    result.node_pty = true;
+  } catch (err) {
+    result.node_pty_error = err?.message || "unknown error";
+  }
+
+  // Check script(1)
+  try {
+    execFileSync("which", ["script"], { stdio: "ignore", timeout: 5000 });
+    result.script = true;
+  } catch (err) {
+    result.script_error = err?.message || "not found on PATH";
+  }
+
+  if (result.node_pty) {
+    result.available = true;
+    result.diagnostic = null;
+    result.detail = "node-pty is installed and available.";
+  } else if (result.script) {
+    result.available = true;
+    result.diagnostic = "Script fallback via script(1)";
+    result.detail = "node-pty is NOT installed; using script(1) fallback. For reliable TUI sessions, install node-pty: npm install node-pty";
+  } else {
+    result.available = false;
+    result.diagnostic = "No PTY support available";
+    result.detail = "node-pty is not installed and script(1) is not found on PATH. Install node-pty via: npm install node-pty, or ensure script(1) is available on the system.";
+  }
+
+  return result;
+}
+
 export function createAgentTuiPtyAdapter({
   pty = undefined,
   loadPty = loadNodePty,
-  allowScriptFallback = true,
+  allowScriptFallback = false,
   spawnImpl = spawnChild,
   command: defaultCommand = "codex",
 } = {}) {
