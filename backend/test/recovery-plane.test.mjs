@@ -172,6 +172,40 @@ test("5a. recovery task status safety checks derive from task-status taxonomy", 
   assert.doesNotMatch(source, /TERMINAL_TASK_STATUSES\s*=\s*new Set\(\[/);
 });
 
+test("5b. queue reconcile cancels orphan waiting_for_review queue item with missing goal and task", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const queueItem = {
+      queue_id: "q_orphan_review",
+      goal_id: "goal_missing",
+      task_id: "task_missing",
+      status: "waiting_for_review",
+      position: 1,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    const { server } = await makeServerWithSeed({
+      goal_queue: [queueItem], goals: [], tasks: []
+    }, { toolMode: "full" });
+
+    let response = await callTool(server, "recovery_queue_reconcile", { dry_run: true });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    let result = response.result.structuredContent;
+    assert.equal(result.dry_run, true);
+    assert.equal(result.results[0].proposed_status, "cancelled");
+    assert.equal(result.results[0].applied, false);
+    assert.match(result.results[0].reason, /orphan queue item/);
+
+    response = await callTool(server, "recovery_queue_reconcile", { dry_run: false, apply: true });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    result = response.result.structuredContent;
+    assert.equal(result.applied, true);
+    assert.equal(result.results[0].status_after, "cancelled");
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
 test("6. lock reconcile dry_run detects stale locks", async () => {
   process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
   try {

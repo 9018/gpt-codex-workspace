@@ -173,6 +173,9 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
   // through _meta instead of leaking raw tool results by default.
   if (base.ok !== undefined) modelPayload.ok = base.ok;
   if (base.results !== undefined) modelPayload.results = base.results;
+  for (const key of ["task", "tasks", "goal", "goals", "conversation", "workspace_files", "acceptance_bundle", "review_packet"]) {
+    if (base[key] !== undefined) modelPayload[key] = base[key];
+  }
 
   if (name === "workflow_advance") {
     const workflowAdvanceFields = [

@@ -142,3 +142,188 @@ The original Closure goal `goal_8081d628-b60e-4f83-bfd4-9a24f709d293` can leave 
 node --check /home/a9017/mcp/workspace/.gptwork/goals/goal_2f637eac-89b4-46e0-81d2-d1287e4db7c5/acceptance.contract.json — valid JSON via python3 -m json.tool
 python3 -m json.tool /home/a9017/mcp/workspace/.gptwork/goals/goal_2f637eac-89b4-46e0-81d2-d1287e4db7c5/acceptance.contract.json > /dev/null — passed
 ```
+
+## 2026-07-10 Codex Exec TUI Provider Policy
+
+This task productized the codex_exec / codex_tui_goal switching mechanism. The default production path is `codex_exec` (automatic execution), with `codex_tui_goal` as a manual operator fallback.
+
+### Provider Policy
+
+**Default**: All tasks use `codex_exec` unless explicitly configured.
+
+**Explicit TUI override**: Set `task.metadata.codex_execution_provider = "codex_tui_goal"` on the task to route through TUI.
+
+**Config fields** (runtime-config, all optional):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `codexTuiEnabled` / `codex_tui_enabled` | boolean | `false` | Master switch for TUI mode. Tasks must have BOTH the metadata flag AND this config set to true. |
+| `codexTuiEvidenceWaitMs` | number | `120000` | Max ms to wait for result.json after TUI session start |
+| `requireSuperpowersPluginForTuiFallback` | boolean | `false` | If true, checks for Superpowers plugin before allowing TUI session |
+| `executeProvider` | string | `"codex_exec"` | Default execution provider |
+| `acceptProvider` | string | `"codex_exec"` | Default acceptance provider |
+| `repairProvider` | string | `"codex_exec"` | Default repair provider |
+
+**Env vars**:
+
+| Variable | Description |
+|----------|-------------|
+| `GPTWORK_CODEX_TUI_ENABLED` | Enable TUI mode globally |
+| `GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI` | Require Superpowers plugin for TUI |
+| `GPTWORK_CLAUDE_TUI_ENABLED` | Enable Claude Code TUI mode |
+| `GPTWORK_CLAUDE_TUI_COMMAND` | Claude CLI command (default: `claude`) |
+
+### Code Paths
+
+**`codex-execution-provider.mjs`**: Central provider policy module containing:
+- `normalizeCodexExecutionProvider(value)` — normalizes to `codex_exec` or `codex_tui_goal`
+- `taskUsesCodexTuiGoal(task)` — checks `task.metadata.codex_execution_provider`
+- `isCodexTuiEnabled(config)` — checks config/env for master switch
+- `isClaudeTuiEnabled(config)` — checks config/env for Claude Code TUI
+- `checkSuperpowersPluginForTuiFallback(config)` — preflight check for Superpowers
+- `describeCodexExecutionProvider(provider)` — human-readable provider description
+- `getTaskExecutionProviderMode(task)` — describes which provider a task uses and why
+
+**`agent-tui-session-core.mjs`**: Shared session management for both codex_tui_goal and claude_tui_goal. Exports `createAgentTuiSessionManager` which provides:
+- `startGoalSession` — creates PTY, sends bootstrap messages, returns session
+- `resumeSession` — reattaches to existing session
+- `readSession` — reads session record
+- `stopSession` — stops PTY and releases repo lock
+- `getSessionStatus` — reports session state
+
+**`codex-tui-evidence-cycle.mjs`**: Evidence collection for TUI sessions.
+- Polls for `result.json` up to `maxWaitMs`
+- When result.json appears, collects durable evidence via `collectCodexTuiCompletion`
+- Returns `{ evidence_ready, reason, status, finding, collected }` with terminal status when evidence deadline is reached
+- `status="timed_out"` when result.json doesn't appear in time
+- `status="failed"` when result.json exists but is invalid
+
+**`task-general-processor.mjs`**: Task processing routing:
+- Checks `taskUsesCodexTuiGoal(task)` first
+- Preflight: PTY availability, Superpowers plugin, repo lock
+- Starts TUI session, waits for evidence, returns `failed`/`timed_out` on missing evidence
+- On evidence ready, normalizes to task result and continues through acceptance/integration/closure
+
+### Failure Handling
+
+| Scenario | Status | Next Action |
+|----------|--------|-------------|
+| TUI config disabled | `provider_unavailable` returned as `waiting_for_review` | Enable `GPTWORK_CODEX_TUI_ENABLED=true` |
+| PTY mechanism unavailable | `failed` | Install `node-pty` or ensure `script(1)` is available |
+| Superpowers plugin missing | `provider_unavailable` returned as `waiting_for_review` | Install via `codex --install-plugin superpowers` |
+| Evidence timed out | `timed_out` with `expected_result_json` and `finding` | Resume session or retry with longer timeout |
+| Evidence invalid | `failed` with `expected_result_json` and `finding` | Check result.json format, resume session |
+| Normal completion | `completed` through acceptance/closure path | Auto-integration and finalization |
+
+### Acceptance Contract Profile
+
+This task also fixed a recurring pattern where repair goals had auto-generated acceptance contracts with `operation_kind: "diagnostic"` instead of the correct `code_change` profile. The contract must be fixed to `code_change` before the repair task can make source changes.
+
+## 2026-07-10 Verifier Evidence Gate Hardening
+
+ChatGPT directly closed another acceptance-loop gap in `backend/src/agent-run-writeback.mjs`.
+
+### Problem
+
+Historical patrols showed a recurring false-positive chain:
+
+1. `verification.passed === true` was present.
+2. `verification.commands` was empty or missing.
+3. `writeVerifierAgentRun()` still completed the verifier role.
+4. Later reviewer/integrator/finalizer roles failed or no-oped because there was no concrete command evidence to review.
+
+The product impact was that automatic acceptance could look green while the user-facing review packet still lacked reproducible verification evidence.
+
+### Fix
+
+Verifier completion now requires concrete command evidence:
+
+- `verification.passed === true`
+- `verification.commands.length > 0`
+
+If commands are missing, the verifier role is failed with:
+
+- `failure_class: "verification_commands_missing"`
+- `commands_count: 0`
+- `missing_evidence: ["verification.commands"]`
+
+The same rule is applied when `completeQueuedAgentRuns()` reconciles queued verifier runs from historical task results, so stale queued verifier roles can no longer be falsely auto-completed with `commands_count=0`.
+
+### Verification
+
+```bash
+node --check backend/src/agent-run-writeback.mjs
+node --test backend/test/agent-run-writeback.test.mjs
+node --test backend/test/agent-run-writeback.test.mjs backend/test/p0-ma11-r2.test.mjs
+```
+
+Observed result: 42 related tests passed, including the new regression where a queued verifier with `verification.passed=true` but no commands fails with `verification_commands_missing`.
+
+### Productization acceptance standard
+
+A task is not automatically accepted unless its verifier evidence contains at least one replayable command. This prevents `commands_count=0` from reaching reviewer, integrator, or finalizer as an apparent success.
+
+## 2026-07-10 Orphan Queue Recovery Hardening
+
+ChatGPT also closed a historical queue-state gap found while inspecting the first `waiting_for_review` item.
+
+### Problem
+
+Some historical queue items can reference both a missing goal and a missing task, for example:
+
+- queue status: `waiting_for_review`
+- goal id: missing from state
+- task id: missing from state
+
+Before this hardening, `recovery_queue_reconcile` only inspected `waiting`, `ready`, `running`, and `blocked` items. That meant orphan items trapped in `waiting_for_review`, `waiting_for_repair`, or `waiting_for_integration` stayed in the queue and kept inflating productization backlog counts.
+
+### Fix
+
+`recovery_queue_reconcile` now includes review/repair/integration hold states in its recoverable scan set and proposes `cancelled` for queue items that reference both a missing goal and missing task.
+
+This is safe because there is no task object to verify, repair, or complete, and no goal context to continue. The recovery action does not start work, does not clear locks, and does not touch the dirty worktree.
+
+### Verification
+
+```bash
+node --check backend/src/tool-groups/recovery-tools-group.mjs
+node --test backend/test/recovery-plane.test.mjs
+```
+
+Observed result: recovery-plane tests passed, including the new regression that dry-runs and applies cancellation for an orphan `waiting_for_review` queue item.
+
+### Runtime note
+
+The running MCP server must be restarted before this new `recovery_queue_reconcile` behavior is visible through the live tool registry.
+
+## 2026-07-10 Docs-only Acceptance Contract Hardening
+
+ChatGPT directly closed the current productization blockers behind two docs regression tasks:
+
+- `Docs Regression: Operations Runbook Sync`
+- `Docs Regression: Delivery Workflow Sync`
+
+### Problem
+
+The operation evidence profile already treated `docs_only` as commit + changed docs + lightweight verification, but the acceptance contract profile still required integration evidence. This mismatch produced false `integration_completed_missing` blockers for documentation-only work that had already reported commits and verification commands.
+
+### Fix
+
+`docs_only` contracts now set:
+
+- `requires_commit: true`
+- `requires_integration: false`
+- `requires_restart: false`
+- `requires_deployment_check: false`
+
+The `integration_completed` blocking requirement was removed from the docs-only contract profile. The docs command alias table also treats `git diff --check`, `cd backend && npm run check:syntax`, and `cd backend && npm run check:imports` as valid `docs_check` evidence.
+
+### Verification
+
+```bash
+node --check backend/src/acceptance/contract-profiles.mjs
+node --check backend/src/verification-report.mjs
+node --test backend/test/acceptance-contract-builder.test.mjs backend/test/acceptance-contract-verifier.test.mjs
+```
+
+Observed result: 28/28 acceptance contract tests passed, including a regression proving that default docs-only contracts close without integration evidence when commit, changed docs, and docs verification are present.

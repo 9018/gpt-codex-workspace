@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCodexTuiEvidenceCycle } from "../src/codex-tui-evidence-cycle.mjs";
 
-test("TUI evidence cycle returns missing when result.json is absent", async () => {
+test("TUI evidence cycle returns timed out when result.json is absent", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-"));
   const goal = { id: "goal_missing" };
   const out = await runCodexTuiEvidenceCycle({
@@ -21,7 +21,8 @@ test("TUI evidence cycle returns missing when result.json is absent", async () =
 
   assert.equal(out.evidence_ready, false);
   assert.equal(out.reason, "tui_result_json_missing");
-  assert.equal(out.finding.code, "tui_result_json_missing");
+  assert.equal(out.timed_out, true);
+  assert.equal(out.finding.code, "tui_result_json_timeout");
 });
 
 test("TUI evidence cycle returns ready when result.json exists", async () => {

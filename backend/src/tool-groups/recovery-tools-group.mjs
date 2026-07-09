@@ -142,6 +142,12 @@ function runtimeHealthProbeCommand() {
 // ---------------------------------------------------------------------------
 
 const ACTIVE_QUEUE_STATUSES = new Set(["waiting", "ready", "running", "blocked"]);
+const RECOVERABLE_QUEUE_STATUSES = new Set([
+  ...ACTIVE_QUEUE_STATUSES,
+  "waiting_for_review",
+  "waiting_for_repair",
+  "waiting_for_integration",
+]);
 
 function isRecoverySafeTerminalTaskStatus(status) {
   const normalized = normalizeTaskStatus(status);
@@ -496,16 +502,26 @@ export function createRecoveryToolsGroup({
       const lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
       const queue = state.goal_queue || [];
       const results = [];
-      const targets = queue_id ? queue.filter(i => i.queue_id === queue_id) : queue.filter(i => ACTIVE_QUEUE_STATUSES.has(i.status));
+      const targets = queue_id ? queue.filter(i => i.queue_id === queue_id) : queue.filter(i => RECOVERABLE_QUEUE_STATUSES.has(i.status));
 
       for (const item of targets) {
         const before = item.status;
         let proposed = null, reason = null, safe = "safe";
 
-        if (item.status === "blocked" && item.blocked_reason?.includes("Repo locked") && lockSummary.active_repo_locks === 0) {
+        const linkedGoal = item.goal_id ? (state.goals || []).find(x => x.id === item.goal_id) : null;
+        const linkedTask = item.task_id ? (state.tasks || []).find(x => x.id === item.task_id) : null;
+        const missingLinkedGoal = Boolean(item.goal_id && !linkedGoal);
+        const missingLinkedTask = Boolean(item.task_id && !linkedTask);
+
+        if (missingLinkedGoal && missingLinkedTask && ["waiting_for_review", "waiting_for_repair", "waiting_for_integration", "blocked"].includes(item.status)) {
+          proposed = "cancelled";
+          reason = "orphan queue item references missing goal " + item.goal_id + " and missing task " + item.task_id;
+          safe = "safe_orphan_queue_item";
+        }
+        if (!proposed && item.status === "blocked" && item.blocked_reason?.includes("Repo locked") && lockSummary.active_repo_locks === 0) {
           proposed = "waiting"; reason = "Repo locked but no active locks";
         }
-        if (item.status === "blocked" && !item.blocked_reason?.includes("Repo locked")) {
+        if (!proposed && item.status === "blocked" && !item.blocked_reason?.includes("Repo locked")) {
           const dg = item.depends_on_goal_id;
           const dt = item.depends_on_task_id;
           if (dg) { const g = (state.goals||[]).find(x=>x.id===dg); if (g && isRecoverySafeTerminalTaskStatus(g.status)) { proposed = "waiting"; reason = "dep goal " + dg + " terminal (" + g.status + ")"; } }

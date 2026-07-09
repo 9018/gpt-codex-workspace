@@ -160,19 +160,29 @@ export async function writeBuilderAgentRun(store, { task_id, goal_id, taskResult
  */
 export async function writeVerifierAgentRun(store, { task_id, goal_id, verification = {} } = {}, context = {}) {
   const outputArtifacts = [];
-  // P0-MA11: Always include verification artifact for contract validation
+  const commands = list(verification.commands);
+  const commandsMissing = commands.length === 0;
+  const passedWithEvidence = verification.passed === true && !commandsMissing;
+  const failureClass = commandsMissing ? "verification_commands_missing" : (verification.failure_class || "unknown");
+
+  // P0: a verifier run is only complete when it has concrete command evidence.
+  // This prevents a false-positive chain where verifier passes with
+  // commands_count=0 and reviewer/integrator/finalizer later fail with no
+  // actionable evidence.
   outputArtifacts.push({
     kind: "verification",
     path: null,
-    commands_count: list(verification.commands).length,
-    passed: verification.passed === true,
+    commands_count: commands.length,
+    passed: passedWithEvidence,
+    failure_class: passedWithEvidence ? null : failureClass,
+    missing_evidence: commandsMissing ? ["verification.commands"] : [],
   });
-  const verifierStatus = verification.passed === true ? "completed" : "failed";
+  const verifierStatus = passedWithEvidence ? "completed" : "failed";
   return writeIdempotentAgentRun(store, {
     task_id, goal_id, role: "verifier",
     status: verifierStatus,
     output_artifacts: outputArtifacts,
-    summary: verifierStatus === "completed" ? "Verification passed" : `Verification failed: ${verification.failure_class || "unknown"}`,
+    summary: verifierStatus === "completed" ? "Verification passed" : `Verification failed: ${failureClass}`,
   }, context);
 }
 
@@ -381,13 +391,23 @@ export async function completeQueuedAgentRuns(store, { task_id, goal_id, taskRes
         completed++;
         reasons.push(role + ": auto-completed from task result");
       } else if (existingEvidence) {
-        // Complete from task result evidence
-        await writeIdempotentAgentRun(store, {
-          task_id, goal_id, role,
-          status: 'completed',
-          output_artifacts: buildRoleOutputArtifacts(role, taskResult),
-          summary: role + ": skipped - no evidence",
-        }, context);
+        // Complete from task result evidence. Verifier evidence is special:
+        // it must include at least one concrete command, otherwise the queued
+        // verifier is failed instead of falsely auto-completed. This keeps the
+        // reviewer/integrator/finalizer chain from advancing on commands_count=0.
+        if (role === 'verifier') {
+          await writeVerifierAgentRun(store, {
+            task_id, goal_id,
+            verification: taskResult.verification || {},
+          }, context);
+        } else {
+          await writeIdempotentAgentRun(store, {
+            task_id, goal_id, role,
+            status: 'completed',
+            output_artifacts: buildRoleOutputArtifacts(role, taskResult),
+            summary: role + ": completed from task result evidence",
+          }, context);
+        }
         completed++;
         reasons.push(role + ": auto-completed from task result");
       } else {

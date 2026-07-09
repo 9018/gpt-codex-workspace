@@ -86,8 +86,11 @@ test("infers docs_only contracts without full gate requirements", () => {
   });
 
   assert.equal(contract.intent.operation_kind, "docs_only");
+  assert.equal(contract.requirements.requires_commit, true);
+  assert.equal(contract.requirements.requires_integration, false);
   assert.equal(contract.verification_plan.profile, "docs");
   assert.ok(!contract.verification_plan.required_commands.includes("full_gate"));
+  assert.ok(!contract.blocking_requirements.some((item) => item.id === "integration_completed"));
 });
 
 test("ambiguous requests remain low confidence and require review", () => {
