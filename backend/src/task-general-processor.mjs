@@ -544,6 +544,52 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       return disabledResult;
     }
 
+    // P0: PTY availability preflight — fail fast with terminal status
+    // before any session I/O or lock acquisition.
+    const { checkPtyAvailability } = await import('./codex-tui-pty-adapter.mjs');
+    const ptyReport = await checkPtyAvailability();
+    if (!ptyReport.node_pty && !ptyReport.script) {
+      const ptyFailedResult = {
+        kind: 'codex_tui_pty_unavailable',
+        provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+        status: 'failed',
+        task_id: task.id,
+        goal_id: goal?.id || null,
+        commit: 'none',
+        changed_files: [],
+        tests: null,
+        pty_report: ptyReport,
+        diagnostic: {
+          code: 'pty_mechanism_unavailable',
+          message: ptyReport.diagnostic,
+          detail: ptyReport.detail,
+        },
+        followup: 'Install node-pty via: npm install node-pty, or ensure script(1) is available on the system PATH.',
+        error: 'No PTY mechanism available for TUI session.',
+      };
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = 'failed';
+        item.result = ptyFailedResult;
+        item.logs.push({ time: new Date().toISOString(), message: '[worker] codex_tui_goal failed: ' + ptyReport.diagnostic });
+      });
+      if (goal) {
+        await appendGoalMessageFn(store, config, {
+          goal_id: goal.id,
+          role: 'codex',
+          content: '[worker] codex_tui_goal failed: ' + ptyReport.diagnostic + ' - ' + ptyReport.detail
+        }, context);
+      }
+      return ptyFailedResult;
+    }
+
+    // P0: Warn if node-pty is missing but script fallback is available
+    if (!ptyReport.node_pty && ptyReport.script) {
+      // Log diagnostic, but allow the session to proceed with script(1) fallback
+      await updateTaskFn(store, task.id, (item) => {
+        item.logs.push({ time: new Date().toISOString(), message: '[worker] codex_tui_goal warning: ' + ptyReport.detail });
+      });
+    }
+
     // P0-UA6-G4: Superpowers plugin preflight for TUI fallback
     const { checkSuperpowersPluginForTuiFallback } = await import('./codex-execution-provider.mjs');
     const superpowersCheck = checkSuperpowersPluginForTuiFallback(config);
@@ -640,8 +686,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       if (tuiLockAcquired && tuiLockPath) {
         try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch { /* non-fatal */ }
       }
+      // P0: Non-ready evidence is terminal — mark as failed/timed_out, not waiting_for_review
+      const terminalStatus = collected?.status === "timed_out" ? "timed_out" : "failed";
       await updateTaskFn(store, task.id, (item) => {
-        item.status = "waiting_for_review";
+        item.status = terminalStatus;
         item.result = {
           ...sessionStartedResult,
           tui_phase: "blocked_missing_evidence",
@@ -651,18 +699,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
           verification: {
             passed: false,
             findings: [collected?.finding || {
-              severity: "major",
-              code: "tui_result_json_missing",
-              message: "Result evidence not collected after TUI session start.",
+              severity: "blocker",
+              code: collected?.status === "timed_out" ? "tui_result_json_timeout" : "tui_result_json_failed",
+              message: `TUI session evidence collection resulted in terminal state: ${collected?.reason || "no evidence"} after evidence wait period.`,
             }],
           },
           collect_result: collected,
         };
-        item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal evidence missing: ${collected?.reason || "unknown"}` });
+        item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal ${terminalStatus}: ${collected?.reason || "no evidence"}` });
       });
       return {
         kind: "codex_tui_awaiting_evidence",
-        status: "waiting_for_review",
+        status: terminalStatus,
         session_id: session.id,
         expected_result_json: collected?.expected_result_json || null,
         finding: collected?.finding || null,

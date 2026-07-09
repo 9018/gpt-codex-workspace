@@ -615,3 +615,11 @@ Tools: `retention_status`/`retention_cleanup`, `tmp_status`/`cleanup_tmp`, `goal
 ---
 
 *This documentation is synchronized with the current codebase implementation (commit `140c70a`).*
+
+---
+
+## Reference Docs
+
+- [Closed-Loop Automation](closed-loop-automation.md) — Goal → Task → Agent → Evidence → Acceptance → Replan/Continue/Stop 闭环设计
+- [Closure and Acceptance](closure-acceptance.md) — 验收门、合同验证、闭环节点判定详解
+- [E2E Acceptance](e2e-acceptance.md) — 端到端交付流程与验收

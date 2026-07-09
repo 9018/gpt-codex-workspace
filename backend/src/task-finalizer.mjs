@@ -190,6 +190,7 @@ function manualReviewBlockers(evidence = {}) {
 function hasRepairPath(evidence = {}) {
   const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
   const closure = asObject(result.closure_decision);
+  const evTask = asObject(evidence.task);
 
   // If the repair outcome was already resolved by handleRepairCompletion,
   // the path is no longer active -- return false to prevent the finalizer
@@ -199,7 +200,7 @@ function hasRepairPath(evidence = {}) {
   // Without this guard a repair task with no changed files would have
   // hasRepairPath return true → finalizer returns waiting_for_repair
   // → handleRepairCompletion never called → parent stays stuck forever.
-  const isRepairTask = !!(task.parent_task_id || task.repair_of_task_id);
+  const isRepairTask = !!(evTask.parent_task_id || evTask.repair_of_task_id);
   if (isRepairTask && (closure.status === "waiting_for_repair" || closure.task_status === "waiting_for_repair"))
     return false;
   // from re-entering waiting_for_repair on stale metadata.
