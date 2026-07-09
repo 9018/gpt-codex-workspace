@@ -97,6 +97,28 @@ function generateAutoSummary(name, base) {
   return result;
 }
 
+function pickTaskForModel(task = {}) {
+  if (!task || typeof task !== "object") return undefined;
+  const keys = [
+    "id",
+    "goal_id",
+    "title",
+    "status",
+    "assignee",
+    "mode",
+    "repo_id",
+    "updated_at",
+    "created_at",
+    "lock_blocked_at",
+    "lock_blocked_by",
+    "lock_blocked_repo_id",
+    "lock_blocked_repo_path",
+  ];
+  const out = {};
+  for (const key of keys) if (task[key] !== undefined) out[key] = task[key];
+  return out;
+}
+
 function addCreateTaskModelFields(modelPayload, base) {
   const task = base?.task || {};
   const goal = base?.goal || {};
@@ -109,6 +131,10 @@ function addCreateTaskModelFields(modelPayload, base) {
   if (conversation.id !== undefined) modelPayload.conversation_id = conversation.id;
   if (task.status !== undefined) modelPayload.task_status = task.status;
   if (task.title !== undefined) modelPayload.title = task.title;
+  modelPayload.task = pickTaskForModel(task);
+  if (goal && typeof goal === "object") {
+    modelPayload.goal = { id: goal.id, title: goal.title, status: goal.status };
+  }
 }
 
 export function payloadHash(value) {
@@ -178,6 +204,98 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
     addCreateTaskModelFields(modelPayload, base);
   }
 
+
+  if (name === "get_task" && base.task) {
+    modelPayload.task = pickTaskForModel(base.task);
+  }
+
+  if (name === "run_assigned_codex_tasks" && Array.isArray(base.tasks)) {
+    modelPayload.tasks = base.tasks.map((item) => ({
+      task_id: item.task_id,
+      id: item.id,
+      status: item.status,
+      reason: item.reason,
+      task: pickTaskForModel(item.task),
+    }));
+  }
+
+  if (name === "repo_lock_status") {
+    for (const key of ["active_repo_locks", "stale_repo_locks", "lock_files", "locks", "active", "stale"]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+  }
+
+  if (name === "list_repo_locks" && Array.isArray(base.locks)) {
+    modelPayload.locks = base.locks.map((lock) => ({
+      repo_id: lock.repo_id,
+      task_id: lock.task_id,
+      status: lock.status,
+      stale: lock.stale,
+      path: lock.path,
+    }));
+  }
+
+
+
+  if (name === "runtime_status") {
+    for (const key of [
+      "repo_locks",
+      "worker",
+      "queue",
+      "config_sources",
+      "config",
+      "bark",
+      "github",
+      "warnings",
+    ]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+  }
+
+  if (name === "worker_status") {
+    for (const key of ["enabled", "running", "status", "queue", "counts", "last_tick_at", "health"]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+  }
+
+  if (name === "gptwork_doctor") {
+    for (const key of [
+      "repo_locks",
+      "suggested_next_actions",
+      "next_actions",
+      "queue",
+      "worker",
+      "warnings",
+      "status",
+    ]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+    if (modelPayload.suggested_next_actions === undefined && Array.isArray(base.next_actions)) {
+      modelPayload.suggested_next_actions = base.next_actions;
+    }
+    if (modelPayload.next_actions === undefined && Array.isArray(base.suggested_next_actions)) {
+      modelPayload.next_actions = base.suggested_next_actions;
+    }
+  }
+
+  if (name === "open_project_context") {
+    for (const key of [
+      "ok",
+      "repo",
+      "config",
+      "project_files",
+      "file_tree",
+      "recommended_next_tools",
+      "current_blockers",
+      "raw_history",
+      "state_summary",
+      "worker",
+      "worktree_retention",
+    ]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+  }
+
   // Legacy compat fields — bounded, sourced from card view model, never raw base
   if (legacy.keyValues) {
     modelPayload.keyValues = legacy.keyValues;
@@ -214,8 +332,11 @@ export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, su
   const modelPayload = tagged ? tagged.modelPayload : rawStructuredContent;
   const cardPayload = tagged ? tagged.cardPayload : undefined;
 
-  const summary = typeof summarizeToolResult === "function"
+  const generatedSummary = typeof summarizeToolResult === "function"
     ? summarizeToolResult(name, modelPayload)
+    : undefined;
+  const summary = typeof generatedSummary === "string" && generatedSummary.length > 0
+    ? generatedSummary
     : modelPayload?.card
       ? renderCardText(modelPayload.card)
       : JSON.stringify(modelPayload);
