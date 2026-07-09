@@ -327,9 +327,9 @@ export async function finalizeCodexTaskRun({
           }
         } else if (classifyIntegrationQueueResult(integrationResult).should_attempt_repair) {
           // Integration failed — create repair or escalate
-          const intCanRepair = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
+          const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           if (intCanRepair.should_repair) {
-            const intRepairGoal = createRepairGoalFromFindingsFn({
+            const intRepairGoal = await createRepairGoalFromFindingsFn({
               task: taskWithRepairContext(task, resolvedRepo),
               goal,
               findings: [{ severity: "blocker", code: "integration_" + integrationResult.status, message: integrationResult.error || "Integration " + integrationResult.status, source: "integration_queue" }],
@@ -570,10 +570,10 @@ export async function finalizeCodexTaskRun({
       });
     if (closureDecision.status === "waiting_for_repair" && !taskResult.repair_goal_id && !taskResult.repair_task_id) {
       const repairableBlockers = Array.isArray(closureDecision.repairable_blockers) ? closureDecision.repairable_blockers : [];
-      const repairCheck = shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
+      const repairCheck = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
       if (repairableBlockers.length > 0 && repairCheck.should_repair) {
         const failureClass = repairableBlockers[0]?.code || "acceptance_blocker";
-        const repairGoal = createRepairGoalFromFindingsFn({
+        const repairGoal = await createRepairGoalFromFindingsFn({
           task: taskWithRepairContext(task, resolvedRepo),
           goal,
           findings: repairableBlockers,

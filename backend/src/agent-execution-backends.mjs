@@ -47,7 +47,7 @@ export const ROLE_BACKEND_DEFAULTS = Object.freeze({
   integrator: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for integration." },
   finalizer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for finalization." },
   repairer: { backend: AGENT_BACKEND_IDS.CODEX_EXEC, semantic: AGENT_BACKEND_SEMANTIC.REAL, reason: null, doc: "Codex execution for repair attempts." },
-});;
+});
 
 // Roles whose default execution semantic is auto_artifact when the null backend
 // is explicitly configured (via agentRoleBackends or task metadata).
@@ -102,8 +102,6 @@ export function resolveBackendSource({ config = {}, role = "builder", task = {} 
   return { source: "product_default", label: "Product default (ROLE_BACKEND_DEFAULTS)" };
 }
 
-/**
-});
 /**
  * Resolve the execution semantic for a resolved backend id and role context.
  *
