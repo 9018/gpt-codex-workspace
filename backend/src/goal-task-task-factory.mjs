@@ -69,7 +69,7 @@ export function buildGoalTask(goal, conversation, createdBy) {
       "Before acting, call get_goal_context with this goal_id and append progress with append_goal_message."
     ].join("\n"),
     created_by: createdBy,
-    require_pipeline_gates: mode === "builder",
+    require_pipeline_gates: ["builder", "deploy", "admin"].includes(mode),
     assignee: "codex",
     status: "assigned",
     mode,

@@ -38,6 +38,15 @@ const RETRY_HEALING_ACTIONS = new Set([
   "fallback_parse_and_retry",
 ]);
 
+function recordAgentRunWritebackFailure(taskResult, role, err) {
+  if (!taskResult || typeof taskResult !== "object") return;
+  const message = String(err?.message || err || "agent run writeback failed").slice(0, 500);
+  taskResult.agent_run_writeback = Array.isArray(taskResult.agent_run_writeback) ? taskResult.agent_run_writeback : [];
+  taskResult.agent_run_writeback.push({ role, status: "failed", reason: message });
+  taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+  taskResult.warnings.push({ code: "agent_run_writeback_failed", role, severity: "warning", message });
+}
+
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
     "root_task_id",
@@ -914,7 +923,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     goal_id: goal?.id,
     taskResult,
     summary,
-  }, context).catch(() => {});
+  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "builder", err));
 
 
   // ---- P0: Network failure retry gate ----
@@ -1346,21 +1355,21 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     task_id: task.id,
     goal_id: goal?.id,
     verification: taskResult.verification || {},
-  }, context).catch(() => {});
+  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "verifier", err));
 
   // Agent run writeback: reviewer (non-blocking)
   await writeReviewerAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     reviewer_decision: taskResult.reviewer_decision || {},
-  }, context).catch(() => {});
+  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "reviewer", err));
 
   // Agent run writeback: integrator
   await writeIntegratorAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     integrationResult: taskResult.integration || {},
-  }, context).catch(() => {});
+  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
 
   // P0-MA12-G1: Write finalizer agent_run with result artifact before pipeline gate evaluation
   // so evaluateTaskPipelineGates sees the completed finalizer with kind=result artifact
@@ -1371,7 +1380,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     goal_id: goal?.id,
     taskResult,
     taskStatus,
-  }, context).catch(() => {});
+  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
 
 
 

@@ -103,3 +103,33 @@ test("manager sends input, reads status, and stops sessions safely", async () =>
 });
 
 // recovery test appended by ChatGPT
+
+
+test("stores session metadata under explicit workspaceRoot instead of cwd", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-workspace-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_root", title: "Root config" },
+    goal: { id: "goal_root" },
+    cwd,
+    workspaceRoot,
+    command: "codex-custom",
+    evidenceWaitMs: 1234,
+    requireSuperpowers: true,
+    ptyAdapter: fakeAdapter,
+  });
+
+  assert.equal(session.session_store_root, workspaceRoot);
+  assert.equal(session.workspace_root, workspaceRoot);
+  assert.equal(session.deprecated_cwd_session_root, false);
+  assert.equal(fakeAdapter.spawns[0].cwd, cwd);
+  assert.equal(fakeAdapter.spawns[0].command, "codex-custom");
+
+  const workspaceStore = createCodexTuiSessionStore({ workspaceRoot });
+  const cwdStore = createCodexTuiSessionStore({ workspaceRoot: cwd });
+  const stored = await workspaceStore.readSession(session.id, { maxChars: 0 });
+  assert.equal(stored.metadata.session_store_root, workspaceRoot);
+  assert.equal(stored.metadata.evidence_wait_ms, 1234);
+  await assert.rejects(() => cwdStore.readSession(session.id, { maxChars: 0 }), /ENOENT|no such file/i);
+});

@@ -84,11 +84,24 @@ function waitForTuiOutput(store, sessionId, readyTimeoutMs = 5_000) {
   });
 }
 
-export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = null, ptyAdapter = null } = {}) {
+export async function startCodexTuiGoalSession({
+  task,
+  goal,
+  cwd,
+  workspaceRoot = null,
+  candidateWorkspaceRoots = [],
+  repoLockId = null,
+  ptyAdapter = null,
+  command = "codex",
+  evidenceWaitMs = null,
+  requireSuperpowers = true,
+} = {}) {
   if (!cwd) throw new Error("cwd is required");
   if (!goal?.id) throw new Error("goal.id is required");
-  const store = createCodexTuiSessionStore({ workspaceRoot: cwd });
-  const adapter = ptyAdapter || createCodexTuiPtyAdapter();
+  const sessionStoreRoot = workspaceRoot || candidateWorkspaceRoots[0] || cwd;
+  const deprecatedCwdSessionRoot = !workspaceRoot && candidateWorkspaceRoots.length === 0;
+  const store = createCodexTuiSessionStore({ workspaceRoot: sessionStoreRoot });
+  const adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
 
@@ -98,12 +111,21 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
     goalId: goal.id,
     cwd,
     repoLockId,
+    metadata: {
+      workspace_root: sessionStoreRoot,
+      session_store_root: sessionStoreRoot,
+      command,
+      evidence_wait_ms: Number.isFinite(Number(evidenceWaitMs)) ? Number(evidenceWaitMs) : null,
+      require_superpowers_for_tui: requireSuperpowers !== false,
+      deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
+    },
   });
 
   // Launch codex bare — no argv prompt.
   // Prompt is submitted via stdin after TUI is ready.
   const ptySession = await adapter.spawn({
     cwd,
+    command,
     onData: (chunk) => {
       store.appendSessionLog(sessionId, chunk).catch(() => {});
     },
@@ -130,7 +152,15 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
     first_output_at: firstOutputAt,
     submitted: true,
   });
-  return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt, bootstrap_method: "stdin_enter" };
+  return {
+    ...record,
+    bootstrap_sent_at: bootstrapSentAt,
+    first_output_at: firstOutputAt,
+    bootstrap_method: "stdin_enter",
+    workspace_root: sessionStoreRoot,
+    session_store_root: sessionStoreRoot,
+    deprecated_cwd_session_root: deprecatedCwdSessionRoot,
+  };
 }
 
 export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {

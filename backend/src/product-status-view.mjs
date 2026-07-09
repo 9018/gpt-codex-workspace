@@ -371,6 +371,11 @@ export async function collectProductStatus(services) {
       github_enabled: github?.enabled || false,
       agent_backend: config.agentBackend || "codex_exec",
       agent_role_backends: config.agentRoleBackends || {},
+      codex_tui_enabled: config.codexTuiEnabled === true,
+      codex_tui_command_set: Boolean(config.codexTuiCommand),
+      codex_tui_evidence_wait_ms: config.codexTuiEvidenceWaitMs ?? null,
+      codex_tui_session_root: config.codexTuiSessionRoot || config.defaultWorkspaceRoot || config.workspaceRoot || null,
+      require_superpowers_for_tui: config.requireSuperpowersForTui !== false,
       worker_interval_ms: workerHealth.interval_ms || null,
     },
     next_actions: nextActions,
@@ -603,6 +608,10 @@ export function productStatusCard(data) {
   lines.push(formatKeyValue('bark', data.config.bark_enabled ? 'enabled' : 'disabled'));
   lines.push(formatKeyValue('github', data.config.github_enabled ? 'enabled' : 'disabled'));
   lines.push(formatKeyValue('agent backend', data.config.agent_backend));
+  lines.push(formatKeyValue('codex tui', data.config.codex_tui_enabled ? 'enabled' : 'disabled'));
+  lines.push(formatKeyValue('tui evidence wait', data.config.codex_tui_evidence_wait_ms));
+  lines.push(formatKeyValue('tui session root', data.config.codex_tui_session_root || '(default workspace)'));
+  lines.push(formatKeyValue('tui superpowers', data.config.require_superpowers_for_tui ? 'required' : 'not required'));
   // Backend chain from canonical source (shows per-role product defaults vs overrides)
   if (data.role_backends && data.role_backends.text) {
     lines.push(formatKeyValue('backend chain', data.role_backends.text));

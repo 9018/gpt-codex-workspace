@@ -1,4 +1,5 @@
 import { AGENT_ROLE_ENUM, LEGACY_AGENT_ROLE_ALIASES, normalizeContractRole } from "./agent-artifact-contract.mjs";
+import { ROLE_BACKEND_DEFAULTS, AGENT_BACKEND_IDS, AGENT_BACKEND_SEMANTIC } from "./agent-execution-backends.mjs";
 
 /**
  * subagent-policy.mjs — Agent pipeline role definitions, defaults, and backends.
@@ -66,18 +67,9 @@ export const LEGACY_ROLE_MAPPING = Object.freeze({
 //   - codex_exec:  Backend: codex_exec,  Evidence: real agent execution via Codex CLI
 //   - local_command: Backend: local_command,  Evidence: deterministic shell command
 //   - null:        Backend: null,  Evidence: auto_artifact (no external commands)
-export const DEFAULT_AGENT_BACKEND_BY_ROLE = Object.freeze({
-  context_curator: "null",
-  planner: "null",
-  builder: "codex_exec",
-  // P0-05: verifier and reviewer now default to local_command for deterministic execution
-  verifier: "local_command",
-  reviewer: "local_command",
-  // integrator and finalizer remain null (auto-artifact from result evidence)
-  integrator: "null",
-  finalizer: "null",
-  repairer: "codex_exec",
-});
+export const DEFAULT_AGENT_BACKEND_BY_ROLE = Object.freeze(Object.fromEntries(
+  Object.entries(ROLE_BACKEND_DEFAULTS).map(([role, info]) => [role, info.backend || AGENT_BACKEND_IDS.CODEX_EXEC])
+));
 
 export const AGENT_ROLES = AGENT_ROLE_ENUM;
 export const LEGACY_AGENT_ROLES = Object.freeze(Object.keys(LEGACY_AGENT_ROLE_ALIASES).filter((role) => role !== "analyst"));
@@ -103,8 +95,8 @@ export function validateAgentRoles(roles = DEFAULT_AGENT_PIPELINE) {
 
 /**
  * Resolve the default backend for a given pipeline role.
- * P0-05: builder -> "codex_exec", verifier/reviewer -> "local_command",
- * others -> "null" (auto-artifact) unless overridden.
+ * Canonical backend source: ROLE_BACKEND_DEFAULTS from agent-execution-backends.mjs.
+ * Product default is codex_exec for all roles unless overridden.
  *
  * @param {string} role - Agent role
  * @param {object} [overrides={}] - Optional role->backend override map
@@ -115,7 +107,7 @@ export function resolveDefaultBackendForRole(role, overrides = {}) {
   if (overrides && typeof overrides === "object" && overrides[normalized]) {
     return overrides[normalized];
   }
-  return DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || "null";
+  return DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || AGENT_BACKEND_IDS.CODEX_EXEC;
 }
 
 /**
@@ -132,18 +124,18 @@ export function describeRoleBackend(role, config = {}) {
   const configBackend = config.agentRoleBackends?.[normalized]
     || config.agentBackendByRole?.[normalized];
   const globalBackend = config.agentBackend || config.agentBackendDefault;
-  const resolvedBackend = configBackend || globalBackend || DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || "codex_exec";
+  const resolvedBackend = configBackend || globalBackend || DEFAULT_AGENT_BACKEND_BY_ROLE[normalized] || AGENT_BACKEND_IDS.CODEX_EXEC;
   const overridden = Boolean(configBackend || globalBackend);
 
   let semantic, nullReason, evidenceSource, doc;
 
-  if (resolvedBackend === "codex_exec") {
-    semantic = "real";
+  if (resolvedBackend === AGENT_BACKEND_IDS.CODEX_EXEC) {
+    semantic = AGENT_BACKEND_SEMANTIC.REAL;
     nullReason = null;
     evidenceSource = "codex_exec (real agent execution)";
-    doc = "Actual Codex execution for code changes.";
-  } else if (resolvedBackend === "local_command") {
-    semantic = "real";
+    doc = ROLE_BACKEND_DEFAULTS[normalized]?.doc || "Actual Codex execution for this pipeline role.";
+  } else if (resolvedBackend === AGENT_BACKEND_IDS.LOCAL_COMMAND) {
+    semantic = AGENT_BACKEND_SEMANTIC.REAL;
     nullReason = null;
     evidenceSource = "local_command (deterministic shell command)";
     doc = "Deterministic local command execution.";

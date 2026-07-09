@@ -15,41 +15,30 @@ import {
 // P0-05: Role backend defaults
 // ===========================================================================
 
-test("subagent-policy: DEFAULT_AGENT_BACKEND_BY_ROLE uses local_command for verifier and reviewer", () => {
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.verifier, "local_command");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.reviewer, "local_command");
-});
-
-test("subagent-policy: DEFAULT_AGENT_BACKEND_BY_ROLE keeps codex_exec for builder and repairer", () => {
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.builder, "codex_exec");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.repairer, "codex_exec");
-});
-
-test("subagent-policy: DEFAULT_AGENT_BACKEND_BY_ROLE keeps null for context_curator, planner, integrator, finalizer", () => {
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.context_curator, "null");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.planner, "null");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.integrator, "null");
-  assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE.finalizer, "null");
+test("subagent-policy: DEFAULT_AGENT_BACKEND_BY_ROLE uses canonical codex_exec defaults for all roles", () => {
+  for (const role of ALL_PIPELINE_ROLES) {
+    assert.equal(DEFAULT_AGENT_BACKEND_BY_ROLE[role], "codex_exec", `${role} should derive codex_exec from ROLE_BACKEND_DEFAULTS`);
+  }
 });
 
 // ===========================================================================
 // P0-05: resolveDefaultBackendForRole
 // ===========================================================================
 
-test("subagent-policy: resolveDefaultBackendForRole returns local_command for verifier", () => {
-  assert.equal(resolveDefaultBackendForRole("verifier"), "local_command");
+test("subagent-policy: resolveDefaultBackendForRole returns codex_exec for verifier", () => {
+  assert.equal(resolveDefaultBackendForRole("verifier"), "codex_exec");
 });
 
-test("subagent-policy: resolveDefaultBackendForRole returns local_command for reviewer", () => {
-  assert.equal(resolveDefaultBackendForRole("reviewer"), "local_command");
+test("subagent-policy: resolveDefaultBackendForRole returns codex_exec for reviewer", () => {
+  assert.equal(resolveDefaultBackendForRole("reviewer"), "codex_exec");
 });
 
-test("subagent-policy: resolveDefaultBackendForRole returns null for integrator", () => {
-  assert.equal(resolveDefaultBackendForRole("integrator"), "null");
+test("subagent-policy: resolveDefaultBackendForRole returns codex_exec for integrator", () => {
+  assert.equal(resolveDefaultBackendForRole("integrator"), "codex_exec");
 });
 
-test("subagent-policy: resolveDefaultBackendForRole returns null for finalizer", () => {
-  assert.equal(resolveDefaultBackendForRole("finalizer"), "null");
+test("subagent-policy: resolveDefaultBackendForRole returns codex_exec for finalizer", () => {
+  assert.equal(resolveDefaultBackendForRole("finalizer"), "codex_exec");
 });
 
 test("subagent-policy: resolveDefaultBackendForRole returns codex_exec for builder", () => {
@@ -66,42 +55,40 @@ test("subagent-policy: resolveDefaultBackendForRole respects overrides", () => {
 // P0-05: describeRoleBackend
 // ===========================================================================
 
-test("subagent-policy: describeRoleBackend returns real semantic for verifier with local_command default", () => {
+test("subagent-policy: describeRoleBackend returns real semantic for verifier with codex_exec default", () => {
   const info = describeRoleBackend("verifier", {});
   assert.equal(info.role, "verifier");
-  assert.equal(info.backend, "local_command");
+  assert.equal(info.backend, "codex_exec");
   assert.equal(info.semantic, "real");
   assert.equal(info.null_reason, null);
-  assert.equal(info.evidence_source, "local_command (deterministic shell command)");
+  assert.equal(info.evidence_source, "codex_exec (real agent execution)");
   assert.equal(info.overridden, false);
   assert.equal(info.config_source, "default");
 });
 
-test("subagent-policy: describeRoleBackend returns real semantic for reviewer with local_command default", () => {
+test("subagent-policy: describeRoleBackend returns real semantic for reviewer with codex_exec default", () => {
   const info = describeRoleBackend("reviewer", {});
   assert.equal(info.role, "reviewer");
-  assert.equal(info.backend, "local_command");
+  assert.equal(info.backend, "codex_exec");
   assert.equal(info.semantic, "real");
   assert.equal(info.overridden, false);
 });
 
-test("subagent-policy: describeRoleBackend returns auto_artifact semantic for integrator", () => {
+test("subagent-policy: describeRoleBackend returns real semantic for integrator by canonical default", () => {
   const info = describeRoleBackend("integrator", {});
   assert.equal(info.role, "integrator");
-  assert.equal(info.backend, "null");
-  assert.equal(info.semantic, "auto_artifact");
-  assert.equal(info.null_reason, "auto_artifact");
-  assert.equal(info.evidence_source, "null (auto_artifact — no external commands executed)");
-  assert.ok(info.doc.includes("Auto-completed"));
+  assert.equal(info.backend, "codex_exec");
+  assert.equal(info.semantic, "real");
+  assert.equal(info.null_reason, null);
+  assert.equal(info.evidence_source, "codex_exec (real agent execution)");
 });
 
-test("subagent-policy: describeRoleBackend returns auto_artifact semantic for finalizer", () => {
+test("subagent-policy: describeRoleBackend returns real semantic for finalizer by canonical default", () => {
   const info = describeRoleBackend("finalizer", {});
   assert.equal(info.role, "finalizer");
-  assert.equal(info.backend, "null");
-  assert.equal(info.semantic, "auto_artifact");
-  assert.equal(info.null_reason, "auto_artifact");
-  assert.ok(info.doc.includes("Auto-completed"));
+  assert.equal(info.backend, "codex_exec");
+  assert.equal(info.semantic, "real");
+  assert.equal(info.null_reason, null);
 });
 
 test("subagent-policy: describeRoleBackend returns real semantic for builder with codex_exec", () => {
@@ -143,18 +130,16 @@ test("subagent-policy: describeRoleBackend covers all pipeline roles", () => {
   }
 });
 
-test("subagent-policy: describeRoleBackend context_curator has auto_artifact semantic", () => {
+test("subagent-policy: describeRoleBackend context_curator has real codex_exec semantic", () => {
   const info = describeRoleBackend("context_curator", {});
-  assert.equal(info.semantic, "auto_artifact");
-  assert.equal(info.backend, "null");
-  assert.ok(info.doc.includes("Context bundle"));
+  assert.equal(info.semantic, "real");
+  assert.equal(info.backend, "codex_exec");
 });
 
-test("subagent-policy: describeRoleBackend planner has auto_artifact semantic", () => {
+test("subagent-policy: describeRoleBackend planner has real codex_exec semantic", () => {
   const info = describeRoleBackend("planner", {});
-  assert.equal(info.semantic, "auto_artifact");
-  assert.equal(info.backend, "null");
-  assert.ok(info.doc.includes("Plan"));
+  assert.equal(info.semantic, "real");
+  assert.equal(info.backend, "codex_exec");
 });
 
 // ===========================================================================

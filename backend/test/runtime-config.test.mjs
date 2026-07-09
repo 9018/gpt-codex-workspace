@@ -122,6 +122,29 @@ test("buildRuntimeConfig parses delivery result recovery commands from runtime.e
   assert.equal(sources.deliveryResultRecoveryCommands, "runtime.env");
 });
 
+
+
+test("buildRuntimeConfig exposes codex TUI productization settings", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile(
+    "GPTWORK_CODEX_TUI_ENABLED=true\n" +
+    "GPTWORK_CODEX_TUI_COMMAND=codex-tui-custom\n" +
+    "GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS=4321\n" +
+    "GPTWORK_CODEX_TUI_SESSION_ROOT=/tmp/gptwork-tui-sessions\n" +
+    "GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=false\n"
+  );
+  const { config, sources } = buildRuntimeConfig(root);
+  assert.equal(config.codexTuiEnabled, true);
+  assert.equal(config.codexTuiCommand, "codex-tui-custom");
+  assert.equal(config.codexTuiEvidenceWaitMs, 4321);
+  assert.equal(config.codexTuiSessionRoot, "/tmp/gptwork-tui-sessions");
+  assert.equal(config.requireSuperpowersForTui, false);
+  assert.equal(sources.codexTuiCommand, "runtime.env");
+  assert.equal(sources.codexTuiEvidenceWaitMs, "runtime.env");
+  assert.equal(sources.codexTuiSessionRoot, "runtime.env");
+  assert.equal(sources.requireSuperpowersForTui, "runtime.env");
+});
+
 test("buildRuntimeConfig defaults bark config", () => {
   clearGptWorkVars();
   const { config, sources } = buildRuntimeConfig("/tmp/test-root");

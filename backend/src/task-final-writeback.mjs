@@ -27,6 +27,15 @@ import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finali
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
+function recordAgentRunWritebackFailure(taskResult, role, err) {
+  if (!taskResult || typeof taskResult !== "object") return;
+  const message = String(err?.message || err || "agent run writeback failed").slice(0, 500);
+  taskResult.agent_run_writeback = Array.isArray(taskResult.agent_run_writeback) ? taskResult.agent_run_writeback : [];
+  taskResult.agent_run_writeback.push({ role, status: "failed", reason: message });
+  taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+  taskResult.warnings.push({ code: "agent_run_writeback_failed", role, severity: "warning", message });
+}
+
 function applyRepairMetadata(args = {}, repairGoal = {}) {
   for (const key of [
     "root_task_id",
@@ -641,28 +650,28 @@ export async function finalizeCodexTaskRun({
     goal_id: goal?.id,
     taskResult,
     summary: taskResult.summary || '',
-  }, _writebackCtx).catch(() => {});
+  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "builder", err));
   await writeIntegratorAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     integrationResult: taskResult.integration || {},
-  }, _writebackCtx).catch(() => {});
+  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
   await writeVerifierAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     verification: taskResult.verification || {},
-  }, _writebackCtx).catch(() => {});
+  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "verifier", err));
   await writeReviewerAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     reviewer_decision: taskResult.reviewer_decision || { decision: { status: taskStatus } },
-  }, _writebackCtx).catch(() => {});
+  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "reviewer", err));
   await writeFinalizerAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
     taskResult,
     taskStatus,
-  }, _writebackCtx).catch(() => {});
+  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
 
 
   // Cleanup policy: remove_on_success_retain_on_failure.
