@@ -41,4 +41,12 @@ jobs:
 
       - name: Delivery check (full profile)
         working-directory: backend
-        run: npm run release:delivery-check -- --profile full
+        run: npm run release:delivery-check -- --profile full --json-report .gptwork/releases/delivery-check-report.json
+
+      - name: Upload delivery check report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: delivery-check-report
+          path: backend/.gptwork/releases/delivery-check-report.json
+          if-no-files-found: ignore
