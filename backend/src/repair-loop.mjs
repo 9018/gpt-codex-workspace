@@ -372,7 +372,15 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
       if (!passed) {
         // Compute remaining repair budget.
         const parentMaxAttempts_ = parent.max_attempts || parent.maxAttempts || 2;
-        const parentAttemptSoFar_ = Number(parent.repair_attempt || parent.attempt || 0);
+        // Check both top-level repair_attempt (set by repair creation code)
+        // and result-level repair_attempt (set by transitionTaskForWorker).
+        // Also use completedTask's repair_attempt as the upper bound.
+        let _pa = Number(parent.repair_attempt || 0);
+        if (!_pa && parent.result && parent.result.repair_attempt) {
+          _pa = Number(parent.result.repair_attempt);
+        }
+        _pa = Math.max(_pa, Number(completedTask.repair_attempt || 0), Number(completedTask.attempt || 0));
+        const parentAttemptSoFar_ = _pa;
         const budgetRemaining_ = parentAttemptSoFar_ < parentMaxAttempts_;
         const nextAttempt_ = parentAttemptSoFar_ + 1;
 
@@ -383,10 +391,10 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
           parent.repair_attempt = nextAttempt_;
           parent.attempt = nextAttempt_;
           parent.status = "waiting_for_repair";
-          parent.result.kind = "repair_attempt_exhausted_no_change";
+          parent.result.kind = "repair_continued";
           parent.result.repair_outcome = "continued";
           parent.result.repair_attempts = (parent.result.repair_attempts || 0) + 1;
-          parent.result.summary = `Repair task ${completedTask.id} completed without advancing closure; ${nextAttempt_}/${parentMaxAttempts_} -- creating next repair attempt.`;
+          parent.result.summary = `Repair task ${completedTask.id} completed without advancing closure; preparing next repair attempt (${nextAttempt_}/${parentMaxAttempts_}).`;
           // Clear stale repair path metadata so the finalizer re-evaluates.
           delete parent.result.repair_goal_id;
           delete parent.result.repair_task_id;

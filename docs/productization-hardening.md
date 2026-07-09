@@ -1,3 +1,42 @@
+## 2026-07-10 P0 Closure State Machine Convergence Second Repair
+
+This task fixes the convergence bug where repair tasks stuck Closure parent tasks
+in an infinite `waiting_for_repair` loop when the repair task produced no changed
+files (`codex_failed`/no-change outcome).
+
+### Changed files
+- `backend/src/task-finalizer.mjs`
+- `backend/src/repair-loop.mjs`
+
+### Fixes
+1. **task-finalizer.mjs - `hasRepairPath()`**: Added guard blocking recursive
+   `waiting_for_repair` — a repair task (has `parent_task_id`) must NOT treat its
+   OWN closure decision as an active external repair path.
+2. **task-finalizer.mjs - `decideTaskFinalState()`**: When repairable blockers exist
+   for a repair task, route to `failed` instead of `waiting_for_repair` so
+   `handleRepairCompletion` is called with `passed: false`. Also in existing hold
+   fallthrough — repair tasks stuck in `existing_repair_hold` escape to `failed`.
+3. **repair-loop.mjs - `handleRepairCompletion`**: Budget calculation now also checks
+   `parent.result.repair_attempt` and `completedTask.repair_attempt`, not only the
+   top-level `parent.repair_attempt` which is often 0 for parent tasks.
+
+### Behavior change
+- **Before**: A repair task with `codex_failed`/no-changed-files would go to
+  `waiting_for_repair` (via its own closure decision), `handleRepairCompletion`
+  was never called, parent stayed stuck forever.
+- **After**: The repair task goes to `failed`, `handleRepairCompletion` is called with
+  `passed: false`, the parent's repair-budget logic runs, and the parent either
+  gets a new repair attempt or moves to `human_interrupted_for_repair_budget_exhausted`.
+
+### Verification
+```
+node --check backend/src/task-finalizer.mjs — passed
+node --check backend/src/repair-loop.mjs — passed
+node --check backend/src/task-final-writeback.mjs — passed
+node -e 'import("./backend/src/task-finalizer.mjs")' — import OK
+node -e 'import("./backend/src/repair-loop.mjs")' — import OK
+```
+
 # Productization Hardening
 
 ## 2026-07-10 P0 hard blockers

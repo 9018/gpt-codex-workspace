@@ -439,6 +439,7 @@ export function decideTaskFinalState(evidence = {}) {
         reason: codexFailed ? "codex_failed_repairable" : "repairable_failure",
         repairableBlockers,
       });
+    }
     // Repair tasks must go to "failed" to trigger handleRepairCompletion propagation to parent.
     if (isRepairTask) {
       return decision(evidence, {
@@ -446,7 +447,6 @@ export function decideTaskFinalState(evidence = {}) {
         reason: "repair_task_unrecoverable",
         blockers: repairableBlockers,
       });
-    }
     }
     return decision(evidence, {
       status: "waiting_for_review",
@@ -467,6 +467,15 @@ export function decideTaskFinalState(evidence = {}) {
 
   const holdStatus = existingHoldStatus(evidence);
   if (holdStatus === "waiting_for_repair") {
+    // P0: Repair tasks stuck in existing_repair_hold must escape to "failed".
+    const isRepairTask = !!(evidence.task && (evidence.task.parent_task_id || evidence.task.repair_of_task_id));
+    if (isRepairTask) {
+      return decision(evidence, {
+        status: "failed",
+        reason: "repair_task_unrecoverable_hold",
+        blockers: [blocker("repair_task_hold_loop", "Repair task stuck in existing_repair_hold; terminating to unblock parent convergence.")],
+      });
+    }
     return decision(evidence, {
       status: "waiting_for_repair",
       reason: "existing_repair_hold",
