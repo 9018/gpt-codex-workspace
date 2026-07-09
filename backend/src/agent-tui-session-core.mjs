@@ -141,41 +141,37 @@ export function createAgentTuiSessionManager({
       metadata: { provider: providerName },
     });
 
-    // Build the goal objective for the initial spawn prompt
-    const messages = buildBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
-    const objective = Array.isArray(messages) && messages.length > 0
-      ? messages[0].replace(/^\/goal\s*/i, "").trim()
-      : `goal_id=${goal.id} task=${task?.id || goal.id}`;
-
-    // Spawn with the objective as initial PROMPT argument so codex starts
-    // working immediately instead of relying on /goal via stdin.
+    // Launch codex bare — no argv prompt.
+    // Prompt is submitted via stdin after TUI is ready.
     const ptySession = await adapter.spawn({
       cwd,
       onData: (chunk) => {
         store.appendSessionLog(sessionId, chunk).catch(() => {});
       },
-      args: [objective],
     });
 
     activeSessions.set(sessionId, { store, ptySession });
 
-    // Wait briefly for TUI to be ready, then send follow-up
+    // Phase 1: wait for TUI ready (first output on PTY)
     const firstOutputAt = await waitForTuiOutput(sessionId, store, 5_000);
+
+    // Phase 2: submit prompt via stdin (messages already include \n)
+    const messages = buildBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
     const bootstrapSentAt = new Date().toISOString();
-    // Send the follow-up instruction via stdin (not the full bootstrap)
-    const followup = Array.isArray(messages) && messages.length > 1
-      ? messages[1]
-      : `Continue goal_id=${goal.id}.`;
-    ptySession.write(followup + "\n");
+    for (const message of messages) {
+      ptySession.write(message);
+    }
 
     record = await store.updateSession(sessionId, {
       status: "running",
       pty_pid: ptySession.pid ?? null,
       started_at: bootstrapSentAt,
       bootstrap_sent_at: bootstrapSentAt,
+      bootstrap_method: "stdin_enter",
       first_output_at: firstOutputAt,
+      submitted: true,
     });
-    return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt };
+    return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt, bootstrap_method: "stdin_enter" };
   };
 
   const resumeSession = async (sessionId, { workspaceRoot = null, candidateWorkspaceRoots: extraRoots = [], ptyAdapter = null, taskTitle = null } = {}) => {

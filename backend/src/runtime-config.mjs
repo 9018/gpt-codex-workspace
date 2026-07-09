@@ -163,6 +163,24 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     defaultRemote: _get("GPTWORK_DEFAULT_REMOTE", "origin"),
     enableTaskWorktrees: _getBool("GPTWORK_ENABLE_TASK_WORKTREES", true),
 
+    // TUI-first branch loop
+    loopStrategy: _get("GPTWORK_LOOP_STRATEGY", ""),
+    executeProvider: _get("GPTWORK_EXECUTE_PROVIDER", "claude_tui_goal"),
+    acceptProvider: _get("GPTWORK_ACCEPT_PROVIDER", "codex_tui_goal"),
+    advanceProvider: _get("GPTWORK_ADVANCE_PROVIDER", "claude_exec_goal"),
+    repairProvider: _get("GPTWORK_REPAIR_PROVIDER", "claude_tui_goal"),
+    goalWorktreeRoot: _get("GPTWORK_GOAL_WORKTREE_ROOT", ""),
+    goalBranchPrefix: _get("GPTWORK_GOAL_BRANCH_PREFIX", "gptwork/goal"),
+    mergeTargetBranch: _get("GPTWORK_MERGE_TARGET_BRANCH", "main"),
+    claudeCommand: _get("GPTWORK_CLAUDE_COMMAND", "claude"),
+    codexCommand: _get("GPTWORK_CODEX_COMMAND", "codex"),
+    claudeTuiEnabled: _getBool("GPTWORK_CLAUDE_TUI_ENABLED", false),
+    codexTuiEnabled: _getBool("GPTWORK_CODEX_TUI_ENABLED", false),
+    claudeExecAdvanceEnabled: _getBool("GPTWORK_CLAUDE_EXEC_ADVANCE_ENABLED", false),
+    claudeTuiArgs: [],
+    codexTuiArgs: [],
+    advanceTimeoutMs: _getNum("GPTWORK_ADVANCE_TIMEOUT_MS", 300000),
+
     // Bark
     barkEnabled: _get("GPTWORK_BARK_ENABLED", ""),
     barkUrl: _get("GPTWORK_BARK_URL", ""),
@@ -303,6 +321,21 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     contextCrossGoalTopK: "GPTWORK_CONTEXT_CROSS_GOAL_TOP_K",
     contextPerGoalTopK: "GPTWORK_CONTEXT_PER_GOAL_TOP_K",
     contextMaxGoalsScanned: "GPTWORK_CONTEXT_MAX_GOALS_SCANNED",
+
+    loopStrategy: "GPTWORK_LOOP_STRATEGY",
+    executeProvider: "GPTWORK_EXECUTE_PROVIDER",
+    acceptProvider: "GPTWORK_ACCEPT_PROVIDER",
+    advanceProvider: "GPTWORK_ADVANCE_PROVIDER",
+    repairProvider: "GPTWORK_REPAIR_PROVIDER",
+    goalWorktreeRoot: "GPTWORK_GOAL_WORKTREE_ROOT",
+    goalBranchPrefix: "GPTWORK_GOAL_BRANCH_PREFIX",
+    mergeTargetBranch: "GPTWORK_MERGE_TARGET_BRANCH",
+    claudeCommand: "GPTWORK_CLAUDE_COMMAND",
+    codexCommand: "GPTWORK_CODEX_COMMAND",
+    claudeTuiEnabled: "GPTWORK_CLAUDE_TUI_ENABLED",
+    codexTuiEnabled: "GPTWORK_CODEX_TUI_ENABLED",
+    claudeExecAdvanceEnabled: "GPTWORK_CLAUDE_EXEC_ADVANCE_ENABLED",
+    advanceTimeoutMs: "GPTWORK_ADVANCE_TIMEOUT_MS",
 
   };
 

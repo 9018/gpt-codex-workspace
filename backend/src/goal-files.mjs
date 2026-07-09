@@ -26,7 +26,17 @@ export function goalWorkspaceFiles(goal) {
     acceptance_contract_json: `${dir}/acceptance.contract.json`,
     artifact_contract_json: `${dir}/artifact.contract.json`,
     reviewer_decision_json: `${dir}/reviewer_decision.json`,
-    codex_entry_md: `${dir}/codex.entry.md`
+    codex_entry_md: `${dir}/codex.entry.md`,
+    workspace_json: `${dir}/workspace.json`,
+    resume_md: `${dir}/resume.md`,
+    evidence_bundle_json: `${dir}/evidence.bundle.json`,
+    acceptance_result_json: `${dir}/acceptance.result.json`,
+    merge_decision_json: `${dir}/merge.decision.json`,
+    merge_result_json: `${dir}/merge.result.json`,
+    advance_result_json: `${dir}/advance.result.json`,
+    claude_entry_md: `${dir}/claude.entry.md`,
+    codex_acceptance_entry_md: `${dir}/codex.acceptance.entry.md`,
+    advance_entry_md: `${dir}/advance.entry.md`
   };
 }
 

@@ -59,17 +59,17 @@ test("start creates session, spawns codex, sends bootstrap messages, and logs ou
   assert.equal(session.task_id, "task_1");
   assert.equal(session.goal_id, "goal_1");
   assert.ok(session.first_output_at, "first_output_at should be set when TUI produces output");
+  assert.equal(session.bootstrap_method, "stdin_enter");
   assert.equal(fakeAdapter.spawns.length, 1);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
-  // Goal objective passed as spawn args, not written to stdin
-  assert.ok(fakeAdapter.spawns[0].args, "spawn should receive args array");
-  assert.ok(fakeAdapter.spawns[0].args[0], "spawn args[0] should be the goal objective");
-  assert.match(fakeAdapter.spawns[0].args[0], /goal_id=goal_1/);
-  assert.match(fakeAdapter.spawns[0].args[0], /Use Superpowers/);
-  // Only follow-up is written to stdin (no /goal prefix)
-  assert.equal(fakeAdapter.writes.length, 1, "only follow-up should be written to stdin");
-  assert.match(fakeAdapter.writes[0], /Continue GPTWork goal_id=goal_1/);
+  assert.equal(fakeAdapter.spawns[0].args, undefined, "spawn should have no args (prompt goes via stdin)");
+  // Full bootstrap is written to stdin: writes[0]=/goal msg, writes[1]=followup
+  assert.ok(fakeAdapter.writes.length >= 2, "at least 2 writes for /goal + followup");
+  assert.match(fakeAdapter.writes[0], /^\/goal /);
+  assert.match(fakeAdapter.writes[0], /goal_id=goal_1/);
+  assert.match(fakeAdapter.writes[0], /Use Superpowers/);
   assert.match(fakeAdapter.writes[0], /codex\.entry\.md/);
+  assert.match(fakeAdapter.writes[1], /Continue GPTWork goal_id=goal_1/);
 
   const read = await readCodexTuiSession(session.id);
   assert.match(read.log, /TUI ready/);

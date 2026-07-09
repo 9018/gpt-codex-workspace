@@ -1,6 +1,6 @@
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
-import { buildCodexTuiGoalObjective, buildCodexTuiFollowupInstruction } from "./codex-tui-goal-prompt.mjs";
+import { buildCodexTuiBootstrapMessages } from "./codex-tui-goal-prompt.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -100,35 +100,37 @@ export async function startCodexTuiGoalSession({ task, goal, cwd, repoLockId = n
     repoLockId,
   });
 
-  const objective = buildCodexTuiGoalObjective({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
-
-  // Spawn codex with the goal objective as the initial PROMPT argument.
-  // This tells codex what to work on immediately, without needing /goal via stdin.
+  // Launch codex bare — no argv prompt.
+  // Prompt is submitted via stdin after TUI is ready.
   const ptySession = await adapter.spawn({
     cwd,
     onData: (chunk) => {
       store.appendSessionLog(sessionId, chunk).catch(() => {});
     },
-    args: [objective],
   });
 
   activeSessions.set(sessionId, { store, ptySession });
 
-  // Wait briefly for TUI ready signal before sending follow-up
+  // Phase 1: wait for TUI ready (first output on PTY)
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
 
-  // Send follow-up instruction via stdin (not the full /goal, which was passed as args)
+  // Phase 2: submit prompt via stdin + Enter
+  const messages = buildCodexTuiBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
   const bootstrapSentAt = new Date().toISOString();
-  ptySession.write(buildCodexTuiFollowupInstruction({ goalId: goal.id }) + "\n");
+  for (const message of messages) {
+    ptySession.write(message);
+  }
 
   record = await store.updateSession(sessionId, {
     status: "running",
     pty_pid: ptySession.pid ?? null,
     started_at: bootstrapSentAt,
     bootstrap_sent_at: bootstrapSentAt,
+    bootstrap_method: "stdin_enter",
     first_output_at: firstOutputAt,
+    submitted: true,
   });
-  return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt };
+  return { ...record, bootstrap_sent_at: bootstrapSentAt, first_output_at: firstOutputAt, bootstrap_method: "stdin_enter" };
 }
 
 export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {

@@ -16,6 +16,8 @@
     "test:perf-smoke": "node --test --test-reporter=dot 'test/perf-smoke.test.mjs'",
     "test:e2e-acceptance": "node --test --test-reporter=dot test/e2e-product-acceptance.test.mjs",
     "release:check": "npm run check:syntax && npm run check:imports && npm run test:e2e-acceptance && npm run test:p0-ma9",
+    "e2e:tui-first-loop": "node scripts/e2e-tui-first-loop.mjs",
+    "release:tui-first-loop-gate": "node scripts/release-tui-first-loop-gate.mjs",
     "test:e2e-delivery": "node --test --test-reporter=dot test/e2e-delivery.test.mjs",
     "release:delivery-check": "node scripts/release-delivery-check.mjs",
     "release:gate": "node scripts/release-gate.mjs",

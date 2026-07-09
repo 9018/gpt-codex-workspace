@@ -39,6 +39,8 @@ import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-servi
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import { createCodexTuiToolsGroup } from "./tool-groups/codex-tui-tools-group.mjs";
 import { createProductStatusToolsGroup } from "./tool-groups/product-status-tools-group.mjs";
+import { createGoalMergeToolsGroup } from "./tool-groups/goal-merge-tools-group.mjs";
+import { readGoalWorkspace } from "./goal-workspace-status.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -140,6 +142,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_goals",
     "retention_status",
     "retention_cleanup",
+    "goal_merge_preview",
+    "goal_merge_apply",
   ]),
   operator: new Set([
     "gptwork_self_test",
@@ -179,6 +183,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_goals",
     "retention_status",
     "retention_cleanup",
+    "goal_merge_preview",
+    "goal_merge_apply",
   ]),
   codex: new Set([
     "gptwork_self_test",
@@ -240,6 +246,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "cleanup_goals",
     "retention_status",
     "retention_cleanup",
+    "goal_merge_preview",
+    "goal_merge_apply",
   ]),
 };
 
@@ -265,6 +273,14 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   const repoDir = resolveRepoDir();
   const tool = createTool;
 
+  const findGoalWorkspace = async (goalId) => {
+    const storeGoal = (store && goalId) ? await store.getGoal?.(goalId) : null;
+    const goal = storeGoal || { id: goalId, title: goalId };
+    const workspace = await readGoalWorkspace({ goalId, config });
+    if (!workspace) throw new Error(`goal workspace not found for ${goalId}`);
+    return { goal, workspace };
+  };
+
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
     ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
@@ -282,6 +298,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
       runAssignedCodexTasks: (store, config, github, args, context) => runAssignedCodexTasks(store, config, github, args, context, { processGeneralTask }),
     }),
     ...createCodexTuiToolsGroup({ tool, schema, config, store, registry }),
+    ...createGoalMergeToolsGroup({ tool, schema, findGoalWorkspace, config }),
     ...createSessionInventoryToolsGroup({ tool, schema, config, store, github, createTask }),
     ...createTaskCompletionToolsGroup({ tool, schema, config, store, github, eventLogger, hookBus }),
     ...createRestartToolsGroup({ tool, schema, config, store }),

@@ -27,12 +27,17 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", `'\\''`)}'`;
 }
 
-function buildCommand(cmd, args = []) {
-  return [cmd, ...args].map(shellQuote).join(" ");
+function buildCommand(cmd, promptArgs = []) {
+  // Build the shell command for script fallback.
+  // Only the command name is quoted; the prompt should NOT be passed as
+  // argv to an interactive TUI — it is submitted via stdin after ready.
+  return [cmd, ...promptArgs].map(shellQuote).join(" ");
 }
 
 function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], command = "codex" } = {}) {
-  const proc = spawnImpl("script", ["-q", "-f", "-c", buildCommand(command, args), "/dev/null"], {
+  // Launch codex bare via script(1). The prompt is NOT passed as argv;
+  // it is submitted via stdin after the TUI is ready.
+  const proc = spawnImpl("script", ["-q", "-f", "-c", shellQuote(command), "/dev/null"], {
     cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
