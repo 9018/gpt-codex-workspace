@@ -196,10 +196,15 @@ function repairFindingsForTask(task = {}) {
   return [{ severity: "blocker", code: result.failure_class || result.kind || "waiting_for_repair", message: result.reason || result.summary || "Task is waiting for automatic repair.", source: "repair_backlog" }];
 }
 
-function findLinkedRepair(tasks = [], item = {}) {
+export function findLinkedRepair(tasks = [], item = {}) {
+  const terminalStatuses = new Set(["completed", "failed", "cancelled", "canceled"]);
+  const isActiveRepair = (candidate) => candidate && !terminalStatuses.has(String(candidate.status || "").toLowerCase());
   const linked = item.result?.repair_task_id || item.repair_task_id || null;
-  if (linked) return tasks.find((candidate) => candidate.id === linked) || null;
-  return tasks.find((candidate) => candidate.id !== item.id && candidate.parent_task_id === item.id) || null;
+  if (linked) {
+    const candidate = tasks.find((entry) => entry.id === linked) || null;
+    if (isActiveRepair(candidate)) return candidate;
+  }
+  return tasks.find((candidate) => candidate.id !== item.id && candidate.parent_task_id === item.id && isActiveRepair(candidate)) || null;
 }
 
 function buildFollowupPayload({ task = {}, goal = {}, descriptor = {} } = {}) {

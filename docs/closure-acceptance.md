@@ -492,3 +492,10 @@ After acceptance, the operator should:
 
 *End of closure acceptance documentation. This document describes the current
 architectural model for closure, acceptance, and automated terminalization.*
+
+## Repair link convergence guard
+
+Waiting-for-repair parents must not stay blocked by terminal child repair tasks. When a linked repair task has reached `failed`, `completed`, `cancelled`, or `canceled`, the worker must treat that linked child as terminal rather than as an active repair blocker. This lets the parent either schedule the next bounded repair attempt or move to the terminal failed / human-interrupt path when the repair budget is exhausted.
+
+Acceptance evidence for this guard requires a targeted unit test proving that failed and completed child repairs are ignored by active linked-repair selection, while still-active repair children remain linked.
+
