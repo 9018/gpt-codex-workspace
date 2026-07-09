@@ -201,7 +201,7 @@ test("codex_tui_goal ready evidence enters acceptance integration finalizer path
   assert.equal(finalized.integration.status, "completed");
 });
 
-test("codex_tui_goal missing result.json remains waiting_for_review with recoverable evidence details", async () => {
+test("codex_tui_goal missing result.json terminates as failed with actionable evidence", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-missing-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
 
@@ -210,9 +210,9 @@ test("codex_tui_goal missing result.json remains waiting_for_review with recover
     startCodexTuiGoalSessionFn: async (args) => ({ id: "session_missing", task_id: args.task.id, goal_id: args.goal.id, cwd: args.cwd, status: "running" }),
   }));
 
-  assert.equal(result.status, "waiting_for_review");
+  assert.equal(result.status, "failed");
   assert.equal(result.session_id, "session_missing");
-  assert.equal(store.state.tasks[0].status, "waiting_for_review");
+  assert.equal(store.state.tasks[0].status, "failed");
   assert.equal(store.state.tasks[0].result.session_id, "session_missing");
   assert.equal(store.state.tasks[0].result.tui_phase, "blocked_missing_evidence");
   assert.equal(store.state.tasks[0].result.collect_result.status, "not_ready");

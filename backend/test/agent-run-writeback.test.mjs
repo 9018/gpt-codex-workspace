@@ -158,6 +158,25 @@ test("agent-run-writeback: writeVerifierAgentRun handles failed verification", a
   assert.equal(result.agent_run.status, "failed");
 });
 
+test("agent-run-writeback: writeVerifierAgentRun fails passed verification without command evidence", async () => {
+  const { writeVerifierAgentRun } = await import("../src/agent-run-writeback.mjs");
+  const store = await makeStore();
+
+  const result = await writeVerifierAgentRun(store, {
+    task_id: "t1", goal_id: "g1",
+    verification: { passed: true, commands: [] },
+  });
+
+  assert.equal(result.created, true);
+  assert.equal(result.agent_run.role, "verifier");
+  assert.equal(result.agent_run.status, "failed");
+  assert.match(result.agent_run.summary, /verification_commands_missing/);
+  assert.equal(result.agent_run.output_artifacts[0].commands_count, 0);
+  assert.equal(result.agent_run.output_artifacts[0].passed, false);
+  assert.equal(result.agent_run.output_artifacts[0].failure_class, "verification_commands_missing");
+  assert.deepEqual(result.agent_run.output_artifacts[0].missing_evidence, ["verification.commands"]);
+});
+
 // ===========================================================================
 // Tests: writeReviewerAgentRun
 // ===========================================================================
@@ -359,6 +378,28 @@ test("agent-run-writeback: writeAllAgentRuns runs multiple writebacks concurrent
   const { listAgentRuns } = await import("../src/agent-run-service.mjs");
   const list = await listAgentRuns(store, { task_id: "t1", limit: 10 });
   assert.ok(list.agent_runs.length >= 2, "should have at least 2 agent runs");
+});
+
+test("agent-run-writeback: completeQueuedAgentRuns fails queued verifier when task result has no command evidence", async () => {
+  const { completeQueuedAgentRuns } = await import("../src/agent-run-writeback.mjs");
+  const { createAgentRun, listAgentRuns } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+
+  await createAgentRun(store, { task_id: "t-empty-verifier", goal_id: "g1", role: "verifier", status: "queued" });
+
+  const result = await completeQueuedAgentRuns(store, {
+    task_id: "t-empty-verifier",
+    goal_id: "g1",
+    taskResult: { verification: { passed: true, commands: [] } },
+  });
+
+  assert.equal(result.completed, 1);
+  const runs = await listAgentRuns(store, { task_id: "t-empty-verifier", limit: 10 });
+  assert.equal(runs.agent_runs.length, 1);
+  assert.equal(runs.agent_runs[0].role, "verifier");
+  assert.equal(runs.agent_runs[0].status, "failed");
+  assert.equal(runs.agent_runs[0].output_artifacts[0].commands_count, 0);
+  assert.equal(runs.agent_runs[0].output_artifacts[0].failure_class, "verification_commands_missing");
 });
 
 // ===========================================================================

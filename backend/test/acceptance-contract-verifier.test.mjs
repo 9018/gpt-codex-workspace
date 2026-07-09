@@ -52,6 +52,30 @@ test('code_change contract is satisfied when blocking evidence and assertions pa
   assert.equal(verification.non_blocking_followups[0].code, 'docs_followup');
 });
 
+test('default docs_only contract closes without integration evidence when commit and docs verification are present', () => {
+  const docsContract = contract('docs_only');
+  assert.equal(docsContract.requirements.requires_integration, false);
+
+  const verification = verifyAcceptanceContract({
+    contract: docsContract,
+    result: {
+      status: 'completed',
+      summary: 'docs updated',
+      operation_kind: 'docs_only',
+      changed_files: ['docs/operations.md'],
+      commit: 'abc123',
+      tests: 'git diff --check passed',
+      verification: { passed: true, commands: [{ cmd: 'git diff --check', exit_code: 0 }] },
+    },
+    verification: { passed: true, commands: [{ cmd: 'git diff --check', exit_code: 0 }] },
+    stateAssertions: { passed: true, assertions: [], failures: [] },
+  });
+
+  assert.equal(verification.blocking_passed, true);
+  assert.equal(verification.acceptance_status, 'satisfied');
+  assert.ok(!verification.blockers.some((b) => b.code === 'integration_completed_missing'));
+});
+
 test('docs_check required command is satisfied by concrete backend verification command evidence', () => {
   const verification = verifyAcceptanceContract({
     contract: contract('docs_only', {

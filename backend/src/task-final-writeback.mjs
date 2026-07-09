@@ -110,8 +110,10 @@ function closureAllowsQueuePropagation(taskResult = {}) {
 function integrationVerifiedForQueuePropagation(taskResult = {}) {
   const integration = taskResult.integration || {};
   const autoCompletion = taskResult.auto_integration_completion || {};
+  const report = autoCompletion.verification_report || {};
+  if (autoCompletion.attempted === true && (report.dirty === true || autoCompletion.canonical_clean_after === false)) return false;
 
-  // P0-AFC3: Check unified_decision first
+  // P0-AFC3: Check unified_decision after explicit dirty auto-integration evidence is ruled out.
   const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
   if (unifiedDecision.integration_effect?.satisfied === true) return true;
 
@@ -119,7 +121,6 @@ function integrationVerifiedForQueuePropagation(taskResult = {}) {
   const merged = integration.merged === true
     || integration.satisfied === true
     || ["merged", "ff_only_merged", "skipped", "already_integrated", "not_required"].includes(String(integration.status || ""));
-  const report = autoCompletion.verification_report || {};
   const autoCompleted = autoCompletion.completed === true
     && report.passed !== false
     && report.dirty !== true
@@ -136,6 +137,12 @@ function shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult = {} } 
   // AFC-P3: When unified_decision.queue_effect.unblock_dependents is true,
   // trust it as the canonical signal and skip individual evidence re-checks.
   const ud = taskResult.unified_decision || {};
+  if (taskResult.requires_review === true) return false;
+  if (!acceptedByAcceptanceAgent(taskResult)) return false;
+  if (taskResult.contract_verification?.blocking_passed === false) return false;
+  if (taskResult.contract_verification?.completion_eligible === false) return false;
+  if (taskResult.contract_verification?.requires_review === true) return false;
+  if (!integrationVerifiedForQueuePropagation(taskResult)) return false;
   if (ud.queue_effect?.unblock_dependents === true) {
     return true;
   }
@@ -849,7 +856,7 @@ export async function finalizeCodexTaskRun({
       // Compute passed: true only when status is "completed" AND verification passed AND no blockers.
       const taskVPassed = taskResult.verification?.passed === true;
       const taskFindings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
-      const taskBlockerFindings = taskFindings.filter(function(f) { return f.severity === "blocker" || f.severity === "major"; });
+      const taskBlockerFindings = taskFindings.filter(function(f) { return f.resolved !== true && (f.severity === "blocker" || f.severity === "major"); });
       const passed = taskStatus === "completed" && taskVPassed && taskBlockerFindings.length === 0;
       try {
         const repairResult = await handleRepairCompletion({
@@ -1178,9 +1185,9 @@ function applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config 
   // P0-AFC4: Use canonical decision (finalizer_decision) as the source of truth
   // for item.status. This ensures reconciled completion outcomes are preserved
   // even if the raw taskStatus parameter is stale or older evidence contradicts.
-  const canonicalStatus = taskResult?.finalizer_decision?.status
-    || taskResult?.unified_decision?.status
-    || taskStatus;
+  const canonicalStatus = taskStatus
+    || taskResult?.finalizer_decision?.status
+    || taskResult?.unified_decision?.status;
   item.status = canonicalStatus;
   item.execution_mode = deriveExecutionMode(taskResult, item);
   item.worktree = deriveSpecWorktreeRecord(taskResult, item.worktree);
@@ -1262,11 +1269,14 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
     if (goal) {
       const goalItem = state.goals.find((candidate) => candidate.id === goal.id);
       if (goalItem) {
-        const canonicalStatus = taskResult?.finalizer_decision?.status
-          || taskResult?.unified_decision?.status
-          || taskStatus;
+        const canonicalStatus = taskStatus
+          || taskResult?.finalizer_decision?.status
+          || taskResult?.unified_decision?.status;
         goalStatus = determineGoalStatus(goalItem, item, item.result || {})
           || (canonicalStatus === "timed_out" ? "failed" : canonicalStatus);
+        const hasRunningQueueItem = Array.isArray(state.goal_queue) && state.goal_queue.some((candidate) => candidate.task_id === task.id && candidate.status === "running");
+        if ((taskStatus === "failed" || taskStatus === "timed_out") && goalStatus === "failed" && hasRunningQueueItem) goalStatus = "waiting_for_repair";
+        if (goalStatus === "waiting_for_human_review") goalStatus = "waiting_for_review";
         goalItem.status = goalStatus;
         goalItem.updated_at = doneAt;
         state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });

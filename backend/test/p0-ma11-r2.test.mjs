@@ -196,7 +196,7 @@ test("MA11-R2: completeQueuedAgentRuns completes queued runs for task with resul
     goal_id: "g1",
     taskResult: {
       commit: HEAD_COMMIT,
-      verification: { passed: true },
+      verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
       changed_files: ["test.js"],
       tests: "node --test passed",
     },
@@ -293,7 +293,7 @@ test("MA11-R2: convergeStaleTaskStates sweeps stale states and completes queued 
         status: "waiting_for_repair",
         result: {
           commit: HEAD_COMMIT,
-          verification: { passed: true },
+          verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
           tests: "node --test passed",
         },
       },
@@ -388,7 +388,7 @@ test("MA11-R2: convergeStaleTaskStates applied sweeps mutate store state", async
         status: "waiting_for_repair",
         result: {
           commit: HEAD_COMMIT,
-          verification: { passed: true },
+          verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
           tests: "node --test passed",
         },
       },
