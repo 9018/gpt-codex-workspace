@@ -64,6 +64,19 @@ test("buildRuntimeConfig defaults defaultRepoPath to empty string", () => {
   assert.equal(config.defaultRepoPath, "");
 });
 
+test("buildRuntimeConfig derives productized restart defaults without author paths", () => {
+  clearGptWorkVars();
+  const { config, sources } = buildRuntimeConfig("/tmp/test-root");
+  assert.ok(config.restartCwd.endsWith("/backend"), "restart cwd should target the backend root");
+  assert.ok(!config.restartCwd.includes("/home/a9017/mcp/workspace/gpt-codex-workspace"));
+  assert.ok(!config.restartCommand.includes("/home/a9017/mcp/workspace/gpt-codex-workspace"));
+  assert.equal(config.sshSocksProxy, "");
+  assert.ok(config.codexHome !== "/home/a9017");
+  assert.equal(sources.restartCwd, "default");
+  assert.equal(sources.restartCommand, "default");
+  assert.equal(sources.sshSocksProxy, "default");
+});
+
 test("buildRuntimeConfig defaults delivery result recovery commands to empty list", () => {
   clearGptWorkVars();
   const { config, sources } = buildRuntimeConfig("/tmp/test-root");
@@ -142,6 +155,17 @@ test("buildRuntimeConfig exposes codex TUI productization settings", async () =>
   assert.equal(sources.codexTuiCommand, "runtime.env");
   assert.equal(sources.codexTuiEvidenceWaitMs, "runtime.env");
   assert.equal(sources.codexTuiSessionRoot, "runtime.env");
+  assert.equal(sources.requireSuperpowersForTui, "runtime.env");
+});
+
+test("buildRuntimeConfig accepts legacy TUI superpowers env via canonical config field", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile(
+    "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK=false\n"
+  );
+  const { config, sources } = buildRuntimeConfig(root);
+  assert.equal(config.requireSuperpowersForTui, false);
+  assert.equal(config.requireSuperpowersPluginForTuiFallback, false);
   assert.equal(sources.requireSuperpowersForTui, "runtime.env");
 });
 
