@@ -11,9 +11,12 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, writeFileSync, mkdirSync } from "node:fs";
+import { execSync } from "node:child_process";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import "./helpers/env-isolation.mjs";
+import { clearGptWorkVars } from "./helpers/env-isolation.mjs";
 
 // ───────────────────────────────────────────────────────────────────
 // Test 1: Flag Propagation — init --production
@@ -69,6 +72,21 @@ test("production worker blocker is hard-fail, not warning", async () => {
   assert.equal(result.status, "blocker", "missing worker is blocker");
   assert.ok(result.fixable, "blocker is fixable");
   assert.ok(result.fixHint.includes("CODEX_WORKER"), "fix hint mentions GPTWORK_CODEX_WORKER");
+});
+
+test("production worker check honors process.env over runtime.env", async () => {
+  const { checkProductionWorkerEnabled } = await import("../src/onboarding-init.mjs");
+
+  clearGptWorkVars();
+  const root = await mkdtemp(join(tmpdir(), "gptwork-prod-worker-precedence-"));
+  const gptworkDir = join(root, ".gptwork");
+  await mkdir(gptworkDir, { recursive: true });
+  await writeFile(join(gptworkDir, "runtime.env"), "GPTWORK_CODEX_WORKER=true\n", "utf8");
+
+  process.env.GPTWORK_CODEX_WORKER = "false";
+  const result = checkProductionWorkerEnabled(gptworkDir);
+  assert.equal(result.status, "blocker", "process.env=false must override runtime.env=true");
+  delete process.env.GPTWORK_CODEX_WORKER;
 });
 
 test("production worker passes when enabled", () => {
@@ -139,6 +157,27 @@ test("runFullCheck default opts.production is falsy", async () => {
   const names = checks.map(c => c.name);
   
   assert.ok(!names.includes("production_worker"), "default opts do not include production checks");
+});
+
+test("current head diagnostics do not depend on docs baseline content", async () => {
+  const { checkCurrentHeadDiagnostics } = await import("../src/onboarding-init.mjs");
+
+  const root = await mkdtemp(join(tmpdir(), "gptwork-head-diag-"));
+  await mkdir(join(root, "docs"), { recursive: true });
+  await writeFile(
+    join(root, "docs", "launch-initialization.md"),
+    "Canonical baseline: `0000000000000000000000000000000000000000`\n",
+    "utf8"
+  );
+  await writeFile(join(root, "README.md"), "head diagnostics fixture\n", "utf8");
+  execSync("git init >/dev/null && git config user.email test@example.com && git config user.name Test && git add . && git commit -m init >/dev/null", {
+    cwd: root,
+    encoding: "utf8",
+  });
+
+  const result = checkCurrentHeadDiagnostics(root);
+  assert.equal(result.status, "pass");
+  assert.ok(!result.detail.includes("docs baseline"));
 });
 
 // ───────────────────────────────────────────────────────────────────

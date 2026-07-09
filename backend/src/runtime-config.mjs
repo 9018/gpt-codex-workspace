@@ -17,6 +17,13 @@
 
 import { loadRuntimeEnv, resolveEnvFilePath } from "./runtime-env.mjs";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = resolve(__dirname, "..", "..");
+const BACKEND_ROOT = resolve(PROJECT_ROOT, "backend");
 
 // ---------------------------------------------------------------------------
 // Internal helpers
@@ -39,6 +46,13 @@ function _getBool(key, defaultVal) {
   if (v === undefined) return defaultVal;
   if (typeof v === "boolean") return v;
   return v === "true" || v === "1";
+}
+
+function _getBoolAliases(keys, defaultVal) {
+  for (const key of keys) {
+    if (process.env[key] !== undefined) return _getBool(key, defaultVal);
+  }
+  return defaultVal;
 }
 
 function parseRoleBackendMap(raw) {
@@ -121,6 +135,19 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     return "default";
   }
 
+  function _sourceAliases(envKeys) {
+    for (const envKey of envKeys) {
+      const source = _source(envKey);
+      if (source !== "default") return source;
+    }
+    return "default";
+  }
+
+  const requireSuperpowersForTui = _getBoolAliases([
+    "GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI",
+    "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK",
+  ], true);
+
   // ── Resolved values ──────────────────────────────────────────────
 
   const config = {
@@ -179,7 +206,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     codexTuiCommand: _get("GPTWORK_CODEX_TUI_COMMAND", _get("GPTWORK_CODEX_COMMAND", "codex")),
     codexTuiEvidenceWaitMs: _getNum("GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS", 30000),
     codexTuiSessionRoot: _get("GPTWORK_CODEX_TUI_SESSION_ROOT", ""),
-    requireSuperpowersForTui: _getBool("GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI", true),
+    requireSuperpowersForTui,
+    requireSuperpowersPluginForTuiFallback: requireSuperpowersForTui,
     claudeExecAdvanceEnabled: _getBool("GPTWORK_CLAUDE_EXEC_ADVANCE_ENABLED", false),
     claudeTuiArgs: [],
     codexTuiArgs: [],
@@ -208,12 +236,12 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     maxShellOutputBytes: _getNum("GPTWORK_MAX_SHELL_OUTPUT_BYTES", 200000),
 
     // Other
-    codexHome: _get("GPTWORK_CODEX_HOME", "/home/a9017"),
+    codexHome: _get("GPTWORK_CODEX_HOME", process.env.CODEX_HOME || homedir() || ""),
     python: _get("GPTWORK_PYTHON", process.platform === "win32" ? "python" : "python3"),
     logPath: _get("GPTWORK_LOG_PATH", ""),
     requireAuth: _getBool("GPTWORK_REQUIRE_AUTH", true),
     tokens: _get("GPTWORK_TOKENS", "dev-token,test"),
-    sshSocksProxy: _get("GPTWORK_SSH_SOCKS_PROXY", "10.0.1.105:20177"),
+    sshSocksProxy: _get("GPTWORK_SSH_SOCKS_PROXY", ""),
     tokenContexts: _get("GPTWORK_TOKEN_CONTEXTS", ""),
     // Recovery / break-glass plane
     recoveryPlaneEnabled: _getBool("GPTWORK_RECOVERY_PLANE_ENABLED", false),
@@ -225,8 +253,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
 
     // Restart strategy
     restartMode: _get("GPTWORK_RESTART_MODE", "npm"),
-    restartCommand: _get("GPTWORK_RESTART_COMMAND", "npm --prefix /home/a9017/mcp/workspace/gpt-codex-workspace/backend run start"),
-    restartCwd: _get("GPTWORK_RESTART_CWD", "/home/a9017/mcp/workspace/gpt-codex-workspace/backend"),
+    restartCommand: _get("GPTWORK_RESTART_COMMAND", `npm --prefix "${BACKEND_ROOT}" run start`),
+    restartCwd: _get("GPTWORK_RESTART_CWD", BACKEND_ROOT),
     restartMarkerKind: _get("GPTWORK_RESTART_MARKER_KIND", "npm"),
 
     // Derive allowed roots array
@@ -351,6 +379,11 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
   for (const [ck, ev] of Object.entries(KEY_MAP)) {
     sources[ck] = _source(ev);
   }
+  sources.requireSuperpowersForTui = _sourceAliases([
+    "GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI",
+    "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK",
+  ]);
+  sources.requireSuperpowersPluginForTuiFallback = sources.requireSuperpowersForTui;
 
   return { config, sources, envLoadResult };
 }
