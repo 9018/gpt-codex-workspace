@@ -389,6 +389,35 @@ function decision(evidence, { status, reason, blockers = [], repairableBlockers 
   };
 }
 
+
+
+/**
+ * Build completion checkpoint metadata for terminal success decisions.
+ * This metadata is persisted before the finalizer declares terminal success
+ * so that recovery/audit can verify the completion state even if downstream
+ * writeback is interrupted.
+ *
+ * @param {object} evidence  - The evidence object passed to decideTaskFinalState
+ * @param {object} decision  - The raw decision object from the decision() helper
+ * @returns {object|null}    - Checkpoint object or null if not a terminal completion
+ */
+export function buildCompletionCheckpoint(evidence = {}, decision = {}) {
+  if (decision.status !== 'completed') return null;
+  const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+  const now = new Date().toISOString();
+  return {
+    checkpoint_type: 'completion',
+    persisted_before_terminal: true,
+    persisted_at: now,
+    status: decision.status,
+    reason: decision.reason,
+    commit: result.commit || null,
+    changed_files: Array.isArray(result.changed_files) ? [...result.changed_files] : [],
+    blocking_passed: decision.blocking_passed === true,
+    non_blocking_followups: decision.non_blocking_followups || [],
+  };
+}
+
 export function decideTaskFinalState(evidence = {}) {
   if (hasCapacityFailure(evidence)) {
     return decision(evidence, {
