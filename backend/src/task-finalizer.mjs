@@ -404,6 +404,7 @@ function decision(evidence, { status, reason, blockers = [], repairableBlockers 
 export function buildCompletionCheckpoint(evidence = {}, decision = {}) {
   if (decision.status !== 'completed') return null;
   const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+  const unified = decision.unified_decision || {};
   const now = new Date().toISOString();
   return {
     checkpoint_type: 'completion',
@@ -413,8 +414,8 @@ export function buildCompletionCheckpoint(evidence = {}, decision = {}) {
     reason: decision.reason,
     commit: result.commit || null,
     changed_files: Array.isArray(result.changed_files) ? [...result.changed_files] : [],
-    blocking_passed: decision.blocking_passed === true,
-    non_blocking_followups: decision.non_blocking_followups || [],
+    blocking_passed: unified.blocking_passed === true,
+    non_blocking_followups: decision.non_blocking_followups || unified.non_blocking_followups || [],
   };
 }
 
