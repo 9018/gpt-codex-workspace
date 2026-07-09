@@ -247,6 +247,17 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
       "bark",
       "github",
       "warnings",
+      "shell_timeout",
+      "max_read_bytes",
+      "max_shell_output_bytes",
+      "agent_backend",
+      "agent_role_backends",
+      "agent_local_command_configured",
+      "agent_role_commands",
+      "default_repo",
+      "default_branch",
+      "default_repo_path",
+      "default_remote",
     ]) {
       if (base[key] !== undefined) modelPayload[key] = base[key];
     }
