@@ -839,23 +839,31 @@ export async function finalizeCodexTaskRun({
     }
   }
 
-  // P0: Repair parent-child loop — when a repair task completes, trigger
-  // parent task re-verification / integration.
-  if (taskStatus === "completed" && (task.parent_task_id || task.repair_of_task_id)) {
-    try {
-      const repairResult = await handleRepairCompletion({
-        store,
-        config,
-        completedTask: result.task,
-        passed: true,
-      });
-      if (repairResult.parent_updated) {
-        const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] repair completion: parent ${repairResult.parent_task_id} updated to ${repairResult.parent_status}
-`);
+  // P0: Repair parent-child loop -- propagate outcome to parent/root task.
+  // Called for ANY terminal outcome of a repair child, not just "completed",
+  // so the parent never stays stuck in waiting_for_repair with stale metadata.
+  if (task.parent_task_id || task.repair_of_task_id) {
+    const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+    const isTerminal = terminalStatuses.has(String(taskStatus || "").toLowerCase());
+    if (isTerminal) {
+      // Compute passed: true only when status is "completed" AND verification passed AND no blockers.
+      const taskVPassed = taskResult.verification?.passed === true;
+      const taskFindings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+      const taskBlockerFindings = taskFindings.filter(function(f) { return f.severity === "blocker" || f.severity === "major"; });
+      const passed = taskStatus === "completed" && taskVPassed && taskBlockerFindings.length === 0;
+      try {
+        const repairResult = await handleRepairCompletion({
+          store,
+          config,
+          completedTask: result.task,
+          passed: passed,
+        });
+        if (repairResult.parent_updated) {
+          const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, "[gptwork-worker] repair completion: parent " + repairResult.parent_task_id + " updated to " + repairResult.parent_status + "\n");
+        }
+      } catch (repairErr) {
+        const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, "[gptwork-worker] repair completion handler error: " + repairErr.message + "\n");
       }
-    } catch (repairErr) {
-      const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] repair completion handler error: ${repairErr.message}
-`);
     }
   }
 

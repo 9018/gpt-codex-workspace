@@ -190,6 +190,23 @@ function manualReviewBlockers(evidence = {}) {
 function hasRepairPath(evidence = {}) {
   const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
   const closure = asObject(result.closure_decision);
+
+  // If the repair outcome was already resolved by handleRepairCompletion,
+  // the path is no longer active -- return false to prevent the finalizer
+  // P0: Prevent recursive waiting_for_repair loops on repair tasks.
+  // A repair task (parent_task_id set) must NOT treat its OWN closure
+  // decision of waiting_for_repair as an active external repair path.
+  // Without this guard a repair task with no changed files would have
+  // hasRepairPath return true → finalizer returns waiting_for_repair
+  // → handleRepairCompletion never called → parent stays stuck forever.
+  const isRepairTask = !!(task.parent_task_id || task.repair_of_task_id);
+  if (isRepairTask && (closure.status === "waiting_for_repair" || closure.task_status === "waiting_for_repair"))
+    return false;
+  // from re-entering waiting_for_repair on stale metadata.
+  const terminalRepairOutcomes = new Set(["repaired", "continued", "budget_exhausted", "failed"]);
+  if (terminalRepairOutcomes.has(String(result.repair_outcome || "").toLowerCase())) return false;
+  if (String(result.repair_status || "").toLowerCase() === "completed") return false;
+
   return result.repair_goal_id
     || result.repair_task_id
     || result.repair_goal
@@ -414,13 +431,22 @@ export function decideTaskFinalState(evidence = {}) {
 
   const repairableBlockers = repairableEvidence(evidence);
   if (repairableBlockers.length > 0) {
-    if (!repairDenied(evidence) && (hasRepairPath(evidence) || repairAttemptsRemaining(evidence))) {
+    const isRepairTask = !!(evidence.task && (evidence.task.parent_task_id || evidence.task.repair_of_task_id));
+    if (!isRepairTask && !repairDenied(evidence) && (hasRepairPath(evidence) || repairAttemptsRemaining(evidence))) {
       const codexFailed = repairableBlockers.some((entry) => entry.code === "codex_failed");
       return decision(evidence, {
         status: "waiting_for_repair",
         reason: codexFailed ? "codex_failed_repairable" : "repairable_failure",
         repairableBlockers,
       });
+    // Repair tasks must go to "failed" to trigger handleRepairCompletion propagation to parent.
+    if (isRepairTask) {
+      return decision(evidence, {
+        status: "failed",
+        reason: "repair_task_unrecoverable",
+        blockers: repairableBlockers,
+      });
+    }
     }
     return decision(evidence, {
       status: "waiting_for_review",
