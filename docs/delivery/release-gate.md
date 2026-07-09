@@ -4,17 +4,38 @@
 
 ## Gate Requirements
 
-1. All unit tests pass (1448+ tests)
-2. Syntax check passes for all source files
-3. Import check passes for all modules
-4. E2E delivery smoke test passes
-5. No blocker or major acceptance findings
+The single baseline release gate is `npm run release:check` from the backend
+directory. It is intentionally explicit so a clean clone fails fast if a
+referenced script or test file is missing.
+
+1. Syntax check passes for all source files
+2. Import check passes for key runtime modules
+3. Package release scripts reference files that exist
+4. Core release gate passes
+5. MA9 and P5 release-gate regressions pass
+6. P5 release gate script reports GO
 
 ## Gate Script
 
 ```bash
-npm run release:delivery-check
+cd backend
+npm run release:check
 ```
+
+`release:check` runs:
+
+1. `npm run check:syntax`
+2. `npm run check:imports`
+3. `npm run test:release-scripts`
+4. `GPTWORK_TOOL_MODE=full npm run release:gate`
+5. `npm run test:p0-ma9`
+6. `npm run test:p0-p5`
+7. `GPTWORK_TOOL_MODE=full npm run release:p5:gate`
+
+`npm run test:e2e-acceptance` remains available as a broader product
+acceptance suite, but it is not part of the baseline gate while its assertions
+target pre-v5 raw `structuredContent` payloads instead of the current bounded
+model payload plus card metadata contract.
 
 ## Release Matrix
 
@@ -39,7 +60,9 @@ The release gate must prove three release modes before publishing:
 | Optional GitHub adapter | `G10 GitHub adapter delivery E2E` covers GitHub issue import, question/task-intake conversion, dry-run no-op behavior, apply behavior, idempotency, and skipped reasons without making live GitHub API calls. |
 | Legacy compatibility | `G10 legacy compatibility tests` cover old task status aliases and result-field normalization so existing task history remains readable without state rewrites. |
 
-Fast mode remains a developer smoke gate. Release candidates should use the full command:
+Fast mode remains a developer smoke gate. Release candidates should use the
+baseline release check above. For delivery-specific diagnostics, run the full
+delivery check:
 
 ```bash
 cd backend
@@ -87,4 +110,4 @@ A release gate workflow runs automatically on push/PR to `main` via `.github/wor
 3. `npm run release:gate`
 4. `npm run release:delivery-check -- --profile full`
 
-The CI gate uses `--profile full` explicitly to match the default behavior of the backend script. Both the root-level wrapper and the backend script default to `full`.
+The CI gate uses `--profile full` explicitly to match the default behavior of the backend script. Both the root-level wrapper and the backend script default to `full`. Local release candidates should still use `npm run release:check`, which includes the P5 gate and package-script regression in addition to the CI gate components.
