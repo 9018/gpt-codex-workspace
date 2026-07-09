@@ -147,6 +147,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     "GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI",
     "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK",
   ], true);
+  const backendRoot = resolve(workspaceRoot || PROJECT_ROOT, "backend");
 
   // ── Resolved values ──────────────────────────────────────────────
 
@@ -236,7 +237,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     maxShellOutputBytes: _getNum("GPTWORK_MAX_SHELL_OUTPUT_BYTES", 200000),
 
     // Other
-    codexHome: _get("GPTWORK_CODEX_HOME", process.env.CODEX_HOME || homedir() || ""),
+    codexHome: _get("GPTWORK_CODEX_HOME", resolve(workspaceRoot || PROJECT_ROOT, ".codex")),
     python: _get("GPTWORK_PYTHON", process.platform === "win32" ? "python" : "python3"),
     logPath: _get("GPTWORK_LOG_PATH", ""),
     requireAuth: _getBool("GPTWORK_REQUIRE_AUTH", true),
@@ -253,8 +254,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
 
     // Restart strategy
     restartMode: _get("GPTWORK_RESTART_MODE", "npm"),
-    restartCommand: _get("GPTWORK_RESTART_COMMAND", `npm --prefix "${BACKEND_ROOT}" run start`),
-    restartCwd: _get("GPTWORK_RESTART_CWD", BACKEND_ROOT),
+    restartCommand: _get("GPTWORK_RESTART_COMMAND", `npm --prefix "${backendRoot}" run start`),
+    restartCwd: _get("GPTWORK_RESTART_CWD", backendRoot),
     restartMarkerKind: _get("GPTWORK_RESTART_MARKER_KIND", "npm"),
 
     // Derive allowed roots array

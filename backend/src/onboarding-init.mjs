@@ -335,12 +335,16 @@ export function validateRuntimeEnvAgainstExample(gptworkDir) {
 export function checkProductionWorkerEnabled(gptworkDir) {
   const dir = gptworkDir || GPTWORK_DIR;
   const envPath = join(dir, "runtime.env");
-  let workerEnabled = process.env.GPTWORK_CODEX_WORKER === "true";
-  
-  // Also check runtime.env directly
-  if (!workerEnabled && existsSync(envPath)) {
+  let workerEnabled;
+
+  // process.env has strict precedence over runtime.env, including explicit false.
+  if (process.env.GPTWORK_CODEX_WORKER !== undefined) {
+    workerEnabled = process.env.GPTWORK_CODEX_WORKER === "true";
+  } else if (existsSync(envPath)) {
     const envVars = parseEnvFile(envPath);
     workerEnabled = envVars.GPTWORK_CODEX_WORKER === "true";
+  } else {
+    workerEnabled = false;
   }
   
   return {
@@ -532,45 +536,14 @@ export function checkCurrentHeadDiagnostics(projectRoot) {
     currentHead = execSync("git rev-parse HEAD 2>/dev/null", { cwd: root, encoding: "utf8", timeout: 5000 }).trim();
   } catch {}
   
-  // Check for baseline reference in docs or .gptwork
-  let baselineRef = null;
-  const docsDir = join(root, "docs");
-  if (existsSync(docsDir)) {
-    try {
-      const launchInitPath = join(docsDir, "launch-initialization.md");
-      if (existsSync(launchInitPath)) {
-        const initContent = readFileSync(launchInitPath, "utf8");
-        const match = initContent.match(/Canonical baseline.*?`([a-f0-9]{7,40})`/);
-        if (match) baselineRef = match[1];
-      }
-    } catch {}
-  }
-  
   if (!currentHead) {
     return { name: "current_head", status: "skip", detail: "Cannot determine current HEAD" };
   }
-  
-  if (baselineRef && currentHead.startsWith(baselineRef)) {
-    return {
-      name: "current_head",
-      status: "pass",
-      detail: `Current HEAD ${currentHead.slice(0, 12)} matches canonical baseline ${baselineRef.slice(0, 12)}`
-    };
-  }
-  
-  if (baselineRef) {
-    return {
-      name: "current_head",
-      status: "warn",
-      detail: `Current HEAD ${currentHead.slice(0, 12)} differs from docs baseline ${baselineRef.slice(0, 12)} (verify deployment)`,
-      fixHint: "Run: git log --oneline -1 HEAD; grep 'Canonical baseline' docs/launch-initialization.md"
-    };
-  }
-  
+
   return {
     name: "current_head",
     status: "pass",
-    detail: `Current HEAD: ${currentHead.slice(0, 12)} (no canonical baseline reference found)`
+    detail: `Current HEAD: ${currentHead.slice(0, 12)}`
   };
 }
 

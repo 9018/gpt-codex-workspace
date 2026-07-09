@@ -333,7 +333,7 @@ The following 9 checks are performed by `runProductionProfile()` in
 | 3 | `agent_backends` | warn | All backends must be valid (codex_exec/local_command/null) |
 | 4 | `release_gate_commands` | warn | `GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS` should be set |
 | 5 | `codex_exec_settings` | warn | Timeout >= 3600s, concurrency >= 1 |
-| 6 | `current_head` | warn | HEAD should match canonical baseline |
+| 6 | `current_head` | pass | Reports current HEAD without depending on docs baseline text |
 | 7 | `workspace_settings` | warn | `GPTWORK_DEFAULT_REPO` should be set |
 | 8 | `context_vector_store` | pass | Should be `auto` (default) or configured |
 | 9 | `integration_mode` | pass | Should be `auto` (default) |
@@ -356,7 +356,6 @@ The following warnings are non-blocking but recommended for production:
 |-------|-------------------|----------------|
 | `release_gate_commands` | No recovery commands | Set `GPTWORK_DELIVERY_RESULT_RECOVERY_COMMANDS` in runtime.env |
 | `codex_exec_settings` | Timeout < 3600s or concurrency < 1 | Set `GPTWORK_CODEX_EXEC_TIMEOUT=3600` |
-| `current_head` | HEAD differs from baseline | Verify deployment is on the intended commit |
 | `workspace_settings` | `GPTWORK_DEFAULT_REPO` not set | Set via `gptwork settings set GPTWORK_DEFAULT_REPO owner/repo` |
 | `agent_backends` | Invalid role backend value | Use only `codex_exec`, `local_command`, or `null` |
 
@@ -521,6 +520,28 @@ The default state example is available at:
 ```bash
 cat data/state.example.json
 ```
+
+---
+
+## 7. Runtime Init Review Repair Notes
+
+Updated after the Runtime Init Productization review repair. The runtime init path now enforces these productization rules:
+
+- `process.env` has strict precedence over `.gptwork/runtime.env`, including explicit false values such as `GPTWORK_CODEX_WORKER=false`.
+- Productized defaults no longer derive restart paths or Codex home from an author machine path; restart defaults are derived from the effective workspace root.
+- `runtime_status` structured output exposes the safe operational fields needed by ChatGPT review: shell/read byte limits, agent backend routing without command text, and default repository settings.
+- `current_head` diagnostics report the actual HEAD only; documentation baseline text is informational and does not make production init fail or warn.
+
+Verification command used for this repair:
+
+```bash
+cd backend && node --test --test-reporter=dot \
+  test/runtime-config.test.mjs \
+  test/cli-startup-config.test.mjs \
+  test/production-init-doctor.test.mjs
+```
+
+Expected result: all selected Runtime Init tests pass.
 
 ---
 
