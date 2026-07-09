@@ -32,7 +32,7 @@ GPTWork 不是部署平台，也不是 secrets 管理系统。它只协调执行
 - **Agent 执行后端**：所有 pipeline 角色默认 `codex_exec`（自动 Codex 执行）。可通过 `GPTWORK_AGENT_ROLE_BACKENDS` 为特定角色配置 `local_command` 或 `null` 后端。
 - **Worker runtime gate**：生产环境必须启用 worker（`GPTWORK_CODEX_WORKER=true`），否则任务无法自动推进。
 - **自我修复与交付恢复**：超时、脏 worktree、changed_files 误判等场景有专用自我修复路径和交付恢复机制。
-- **Pipeline gate 硬性门禁**：新 builder-mode 任务在关闭前必须通过 pipeline gate 检查（verification、reviewer_decision、integration 等 artifact 必须存在）。
+- **Pipeline gate 硬性门禁**：新 builder/deploy/admin 任务在关闭前必须通过 pipeline gate 检查（verification、reviewer_decision、integration 等 artifact 必须存在）。
 - **产品状态仪表盘**：`product_status` 单命令显示 running commit、worker health、queue 进度、当前 blocker、review 分类和推荐下一步操作。
 - 集成收口：支持按任务 worktree 执行，成功后通过 ff-only 路径进入 canonical main；push branch 或 open PR 不等于 merged。
 
@@ -106,14 +106,16 @@ npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 ```
 
-发布候选版本需要运行完整交付门禁：
+发布候选版本需要在 clean worktree 上运行三组产品门禁：
 
 ```bash
 cd backend
-node scripts/release-delivery-check.mjs  # 默认 full 完整发布门禁
+npm run release:delivery-check
+npm run release:tui-first-loop-gate
+npm run release:check
 ```
 
-完整门禁覆盖两种交付模式：无 GitHub 的本地 goal/task/worktree 执行，以及可选 GitHub Issues adapter 的导入/幂等/跳过原因链路；同时覆盖旧任务兼容层，保证历史 task 记录无需直接改写也能被验收、review 和队列状态展示消费。
+`release:delivery-check` 覆盖交付系统和兼容面，`release:tui-first-loop-gate` 覆盖 TUI-first loop smoke path，`release:check` 是 baseline package 发布门禁。完整门禁覆盖两种交付模式：无 GitHub 的本地 goal/task/worktree 执行，以及可选 GitHub Issues adapter 的导入/幂等/跳过原因链路；同时覆盖旧任务兼容层，保证历史 task 记录无需直接改写也能被验收、review 和队列状态展示消费。
 
 `health` 返回 200 只表示服务进程响应了请求，不表示当前运行的是期望 commit。确认部署是否生效时还要看 `runtime_status.running_commit`、重启 marker、进程启动时间和预期 commit。
 
@@ -300,7 +302,9 @@ npm install
 npm run check:syntax
 npm run check:imports
 node scripts/release-delivery-check.mjs --fast
-npm run test:e2e-acceptance
+npm run release:delivery-check
+npm run release:tui-first-loop-gate
+npm run release:check
 node bin/gptwork.mjs init        # 一键初始化+诊断
 node bin/gptwork.mjs doctor --local  # 详细诊断
 node bin/gptwork.mjs status --local
@@ -350,6 +354,7 @@ docs/
 | [docs/operations.md](docs/operations.md) | 诊断、recovery、安全重启和交付检查。 |
 | [docs/delivery/context-and-worktree-contract.md](docs/delivery/context-and-worktree-contract.md) | `codex.entry`、`context.bundle`、review packet、worktree 和 ff-only integration 语义。 |
 | [docs/delivery/acceptance-and-repair-contract.md](docs/delivery/acceptance-and-repair-contract.md) | 验收与修复契约。 |
+| [docs/delivery/release-gate.md](docs/delivery/release-gate.md) | 发布门禁和 TUI/release checklist。 |
 | [docs/setup-connect.md](docs/setup-connect.md) | 安装与连接指南。 |
 | [docs/goal-queue.md](docs/goal-queue.md) | goal queue 语义。 |
 | [docs/github-fallback.md](docs/github-fallback.md) | GitHub Issues fallback。 |
@@ -368,8 +373,8 @@ MIT
 | P0-01 Release Gate Hardening | ✅ **已处理（CI Workflow）** | 通过 CI workflow 和 release-gate.md 文档落地，含全量 syntax/import/test/e2e 发布门禁 |
 | P0-02 Retention Cleanup Productization | ✅ **已完成** | git_branches/git_worktrees 保留族、storage_pressure、分支修剪 |
 | P0-03 Review State Auto-Resolution | ✅ **已完成** | 6 种规范 review 分类（evidence_missing/policy_uncertain/...） |
-| P0-04 Pipeline Gate Hardening | ✅ **已完成** | 新 builder-mode 任务强 gate 检查，旧任务兼容 |
-| P0-05 Real Agent Backends | ✅ **已合并** | verifier/reviewer 默认改为 local_command 确定性执行 |
+| P0-04 Pipeline Gate Hardening | ✅ **已完成** | 新 builder/deploy/admin 任务强 gate 检查，旧任务兼容 |
+| P0-05 Real Agent Backends | ✅ **已合并** | 所有 pipeline 角色默认统一为 codex_exec；local_command/null 仅作为显式覆盖 |
 | P0-06 Init Onboarding Productization | ✅ **已合并** | `gptwork init/doctor/fix` 产品化开机流程 |
 | P0-07 Codex Exec Production Hardening | ✅ **已完成** | timeout/无输出/脏 worktree/changed_files 误判自愈 |
 | P1-08 Codex TUI Operator Fallback | ✅ 完成 | codex_exec 默认生产，codex_tui 显式 fallback |

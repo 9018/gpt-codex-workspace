@@ -1,6 +1,6 @@
 # GPTWork Current Status
 
-Last reviewed for current main: 2026-07-07 (docs-only repair verification).
+Last reviewed for current main: 2026-07-09 (P0/P1 repair convergence, README/docs refresh, clean release gates).
 
 This document describes code-backed capabilities that are present in the repository. It does not assert that a particular production process has been restarted onto the latest commit; use `runtime_status.running_commit` for that check.
 
@@ -16,7 +16,7 @@ The project now treats delivery state as several separate facts:
 | acceptance | The user goal is satisfied according to the acceptance contract and evidence. |
 | integration | The change entered canonical main or was explicitly not required. |
 | deployment | The running environment is using the expected commit/configuration. |
-| closure | The task can be closed because blocking gates passed or no longer apply. P0-04: New builder-mode tasks enforce strict pipeline gates before closure — missing required artifacts block the task. |
+| closure | The task can be closed because blocking gates passed or no longer apply. P0-04: New builder/deploy/admin tasks enforce strict pipeline gates before closure — missing required artifacts block the task. |
 | review | Human judgment is required. Review is not the same as failure. |
 
 Important boundaries are enforced in code and docs: `branch_pushed` is not `merged`; `pr_opened` is not `merged`; `merged` is not `deployed`; `health 200` is not proof of the expected running commit. `quality_notes` and `non_blocking_followups` are preserved but do not block current task closure.
@@ -102,11 +102,11 @@ Large finalization and task-processing responsibilities have been split into foc
 
 ### Pipeline Gate Enforcement (P0-04)
 
-Multi-agent pipeline gates transitioned from passive recording to strict enforcement for new builder-mode tasks.
+Multi-agent pipeline gates transitioned from passive recording to strict enforcement for new builder/deploy/admin tasks.
 
 Key changes:
 
-- **New task detection**: Tasks created with `mode: builder` now set `require_pipeline_gates: true` during task construction. This flag gates the strict enforcement path.
+- **New task detection**: Tasks created with `mode: builder`, `mode: deploy`, or `mode: admin` now set `require_pipeline_gates: true` during task construction. This flag gates the strict enforcement path.
 - **isLegacyTask hardening**: `isLegacyTask` now checks `require_pipeline_gates` first — if `true`, the task is definitively non-legacy and requires gate enforcement. Existing tasks without this flag retain legacy compatibility.
 - **Pipeline init is no longer fire-and-forget**: `ensurePipelineRunsForTask` is awaited for new tasks. Initialization failures are logged to goal messages rather than silently swallowed. The downstream gate check handles blocking when agent runs are missing.
 - **Strict gate default**: `applyPipelineGateBeforeClosure` defaults `allowMissingGates` to `false`. New tasks pass `allowMissingGates: false` via caller logic. Legacy tasks still get `allowMissingGates: true`.
@@ -210,11 +210,11 @@ These categories flow into the blocker-policy, review backlog reconciliation, an
 
 ### P0-04: Pipeline Gate Hardening (Completed)
 
-See "Pipeline Gate Enforcement" section above. New builder-mode tasks enforce strict gate defaults before closure.
+See "Pipeline Gate Enforcement" section above. New builder/deploy/admin tasks enforce strict gate defaults before closure.
 
 ### P0-05: Real Agent Backends (Completed)
 
-`backend/src/agent-execution-backends.mjs` upgraded from null defaults to productizable deterministic execution units:
+`backend/src/agent-execution-backends.mjs` is the canonical source for productized execution backend defaults:
 
 - All pipeline roles now default to `codex_exec` (real agent execution) by product default, with per-role overrides via `agentRoleBackends`.
 - `ROLE_AUTO_ARTIFACT_DEFAULTS` tracks roles that complete as `auto_artifact` when explicitly configured with `null` backend (context_curator, planner, integrator, finalizer).

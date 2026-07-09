@@ -76,14 +76,14 @@ GPTWork routes execution through configurable backends per agent role. The defau
 
 | Role | Default Backend | Semantic | Description |
 |------|----------------|----------|-------------|
+| context_curator | `codex_exec` | real | Codex prepares/curates task context. |
+| planner | `codex_exec` | real | Codex produces or refines the execution plan. |
 | builder | `codex_exec` | real | Codex executes autonomously in an isolated worktree. **Default production path.** |
+| verifier | `codex_exec` | real | Codex performs verification by default; can be explicitly overridden to `local_command`. |
+| reviewer | `codex_exec` | real | Codex performs review by default; can be explicitly overridden to `local_command`. |
+| integrator | `codex_exec` | real | Codex handles integration by default; can be explicitly overridden to `null` for auto-artifact completion when evidence is sufficient. |
+| finalizer | `codex_exec` | real | Codex handles finalization by default; can be explicitly overridden to `null` for auto-artifact completion when evidence is sufficient. |
 | repairer | `codex_exec` | real | Codex performs repair attempts with the same worktree isolation. |
-| verifier | `local_command` | real | Deterministic local command execution (e.g. `npm test`). |
-| reviewer | `local_command` | real | Deterministic local command execution for review evidence. |
-| integrator | `null` | auto_artifact | Auto-completed from task integration evidence. |
-| finalizer | `null` | auto_artifact | Auto-completed from task result evidence. |
-| context_curator | `null` | auto_artifact | Context bundle prepared from task metadata. |
-| planner | `null` | auto_artifact | Plan determined from context/prompt files. |
 
 `codex_tui_goal` is available as an **explicit operator fallback** only — never automatic. When enabled, the operator works interactively in a terminal session and must write durable `result.json` evidence, with commit/tests/result.md evidence where applicable. Once `result.json` is collected, the worker normalizes it into a standard taskResult and continues through the same verifier, acceptance, integration, finalizer, and queue auto-start path as `codex_exec`.
 
@@ -98,7 +98,7 @@ All configuration lives in `.gptwork/runtime.env` (excluded from git via `.gitig
 | `GPTWORK_TOOL_MODE` | `standard` | Tool exposure mode (minimal/standard/operator/codex/full) |
 | `GPTWORK_CODEX_EXEC_TIMEOUT` | `3600` | Codex execution timeout in seconds |
 | `GPTWORK_AGENT_BACKEND` | `codex_exec` | Default execution backend (`codex_exec`, `local_command`, `null`) |
-| `GPTWORK_AGENT_ROLE_BACKENDS` | — | Comma-separated role routing, for example `verifier=local_command,reviewer=null` |
+| `GPTWORK_AGENT_ROLE_BACKENDS` | — | Optional comma-separated role overrides, for example `verifier=local_command,reviewer=local_command` |
 | `GPTWORK_AGENT_LOCAL_COMMAND` | — | Shell command for the `local_command` backend |
 | `GPTWORK_AGENT_ROLE_COMMANDS` | — | Role command overrides separated by `||`, for example `verifier=npm test` |
 | `GPTWORK_GITHUB_ENABLED` | `false` | Enable GitHub Issues sync |
@@ -117,7 +117,8 @@ GPTWORK_TOOL_MODE=standard
 GPTWORK_REQUIRE_AUTH=true
 GPTWORK_CODEX_EXEC_TIMEOUT=3600
 GPTWORK_AGENT_BACKEND=codex_exec
-# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=null
+# Optional explicit overrides; leave unset for product defaults.
+# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
 # GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
 
 # GitHub Issues sync (optional)
@@ -217,7 +218,7 @@ Key principles:
 - **Acceptance is not verification**: verification commands may pass while acceptance fails (e.g. missing contract evidence).
 - **Integration is not deployment**: a merged commit still needs deployment/restart verification.
 - **Review is not failure**: `waiting_for_review` means human judgment is needed, not that the task is failed.
-- **Auto-closure is gated**: new builder-mode tasks enforce strict pipeline gate checks (verification, reviewer_decision, integration) before closure is allowed.
+- **Auto-closure is gated**: new builder/deploy/admin tasks enforce strict pipeline gate checks (verification, reviewer_decision, integration) before closure is allowed.
 
 ---
 
@@ -292,7 +293,7 @@ initialization with fix hints when production requirements are not met.
 |---------|-------------|---------------------|
 | `GPTWORK_CODEX_WORKER` | not set | `true` |
 | `GPTWORK_AGENT_BACKEND` | `codex_exec` | `codex_exec` |
-| `GPTWORK_AGENT_ROLE_BACKENDS` | — | `verifier=local_command,reviewer=local_command` |
+| `GPTWORK_AGENT_ROLE_BACKENDS` | — | Leave unset for product default; set only for explicit role overrides |
 | `GPTWORK_CODEX_EXEC_TIMEOUT` | 3600s | >= 3600s |
 | `GPTWORK_CONTEXT_VECTOR_STORE` | `auto` | `auto` or `zvec` |
 | `GPTWORK_INTEGRATION_MODE` | `ff-only` | `ff-only` |

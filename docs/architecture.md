@@ -179,7 +179,7 @@ Current blocker policy (`current-blocker-policy.mjs`) further classifies review 
 
 Paths: `backend/src/pipeline-orchestration.mjs`, `backend/src/agent-run-writeback.mjs`, `backend/src/agent-artifact-contract.mjs`, `backend/src/agent-execution-backends.mjs`
 
-A pipeline of agent roles executes sequentially for builder-mode tasks. Each role has a default backend, execution semantic, and expected artifact kind.
+A pipeline of agent roles executes sequentially for tasks that require pipeline gates, including new builder/deploy/admin tasks. Each role has a default backend, execution semantic, and expected artifact kind.
 
 **Pipeline Roles and Default Backends:**
 
@@ -217,7 +217,7 @@ Both `codex_exec` and `local_command` are `real` executions -- the former runs a
 
 **Gate enforcement flow:**
 
-1. Task creation in `buildGoalTask` sets `require_pipeline_gates: true` for builder-mode tasks.
+1. Task creation in `buildGoalTask` sets `require_pipeline_gates: true` for new builder/deploy/admin tasks.
 2. `ensurePipelineRunsForTask` creates agent_run records for each pipeline role.
 3. Agent writeback functions record completed runs with output artifacts per `ARTIFACT_SCHEMA.required_by_role`.
 4. Before closure, `applyPipelineGateBeforeClosure` evaluates gates: blocking roles must have completed runs with required artifact kinds.
@@ -414,14 +414,14 @@ Path: `backend/src/agent-execution-backends.mjs`
 Assigned agent tasks execute through a small backend abstraction before result parsing and final writeback. Supported backends:
 
 - `codex_exec` (default for all pipeline roles by product default): Real Codex CLI execution.
-- `local_command` (default for verifier/reviewer): Deterministic shell command execution.
-- `null` (default for integrator/finalizer/context_curator/planner): Auto-artifact from result evidence.
+- `local_command` (explicit override only): Deterministic shell command execution, commonly used for verifier/reviewer in constrained deployments.
+- `null` (explicit override only): Auto-artifact from result evidence for roles that support deterministic completion.
 
 **Runtime configuration:**
 
 ```text
 GPTWORK_AGENT_BACKEND=codex_exec                                    # Global default
-GPTWORK_AGENT_ROLE_BACKENDS=builder=codex_exec,verifier=local_command  # Per-role overrides
+GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command  # Optional explicit per-role overrides
 GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test               # Default shell command
 GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm test||reviewer=node scripts/review.mjs  # Per-role commands
 ```

@@ -149,7 +149,7 @@ TUI 会话完成 → collectCodexTuiCompletion()
 
 ## TUI Superpowers 插件预检
 
-当 `GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=true` 或 `config.requireSuperpowersPluginForTuiFallback=true` 时，
+当 `GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=true` 或 `config.requireSuperpowersForTui=true` 时，
 TUI 回退需要 Superpowers 插件可用（`checkSuperpowersPluginForTuiFallback()` in `codex-execution-provider.mjs`）。
 
 如果插件缺失，返回：
@@ -165,6 +165,17 @@ TUI 回退需要 Superpowers 插件可用（`checkSuperpowersPluginForTuiFallbac
 ```
 
 TUI 会话不能启动，`codex_exec` 保持为回退 provider。
+
+### TUI runtime config
+
+| 变量 | 默认 | 含义 |
+|---|---|---|
+| `GPTWORK_CODEX_TUI_ENABLED` | `false` | 是否启用显式 TUI provider |
+| `GPTWORK_CODEX_TUI_COMMAND` | `GPTWORK_CODEX_COMMAND` 或 `codex` | TUI 启动命令 |
+| `GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS` | `30000` | completion collector 等待 durable evidence 的默认窗口 |
+| `GPTWORK_CODEX_TUI_SESSION_ROOT` | workspace root | session metadata/log 的存储根；新实现会记录 `session_store_root`，避免误写到任务 cwd |
+| `GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI` | `true` | TUI fallback 是否要求 Superpowers 插件可用 |
+
 
 ## Codex 执行 Provider 描述
 

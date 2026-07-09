@@ -2,17 +2,20 @@
 
 [中文主文档](README.zh-CN.md) | English
 
-GPTWork is a backend MCP service that coordinates ChatGPT, Codex, and project workspaces. ChatGPT creates bounded goals, Codex executes them in isolated worktrees, and GPTWork records task state, compact context, verification evidence, review packets, and closure decisions.
+GPTWork is a backend MCP service that coordinates ChatGPT, Codex, and project workspaces. ChatGPT creates bounded goals, GPTWork manages task state/queue/context/evidence, and Codex executes changes in isolated worktrees before GPTWork verifies, accepts, integrates, and closes the work.
 
-The complete project documentation is maintained in Chinese at [README.zh-CN.md](README.zh-CN.md). This English README is intentionally short to avoid duplicating the operational contract.
+The detailed project documentation is maintained in Chinese at [README.zh-CN.md](README.zh-CN.md). This English README is the current operator/product entry and should stay aligned with the release gates.
 
-## Current Shape
+## Current Product Shape
 
-- ChatGPT should start with `open_project_context`, then use `create_encoded_goal` for implementation, deployment, maintenance, or multi-step work.
-- Codex starts from `.gptwork/goals/<goal_id>/codex.entry.md` and prefers `context.bundle.md` over full goal context when a bundle exists.
-- Review should use compact packets: `get_task_review_packet` and `get_task_acceptance_bundle`.
-- Zvec is an optional rebuildable context index, not the source of truth. Durable facts live in goal/task/result state, Git, and runtime diagnostics.
-- Verification means commands/checks passed. Acceptance means the user goal is satisfied. Integration means changes reached canonical main. Deployment means the running environment uses the expected commit/config. Closure means the task can be closed. Review means human judgment is needed; it is not automatically failure.
+- **Primary entry**: ChatGPT should start with `open_project_context`, then use `create_encoded_goal` for implementation, deployment, maintenance, or multi-step work.
+- **Bounded context**: Codex starts from `.gptwork/goals/<goal_id>/codex.entry.md` and prefers `context.bundle.md` over full goal context when a bundle exists.
+- **Compact review**: Review should use `get_task_review_packet` and `get_task_acceptance_bundle`, not full transcripts or large diffs.
+- **Default automation path**: all pipeline roles default to `codex_exec` through the canonical `ROLE_BACKEND_DEFAULTS` source. Role-specific overrides via `GPTWORK_AGENT_ROLE_BACKENDS` are explicit operator configuration, not product defaults.
+- **Codex TUI**: `codex_tui_goal` is an explicit operator fallback only. GPTWork never silently downgrades automatic execution to TUI.
+- **Pipeline gates**: new builder/deploy/admin tasks enforce pipeline gates before closure. Missing required artifacts block closure or send the task to review/repair.
+- **Product diagnostics**: `product_status`, `runtime_status`, `worker_status`, and `gptwork_doctor` show commit/runtime/queue/blocker/review/TUI status without requiring raw state reads.
+- **Tool-result v5 contract**: model-facing tool results are bounded. Full card payloads remain in card metadata; only controlled compatibility fields are exposed to the model.
 
 Important delivery boundaries: `branch_pushed != merged`, `pr_opened != merged`, `merged != deployed`, and `health 200 != running expected commit`. `quality_notes` and `non_blocking_followups` do not block current task closure.
 
@@ -22,8 +25,7 @@ Important delivery boundaries: `branch_pushed != merged`, `pr_opened != merged`,
 cd backend
 npm install
 npm link
-gptwork setup
-gptwork settings set GPTWORK_TOOL_MODE standard
+gptwork init
 gptwork start
 ```
 
@@ -38,7 +40,36 @@ gptwork self-test --local
 curl http://127.0.0.1:8787/health
 ```
 
-## Verification
+For production initialization:
+
+```bash
+cd backend
+gptwork init --production
+```
+
+Production mode validates worker enablement, role/backend settings, Codex exec settings, workspace configuration, vector-store configuration, and integration mode before the environment is treated as ready.
+
+## Runtime Configuration Highlights
+
+```bash
+# Product default: all roles use automatic Codex execution.
+GPTWORK_AGENT_BACKEND=codex_exec
+
+# Optional explicit per-role override examples.
+# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
+# GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
+
+# Optional explicit TUI fallback. It still requires task metadata opt-in.
+# GPTWORK_CODEX_TUI_ENABLED=true
+# GPTWORK_CODEX_TUI_COMMAND=codex
+# GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS=30000
+# GPTWORK_CODEX_TUI_SESSION_ROOT=/path/to/workspace
+# GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=true
+```
+
+## Verification and Release Gates
+
+Fast local checks:
 
 ```bash
 cd backend
@@ -47,17 +78,16 @@ npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 ```
 
-For release candidates, run the full delivery gate:
+Release candidates should pass all product gates from a clean worktree:
 
 ```bash
 cd backend
-node scripts/release-delivery-check.mjs
+npm run release:delivery-check
+npm run release:tui-first-loop-gate
+npm run release:check
 ```
 
-The full gate covers both supported delivery modes: local/no-GitHub task
-execution and optional GitHub Issues adapter intake. It also runs legacy task
-compatibility checks so older task records can still be reviewed without
-rewriting historical state.
+`release:delivery-check` covers the delivery system and compatibility surface, `release:tui-first-loop-gate` covers the TUI-first loop smoke path, and `release:check` is the baseline package release gate.
 
 ## Main Docs
 
@@ -65,6 +95,7 @@ rewriting historical state.
 - [Current status](docs/current-status.md)
 - [Architecture](docs/architecture.md)
 - [Operations](docs/operations.md)
+- [Release gate](docs/delivery/release-gate.md)
 - [Context and worktree contract](docs/delivery/context-and-worktree-contract.md)
 - [Setup and connection](docs/setup-connect.md)
 - [Goal queue](docs/goal-queue.md)
@@ -72,7 +103,7 @@ rewriting historical state.
 
 ## Security
 
-Do not put real tokens, `.env` contents, runtime secrets, GitHub tokens, or notification keys in README files, docs, goal payloads, results, or Issues. Use local ignored runtime configuration and secret stores.
+Do not put real tokens, `.env` contents, runtime secrets, GitHub tokens, notification keys, raw transcripts, shell snapshots, or durable memory contents in README files, docs, goal payloads, results, or Issues. Use local ignored runtime configuration and secret stores.
 
 ## License
 

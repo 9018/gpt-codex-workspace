@@ -27,7 +27,7 @@ The `structuredContent` field in every MCP tool result contains the **modelPaylo
 }
 ```
 
-The modelPayload explicitly **excludes** raw base fields such as `pid`, `running_commit`, `worker`, `queue`, `stdout`, `stderr`, task results, or any deep inspection data. It includes:
+The modelPayload explicitly **excludes raw deep data** such as full stdout/stderr, full task results, full queue objects, large diffs, transcripts, shell snapshots, and debug blobs. A small set of **controlled compatibility fields** may be exposed for specific operational tools so ChatGPT can reason about task IDs, lock summaries, worker status, runtime status, and doctor next actions without reading raw state. It includes:
 
 | Field | Type | Description |
 |---|---|---|
@@ -40,8 +40,11 @@ The modelPayload explicitly **excludes** raw base fields such as `pid`, `running
 | `status` | string | Result status (ok, warning, error, info) |
 | `rawAvailable` | boolean | Always `true` — signals that deep data can be fetched via explicit tools |
 | `card` | object | **Backward compat**: embedded card view model (see Layer 2) |
+| tool-specific compact fields | object/scalars | Controlled compatibility fields for tools such as `create_task`, `get_task`, `run_assigned_codex_tasks`, `runtime_status`, `worker_status`, `repo_lock_status`, `list_repo_locks`, `gptwork_doctor`, and `open_project_context` |
 
 The `card` field inside `structuredContent` exists for backward compatibility with v2 clients that expect the card model inside the structured content. New code should prefer `_meta.gptwork_card`.
+
+Tool-specific compatibility fields are intentionally bounded. For example, task payloads use a compact task projection, repo lock tools expose lock summaries, and runtime/doctor tools expose queue/worker/next-action summaries. They do not reintroduce full raw payload spreading.
 
 ### Layer 2: V5 User Card View (cardPayload)
 
@@ -101,7 +104,7 @@ Deep inspection tools (not card data):
 - `gptwork_doctor` — runtime diagnostics with environment detail
 - `runtime_status` — full runtime object with queue policy detail
 
-These tools return cardPayload for quick reference AND modelPayload with `rawAvailable: true`, but the deep data remains accessible only through their dedicated `content[0].text` or additional tool-specific accessors.
+These tools return cardPayload for quick reference AND modelPayload with `rawAvailable: true`. Some operational tools also include bounded compatibility fields in modelPayload, but deep data remains accessible only through their dedicated `content[0].text` or additional tool-specific accessors.
 
 ## Widget Version vs Card Schema Version
 

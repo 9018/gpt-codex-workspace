@@ -668,10 +668,11 @@ For a single-pane-of-glass overview, use `product_status`. It aggregates system,
 When configuring which execution backend to use per role, set:
 
 ```bash
-GPTWORK_AGENT_BACKEND=codex_exec        # global default (default: codex_exec)
-GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
-GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
-GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
+GPTWORK_AGENT_BACKEND=codex_exec        # product default: all roles use codex_exec
+# Optional explicit overrides only:
+# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
+# GPTWORK_AGENT_LOCAL_COMMAND=npm --prefix backend test
+# GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
 ```
 
 ### Onboarding Commands

@@ -15,10 +15,21 @@ referenced script or test file is missing.
 5. MA9 and P5 release-gate regressions pass
 6. P5 release gate script reports GO
 
-## Gate Script
+## Gate Scripts
+
+Baseline package gate:
 
 ```bash
 cd backend
+npm run release:check
+```
+
+Release candidates should pass all three product gates from a clean worktree:
+
+```bash
+cd backend
+npm run release:delivery-check
+npm run release:tui-first-loop-gate
 npm run release:check
 ```
 

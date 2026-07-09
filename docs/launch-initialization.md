@@ -85,11 +85,12 @@ gpt-codex-workspace/
 | Run tests | `cd backend && npm test` |
 | Syntax check | `cd backend && npm run check:syntax` |
 | Import check | `cd backend && npm run check:imports` |
-| Release gate (profile-aware) | `cd backend && npm run release:delivery-check` |
+| Delivery release gate | `cd backend && npm run release:delivery-check` |
 | E2E delivery | `cd backend && npm run test:e2e-delivery` |
+| TUI-first release gate | `cd backend && npm run release:tui-first-loop-gate` |
 | Production init (legacy) | `cd backend && node scripts/init-production.mjs` |
 | Smoke test | `cd backend && node scripts/e2e-delivery-smoke.mjs` |
-| All checks | `cd backend && npm run release:check` |
+| Baseline package release gate | `cd backend && npm run release:check` |
 
 ### 1.4 Build and Package
 
@@ -166,7 +167,7 @@ gptwork fix        # automated repair for common issues
 | Variable | Default | Description |
 |---|---|---|
 | `GPTWORK_AGENT_BACKEND` | `codex_exec` | Default backend |
-| `GPTWORK_AGENT_ROLE_BACKENDS` | (none) | Per-role overrides (comma-separated) |
+| `GPTWORK_AGENT_ROLE_BACKENDS` | (none) | Optional per-role overrides (comma-separated); leave unset for product defaults |
 | `GPTWORK_AGENT_LOCAL_COMMAND` | (none) | Default local command |
 | `GPTWORK_AGENT_ROLE_COMMANDS` | (none) | Per-role command overrides (||-separated) |
 | `GPTWORK_AGENT_COMMAND_TIMEOUT` | `60` | Command timeout (seconds) |
