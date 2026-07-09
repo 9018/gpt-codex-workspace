@@ -493,6 +493,78 @@ After acceptance, the operator should:
 *End of closure acceptance documentation. This document describes the current
 architectural model for closure, acceptance, and automated terminalization.*
 
+
+
+## 12. Completion Checkpoint Persistence
+
+The finalizer (`task-finalizer.mjs`) exports a `buildCompletionCheckpoint` function
+that constructs completion checkpoint metadata before terminal success is declared.
+
+### Checkpoint Contract
+
+When `decideTaskFinalState` returns a `completed` status, the writeback module MUST
+call `buildCompletionCheckpoint(evidence, decision)` and persist the returned metadata
+to durable storage (goal directory or state store) before applying the terminal decision
+to the task state or advancing the queue.
+
+The checkpoint object contains:
+
+| Field | Type | Source |
+|---|---|---|
+| `checkpoint_type` | string | Always `"completion"` |
+| `persisted_before_terminal` | bool | Always `true` |
+| `persisted_at` | ISO 8601 | Current timestamp |
+| `status` | string | Decision status (`"completed"`) |
+| `reason` | string | Decision reason code |
+| `commit` | string or null | Commit hash from the task result |
+| `changed_files` | string[] | Changed file paths |
+| `blocking_passed` | bool | From unified decision |
+| `non_blocking_followups` | array | Followup items from all sources |
+
+### Guarantees
+
+- **Non-terminal decisions produce null**: `buildCompletionCheckpoint` returns `null`
+  for any non-completed status (`waiting_for_repair`, `waiting_for_review`, `failed`,
+  etc.), ensuring no false checkpoint is persisted.
+- **Checkpoint is generated before the decision is applied**: The function computes
+  the checkpoint from the raw evidence and decision before the writeback module
+  applies the terminal state to the task or queue.
+- **Recovery evidence**: If downstream writeback is interrupted after checkpoint
+  persistence but before full state mutation, the checkpoint file serves as
+  durable evidence that the finalizer judged the task as completable.
+
+### Verification
+
+The checkpoint contract is covered by the lifecycle acceptance regression suite
+(`test/lifecycle-acceptance.test.mjs`) which verifies:
+- Checkpoint metadata is produced for completed decisions.
+- Checkpoint includes commit, changed_files, blocking_passed, and followups.
+- Checkpoint returns null for all non-completed statuses.
+- No-change repair completions also produce valid checkpoints when terminal.
+
+### Acceptance Policy Summary
+
+The full lifecycle acceptance policy as implemented:
+
+1. **Passed automated acceptance completes tasks by default** - When `decideTaskClosure`
+   returns `auto_completed_clean` or `auto_completed_with_followups`, the finalizer
+   returns `completed` with `safe_to_auto_advance: true`. No manual intervention needed.
+2. **Nonblocking followups do not block terminal completion** - Non-blocking followups
+   (severity `followup` or `minor`) and quality notes are collected as metadata on
+   the decision but do not create blockers. Only findings with severity `blocker` or
+   `major` can prevent completion.
+3. **Completion checkpoint metadata is persisted before terminal success** - The
+   `buildCompletionCheckpoint` function produces durable evidence before the
+   terminal state is committed.
+4. **Blocking findings or failed verification route to repair/convergence** - The
+   closure decider produces `waiting_for_repair` for repairable blockers. The
+   finalizer routes them to the existing repair/convergence path. Non-repairable
+   blockers route to `waiting_for_review`.
+5. **Regression coverage** - All six scenarios (accepted clean, accepted_with_followups,
+   resolved findings, blocking findings, missing evidence, checkpoint persistence)
+   are covered by `test/lifecycle-acceptance.test.mjs`.
+
+
 ## Repair link convergence guard
 
 Waiting-for-repair parents must not stay blocked by terminal child repair tasks. When a linked repair task has reached `failed`, `completed`, `cancelled`, or `canceled`, the worker must treat that linked child as terminal rather than as an active repair blocker. This lets the parent either schedule the next bounded repair attempt or move to the terminal failed / human-interrupt path when the repair budget is exhausted.
