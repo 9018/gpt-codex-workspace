@@ -26,6 +26,7 @@ import {
   runBacklogCensus,
   generateBacklogConvergenceReport,
   typedStateToNextAction,
+  buildCensusMigrationEvidence,
   VERSION,
 } from '../src/backlog-census.mjs';
 
@@ -44,7 +45,7 @@ import {
 test('VERSION is exported correctly', () => {
   assert.strictEqual(typeof VERSION, 'string');
   assert.ok(VERSION.length > 0);
-  assert.strictEqual(VERSION, '1.1.0');
+  assert.strictEqual(VERSION, '1.2.0');
 });
 
 // =========================================================================
@@ -897,4 +898,98 @@ test('runBacklogCensus: non-codex tasks are excluded', async () => {
   const census = await runBacklogCensus(tasks);
   assert.equal(census.total_tasks, 2);
   assert.equal(census.backlog_tasks, 0); // human-assigned failed is not codex backlog
+});
+
+// =========================================================================
+// 10. buildCensusMigrationEvidence
+// =========================================================================
+
+test('buildCensusMigrationEvidence: empty tasks returns valid evidence bundle', async () => {
+  const result = await buildCensusMigrationEvidence({ tasks: [] });
+  
+  assert.equal(result.report_type, 'p0_ma1_census_migration');
+  assert.ok(result.generated_at);
+  
+  const ev = result.evidence;
+  assert.ok(ev.backup);
+  assert.equal(ev.backup.backup_type, 'git_commit_snapshot');
+  assert.ok(ev.backup.restore_command);
+  
+  assert.ok(ev.before_count);
+  assert.equal(ev.before_count.codex_tasks, 0);
+  assert.equal(ev.before_count.backlog_tasks, 0);
+  
+  assert.ok(ev.dry_run);
+  assert.equal(ev.dry_run.total_tasks, 0);
+  
+  assert.ok(ev.apply);
+  assert.equal(ev.apply.execution_mode, 'dry_run');
+  assert.equal(ev.apply.state_modification, false);
+  assert.equal(ev.apply.affected_blockers, 0);
+  
+  assert.ok(ev.after_count);
+  assert.equal(ev.after_count.state_unchanged, true);
+  
+  assert.ok(ev.rollback);
+  assert.equal(ev.rollback.rollback_strategy, 'git_revert');
+  assert.ok(Array.isArray(ev.rollback.steps));
+  
+  assert.ok(ev.counts);
+  assert.equal(ev.counts.delta, 0);
+});
+
+test('buildCensusMigrationEvidence: with codex backlog tasks produces counts', async () => {
+  const tasks = [
+    { id: 't1', status: 'waiting_for_repair', assignee: 'codex', goal_id: 'g1', result: { verification: { passed: false }, changed_files: [] } },
+    { id: 't2', status: 'waiting_for_review', assignee: 'codex', goal_id: 'g2', result: { verification: { passed: true }, changed_files: ['x'] } },
+    { id: 't3', status: 'completed', assignee: 'codex', goal_id: 'g3', result: { verification: { passed: true }, commit: 'abc' } },
+    { id: 't4', status: 'failed', assignee: 'human', goal_id: 'g4' },
+  ];
+  
+  const result = await buildCensusMigrationEvidence({ tasks });
+  const { before_count: bc, after_count: ac, counts } = result.evidence;
+  
+  assert.equal(bc.codex_tasks, 3);
+  assert.equal(bc.backlog_tasks, 2); // waiting_for_repair + waiting_for_review
+  assert.deepEqual(ac, { ...bc, state_unchanged: true });
+  assert.equal(counts.delta, 0);
+});
+
+test('buildCensusMigrationEvidence: accepts pre-computed census result', async () => {
+  const fakeCensus = {
+    scanned_at: new Date().toISOString(),
+    total_tasks: 5,
+    backlog_tasks: 3,
+    classification_summary: { missing_evidence_repair: 3 },
+    convergence_report: {
+      total_blockers: 3,
+      recommended_actions: ['auto_repair'],
+    },
+  };
+  
+  const result = await buildCensusMigrationEvidence({
+    tasks: [],
+    censusResult: fakeCensus,
+    backupEvidence: { backup_type: 'manual', head_sha: 'abc12345', restore_command: 'manual restore' },
+    rollbackPlan: { rollback_strategy: 'manual_review', steps: ['check manually'], risk_level: 'medium' },
+  });
+  
+  assert.equal(result.evidence.dry_run.total_tasks, 5);
+  assert.equal(result.evidence.backup.backup_type, 'manual');
+  assert.equal(result.evidence.apply.affected_blockers, 3);
+  assert.equal(result.evidence.rollback.rollback_strategy, 'manual_review');
+});
+
+test('buildCensusMigrationEvidence: evidence keys match acceptance contract requirements', async () => {
+  const result = await buildCensusMigrationEvidence({ tasks: [] });
+  const evidenceKeys = Object.keys(result.evidence).sort();
+  
+  // Must have all 7 evidence sections
+  assert.deepEqual(evidenceKeys, ['after_count', 'apply', 'backup', 'before_count', 'counts', 'dry_run', 'rollback'].sort());
+});
+
+test('buildCensusMigrationEvidence: accepts default params (no argument)', async () => {
+  const result = await buildCensusMigrationEvidence();
+  assert.equal(result.report_type, 'p0_ma1_census_migration');
+  assert.equal(result.evidence.before_count.codex_tasks, 0);
 });
