@@ -24,6 +24,7 @@ const FINALIZER_STATUSES = new Set([
   "waiting_for_noop_evidence",
   "waiting_for_manual_terminal_decision",
   "human_interrupted_for_repair_budget_exhausted",
+  "blocked",
   "timed_out",
   "failed",
 ]);
@@ -107,6 +108,15 @@ function hasCapacityFailure(evidence = {}) {
   const failureClass = String(result.failure_class || evidence.failure_class || evidence.failure?.failure_class || "");
   if (["quota_exhausted", "quota_exhausted_or_rate_limited", "rate_limited", "insufficient_quota"].includes(failureClass)) return true;
   return CAPACITY_PATTERNS.some((pattern) => pattern.test(textEvidence(evidence)));
+}
+
+function providerEndpointFailure(evidence = {}) {
+  const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+  const failureClass = String(result.failure_class || evidence.failure_class || "");
+  if (failureClass === "codex_transport_404") return true;
+  if (list(result.acceptance_findings).some((entry) => entry?.code === "provider_endpoint_not_found")) return true;
+  const text = textEvidence(evidence);
+  return /\b404\b/i.test(text) && /\/v1\/responses\b/i.test(text);
 }
 
 function blocker(code, message, evidence = {}, source = "task_finalizer") {
@@ -420,6 +430,24 @@ export function buildCompletionCheckpoint(evidence = {}, decision = {}) {
 }
 
 export function decideTaskFinalState(evidence = {}) {
+  if (providerEndpointFailure(evidence)) {
+    const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+    const nextAction = result.next_action || "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.";
+    return {
+      ...decision(evidence, {
+        status: "blocked",
+        reason: "provider_endpoint_not_found",
+        blockers: [blocker(
+          "provider_endpoint_not_found",
+          result.blocking_finding?.message || result.summary || "The configured provider returned 404 for /v1/responses.",
+          { failure_class: "codex_transport_404", next_action: nextAction },
+          "codex_transport",
+        )],
+      }),
+      next_action: nextAction,
+    };
+  }
+
   if (hasCapacityFailure(evidence)) {
     return decision(evidence, {
       status: "waiting_for_capacity",

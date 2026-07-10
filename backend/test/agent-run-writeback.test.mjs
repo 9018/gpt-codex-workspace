@@ -175,6 +175,33 @@ test("agent-run-writeback: writeVerifierAgentRun fails passed verification witho
   assert.equal(result.agent_run.output_artifacts[0].passed, false);
   assert.equal(result.agent_run.output_artifacts[0].failure_class, "verification_commands_missing");
   assert.deepEqual(result.agent_run.output_artifacts[0].missing_evidence, ["verification.commands"]);
+  assert.equal(result.agent_run.output_artifacts[0].findings[0].code, "verification_commands_missing");
+  assert.match(result.agent_run.output_artifacts[0].next_action, /verification command/i);
+});
+
+test("agent-run-writeback: provider blocker skips downstream acceptance roles", async () => {
+  const { skipDownstreamAgentRunsForBlocker } = await import("../src/agent-run-writeback.mjs");
+  const store = await makeStore();
+
+  const result = await skipDownstreamAgentRunsForBlocker(store, {
+    task_id: "t_provider_404",
+    goal_id: "g_provider_404",
+    finding: {
+      severity: "blocker",
+      code: "provider_endpoint_not_found",
+      message: "The configured provider returned 404 for /v1/responses.",
+    },
+    next_action: "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.",
+  });
+
+  assert.deepEqual(result.roles, ["verifier", "reviewer", "integrator"]);
+  assert.equal(result.skipped, 3);
+
+  const { listAgentRuns } = await import("../src/agent-run-service.mjs");
+  const runs = await listAgentRuns(store, { task_id: "t_provider_404", limit: 10 });
+  assert.deepEqual(runs.agent_runs.map((run) => run.role).sort(), ["integrator", "reviewer", "verifier"]);
+  assert.ok(runs.agent_runs.every((run) => run.status === "skipped"));
+  assert.ok(runs.agent_runs.every((run) => run.output_artifacts[0].code === "provider_endpoint_not_found"));
 });
 
 // ===========================================================================

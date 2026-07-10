@@ -28,21 +28,50 @@
 - **Review**: `result_missing_no_evidence`
 - **Next action**: 回退到 stdout/last-message 解析器。
 
-### 4. `dirty_worktree_after_codex`
+### 4. `codex_transport_404` / `provider_endpoint_not_found`
+
+当 Codex provider 配置使用 `base_url = ".../v1"` 且 `wire_api = "responses"` 时，
+Codex CLI 会请求 `<base_url>/responses`，即 `/v1/responses`。如果 provider 对该路径返回
+`404 Not Found`，说明当前 endpoint 不实现 Codex Responses transport，或 `base_url` /
+`wire_api` 配置与 provider 实际协议不匹配。这是 provider 配置/transport blocker，不是代码缺陷。
+
+- **failure_class**: `codex_transport_404`
+- **finding code**: `provider_endpoint_not_found`
+- **status**: `blocked`
+- **repairable/retryable**: `false`
+- **Next action**: 配置实现 Responses transport 的 provider endpoint，或修正
+  `base_url` / `wire_api` 后重新入队。
+
+检测到该错误后，pipeline 在 builder 后立即停止。verifier、reviewer、integrator 的
+agent runs 记录为 `skipped`，acceptance 和 integration callback 不执行，finalizer 保留
+actionable blocker 和 `next_action`。不得把该错误降级为通用 non-zero exit，也不得进入
+`commands_count=0` 的空验收链。
+
+### 5. Verifier 无命令
+
+verifier 必须至少产生一条可执行验证命令。`commands_count=0` 不是 unknown failure，也不能
+视为通过；它必须输出：
+
+- **failure_class/finding code**: `verification_commands_missing`
+- **status**: `blocked`
+- **finding severity**: `blocker`
+- **Next action**: 配置并运行至少一条验证命令，然后重新执行 verification。
+
+### 6. `dirty_worktree_after_codex`
 - **category**: `DIRTY_WORKTREE_AFTER_CODEX`
 - **healing_action**: `recover_delivery_result`
 - **Next action**: delivery_result_recovery 将提交更改并 ff-only merge 到 canonical repo。
 
-### 5. `changed_files_mismatch`
+### 7. `changed_files_mismatch`
 - **category**: `CHANGED_FILES_MISMATCH`
 - **healing_action**: `reconcile_changed_files_from_git`
 - **Next action**: 从 `git diff --name-only` 重新获取 changed_files。
 
-### 6. `no_first_output_timeout` vs `timeout`
+### 8. `no_first_output_timeout` vs `timeout`
 - `no_first_output_timeout`: codex CLI 启动后从未产生任何输出
 - `timeout` (codex_timeout): codex CLI 启动并产生输出但超时
 
-### 7. 生产模式核心逻辑
+### 9. 生产模式核心逻辑
 
 ```
 codex exec → 结果解析 → 接受度检查 → delivery recovery → finalizaton
@@ -50,10 +79,11 @@ codex exec → 结果解析 → 接受度检查 → delivery recovery → finali
 
 所有非正常路径的自动归宿：
 - 可修复 → 创建 repair task 或自动重试
-- 不可修复 → `waiting_for_review` 并附带精确的 `review_reason` / `blocking_findings`
+- 需要人工判断的不可修复错误 → `waiting_for_review` 并附带精确的 `review_reason` / `blocking_findings`
+- 有明确外部修复动作的 provider/transport 错误 → `blocked` 并附带 `next_action`
 - delivery recovery → 自动提交 dirty worktree 并 merge
 
-### 8. 生产模式探测：Model / Provider / 推理效率
+### 10. 生产模式探测：Model / Provider / 推理效率
 
 `executeCodexTaskRun()` 在 codex CLI 横幅输出中提取：
 ```
@@ -65,7 +95,7 @@ reasoning effort: high
 这些提取结果写入 `parsedResult.model`、`parsedResult.provider`、`parsedResult.reasoning_effort`，
 以及 `codexMeta` 诊断元数据。详见 `extractHeaderMetadata()` 在 `task-codex-execution.mjs`。
 
-### 9. 执行参数重解析
+### 11. 执行参数重解析
 
 `resolveCodexExecArgs()` 在每次执行时重新解析 codex exec CLI 参数，而不是使用启动时的快照配置。
 优先级：`task.metadata.codex_exec_args` > `process.env.GPTWORK_CODEX_EXEC_ARGS` > `config.codexExecArgs` > 默认 `--yolo --skip-git-repo-check`。

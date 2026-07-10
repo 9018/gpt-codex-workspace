@@ -1,4 +1,5 @@
 import { KIND_EXECUTED, KIND_FAILED, KIND_TIMEOUT } from "./codex-finalizer-contract.mjs";
+import { classifyFailure, CODEX_TRANSPORT_404_NEXT_ACTION } from "./failure-classifier.mjs";
 
 /** Max chars of raw output to include in no-op diagnostics. */
 const DIAGNOSTIC_EXCERPT_MAX = 2000;
@@ -89,6 +90,39 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
     return diag;
   }
 
+  function _provider404Result() {
+    const providerError = String(cr?.stderr || parsed.summary || "Codex provider returned 404 for /v1/responses").trim().slice(0, DIAGNOSTIC_EXCERPT_MAX);
+    const blockingFinding = {
+      severity: "blocker",
+      code: "provider_endpoint_not_found",
+      message: providerError,
+      source: "codex_transport",
+    };
+    return {
+      kind: KIND_FAILED,
+      status: "blocked",
+      summary: providerError,
+      failure_class: "codex_transport_404",
+      repairable: false,
+      retryable: false,
+      blocking_finding: blockingFinding,
+      acceptance_findings: [blockingFinding],
+      next_action: CODEX_TRANSPORT_404_NEXT_ACTION,
+      pipeline_halted: true,
+      structured: parsed.structured,
+      from_json: parsed.from_json,
+      changed_files: parsed.changed_files || [],
+      tests: parsed.tests,
+      commit: parsed.commit,
+      remote_head: parsed.remote_head,
+      warnings: parsed.warnings || [],
+      followups: parsed.followups || [],
+      diagnostics: cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
+      completed_at: now,
+      timed_out: false,
+    };
+  }
+
   if (timedOut) {
     return {
       kind: KIND_TIMEOUT,
@@ -102,6 +136,13 @@ export function buildTaskResult(parsed, { timedOut = false, timeoutSeconds = 0, 
       diagnostics: cr ? _buildNoopDiagnostics(parsed, cr) : undefined,
       completed_at: now,
     };
+  }
+
+  if (returnCode !== 0 && classifyFailure({
+    result: parsed,
+    message: [parsed.summary, cr?.stderr, cr?.stdout].filter(Boolean).join("\n"),
+  }) === "codex_transport_404") {
+    return _provider404Result();
   }
 
   // If STATUS=failed (structured failure, not timeout)

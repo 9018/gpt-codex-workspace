@@ -131,6 +131,28 @@ test('verifyTaskCompletion passes with git diff fallback when no project checks 
   assert.deepEqual(calls.map((call) => call.command), ['git diff --check']);
 });
 
+test('verifyTaskCompletion reports an explicit blocker when commands_count is zero', async (t) => {
+  const { resultJsonPath } = await makeResultDir(t);
+
+  const verification = await verifyTaskCompletion({
+    resultJson: {
+      status: 'completed',
+      summary: 'claimed completion without executable verification',
+      changed_files: [],
+      verification: { passed: true },
+    },
+    resultJsonPath,
+    config: { verificationCommands: [] },
+  });
+
+  assert.equal(verification.passed, false);
+  assert.equal(verification.status, 'blocked');
+  assert.equal(verification.failure_class, 'verification_commands_missing');
+  assert.equal(verification.commands.length, 0);
+  assert.ok(verification.findings.some((entry) => entry.code === 'verification_commands_missing' && entry.severity === 'blocker'));
+  assert.match(verification.next_action, /verification command/i);
+});
+
 test('verifyTaskCompletion discovers bounded backend package checks when root package is absent', async (t) => {
   const { dir, resultJsonPath } = await makeResultDir(t);
   await mkdir(join(dir, 'backend'), { recursive: true });

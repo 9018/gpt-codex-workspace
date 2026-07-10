@@ -321,6 +321,14 @@ export async function verifyTaskCompletion({
     commands.push(reused || await runCommand(command, { cwd: repoPath || process.cwd(), timeout: config.verificationCommandTimeout || 120_000, config }));
   }
 
+  const commandsMissing = commands.length === 0;
+  if (commandsMissing) {
+    findings.push(finding(
+      'verification_commands_missing',
+      'Verifier produced commands_count=0; at least one executable verification command is required.',
+    ));
+  }
+
   if (commands.some((command) => command.exit_code !== 0)) {
     findings.push(finding('verification_command_failed', 'One or more verification commands failed'));
   }
@@ -354,7 +362,9 @@ export async function verifyTaskCompletion({
   const passed = findings.length === 0 && commands.every((command) => command.exit_code === 0) && (contract_verification ? contract_verification.completion_eligible === true : true);
   const verification = {
     passed,
-    status: passed ? 'completed' : 'waiting_for_review',
+    status: passed ? 'completed' : commandsMissing ? 'blocked' : 'waiting_for_review',
+    failure_class: commandsMissing ? 'verification_commands_missing' : null,
+    next_action: commandsMissing ? 'Configure and run at least one verification command, then rerun verification.' : null,
     commands,
     skipped_checks,
     changed_files,

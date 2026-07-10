@@ -26,7 +26,7 @@ import { runCodexTuiEvidenceCycle } from "./codex-tui-evidence-cycle.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
-import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writePlannerAgentRun, completeQueuedAgentRuns } from "./agent-run-writeback.mjs";
+import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writePlannerAgentRun, completeQueuedAgentRuns, skipDownstreamAgentRunsForBlocker } from "./agent-run-writeback.mjs";
 import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
@@ -992,6 +992,79 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     noFirstOutputTimeout: taskResult.no_first_output_timeout,
   });
   taskResult.failure_class = _fc;
+  if (_fc === "codex_transport_404") {
+    const finding = taskResult.blocking_finding || {
+      severity: "blocker",
+      code: "provider_endpoint_not_found",
+      message: taskResult.summary || "The configured provider returned 404 for /v1/responses.",
+      source: "codex_transport",
+    };
+    taskResult.status = "blocked";
+    taskResult.pipeline_halted = true;
+    taskResult.next_action = taskResult.next_action || "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.";
+    taskResult.acceptance_findings = [finding];
+    taskResult.verification = {
+      passed: false,
+      status: "skipped",
+      commands: [],
+      failure_class: "codex_transport_404",
+      findings: [finding],
+      next_action: taskResult.next_action,
+      skipped: true,
+    };
+    taskResult.reviewer_decision = {
+      status: "skipped",
+      passed: false,
+      reason: "pipeline_halted_by_provider_endpoint_not_found",
+    };
+    taskResult.integration = {
+      status: "skipped",
+      required: false,
+      terminal: true,
+      reason: "pipeline_halted_by_provider_endpoint_not_found",
+    };
+
+    await skipDownstreamAgentRunsForBlocker(store, {
+      task_id: task.id,
+      goal_id: goal?.id,
+      finding,
+      next_action: taskResult.next_action,
+    }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "pipeline", err));
+    await writeFinalizerAgentRun(store, {
+      task_id: task.id,
+      goal_id: goal?.id,
+      taskResult,
+      taskStatus: "blocked",
+    }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
+
+    return finalizeCodexTaskRunFn({
+      store,
+      config,
+      task,
+      taskStatus: "blocked",
+      taskResult,
+      doneAt: new Date().toISOString(),
+      cr,
+      workspace,
+      goal,
+      workspaceFiles,
+      summary: taskResult.summary,
+      context,
+      runFilePath,
+      repoLockPath,
+      resolvedRepo,
+      github,
+      appendGoalMessageFn,
+      resultJsonPath: _resultJsonPath,
+      verifyTaskCompletionFn: deps.verifyTaskCompletionFn,
+      autoStartNextOnTaskCompletedFn: deps.autoStartNextOnTaskCompletedFn,
+      runIntegrationQueueFn,
+      shouldAttemptRepairFn,
+      createRepairGoalFromFindingsFn,
+      createGoalFn,
+      deliveryResultRecovery: null,
+    });
+  }
   if (_fc && failureClassIsTerminalNonRepairable(_fc)) {
     const _healing = determineHealingActionFn({
       error: new Error(taskResult.summary || _fc),

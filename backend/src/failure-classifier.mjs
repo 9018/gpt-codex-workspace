@@ -9,15 +9,33 @@
  * repairable, confidence, nextStatusHint, and evidence fields.
  */
 
+export const CODEX_TRANSPORT_404_NEXT_ACTION = "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.";
+
+export function isCodexTransport404(value) {
+  const text = String(value || "").toLowerCase();
+  return text.includes("codex_transport_404")
+    || text.includes("provider_endpoint_not_found")
+    || (/\b404\b/.test(text) && /\/v1\/responses\b/.test(text));
+}
+
 /** Simple string-based classification (backward compatible) */
 export function classifyFailure(input = {}) {
   const result = input.resultJson || input.result || {};
   const error = input.error || {};
-  const message = String(input.message || error.message || result.summary || "").toLowerCase();
+  const message = textOf(
+    input.message,
+    error,
+    result.summary,
+    result.failure_class,
+    result.blocking_finding,
+    result.diagnostics,
+  );
 
   // ---- P0: Network failure classes ----
   // Checked before code-level failures to prevent transient network issues
   // from being misclassified as repairable code failures.
+  if (isCodexTransport404(message)) return "codex_transport_404";
+
   if (
     input.rateLimited ||
     message.includes("429") ||
@@ -119,6 +137,7 @@ const TASK_FAILURE_DEFINITIONS = {
   deployment_failed: { repairable: false, repair_strategy: "human_interrupt_deployment", reason: "Deployment failed. Requires human intervention — not auto-repairable." },
   context_missing: { repairable: true, repair_strategy: "repair_context", reason: "Required context is missing. Re-run with enriched context." },
   repair_budget_exhausted: { repairable: false, repair_strategy: "human_interrupt_budget_exhausted", reason: "Repair budget exhausted. Human must decide next action (extend budget, override status, or escalate)." },
+  codex_transport_404: { repairable: false, repair_strategy: "fix_provider_endpoint", reason: "The configured provider returned 404 for the Codex Responses endpoint." },
 };
 
 function taskFailure(failureClass, overrides = {}) {
@@ -152,8 +171,17 @@ export function classifyTaskFailure({ task = {}, codexResult = {}, verification 
     task.failure_class,
     task.result?.failure_class,
     task.result?.summary,
+    codexResult.blocking_finding,
+    codexResult.diagnostics,
+    task.result?.blocking_finding,
+    task.result?.diagnostics,
   );
 
+  if (isCodexTransport404(combined)) {
+    return taskFailure("codex_transport_404", {
+      reason: codexResult.blocking_finding?.message || codexResult.summary || "The configured provider returned 404 for /v1/responses.",
+    });
+  }
 
   // ---- P0: Check quota/rate-limit signals first before code-level failures ----
   // Ensures quota/rate-limit is never misclassified as repairable code defect.
@@ -308,6 +336,7 @@ export function failureClassIsTerminalNonRepairable(failureClass) {
     // ---- P0-C7: New terminal non-repairable failure classes ----
     "deployment_failed",
     "repair_budget_exhausted",
+    "codex_transport_404",
   ]).has(failureClass);
 }
 
@@ -478,6 +507,14 @@ const FAILURE_CLASS_STRUCTURED = {
     nextStatusHint: "failed",
     confidence: "high",
     description: "Repair budget exhausted. Human must decide next action.",
+  },
+  codex_transport_404: {
+    class: "codex_transport_404",
+    retryable: false,
+    repairable: false,
+    nextStatusHint: "blocked",
+    confidence: "high",
+    description: "Configured provider does not implement the Codex Responses endpoint",
   },
 };
 
