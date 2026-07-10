@@ -960,11 +960,19 @@ function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) 
 
 function normalizeCompletedDeliveryState({ taskStatus, taskResult = {} } = {}) {
   if (taskStatus !== "completed") return taskResult;
-  if (!hasIntegratedCommitEvidence(taskResult) || !hasRuntimeHeadConvergence(taskResult)) return taskResult;
 
+  // Always filter Worktree retained warnings for completed results — these
+  // are stale operational notes that were pushed when the task was still in a
+  // non-terminal state (e.g. waiting_for_repair) and the finalizer later
+  // promoted the status to completed.
   const warnings = Array.isArray(taskResult.warnings)
     ? taskResult.warnings.filter((warning) => !/^Worktree retained:/i.test(String(warning || "")))
     : [];
+
+  if (!hasIntegratedCommitEvidence(taskResult) || !hasRuntimeHeadConvergence(taskResult)) {
+    return { ...taskResult, warnings };
+  }
+
   const next = {
     ...taskResult,
     warnings,
