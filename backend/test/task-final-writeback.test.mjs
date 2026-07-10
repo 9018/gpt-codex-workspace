@@ -287,6 +287,37 @@ test("task-final-writeback: waiting_for_review status labels correctly (not Comp
   }
 });
 
+test("task-final-writeback: provider endpoint blocker remains blocked and skips verification", async () => {
+  const args = makeMinimalArgs("blocked");
+  const captured = captureWriteCalls(args);
+  args.taskResult = {
+    kind: "codex_failed",
+    status: "blocked",
+    summary: "ERROR unexpected status 404 Not Found: not found, url: http://provider.invalid/v1/responses",
+    failure_class: "codex_transport_404",
+    pipeline_halted: true,
+    next_action: "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.",
+    changed_files: [],
+    warnings: [],
+    followups: [],
+    acceptance_findings: [{
+      severity: "blocker",
+      code: "provider_endpoint_not_found",
+      message: "The configured provider returned 404 for /v1/responses.",
+      source: "codex_transport",
+    }],
+  };
+  args.verifyTaskCompletionFn = async () => {
+    throw new Error("verification must not run for a provider endpoint blocker");
+  };
+
+  const result = await finalizeCodexTaskRun(args);
+
+  assert.equal(result.status, "blocked");
+  assert.match(captured.messageContent.content, /Blocked/);
+  assert.doesNotMatch(captured.messageContent.content, /Waiting for review/);
+});
+
 // ===========================================================================
 // Test: statusLabel for unknown status falls through
 // ===========================================================================

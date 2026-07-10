@@ -256,6 +256,41 @@ test("buildTaskResult preserves structured=false for non-structured output", () 
   assert.equal(result.structured, false);
 });
 
+test("buildTaskResult preserves provider responses 404 as an actionable blocked result", () => {
+  const stderr = "ERROR unexpected status 404 Not Found: not found, url: http://www.9017i.cc:58901/v1/responses";
+  const parsed = { status: null, summary: null, changed_files: [], structured: false };
+  const result = buildTaskResult(parsed, {
+    returnCode: 1,
+    cr: { returncode: 1, stdout: "", stderr },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.kind, "codex_failed");
+  assert.equal(result.failure_class, "codex_transport_404");
+  assert.equal(result.blocking_finding.code, "provider_endpoint_not_found");
+  assert.match(result.next_action, /provider endpoint/i);
+  assert.equal(result.pipeline_halted, true);
+  assert.match(result.summary, /404 Not Found/);
+});
+
+test("buildTaskResult detects provider responses 404 after structured status is changed to failed", () => {
+  const stderr = "ERROR unexpected status 404 Not Found: not found, url: http://www.9017i.cc:58901/v1/responses";
+  const result = buildTaskResult({
+    status: "failed",
+    summary: "Codex execution reported failure",
+    changed_files: [],
+    structured: true,
+    from_json: false,
+  }, {
+    returnCode: 1,
+    cr: { returncode: 1, stdout: "STATUS=completed", stderr },
+  });
+
+  assert.equal(result.status, "blocked");
+  assert.equal(result.failure_class, "codex_transport_404");
+  assert.equal(result.blocking_finding.code, "provider_endpoint_not_found");
+});
+
 test("buildTaskResult with STATUS=timed_out without timedOut param treats as failed", () => {
   const parsed = { status: "timed_out", summary: "Timed out by report", changed_files: [], structured: true };
   const result = buildTaskResult(parsed, { timedOut: false });

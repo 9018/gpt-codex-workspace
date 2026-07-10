@@ -817,6 +817,7 @@ export async function finalizeCodexTaskRun({
       "waiting_for_review": "Waiting for review",
       "waiting_for_integration": "Waiting for integration",
       "waiting_for_repair": "Waiting for repair",
+      "blocked": "Blocked",
     };
     const statusLabel = statusLabels[taskStatus] || taskStatus;
     await writeWorkspaceTextInternalFn(store, config, goal.workspace_id, workspaceFiles.result_md,

@@ -305,3 +305,48 @@ test("unknown provider metadata still routes to codex_exec", async () => {
 
   assert.equal(execCalled, true);
 });
+
+test("codex_exec provider responses 404 blocks and does not enter acceptance or integration", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "codex-provider-404-")));
+  await mkdir(join(root, ".gptwork", "worktrees", "task_1"), { recursive: true });
+  const store = makeStore(root);
+  const stderr = "ERROR unexpected status 404 Not Found: not found, url: http://www.9017i.cc:58901/v1/responses";
+  let acceptanceCalls = 0;
+  let integrationCalls = 0;
+  let finalized = null;
+
+  const result = await processGeneralTaskWithDeps(
+    store,
+    { defaultWorkspaceRoot: root, defaultRepoPath: root, enableTaskWorktrees: true },
+    store.state.tasks[0],
+    {},
+    {},
+    baseDeps(root, {
+      executeCodexTaskRunFn: async () => ({
+        cr: { returncode: 1, stdout: "", stderr, timed_out: false },
+        parsedResult: { status: null, summary: null, changed_files: [], structured: false, from_json: false },
+        summary: stderr,
+      }),
+      runAcceptanceAgentFn: async () => {
+        acceptanceCalls += 1;
+        throw new Error("acceptance must not run for a provider endpoint blocker");
+      },
+      runIntegrationQueueFn: async () => {
+        integrationCalls += 1;
+        throw new Error("integration must not run for a provider endpoint blocker");
+      },
+      finalizeCodexTaskRunFn: async (args) => {
+        finalized = args;
+        return { task_id: args.task.id, status: args.taskStatus, result: args.taskResult };
+      },
+    }),
+  );
+
+  assert.equal(result.status, "blocked");
+  assert.equal(acceptanceCalls, 0);
+  assert.equal(integrationCalls, 0);
+  assert.equal(finalized.taskResult.failure_class, "codex_transport_404");
+  assert.equal(finalized.taskResult.pipeline_halted, true);
+  assert.equal(finalized.taskResult.acceptance_findings[0].code, "provider_endpoint_not_found");
+  assert.match(finalized.taskResult.next_action, /provider endpoint/i);
+});

@@ -137,8 +137,11 @@ export async function writeBuilderAgentRun(store, { task_id, goal_id, taskResult
     path: null,
     changed_count: changedFiles.length,
     commit: taskResult.commit || null,
+    failure_class: taskResult.failure_class || null,
   });
-  const builderStatus = taskResult.status === "completed" || summary ? "completed" : "failed";
+  const builderFailed = taskResult.failure_class === "codex_transport_404"
+    || taskResult.status === "blocked";
+  const builderStatus = builderFailed ? "failed" : (taskResult.status === "completed" || summary ? "completed" : "failed");
   return writeIdempotentAgentRun(store, {
     task_id, goal_id, role: "builder",
     status: builderStatus,
@@ -176,6 +179,15 @@ export async function writeVerifierAgentRun(store, { task_id, goal_id, verificat
     passed: passedWithEvidence,
     failure_class: passedWithEvidence ? null : failureClass,
     missing_evidence: commandsMissing ? ["verification.commands"] : [],
+    findings: commandsMissing ? [{
+      severity: "blocker",
+      code: "verification_commands_missing",
+      message: "Verifier produced commands_count=0; at least one executable verification command is required.",
+      source: "agent_run_writeback",
+    }] : list(verification.findings),
+    next_action: commandsMissing
+      ? "Configure and run at least one verification command, then rerun verification."
+      : (verification.next_action || null),
   });
   const verifierStatus = passedWithEvidence ? "completed" : "failed";
   return writeIdempotentAgentRun(store, {
@@ -184,6 +196,50 @@ export async function writeVerifierAgentRun(store, { task_id, goal_id, verificat
     output_artifacts: outputArtifacts,
     summary: verifierStatus === "completed" ? "Verification passed" : `Verification failed: ${failureClass}`,
   }, context);
+}
+
+export async function skipDownstreamAgentRunsForBlocker(store, {
+  task_id,
+  goal_id,
+  finding = {},
+  next_action = "",
+  roles = ["verifier", "reviewer", "integrator"],
+} = {}, context = {}) {
+  if (!task_id) return { roles: [], skipped: 0, reason: "no task_id" };
+  const existing = await listAgentRuns(store, { task_id, limit: 100 });
+  const runs = existing.agent_runs || [];
+  let skipped = 0;
+
+  for (const role of roles) {
+    const canonicalRole = normalizeContractRole(role);
+    let run = runs.find((entry) => normalizeContractRole(entry.role) === canonicalRole);
+    if (run?.status === "completed" || run?.status === "skipped") continue;
+    if (!run) {
+      const created = await createAgentRun(store, {
+        task_id,
+        goal_id: goal_id || "",
+        role: canonicalRole,
+        status: "queued",
+      }, context);
+      run = created.agent_run;
+    }
+    await completeAgentRun(store, {
+      agent_run_id: run.id,
+      status: "skipped",
+      output_artifacts: [{
+        kind: "pipeline_blocker",
+        severity: finding.severity || "blocker",
+        code: finding.code || "pipeline_halted",
+        message: finding.message || "Downstream pipeline halted by an actionable blocker.",
+        source: finding.source || "pipeline_orchestration",
+        next_action: next_action || null,
+      }],
+      summary: `${canonicalRole}: skipped because ${finding.code || "pipeline_halted"}`,
+    }, context);
+    skipped += 1;
+  }
+
+  return { roles: roles.map((role) => normalizeContractRole(role)), skipped };
 }
 
 /**

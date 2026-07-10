@@ -118,6 +118,31 @@ test("task-finalizer: quota and rate-limit failures wait for capacity before rep
   assert.equal(decision.repairable_blockers.length, 0);
 });
 
+test("task-finalizer: provider responses 404 blocks with an actionable next action", () => {
+  const decision = decideTaskFinalState({
+    current_status: "blocked",
+    codex_result: {
+      status: "blocked",
+      kind: "codex_failed",
+      failure_class: "codex_transport_404",
+      summary: "ERROR unexpected status 404 Not Found: not found, url: http://www.9017i.cc:58901/v1/responses",
+      next_action: "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.",
+      pipeline_halted: true,
+      acceptance_findings: [{
+        severity: "blocker",
+        code: "provider_endpoint_not_found",
+        message: "The configured provider does not expose /v1/responses.",
+      }],
+    },
+  });
+
+  assert.equal(decision.status, "blocked");
+  assert.equal(decision.reason, "provider_endpoint_not_found");
+  assert.equal(decision.blockers[0].code, "provider_endpoint_not_found");
+  assert.match(decision.next_action, /provider endpoint/i);
+  assert.equal(decision.safe_to_auto_advance, false);
+});
+
 test("task-finalizer: semantic ambiguity and unsafe approval route to manual review", () => {
   const semantic = decideTaskFinalState(passedEvidence({
     contract_verification: { blocking_passed: true, completion_eligible: true, semantic_ambiguity: true, blockers: [] },

@@ -218,3 +218,26 @@ test('classifyFailureStructured returns quota_wait for rate_limited input', () =
   assert.equal(result.nextStatusHint, 'quota_wait');
   assert.equal(result.retryable, true);
 });
+
+test('provider responses endpoint 404 is an actionable non-repairable blocker', () => {
+  const message = 'ERROR unexpected status 404 Not Found: not found, url: http://www.9017i.cc:58901/v1/responses';
+
+  assert.equal(classifyFailure({ message }), 'codex_transport_404');
+
+  const structured = classifyFailureStructured({ message });
+  assert.equal(structured.class, 'codex_transport_404');
+  assert.equal(structured.retryable, false);
+  assert.equal(structured.repairable, false);
+  assert.equal(structured.nextStatusHint, 'blocked');
+
+  const taskFailure = classifyTaskFailure({
+    codexResult: {
+      kind: 'codex_failed',
+      summary: 'Codex execution failed (non-zero exit)',
+      diagnostics: { raw_stderr_excerpt: message },
+    },
+  });
+  assert.equal(taskFailure.failure_class, 'codex_transport_404');
+  assert.equal(taskFailure.repairable, false);
+  assert.equal(taskFailure.repair_strategy, 'fix_provider_endpoint');
+});
