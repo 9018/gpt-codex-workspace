@@ -65,3 +65,17 @@ G7 consolidates the seven documents and updates `docs/current-status.md`, `READM
 ## Supervisor Contract
 
 The hourly supervisor checks the root and seven child Goals, worker/queue/locks, Tasks, TUI sessions, structured progress, review packets, acceptance bundles, Git state, and documentation. It corrects drift, recovers stalls, advances eligible work, and creates bounded repair Tasks only when direct ChatGPT correction is unavailable or unsuitable. Repeated checks over unchanged state must be idempotent.
+
+## Current Operational Blocker
+
+The first G1 dispatch created Task `task_535fbd81-9e34-4005-b786-4b021d15f2ef` and its agent pipeline, but no product code was executed. An automatically generated repair Task, `task_b19f3418-05fe-4611-aedf-f6699bd780ca`, repeated the same runtime failure and also produced no code changes.
+
+Confirmed runtime evidence:
+
+- Codex loads `model_provider = "test"` from the user configuration.
+- That provider points to `http://127.0.0.1:15722/v1`.
+- No service is listening on port `15722`.
+- cc-switch reports the selected Codex provider as `default`, but enabling its Codex worker terminates with `codex worker hello timed out`.
+- Bypassing the user provider and connecting directly is not a usable fallback with the currently installed proxy-managed authentication.
+
+This is classified as `execution_environment/cc_switch_codex_worker_startup`, not as a G1 product-code failure. No further product repair attempt may be created until the cc-switch Codex worker listens on the configured port and a read-only `codex exec` smoke test passes. After recovery, reuse the existing G1 Goal and preserve the documentation gate for `01-workstream-context.md`.
