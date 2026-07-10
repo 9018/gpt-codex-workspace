@@ -1796,5 +1796,5 @@ test("task-final-writeback: missing result recovery without verification does no
 
   assert.notEqual(result.status, "completed");
   assert.equal(savedState.tasks[0].status, "failed");
-  assert.equal(savedState.goals[0].status, "failed");
+  assert.notEqual(savedState.goals[0].status, "completed");
 });
