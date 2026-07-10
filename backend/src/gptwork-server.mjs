@@ -106,6 +106,7 @@ export async function createGptWorkServer(options = {}) {
     githubRepo: rcc.githubRepo,
     githubToken: rcc.githubToken,
     toolMode: options.toolMode || rcc.toolMode,
+    renderMode: options.renderMode || rcc.renderMode,
     // Recovery / break-glass plane
     recoveryPlaneEnabled: rcc.recoveryPlaneEnabled,
     breakGlassEnabled: rcc.breakGlassEnabled,
@@ -205,20 +206,20 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
     async handleRpc(message, headers = {}, emitProgress = () => {}) {
       try {
         if (!message || message.jsonrpc !== "2.0") return jsonError(message?.id ?? null, -32600, "Invalid JSON-RPC request");
-        if (message.method === "initialize") return jsonResult(message.id, initializeResult());
+        if (message.method === "initialize") return jsonResult(message.id, initializeResult(config.renderMode));
         if (message.method === "notifications/initialized") return null;
         if (message.method === "tools/list") {
           assertAuthorized(headers, config);
-          return jsonResult(message.id, { tools: toolList(createDiscoverableTools(tools, config.toolMode)) });
+          return jsonResult(message.id, { tools: toolList(createDiscoverableTools(tools, config.toolMode), config.renderMode) });
         }
         if (message.method === "resources/list") {
           assertAuthorized(headers, config);
-          return jsonResult(message.id, { resources: resourceList() });
+          return jsonResult(message.id, { resources: resourceList(config.renderMode) });
         }
         if (message.method === "resources/read") {
           assertAuthorized(headers, config);
           const uri = message.params?.uri;
-          const resource = readResource(uri);
+          const resource = readResource(uri, config.renderMode);
           if (!resource) return jsonError(message.id, -32602, `Unknown resource: ${uri}`);
           return jsonResult(message.id, { contents: [resource] });
         }
@@ -236,6 +237,7 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
             toolDescriptor,
             rawStructuredContent,
             summarizeToolResult: this.summarizeToolResult,
+            renderMode: config.renderMode,
           });
           return jsonResult(message.id, result);
         }

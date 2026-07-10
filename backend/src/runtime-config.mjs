@@ -25,6 +25,16 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..", "..");
 const BACKEND_ROOT = resolve(PROJECT_ROOT, "backend");
 
+const RENDER_MODES = new Set(["text", "selective", "card"]);
+
+export function normalizeRenderMode(value = "text") {
+  const normalized = String(value || "text").trim().toLowerCase();
+  if (!RENDER_MODES.has(normalized)) {
+    throw new Error(`GPTWORK_RENDER_MODE must be one of: text, selective, card; got: ${value}`);
+  }
+  return normalized;
+}
+
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
@@ -159,6 +169,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     statePath: _get("GPTWORK_STATE_PATH", workspaceRoot + "/.gptwork/state.json"),
     runtimeEnvFile: _get("GPTWORK_RUNTIME_ENV_FILE", ".gptwork/runtime.env"),
     toolMode: _get("GPTWORK_TOOL_MODE", "standard"),
+    renderMode: normalizeRenderMode(_get("GPTWORK_RENDER_MODE", "text")),
 
     // Codex
     codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 3600),
@@ -293,6 +304,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     statePath: "GPTWORK_STATE_PATH",
     runtimeEnvFile: "GPTWORK_RUNTIME_ENV_FILE",
     toolMode: "GPTWORK_TOOL_MODE",
+    renderMode: "GPTWORK_RENDER_MODE",
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
     codexFirstOutputTimeout: "GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT",
     codexContentFirstOutputTimeout: "GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT",

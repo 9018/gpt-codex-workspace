@@ -344,3 +344,56 @@ test("tagToolResult: gptwork_ prefixed keys propagated", () => {
   assert.ok(typeof res.gptwork_payload_hash === "string");
   assert.ok(res.gptwork_payload_hash.length > 0);
 });
+
+test("shapeToolResult: text mode keeps bounded model data and omits all card fields", () => {
+  const result = shapeToolResult({
+    name: "runtime_status",
+    toolDescriptor: {
+      metadata: {
+        outputTemplate: "ui://widget/gptwork-tool-card-v5.html",
+        resourceUri: "ui://widget/gptwork-tool-card-v5.html",
+        name: "Runtime Status",
+      },
+    },
+    renderMode: "text",
+    rawStructuredContent: {
+      worker: { enabled: true, running: true, health: { phase: "running" } },
+      queue: { assigned: 0, queued: 1, running: 0, actionable_review: 2 },
+      secret_debug_blob: { token: "must-not-leak" },
+    },
+    summarizeToolResult: undefined,
+  });
+
+  assert.equal(result._meta, undefined);
+  assert.equal(result.structuredContent.card, undefined);
+  assert.equal(result.structuredContent.keyValues, undefined);
+  assert.equal(result.structuredContent.items, undefined);
+  assert.equal(result.structuredContent.worker, undefined);
+  assert.equal(result.structuredContent.queue, undefined);
+  assert.equal(result.structuredContent.secret_debug_blob, undefined);
+  assert.equal(result.structuredContent.worker_running, true);
+  assert.equal(result.structuredContent.queue_actionable_review, 2);
+  assert.ok(result.content[0].text.length > 0);
+});
+
+test("shapeToolResult: card mode preserves v5 card envelope", () => {
+  const result = shapeToolResult({
+    name: "runtime_status",
+    toolDescriptor: {
+      metadata: {
+        outputTemplate: "ui://widget/gptwork-tool-card-v5.html",
+        resourceUri: "ui://widget/gptwork-tool-card-v5.html",
+      },
+    },
+    renderMode: "card",
+    rawStructuredContent: {
+      worker: { enabled: true, running: true, health: { phase: "running" } },
+      queue: { assigned: 0, running: 0 },
+    },
+    summarizeToolResult: undefined,
+  });
+
+  assert.equal(result._meta?.resourceUri, "ui://widget/gptwork-tool-card-v5.html");
+  assert.equal(result._meta?.gptwork_card?.card_version, "gptwork-card-v1");
+  assert.equal(result.structuredContent.card?.card_version, "gptwork-card-v1");
+});

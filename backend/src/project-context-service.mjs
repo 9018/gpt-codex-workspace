@@ -110,6 +110,7 @@ export async function collectProjectContext({ config, store, workerState, regist
       workspace_root: config.defaultWorkspaceRoot,
       state_path: config.statePath,
       tool_mode: config.toolMode || "standard",
+      render_mode: config.renderMode || "text",
       default_repo: config.defaultRepo || "",
       default_branch: config.defaultBranch || "",
     },

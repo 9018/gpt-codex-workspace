@@ -1,3 +1,15 @@
+# GPTWork 渲染模式
+
+当前默认模式为 `GPTWORK_RENDER_MODE=text`。纯文本模式不会向 ChatGPT 暴露 Apps SDK UI capability、卡片资源、工具 `outputTemplate` 或结果 card payload；v5 卡片代码仅作为 `card`/`selective` 兼容路径保留。
+
+- `text`：移动端推荐，原生中文文本。
+- `selective`：仅低频审核类工具使用卡片。
+- `card`：完整 v5 卡片兼容模式。
+
+切换模式后必须重启服务，并刷新或重新连接 ChatGPT 应用。
+
+---
+
 # GPTWork Tool Card v5
 
 ## Overview

@@ -1,5 +1,5 @@
 import { GPTWORK_TOOL_CARD_URI } from "./constants.mjs";
-import { hasToolCardMetadata } from "./card-meta.mjs";
+import { hasToolCardMetadata, isToolCardEnabled } from "./card-meta.mjs";
 import { createHash } from "node:crypto";
 import { buildCardViewModel, isCardViewModelEnabledTool, legacyFieldsFromCard } from "../card-view-model.mjs";
 import { renderCardText } from "../card-render-text.mjs";
@@ -138,14 +138,14 @@ export function payloadHash(value) {
   return createHash("sha256").update(stableStringify(value)).digest("hex").slice(0, 16);
 }
 
-export function tagToolResult(name, toolDescriptor, structuredContent) {
+export function tagToolResult(name, toolDescriptor, structuredContent, { includeCard = true } = {}) {
   const base = structuredContent && typeof structuredContent === "object" && !Array.isArray(structuredContent)
     ? structuredContent
     : { value: structuredContent };
   const auto = generateAutoSummary(name, base);
   const hash = payloadHash(base);
   const title = toolDescriptor?.metadata?.name || name;
-  const card = isCardViewModelEnabledTool(name)
+  const card = includeCard && isCardViewModelEnabledTool(name)
     ? buildCardViewModel(name, base, { payload_hash: hash, card_instance_id: `${name}:${hash}`, title })
     : undefined;
   if (card) {
@@ -266,6 +266,7 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
       "default_branch",
       "default_repo_path",
       "default_remote",
+      "render_mode",
     ]) {
       if (base[key] !== undefined) modelPayload[key] = base[key];
     }
@@ -335,24 +336,26 @@ export function tagToolResult(name, toolDescriptor, structuredContent) {
   };
 }
 
-export function toolResultMeta(name, toolDescriptor) {
-  if (!hasToolCardMetadata(toolDescriptor?.metadata)) return undefined;
+export function toolResultMeta(name, toolDescriptor, renderMode = "card") {
+  if (!isToolCardEnabled({ renderMode, toolName: name, metadata: toolDescriptor?.metadata })) return undefined;
   return {
     tool: name,
     resourceUri: GPTWORK_TOOL_CARD_URI,
   };
 }
 
-export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, summarizeToolResult }) {
-  const tagged = toolResultMeta(name, toolDescriptor)
-    ? tagToolResult(name, toolDescriptor, rawStructuredContent)
+export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, summarizeToolResult, renderMode = "card" }) {
+  const cardCapable = hasToolCardMetadata(toolDescriptor?.metadata);
+  const cardEnabled = Boolean(toolResultMeta(name, toolDescriptor, renderMode));
+  const tagged = cardCapable
+    ? tagToolResult(name, toolDescriptor, rawStructuredContent, { includeCard: cardEnabled })
     : null;
 
   const modelPayload = tagged ? tagged.modelPayload : rawStructuredContent;
   const cardPayload = tagged ? tagged.cardPayload : undefined;
 
   const generatedSummary = typeof summarizeToolResult === "function"
-    ? summarizeToolResult(name, modelPayload)
+    ? summarizeToolResult(name, renderMode === "text" ? rawStructuredContent : modelPayload)
     : undefined;
   const summary = typeof generatedSummary === "string" && generatedSummary.length > 0
     ? generatedSummary
@@ -366,7 +369,7 @@ export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, su
     isError: false,
   };
 
-  const meta = toolResultMeta(name, toolDescriptor);
+  const meta = toolResultMeta(name, toolDescriptor, renderMode);
   if (meta) {
     result._meta = {
       ...meta,

@@ -10,7 +10,7 @@ import {
   readToolCardResource,
   resourceList as appsSdkCardResourceList,
 } from "./apps-sdk-card/card-resource.mjs";
-import { hasToolCardMetadata, toolCardMeta, toolCardResourceMeta } from "./apps-sdk-card/card-meta.mjs";
+import { isToolCardEnabled, isWidgetResourceEnabled, toolCardMeta, toolCardResourceMeta } from "./apps-sdk-card/card-meta.mjs";
 import { shapeToolResult, tagToolResult, toolResultMeta } from "./apps-sdk-card/tool-result.mjs";
 export {
   GPTWORK_TOOL_CARD_URI,
@@ -35,7 +35,7 @@ export function schema(properties, required = []) {
   return { type: "object", properties: mapped, required, additionalProperties: false };
 }
 
-export function toolList(tools) {
+export function toolList(tools, renderMode = "card") {
   return Object.entries(tools).map(([name, value]) => {
     const descriptor = {
       name,
@@ -43,18 +43,19 @@ export function toolList(tools) {
       inputSchema: value.inputSchema,
       outputSchema: { type: "object", additionalProperties: true }
     };
-    if (hasToolCardMetadata(value.metadata)) {
+    if (isToolCardEnabled({ renderMode, toolName: name, metadata: value.metadata })) {
       descriptor._meta = toolCardMeta();
     }
     return descriptor;
   });
 }
 
-export function resourceList() {
-  return appsSdkCardResourceList();
+export function resourceList(renderMode = "card") {
+  return isWidgetResourceEnabled(renderMode) ? appsSdkCardResourceList() : [];
 }
 
-export function readResource(uri) {
+export function readResource(uri, renderMode = "card") {
+  if (!isWidgetResourceEnabled(renderMode)) return null;
   if (uri === "ui://widget/gptwork-card-v1.html") {
     return {
       uri,
@@ -173,17 +174,20 @@ e.innerHTML = renderCard(d);
   return null;
 }
 
-export function initializeResult() {
+export function initializeResult(renderMode = "card") {
+  const capabilities = {
+    experimental: {},
+    logging: {},
+    prompts: { listChanged: true },
+    resources: { subscribe: false, listChanged: true },
+    tools: { listChanged: true },
+  };
+  if (isWidgetResourceEnabled(renderMode)) {
+    capabilities.extensions = { "io.modelcontextprotocol/ui": {} };
+  }
   return {
     protocolVersion: MCP_PROTOCOL_VERSION,
-    capabilities: {
-      experimental: {},
-      logging: {},
-      prompts: { listChanged: true },
-      resources: { subscribe: false, listChanged: true },
-      tools: { listChanged: true },
-      extensions: { "io.modelcontextprotocol/ui": {} }
-    },
+    capabilities,
     serverInfo: { name: "GPTWork MCP", version: "0.1.0" }
   };
 }

@@ -36,6 +36,7 @@ async function makeServer(extra = {}) {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    renderMode: "card",
     ...extra,
   });
 }
@@ -1044,4 +1045,59 @@ test("PAYLOAD-6: widget renders card from call_tool_result._meta.gptwork_card", 
   assert.match(rendered.root.innerHTML, /Direct card from _meta/);
   assert.match(rendered.root.innerHTML, /source<\/td><td>_meta\.gptwork_card/);
   assert.doesNotMatch(rendered.root.innerHTML, /Waiting for tool result/);
+});
+
+// ---------------------------------------------------------------------------
+// Native text render mode
+// ---------------------------------------------------------------------------
+
+test("TEXT-1: text mode omits UI extension, card metadata, and card resources", async () => {
+  const server = await makeServer({ toolMode: "standard", renderMode: "text" });
+
+  const init = await rpc(server, "initialize", {
+    protocolVersion: "2025-03-26",
+    capabilities: {},
+    clientInfo: { name: "test", version: "0.0.1" },
+  });
+  assert.equal(init.result.capabilities.extensions?.["io.modelcontextprotocol/ui"], undefined);
+
+  const listed = await rpc(server, "tools/list");
+  assert.ok(listed.result.tools.length > 0);
+  assert.ok(listed.result.tools.every((tool) => tool._meta === undefined),
+    "text mode must not advertise Apps SDK card metadata");
+
+  const resources = await rpc(server, "resources/list");
+  assert.deepEqual(resources.result.resources, []);
+
+  const read = await rpc(server, "resources/read", { uri: TOOL_CARD_URI });
+  assert.equal(read.error?.code, -32602);
+});
+
+test("TEXT-2: text mode tool result is native text with no card payload", async () => {
+  const server = await makeServer({ toolMode: "standard", renderMode: "text" });
+  const res = await rpc(server, "tools/call", { name: "worker_status", arguments: {} });
+
+  assert.equal(res.result._meta, undefined);
+  assert.equal(res.result.structuredContent?.card, undefined);
+  assert.equal(res.result.structuredContent?.gptwork_tool, "worker_status");
+  assert.ok(res.result.content?.[0]?.text);
+  assert.match(res.result.content[0].text, /工作进程|队列|运行/);
+
+  const runtime = await rpc(server, "tools/call", { name: "runtime_status", arguments: {} });
+  assert.equal(runtime.result.structuredContent?.render_mode, "text");
+  assert.equal(runtime.result._meta, undefined);
+  assert.match(runtime.result.content?.[0]?.text || "", /运行状态|工作进程|队列/);
+});
+
+test("SELECTIVE-1: selective mode keeps cards only for low-frequency review tools", async () => {
+  const server = await makeServer({ toolMode: "standard", renderMode: "selective" });
+  const listed = await rpc(server, "tools/list");
+  const toolsByName = new Map(listed.result.tools.map((tool) => [tool.name, tool]));
+
+  assert.equal(toolsByName.get("runtime_status")?._meta, undefined);
+  assert.equal(toolsByName.get("worker_status")?._meta, undefined);
+  assert.equal(toolsByName.get("list_tasks")?._meta, undefined);
+  assert.equal(toolsByName.get("list_goals")?._meta, undefined);
+  assert.equal(toolsByName.get("list_goal_queue")?._meta, undefined);
+  assert.equal(toolsByName.get("show_changes")?._meta?.["openai/outputTemplate"], TOOL_CARD_URI);
 });

@@ -1,6 +1,7 @@
 import { runtimeStatusCard, workerStatusCard, gptworkDoctorCard, getTaskCard, createEncodedGoalCard, contextStatusCard, githubStatusCard, previewCodexContextCard, shellExecCard, gitRemoteDiffCard, readTextFileCard, listDirCard, goalContextCard, formatToolCard, formatKeyValue } from "./card-utils.mjs";
 import { renderCardText } from "./card-render-text.mjs";
 import { productStatusCard } from "./product-status-view.mjs";
+import { summarizeNativeTextZh } from "./native-text-summary-zh.mjs";
 
 export function summarizeToolResult(name, structuredContent) {
       if (!structuredContent || typeof structuredContent !== "object") return JSON.stringify(structuredContent);
@@ -8,6 +9,9 @@ export function summarizeToolResult(name, structuredContent) {
       if (structuredContent.card && typeof structuredContent.card === "object") {
         return renderCardText(structuredContent.card);
       }
+
+      const nativeTextZh = summarizeNativeTextZh(name, structuredContent);
+      if (nativeTextZh) return nativeTextZh;
 
       // Use compact card formatting for targeted tools
       switch (name) {

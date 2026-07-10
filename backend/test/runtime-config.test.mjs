@@ -657,3 +657,35 @@ test("buildRuntimeConfig supports Codex contentful progress timeout env keys", a
   delete process.env.GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT;
   delete process.env.GPTWORK_CODEX_NO_PROGRESS_TIMEOUT;
 });
+
+// ================================================================
+// Tests: GPTWork render mode
+// ================================================================
+
+test("buildRuntimeConfig defaults renderMode to text", () => {
+  clearGptWorkVars();
+  const { config, sources } = buildRuntimeConfig("/tmp/test-root-render-default");
+  assert.equal(config.renderMode, "text");
+  assert.equal(sources.renderMode, "default");
+});
+
+test("buildRuntimeConfig accepts text, selective, and card render modes", () => {
+  for (const mode of ["text", "selective", "card"]) {
+    clearGptWorkVars();
+    process.env.GPTWORK_RENDER_MODE = mode;
+    const { config, sources } = buildRuntimeConfig(`/tmp/test-root-render-${mode}`);
+    assert.equal(config.renderMode, mode);
+    assert.equal(sources.renderMode, "process.env");
+  }
+  delete process.env.GPTWORK_RENDER_MODE;
+});
+
+test("buildRuntimeConfig rejects unknown render mode", () => {
+  clearGptWorkVars();
+  process.env.GPTWORK_RENDER_MODE = "heavy";
+  assert.throws(
+    () => buildRuntimeConfig("/tmp/test-root-render-invalid"),
+    /GPTWORK_RENDER_MODE.*text.*selective.*card/i,
+  );
+  delete process.env.GPTWORK_RENDER_MODE;
+});
