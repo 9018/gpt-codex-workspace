@@ -1,6 +1,10 @@
 /**
  * backlog-census.mjs — Typed Backlog Census and Status Migration Baseline
  *
+ * @module backlog-census
+ * @version 1.0.0
+ *
+ *
  * P0-MA1: Scans the current state store for blocked backlog tasks and classifies them
  * into typed categories for machine-executable migration planning.
  *
@@ -51,6 +55,10 @@ import {
 // ---------------------------------------------------------------------------
 
 /** The 8 typed blocker classifications from the P0-MA1 spec. */
+
+/** Current module version. */
+export const VERSION = '1.0.0';
+
 export const BLOCKER_CLASSIFICATIONS = Object.freeze({
   TRUE_HUMAN_REVIEW: 'true_human_review',
   MISSING_EVIDENCE_REPAIR: 'missing_evidence_repair',
