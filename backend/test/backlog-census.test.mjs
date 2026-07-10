@@ -44,7 +44,7 @@ import {
 test('VERSION is exported correctly', () => {
   assert.strictEqual(typeof VERSION, 'string');
   assert.ok(VERSION.length > 0);
-  assert.strictEqual(VERSION, '1.0.0');
+  assert.strictEqual(VERSION, '1.1.0');
 });
 
 // =========================================================================
