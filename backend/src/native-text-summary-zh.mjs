@@ -89,7 +89,7 @@ function renderWorkerStatus(data) {
   const blockers = value(queue.current_blockers);
   return [
     `工作进程：${enabled ? (running ? "运行中" : "已启用但未运行") : "已停用"}`,
-    `健康状态：${zhStatus(health.phase || data.status || (running ? "running" : "disabled"))}${health.reason ? `（${health.reason}）` : ""}`,
+    `健康状态：${zhStatus(health.phase || data.status || (running ? "running" : "disabled"))}${health.reason ? `（${zhReason(health.reason)}）` : ""}`,
     `队列：已分配 ${value(queue.assigned)} · 排队 ${value(queue.queued)} · 运行 ${value(queue.running)} · 待审核 ${value(queue.actionable_review ?? queue.waiting_for_review)}`,
     `阻塞：${blockers} · 已完成 ${value(queue.completed)} · 失败 ${value(queue.failed)}`,
   ].join("\n");
