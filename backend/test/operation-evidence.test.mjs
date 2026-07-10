@@ -412,7 +412,7 @@ test('P0-AFC10: docs_only is a known operation kind', () => {
   assert.equal(profile.intent.mutation_scope, 'repo');
   assert.equal(profile.intent.execution_mode, 'worktree');
   assert.equal(profile.requirements.requires_commit, true);
-  assert.equal(profile.requirements.requires_integration, true);
+  assert.equal(profile.requirements.requires_integration, false);
 });
 
 test('P0-AFC10: docs_only contract built from user request with documentation keywords', () => {

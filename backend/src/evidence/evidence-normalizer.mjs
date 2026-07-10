@@ -240,7 +240,17 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.integration_only || result.integration_evidence?.ff_only_merged) return 'integration';
   if (result.repair_evidence || result.repair_marker) return 'repair';
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
-  if (hasChangedFiles || hasValue(result.commit)) return 'code_change';
+  if (hasChangedFiles || hasValue(result.commit)) {
+    // Check contract intent before defaulting to code_change.
+    // When the contract explicitly specifies a non-code_change operation kind
+    // that is compatible with having changed files (e.g. docs_only),
+    // respect the contract intent instead of inferring code_change.
+    const contractKind = contract?.intent?.operation_kind;
+    if (contractKind && contractKind !== 'unknown' && contractKind !== 'code_change') {
+      return String(contractKind);
+    }
+    return 'code_change';
+  }
 
   // 3. Least authoritative: contract intent (fallback when no evidence)
   if (hasValue(contract.intent?.operation_kind)) return String(contract.intent.operation_kind);
