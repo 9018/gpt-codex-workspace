@@ -1,13 +1,13 @@
 {
   "report_type": "p0_ma1_census_migration",
-  "generated_at": "2026-07-10T01:09:26.644Z",
-  "state_path": "/home/a9017/mcp/workspace/gpt-codex-workspace/backend/data/state.json",
+  "generated_at": "2026-07-10T01:17:50.026Z",
+  "state_path": "/home/a9017/mcp/workspace/.gptwork/worktrees/github.com-9018-gpt-codex-workspace/task_7c0c0d3f-8d6a-424b-883d-bed2ef0cd453/backend/data/state.json",
   "evidence": {
     "backup": {
       "backup_type": "git_commit_snapshot",
-      "head_sha": "dd4527a13218527038f91d62043ee3e3ebbb6ab3",
-      "working_tree_clean": false,
-      "restore_command": "git checkout dd4527a13218527038f91d62043ee3e3ebbb6ab3",
+      "head_sha": "4596a04799a9ce20a8e4f65ef93db473409c6177",
+      "working_tree_clean": true,
+      "restore_command": "git checkout 4596a04799a9ce20a8e4f65ef93db473409c6177",
       "backup_location": "canonical repository .git/objects"
     },
     "before_count": {
@@ -16,7 +16,7 @@
       "status_breakdown": {}
     },
     "dry_run": {
-      "scanned_at": "2026-07-10T01:09:26.643Z",
+      "scanned_at": "2026-07-10T01:17:50.024Z",
       "total_tasks": 0,
       "backlog_tasks": 0,
       "raw_counts": {},
