@@ -3,6 +3,7 @@ const STATUS_ZH = Object.freeze({
   healthy: "健康",
   running: "运行中",
   enabled: "已启用",
+  enabled_but_not_running: "已启用但未运行",
   disabled: "已停用",
   queued: "排队中",
   assigned: "已分配",
@@ -34,6 +35,19 @@ function zhStatus(value, fallback = "未知") {
 function value(value, fallback = 0) {
   return value === undefined || value === null ? fallback : value;
 }
+
+function zhReason(reason) {
+  const raw = String(reason || "").trim();
+  if (!raw) return "";
+  if (raw === "worker enabled but not running") return "工作进程已启用但未运行";
+  if (raw === "worker not enabled") return "工作进程未启用";
+  const tickRunning = raw.match(/^tick running for (\d+)s$/i);
+  if (tickRunning) return `当前轮询已运行 ${tickRunning[1]} 秒`;
+  const lastTick = raw.match(/^last tick (.+) ago \((.+)\)$/i);
+  if (lastTick) return `距上次轮询 ${lastTick[1]}（阈值 ${lastTick[2]}）`;
+  return raw;
+}
+
 
 function statusCounts(items = []) {
   const counts = new Map();

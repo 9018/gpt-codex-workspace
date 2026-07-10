@@ -1082,6 +1082,7 @@ test("TEXT-2: text mode tool result is native text with no card payload", async 
   assert.equal(res.result.structuredContent?.gptwork_tool, "worker_status");
   assert.ok(res.result.content?.[0]?.text);
   assert.match(res.result.content[0].text, /工作进程|队列|运行/);
+  assert.doesNotMatch(res.result.content[0].text, /worker enabled|Worker Status/);
 
   const runtime = await rpc(server, "tools/call", { name: "runtime_status", arguments: {} });
   assert.equal(runtime.result.structuredContent?.render_mode, "text");
