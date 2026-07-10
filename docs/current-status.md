@@ -413,3 +413,51 @@ All three items are now in place: `.github/workflows/release-gate.yml` runs synt
 1. **P0-01**: Release gate hardening has been addressed. Both fast and full release delivery checks pass. The production release gate requires `GPTWORK_TOOL_MODE=full` to pass the runtime env check, which is expected for production deployments.
 2. **P0-AFC series**: The acceptance-flow-closure pipeline (AFC1-AFC10) is complete. All nine preceding AFC tasks produce passing tests. Each task is verified individually and the combined test suite covers the acceptance, finalization, closure, continuation, and review pipeline end to end. No known gaps in the AFC series.
 3. **CI/CD pipeline integration**: The `.github/workflows/release-gate.yml` workflow runs on push/PR to `main` covering syntax, imports, release gate, and full delivery check. This provides automated CI/CD release gate integration.
+
+## P0-MA1 Repair Evidence (goal_206c6a96, attempt 1)
+
+### Background
+
+Task #685 (P0-MA1: Typed Backlog Census / 状态迁移基线) completed diagnosis and
+regression fixes, but the result.json had a `changed_files_mismatch`:
+12 changed_files were listed under commit `9c40635`, but those files were
+accumulated across ~20 prior commits by different auto-integrated tasks, not
+in the task's own diff. The acceptance agent correctly identified this as a
+major finding requiring repair.
+
+### Root Cause
+
+The previous repair agent used the merge-base (`9c40635`) as the commit hash
+and included files from the entire git history as `changed_files`. The correct
+behavior is to include only files changed in the task's own commit(s) relative
+to the base. The task's actual commit (`660a5b3`) changed only 4 docs files.
+
+### Repair Result
+
+| Check | Result |
+|-------|--------|
+| check:syntax (519 files) | ✅ PASS |
+| check:imports | ✅ PASS |
+| workspace-task-tools (51/51) | ✅ PASS |
+| task-final-writeback (36/36) | ✅ PASS |
+| backlog-census | ✅ PASS |
+| census-migration-report | ✅ PASS |
+| census:migration (run-census-migration-report) | ✅ ALL evidence sections generated |
+| release-delivery-check --fast | ✅ ALL PASS |
+
+All verifications pass. No code changes were required — all 21 workspace-task-tools
+regressions found by #685 had already been fixed in prior commits on `main`.
+The evidence chain has been corrected with honest documentation.
+
+### Evidence Paths
+
+- Review packet: `docs/review-packet-acb984fa.md`
+- Acceptance bundle: `docs/acceptance-bundle-acb984fa.md`
+- Migration evidence: `backend/data/census-migration-report.json`
+- Result: `.gptwork/goals/goal_206c6a96-76a8-4b3c-90f1-eda4cc74b7ae/result.json`
+- Result (md): `.gptwork/goals/goal_206c6a96-76a8-4b3c-90f1-eda4cc74b7ae/result.md`
+
+### Next Action
+
+Close the acceptance evidence repair loop. Proceed to P0-Next-1 (Product Cockpit)
+per productization-next-goals plan.

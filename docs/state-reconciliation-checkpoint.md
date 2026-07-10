@@ -119,3 +119,32 @@ cd backend && npm test
 ## Closure requirement
 
 A task blocked by dirty/no-op/lock/review states should not be marked completed until the checkpoint records enough evidence to justify `passed`. Otherwise, close with `partial` or `blocked-with-next-action` and a precise next task.
+
+## Repair Checkpoint: goal_206c6a96 (P0-MA1 Evidence Repair, attempt 1)
+
+### Snapshot
+
+- **Repair goal**: goal_206c6a96-76a8-4b3c-90f1-eda4cc74b7ae
+- **Repair task**: task_52a41f6c-c980-4070-93ec-c38c5dda9b63
+- **Parent task**: task_7e73d511-edd2-456c-860c-d8f46d5b4686 (#685)
+- **Primary signal**: `waiting_for_review` with `changed_files_mismatch`
+
+### Verdict
+
+`repaired` — Changed files mismatch resolved, evidence corrected.
+
+### Decision
+
+`continue` — No blocking issues remain after evidence correction.
+
+### Next Action
+
+Close the acceptance evidence repair loop. Proceed to P0-Next-1.
+
+### State
+
+- worktree: clean (evidence files committed/created)
+- changed_files (this repair): docs/review-packet-acb984fa.md, docs/acceptance-bundle-acb984fa.md, docs/current-status.md, docs/state-reconciliation-checkpoint.md, docs/productization-next-goals-2026-07-10.md
+- evidence_paths: see result.json/result.md in goal directory
+- tests: all pass (syntax, imports, 4 test files, census:migration, delivery-check)
+- retention: worktree retained for audit (task_52a41f6c)

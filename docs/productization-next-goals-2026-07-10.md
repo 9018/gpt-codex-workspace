@@ -357,3 +357,36 @@ Out of scope:
 ## Short operating decision
 
 Immediate action: continue #685 as the active P0 task by repairing the 21 new workspace task tool regressions. After #685 is reconciled, implement P0-Next-1 Product Cockpit as the next code task.
+
+---
+
+## Addendum: #685 Evidence Repair (goal_206c6a96, attempt 1)
+
+### Result
+
+The evidence chain for #685 has been repaired. The original `changed_files_mismatch`
+was caused by the previous agent using the merge-base as commit hash and including
+files from the entire git history as changed_files.
+
+### Status Update
+
+- **#685**: waiting_for_review → repaired (evidence corrected, tests pass)
+- **Goal_206c6a96**: P0-MA1 evidence repair completed
+- **Remaining queue**: No blockers remain for #685 continuation
+
+### Verification
+
+All verification commands pass (confirmed 2026-07-10T08:13+08:00):
+- check:syntax (519 files) — PASS
+- check:imports — PASS
+- workspace-task-tools.test.mjs (51/51) — PASS
+- task-final-writeback.test.mjs (36/36) — PASS
+- backlog-census.test.mjs — PASS
+- census-migration-report.test.mjs — PASS
+- run-census-migration-report.mjs — ALL evidence sections generated
+- release-delivery-check --fast — ALL PASS
+
+### Next Action
+
+The evidence repair is complete. Proceed to P0-Next-1 (Product Cockpit) as the
+next productization goal.
