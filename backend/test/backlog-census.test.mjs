@@ -25,6 +25,7 @@ import {
   scanBacklogCensus,
   runBacklogCensus,
   generateBacklogConvergenceReport,
+  VERSION,
 } from '../src/backlog-census.mjs';
 
 import {
@@ -34,6 +35,16 @@ import {
 import {
   REVIEW_STATES,
 } from '../src/task-review-status-taxonomy.mjs';
+
+// =========================================================================
+// 0. VERSION export
+// =========================================================================
+
+test('VERSION is exported correctly', () => {
+  assert.strictEqual(typeof VERSION, 'string');
+  assert.ok(VERSION.length > 0);
+  assert.strictEqual(VERSION, '1.0.0');
+});
 
 // =========================================================================
 // 1. Constants structure
