@@ -2,14 +2,16 @@
 
 ## Current snapshot
 
-Latest inspected PR: #684 (`chatgpt/state-reconciliation-checkpoint`, head `4601f208de6a0d241ab7843800f14d58d6131bbd`).
+Latest integrated PR: #684 (`chatgpt/state-reconciliation-checkpoint`) was merged into `main` as merge commit `7e41bde9f219156f9bfd2a958030c6d39fd55da6`.
 
 Evidence available:
 
-- Release Gate run `29054228908` completed successfully.
-- `syntax`, `imports`, `release gate`, `delivery check (full profile)`, and `delivery-check-report` artifact upload all passed.
-- PR is mergeable.
-- Merge attempt from ChatGPT was blocked by the tool safety layer, so the next integration action is explicit merge/auto-merge by an allowed actor/tool path.
+- Repository `9018/gpt-codex-workspace` is writable through the GitHub connector and uses `main` as default branch.
+- #684 is closed and merged.
+- `backend/src/state-reconciliation-checkpoint.mjs` is present on `main`.
+- `backend/package.json` includes `state-reconciliation-checkpoint.mjs` in `check:imports`.
+- Current active productization task: #685 (`Dispatch v5card P0 task`) is open and waiting for review.
+- #685 produced a useful diagnosis but should not be marked passed yet: it reports 21 new `workspace-task-tools.test.mjs` regressions and 5 pre-existing `task-final-writeback.test.mjs` failures.
 
 ## Product design assessment
 
@@ -25,11 +27,103 @@ The remaining productization gap is not another isolated helper. It is operator 
 
 ## Context7 calibration
 
-Current `actions/checkout` documentation says `fetch-depth: 0` fetches all history for all branches and tags. That is the right workflow setting when tests inspect historical commits.
+LangGraph JavaScript docs show three transferable implementation patterns:
 
-Current `actions/upload-artifact` documentation supports `name`, required `path`, and `if-no-files-found: warn|error|ignore`. Keeping report upload behind `if: always()` plus `if-no-files-found: ignore` is appropriate for best-effort CI diagnostics.
+- task-level checkpointing lets resumed runs skip already completed sub-operations;
+- `Promise.all` can safely express bounded parallel I/O tasks when results are checkpointed;
+- orchestrator-worker workflows should collect worker outputs into reduced/shared state rather than relying on hidden transcripts.
+
+For GPTWork, this means the project should copy the architecture pattern, not add LangGraph as a dependency: durable task snapshots, explicit worker outputs, reduced state, and a small orchestrator decision surface.
+
+## Highest-priority decision
+
+Do not start another broad code-change PR before #685 is reconciled.
+
+#685 is the active P0 productization task. It is `waiting_for_review`, but the default GPTChat verdict is not manual stop. The right status is:
+
+```json
+{
+  "verdict": "blocked-with-next-action",
+  "decision": "replan",
+  "next_action": "fix_workspace_task_tools_regression_then_resume_product_cockpit"
+}
+```
+
+Reason: #685 found a real new regression (`workspace-task-tools.test.mjs` undefined returns). That must be repaired before the Product Cockpit can be trusted.
 
 ## Highest-priority goals/tasks
+
+### Goal P0-685-R1 — Repair workspace-task-tools regression from completion checkpoint changes
+
+#### Background
+
+#685 completed diagnosis and found:
+
+- syntax/import/delivery gates pass;
+- core modules pass;
+- 21 new `workspace-task-tools.test.mjs` failures exist;
+- 5 `task-final-writeback.test.mjs` failures appear pre-existing;
+- no code mutations were made in #685.
+
+Because the 21 failures are new and tied to recent lifecycle/checkpoint changes, they block productization.
+
+#### Target
+
+Repair the `workspace-task-tools.test.mjs` regression with the smallest safe code change and produce complete acceptance evidence.
+
+#### Scope
+
+In scope:
+
+- inspect `buildCompletionCheckpoint` return shape;
+- inspect workspace task tools callers;
+- preserve backwards-compatible fields or add defensive normalization;
+- update tests and docs where required;
+- generate result and acceptance evidence.
+
+Out of scope:
+
+- security expansion;
+- scheduler rewrite;
+- force-clearing locks;
+- broad refactor of task-final-writeback semantics.
+
+#### Execution steps
+
+1. Confirm latest `main` contains merge commit `7e41bde9f219156f9bfd2a958030c6d39fd55da6`.
+2. Run `cd backend && npm run check:syntax`.
+3. Run `cd backend && npm run check:imports`.
+4. Run `cd backend && node --test --test-reporter=dot test/workspace-task-tools.test.mjs`.
+5. Trace the undefined return source to checkpoint/lifecycle/workspace task boundary.
+6. Add minimal compatibility fix.
+7. Re-run focused test.
+8. Re-run broader release/delivery checks that #685 already used.
+9. Produce `result.json`, `result.md`, review packet, acceptance bundle, changed files, test commands, evidence paths.
+10. Update docs.
+
+#### Acceptance criteria
+
+- All 21 `workspace-task-tools.test.mjs` regressions pass.
+- `check:syntax` passes.
+- `check:imports` passes.
+- `release-delivery-check` passes.
+- The result distinguishes fixed new regressions from the 5 pre-existing `task-final-writeback.test.mjs` failures.
+- No task is marked `passed` without changed files, tests, result artifacts, and acceptance evidence.
+
+#### Rollback/failure handling
+
+- If the minimal fix creates new failures, revert only that change and return `blocked-with-next-action` with exact failing tests.
+- If a lock/running worker exists, append requirements to #685/current workflow instead of creating a competing task.
+- If dirty worktree exists, attribute dirty paths first; do not reset or clean.
+
+#### Docs to update after completion
+
+- `docs/productization-next-goals-2026-07-10.md`
+- `docs/state-reconciliation-checkpoint.md`
+- `docs/operations.md`
+- `docs/current-status.md`
+
+---
 
 ### Goal P0-Next-1 — Product cockpit: unified state and next-action surface
 
@@ -66,7 +160,7 @@ Out of scope:
 
 #### Execution steps
 
-1. Reuse `buildStateReconciliationCheckpoint()` from #684.
+1. Reuse `buildStateReconciliationCheckpoint()`.
 2. Add `product_cockpit_status` or extend `open_project_context` with a `cockpit` field.
 3. Gather durable facts from existing status modules only.
 4. Normalize next action into one of: `continue_current_task`, `append_requirements`, `create_followup_task`, `repair_evidence`, `merge_ready`, `blocked_manual_merge`, `stop_passed`.
@@ -262,4 +356,4 @@ Out of scope:
 
 ## Short operating decision
 
-Do not create another code-change PR until #684 is merged or explicitly superseded. The next safe action is integration of #684, then P0-Next-1 as the next implementation task.
+Immediate action: continue #685 as the active P0 task by repairing the 21 new workspace task tool regressions. After #685 is reconciled, implement P0-Next-1 Product Cockpit as the next code task.
