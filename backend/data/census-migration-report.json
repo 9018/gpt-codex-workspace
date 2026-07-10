@@ -1,0 +1,93 @@
+{
+  "report_type": "p0_ma1_census_migration",
+  "generated_at": "2026-07-10T01:09:26.644Z",
+  "state_path": "/home/a9017/mcp/workspace/gpt-codex-workspace/backend/data/state.json",
+  "evidence": {
+    "backup": {
+      "backup_type": "git_commit_snapshot",
+      "head_sha": "dd4527a13218527038f91d62043ee3e3ebbb6ab3",
+      "working_tree_clean": false,
+      "restore_command": "git checkout dd4527a13218527038f91d62043ee3e3ebbb6ab3",
+      "backup_location": "canonical repository .git/objects"
+    },
+    "before_count": {
+      "codex_tasks": 0,
+      "backlog_tasks": 0,
+      "status_breakdown": {}
+    },
+    "dry_run": {
+      "scanned_at": "2026-07-10T01:09:26.643Z",
+      "total_tasks": 0,
+      "backlog_tasks": 0,
+      "raw_counts": {},
+      "policy_counts": {
+        "assigned": 0,
+        "queued": 0,
+        "running": 0,
+        "waiting_for_lock": 0,
+        "waiting_for_review": 0,
+        "waiting_for_repair": 0,
+        "waiting_for_integration": 0,
+        "completed": 0,
+        "failed": 0
+      },
+      "classification_summary": {},
+      "by_category": {},
+      "tasks": [],
+      "legacy_review_migration": {
+        "total_legacy_review": 0,
+        "auto_migrate": 0,
+        "auto_accept": 0,
+        "true_human_review_required": 0,
+        "tasks": []
+      },
+      "convergence_report": {
+        "total_blockers": 0,
+        "machine_repairable": 0,
+        "human_review_required": 0,
+        "resolved_skip": 0,
+        "unrecoverable": 0,
+        "recommended_actions": [],
+        "summary": "Backlog Census: 0 total blockers identified. Machine-repairable: 0 Human review required: 0 Resolved/skip: 0 Unrecoverable: 0. 0 distinct recommended actions."
+      }
+    },
+    "apply": {
+      "migration_tool": "backlog-census.mjs (classifyBlocker + scanBacklogCensus)",
+      "execution_mode": "dry_run",
+      "affected_blockers": 0,
+      "recommended_actions": [],
+      "state_modification": false,
+      "note": "Read-only census. Use typed review taxonomy to apply status migrations."
+    },
+    "after_count": {
+      "codex_tasks": 0,
+      "backlog_tasks": 0,
+      "state_unchanged": true
+    },
+    "rollback": {
+      "rollback_strategy": "git_revert",
+      "steps": [
+        "1. Verify backup commit: git rev-parse HEAD",
+        "2. If state modified: git checkout HEAD -- backend/data/state.json",
+        "3. If manifest modified: git checkout HEAD -- .gptwork/goals/<goal_id>/manifest.json",
+        "4. Verify state integrity: compare task counts with backup"
+      ],
+      "verification_command": "node --test test/backlog-census.test.mjs",
+      "risk_level": "low",
+      "fallback": "manual review if automated rollback fails"
+    },
+    "counts": {
+      "before": {
+        "codex_tasks": 0,
+        "backlog_tasks": 0,
+        "status_breakdown": {}
+      },
+      "after": {
+        "codex_tasks": 0,
+        "backlog_tasks": 0,
+        "state_unchanged": true
+      },
+      "delta": 0
+    }
+  }
+}

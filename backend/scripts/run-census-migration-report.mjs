@@ -157,6 +157,11 @@ async function main() {
       apply: applyPlan,
       after_count: { codex_tasks: codexTasks.length, backlog_tasks: backlogBefore, state_unchanged: true },
       rollback,
+      counts: {
+        before: { codex_tasks: codexTasks.length, backlog_tasks: backlogBefore, status_breakdown: byStatus },
+        after: { codex_tasks: codexTasks.length, backlog_tasks: backlogBefore, state_unchanged: true },
+        delta: 0,
+      },
     },
   };
 
