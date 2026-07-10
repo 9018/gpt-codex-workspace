@@ -844,7 +844,7 @@ function migrationActionToNextAction(migrationAction, targetState) {
  * @param {string} state
  * @returns {string}
  */
-function typedStateToNextAction(state) {
+export function typedStateToNextAction(state) {
   switch (state) {
     case REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW:
       return 'human_review_required';

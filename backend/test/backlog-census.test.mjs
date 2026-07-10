@@ -25,6 +25,7 @@ import {
   scanBacklogCensus,
   runBacklogCensus,
   generateBacklogConvergenceReport,
+  typedStateToNextAction,
   VERSION,
 } from '../src/backlog-census.mjs';
 
@@ -87,6 +88,62 @@ test('LEGACY_MIGRATION_ACTIONS is frozen with 3 expected keys', () => {
   assert.equal(LEGACY_MIGRATION_ACTIONS.AUTO_MIGRATE_TO_TYPED, 'auto_migrate_to_typed');
   assert.equal(LEGACY_MIGRATION_ACTIONS.AUTO_ACCEPT, 'auto_accept');
   assert.equal(LEGACY_MIGRATION_ACTIONS.TRUE_HUMAN_REVIEW_REQUIRED, 'true_human_review_required');
+});
+
+
+test("typedStateToNextAction: maps WAITING_FOR_HUMAN_REVIEW correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW),
+    "human_review_required",
+  );
+});
+
+test("typedStateToNextAction: maps WAITING_FOR_MISSING_EVIDENCE_REPAIR correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR),
+    "auto_repair",
+  );
+});
+
+test("typedStateToNextAction: maps WAITING_FOR_INTEGRATION_RECOVERY correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_INTEGRATION_RECOVERY),
+    "integration_recovery",
+  );
+});
+
+test("typedStateToNextAction: maps WAITING_FOR_RESULT_CONTRACT_REPAIR correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR),
+    "contract_repair",
+  );
+});
+
+test("typedStateToNextAction: maps WAITING_FOR_NOOP_EVIDENCE correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_NOOP_EVIDENCE),
+    "evidence_collection",
+  );
+});
+
+test("typedStateToNextAction: maps WAITING_FOR_MANUAL_TERMINAL_DECISION correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION),
+    "human_terminal_decision",
+  );
+});
+
+test("typedStateToNextAction: maps HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED correctly", () => {
+  assert.equal(
+    typedStateToNextAction(REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED),
+    "human_review_of_exhausted_repairs",
+  );
+});
+
+test("typedStateToNextAction: default returns manual_review", () => {
+  assert.equal(typedStateToNextAction("unknown_state"), "manual_review");
+  assert.equal(typedStateToNextAction(""), "manual_review");
+  assert.equal(typedStateToNextAction("completed"), "manual_review");
 });
 
 // =========================================================================
