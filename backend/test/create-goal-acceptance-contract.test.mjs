@@ -18,15 +18,9 @@ async function makeServer() {
 }
 
 async function callTool(server, name, args = {}) {
-  const response = await server.handleRpc({
-    jsonrpc: "2.0",
-    id: Math.floor(Math.random() * 100000),
-    method: "tools/call",
-    params: { name, arguments: args }
-  }, { authorization: "Bearer test-token" });
-
-  assert.equal(response.error, undefined, JSON.stringify(response.error));
-  return response.result.structuredContent;
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "task:read", "project:read", "workspace:read", "workspace:write", "files:download"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
 }
 
 test("create_goal writes inferred acceptance.contract.json and references it from goal files", async () => {

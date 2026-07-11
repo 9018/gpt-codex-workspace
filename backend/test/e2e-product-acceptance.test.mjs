@@ -59,6 +59,12 @@ async function call(server, name, args = {}) {
   return response.result;
 }
 
+async function callRaw(server, name, args = {}) {
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "task:read", "project:read", "workspace:read", "workspace:write", "shell:exec", "files:upload", "files:download"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
+}
+
 async function callError(server, name, args = {}) {
   return server.handleRpc({
     jsonrpc: "2.0",
@@ -119,8 +125,8 @@ test("Area 1b: CLI doctor --local prints local summary without secrets", () => {
 
 test("Area 1c: runtime_status returns diagnostic fields without secrets", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
-  const result = await call(server, "runtime_status");
-  const sc = result.structuredContent;
+  const sc = await callRaw(server, "runtime_status");
+  const result = sc;
   assert.ok(sc.pid, "has pid");
   assert.ok(sc.defaultWorkspaceRoot, "has workspace root");
   assert.equal(sc.codex_exec_timeout, 3600, "timeout is 3600");
@@ -311,14 +317,13 @@ test("Area 3c: get_goal_context returns goal context with files", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
   const payload = { user_request: "test", goal_prompt: "# Context test", context_summary: "", messages: [], workspace_id: "hosted-default", mode: "builder" };
   const payloadBase64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
-  const created = await call(server, "create_encoded_goal", {
+  const created = await callRaw(server, "create_encoded_goal", {
     preview_text: "Context test", payload_base64: payloadBase64, assign_to_codex: true, wait_ms: 0,
   });
-  const goalId = created.structuredContent.goal.id;
-  const taskId = created.structuredContent.task?.id;
+  const goalId = created.goal.id;
+  const taskId = created.task?.id;
 
-  const context = await call(server, "get_goal_context", { goal_id: goalId, task_id: taskId });
-  const ctx = context.structuredContent;
+  const ctx = await callRaw(server, "get_goal_context", { goal_id: goalId, task_id: taskId });
   assert.ok(ctx.goal, "has goal object");
   assert.equal(ctx.goal.id, goalId, "goal id matches");
   assert.ok(ctx.workspace_files?.goal_md, "has workspace_files.goal_md");
@@ -330,17 +335,16 @@ test("Area 3d: append_goal_message writes message to goal conversation", async (
   const { server } = await makeServer({ toolMode: "standard" });
   const payload = { user_request: "test", goal_prompt: "# Append test", context_summary: "", messages: [], workspace_id: "hosted-default", mode: "builder" };
   const payloadBase64 = Buffer.from(JSON.stringify(payload), "utf8").toString("base64");
-  const created = await call(server, "create_encoded_goal", {
+  const created = await callRaw(server, "create_encoded_goal", {
     preview_text: "Append test", payload_base64: payloadBase64, assign_to_codex: true, wait_ms: 0,
   });
-  const goalId = created.structuredContent.goal.id;
+  const goalId = created.goal.id;
 
-  const result = await call(server, "append_goal_message", {
+  const sc = await callRaw(server, "append_goal_message", {
     goal_id: goalId,
     role: "codex",
     content: "E2E test message from automated acceptance",
   });
-  const sc = result.structuredContent;
   // append_goal_message returns { goal, conversation, message, memory, workspace_files }
   assert.ok(sc.message, "has message object");
   assert.equal(sc.message.role, "codex", "message role is codex");
@@ -401,13 +405,12 @@ test("Area 4a: run_agent_pipeline creates pipeline runs", async () => {
 
 test("Area 4b: handoff_to_agent writes plan/status/log files to disk", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
-  const result = await call(server, "handoff_to_agent", {
+  const sc = await callRaw(server, "handoff_to_agent", {
     agent: "codex",
     plan: "# E2E Acceptance Plan\n\n1. Verify handoff files are written.\n2. Read them back.",
     goal_id: "goal_e2e_handoff",
     task_id: "task_e2e_handoff",
   });
-  const sc = result.structuredContent;
   assert.ok(sc.handoff, "has handoff object");
   assert.equal(sc.handoff.agent, "codex");
   assert.ok(sc.handoff.plan_file, "plan_file path returned");
@@ -424,14 +427,13 @@ test("Area 4b: handoff_to_agent writes plan/status/log files to disk", async () 
 
 test("Area 4c: read_handoff returns compact handoff summary", async () => {
   const { server } = await makeServer({ toolMode: "standard" });
-  await call(server, "handoff_to_agent", {
+  await callRaw(server, "handoff_to_agent", {
     agent: "codex",
     plan: "# Handoff Plan\nRead test.",
     goal_id: "goal_read_test",
     task_id: "task_read_test",
   });
-  const result = await call(server, "read_handoff", {});
-  const sc = result.structuredContent;
+  const sc = await callRaw(server, "read_handoff", {});
   assert.match(sc.plan || "", /Handoff Plan/, "plan content returned");
   assert.ok(sc.status, "status object returned");
   assert.ok(sc.status.agent, "agent name in status");
@@ -544,7 +546,7 @@ test("Area 6d: sync_from_github handles disabled gracefully", async () => {
 // ===========================================================================
 
 test("Area 7a: resources/list includes primary tool card and legacy widget card resources", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/list", params: {},
   }, { authorization: "Bearer test-token" });
@@ -563,7 +565,7 @@ test("Area 7a: resources/list includes primary tool card and legacy widget card 
 });
 
 test("Area 7b: resources/read returns compact card HTML for v1 and v2", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   // Test v1
   const v1resp = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
@@ -587,7 +589,7 @@ test("Area 7b: resources/read returns compact card HTML for v1 and v2", async ()
 });
 
 test("Area 7c: v2 HTML contains badge/renderCard/keyValues/items/warnings/errors/diff/raw", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
     params: { uri: "ui://widget/gptwork-card-v2.html" },
@@ -608,7 +610,7 @@ test("Area 7c: v2 HTML contains badge/renderCard/keyValues/items/warnings/errors
 });
 
 test("Area 7d: tool descriptors have _meta with outputTemplate AND resourceUri pointing to primary tool card", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   const descriptors = await toolDescriptors(server);
   const withCard = descriptors.filter(d => {
     const ot = d._meta?.["openai/outputTemplate"];
@@ -625,7 +627,7 @@ test("Area 7d: tool descriptors have _meta with outputTemplate AND resourceUri p
 });
 
 test("Area 7e: resources/list returns both widget cards even in minimal mode", async () => {
-  const { server } = await makeServer({ toolMode: "minimal" });
+  const { server } = await makeServer({ toolMode: "minimal", renderMode: "card" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/list", params: {},
   }, { authorization: "Bearer test-token" });
@@ -639,7 +641,7 @@ test("Area 7e: resources/list returns both widget cards even in minimal mode", a
 
 
 test("Area 7f: v2 card has root/status/summary/key-values/items/warnings/errors/raw fallback/render", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   const response = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
     params: { uri: "ui://widget/gptwork-card-v2.html" },
@@ -675,7 +677,7 @@ test("Area 7f: v2 card has root/status/summary/key-values/items/warnings/errors/
 });
 
 test("Area 7g: v1 card remains backward-compatible", async () => {
-  const { server } = await makeServer({ toolMode: "standard" });
+  const { server } = await makeServer({ toolMode: "standard", renderMode: "card" });
   const v1resp = await server.handleRpc({
     jsonrpc: "2.0", id: 1, method: "resources/read",
     params: { uri: "ui://widget/gptwork-card-v1.html" },

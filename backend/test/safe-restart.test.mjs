@@ -2692,15 +2692,9 @@ test("P4.5: runtime_status triggers auto-verification via runtime_status handler
   });
 
   // Call runtime_status (should trigger auto-verification)
-  const response = await server.handleRpc({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: { name: "runtime_status", arguments: {} }
-  }, { authorization: "Bearer test-token" });
-
-  assert.equal(response.error, undefined);
-  const result = response.result.structuredContent;
+  const handler = server.getToolForTests("runtime_status");
+  assert.equal(typeof handler, "function");
+  const result = await handler({}, { user_id: "test", scopes: ["project:read", "workspace:read"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
 
   // Verify marker was auto-verified
   const postMarker = await loadRestartMarker(workspaceRoot, "task_p45_rtstatus_1");

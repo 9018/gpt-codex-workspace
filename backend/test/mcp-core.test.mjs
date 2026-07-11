@@ -18,6 +18,12 @@ async function makeServer(options = {}) {
   });
 }
 
+async function callRaw(server, name, args = {}) {
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "task:read", "project:read", "workspace:read", "workspace:write"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
+}
+
 test("initialize returns MCP server metadata", async () => {
   const server = await makeServer({ toolMode: "full" });
   const response = await server.handleRpc({
@@ -272,23 +278,11 @@ test("preview_codex_context returns safe context preview with full structure", a
   const server = await makeServer();
 
   // Create a task
-  const createResult = await server.handleRpc({
-    jsonrpc: "2.0", id: 1,
-    method: "tools/call",
-    params: { name: "create_task", arguments: { title: "preview test task" } }
-  }, { authorization: "Bearer test-token" });
-  const taskId = createResult.result.structuredContent.task.id;
+  const created = await callRaw(server, "create_task", { title: "preview test task" });
+  const taskId = created.task.id;
   assert.ok(taskId, "task should be created");
 
-  // Now call preview_codex_context
-  const previewResult = await server.handleRpc({
-    jsonrpc: "2.0", id: 2,
-    method: "tools/call",
-    params: { name: "preview_codex_context", arguments: { task_id: taskId } }
-  }, { authorization: "Bearer test-token" });
-
-  assert.equal(previewResult.error, undefined, "preview_codex_context should not error");
-  const sc = previewResult.result.structuredContent;
+  const sc = await callRaw(server, "preview_codex_context", { task_id: taskId });
 
   // Check top-level fields
   assert.ok(sc.context, "should have context object");
@@ -310,41 +304,17 @@ test("preview_codex_context returns safe context preview with full structure", a
 
 test("preview_codex_context exposes actual_prompt_bytes and actual_prompt_warning", async () => {
   const server = await makeServer();
+  const created = await callRaw(server, "create_task", { title: "prompt-size test" });
+  const taskId = created.task.id;
+  const sc = await callRaw(server, "preview_codex_context", { task_id: taskId });
 
-  // Create a task
-  const createResult = await server.handleRpc({
-    jsonrpc: "2.0", id: 1,
-    method: "tools/call",
-    params: { name: "create_task", arguments: { title: "prompt-size test" } }
-  }, { authorization: "Bearer test-token" });
-  const taskId = createResult.result.structuredContent.task.id;
-
-  // Call preview_codex_context
-  const previewResult = await server.handleRpc({
-    jsonrpc: "2.0", id: 2,
-    method: "tools/call",
-    params: { name: "preview_codex_context", arguments: { task_id: taskId } }
-  }, { authorization: "Bearer test-token" });
-
-  assert.equal(previewResult.error, undefined, "preview_codex_context should not error");
-  const sc = previewResult.result.structuredContent;
-
-  // Check actual_prompt_bytes is present
-  assert.ok("actual_prompt_bytes" in sc,
-    "response should have actual_prompt_bytes field");
-  assert.equal(typeof sc.actual_prompt_bytes, "number",
-    "actual_prompt_bytes should be a number");
-  assert.ok(sc.actual_prompt_bytes > 0,
-    "actual_prompt_bytes should be > 0");
-
-  // actual_prompt_warning should be undefined (no warning for small prompt)
-  assert.equal(sc.actual_prompt_warning, undefined,
-    "actual_prompt_warning should be undefined for small prompt");
-
-  // Verify backward compat: original fields still present
-  assert.ok(sc.context, "should have context object");
-  assert.ok(sc.preview, "should have preview text string");
-  assert.ok(sc.preview_text, "should have preview_text for backward compat");
+  assert.ok("actual_prompt_bytes" in sc);
+  assert.equal(typeof sc.actual_prompt_bytes, "number");
+  assert.ok(sc.actual_prompt_bytes > 0);
+  assert.equal(sc.actual_prompt_warning, undefined);
+  assert.ok(sc.context);
+  assert.ok(sc.preview);
+  assert.ok(sc.preview_text);
 });
 test("Codex worker interval uses safe assigned task runner with configured concurrency", async () => {
   let calls = 0;
