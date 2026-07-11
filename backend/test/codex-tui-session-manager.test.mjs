@@ -44,39 +44,28 @@ function makeFakeAdapter() {
   };
 }
 
-test("start creates session, spawns codex, sends bootstrap messages, and logs output", async () => {
+test("start passes the goal as the interactive Codex initial prompt", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-")));
   const fakeAdapter = makeFakeAdapter();
-  const startedAt = Date.now();
   const session = await startCodexTuiGoalSession({
     task: { id: "task_1", title: "TUI foundation" },
     goal: { id: "goal_1" },
     cwd,
     repoLockId: "lock_1",
     ptyAdapter: fakeAdapter,
-    startupSettleMs: 600,
-    bootstrapMessageGapMs: 100,
   });
 
   assert.equal(session.status, "running");
   assert.equal(session.task_id, "task_1");
   assert.equal(session.goal_id, "goal_1");
-  assert.ok(session.first_output_at, "first_output_at should be set when TUI produces output");
-  assert.equal(session.bootstrap_method, "stdin_enter");
+  assert.equal(session.bootstrap_method, "argv_prompt");
   assert.equal(fakeAdapter.spawns.length, 1);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
-  assert.equal(fakeAdapter.spawns[0].args, undefined, "spawn should have no args (prompt goes via stdin)");
-  assert.ok(Date.now() - startedAt >= 650, "bootstrap must wait for startup settle and stage the follow-up message");
-  // Full bootstrap is written to stdin: writes[0]=/goal msg, writes[1]=followup
-  assert.ok(fakeAdapter.writes.length >= 2, "at least 2 writes for /goal + followup");
-  assert.match(fakeAdapter.writes[0], /^\/goal /);
-  assert.match(fakeAdapter.writes[0], /goal_id=goal_1/);
-  assert.match(fakeAdapter.writes[0], /Use Superpowers/);
-  assert.match(fakeAdapter.writes[0], /codex\.entry\.md/);
-  assert.match(fakeAdapter.writes[1], /Continue GPTWork goal_id=goal_1/);
-  assert.ok(fakeAdapter.writes[0].endsWith("\r"), "first bootstrap must submit a real TUI Enter (CR)");
-  assert.ok(fakeAdapter.writes[1].endsWith("\r"), "follow-up bootstrap must submit a real TUI Enter (CR)");
-  assert.ok(!fakeAdapter.writes[0].endsWith("\n"), "LF alone must not be used as TUI Enter");
+  assert.equal(fakeAdapter.spawns[0].args.length, 1);
+  assert.match(fakeAdapter.spawns[0].args[0], /goal_id=goal_1/);
+  assert.match(fakeAdapter.spawns[0].args[0], /Use Superpowers/);
+  assert.match(fakeAdapter.spawns[0].args[0], /codex\.entry\.md/);
+  assert.deepEqual(fakeAdapter.writes, [], "initial prompt must not depend on synthetic TUI keystrokes");
 
   const read = await readCodexTuiSession(session.id);
   assert.match(read.log, /TUI ready/);

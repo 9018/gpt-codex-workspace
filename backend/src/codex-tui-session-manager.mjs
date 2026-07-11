@@ -1,6 +1,6 @@
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
-import { buildCodexTuiBootstrapMessages } from "./codex-tui-goal-prompt.mjs";
+import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -67,10 +67,6 @@ async function normalizeRecoveredSessionRecord(store, sessionId, record = null) 
   return current;
 }
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
-}
-
 function waitForTuiOutput(store, sessionId, readyTimeoutMs = 5_000) {
   const start = Date.now();
   const deadline = start + readyTimeoutMs;
@@ -100,8 +96,6 @@ async function startCodexTuiGoalSessionImpl({
   command = "codex",
   evidenceWaitMs = null,
   requireSuperpowers = true,
-  startupSettleMs = 1_500,
-  bootstrapMessageGapMs = 500,
 } = {}) {
   if (!cwd) throw new Error("cwd is required");
   if (!goal?.id) throw new Error("goal.id is required");
@@ -141,19 +135,23 @@ async function startCodexTuiGoalSessionImpl({
       command,
       evidence_wait_ms: Number.isFinite(Number(evidenceWaitMs)) ? Number(evidenceWaitMs) : null,
       require_superpowers_for_tui: requireSuperpowers !== false,
-      startup_settle_ms: Math.max(0, Number(startupSettleMs) || 0),
-      bootstrap_message_gap_ms: Math.max(0, Number(bootstrapMessageGapMs) || 0),
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
   });
 
-  // Launch codex bare — no argv prompt.
-  // Prompt is submitted via stdin after TUI is ready.
+  // Launch the interactive Codex TUI with its supported initial PROMPT argv.
+  // This is deterministic across node-pty and script(1), and avoids synthetic
+  // keystrokes racing the terminal's initialization/input editor.
+  const initialPrompt = buildCodexTuiGoalObjective({
+    goalId: goal.id,
+    taskTitle: task?.title || goal?.title || task?.id,
+  });
   let ptySession;
   try {
     ptySession = await adapter.spawn({
       cwd,
       command,
+      args: [initialPrompt],
       onData: (chunk) => {
         store.appendSessionLog(sessionId, chunk).catch(() => {});
       },
@@ -170,26 +168,17 @@ async function startCodexTuiGoalSessionImpl({
 
   activeSessions.set(sessionId, { store, ptySession });
 
-  // Phase 1: wait for TUI ready (first output on PTY)
-  const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
-
-  // Phase 2: terminal negotiation output is not proof that the input editor is ready.
-  // Give the full-screen TUI a bounded settle window, then stage messages so the
-  // follow-up cannot be swallowed by the same initialization/render cycle.
-  await sleep(startupSettleMs);
-  const messages = buildCodexTuiBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
+  // The initial prompt is submitted by Codex itself during startup. First PTY
+  // output is retained as observability evidence, not as an input-readiness gate.
   const bootstrapSentAt = new Date().toISOString();
-  for (let index = 0; index < messages.length; index += 1) {
-    ptySession.write(messages[index]);
-    if (index < messages.length - 1) await sleep(bootstrapMessageGapMs);
-  }
+  const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
 
   record = await store.updateSession(sessionId, {
     status: "running",
     pty_pid: ptySession.pid ?? null,
     started_at: bootstrapSentAt,
     bootstrap_sent_at: bootstrapSentAt,
-    bootstrap_method: "stdin_enter",
+    bootstrap_method: "argv_prompt",
     first_output_at: firstOutputAt,
     submitted: true,
   });
@@ -197,7 +186,7 @@ async function startCodexTuiGoalSessionImpl({
     ...record,
     bootstrap_sent_at: bootstrapSentAt,
     first_output_at: firstOutputAt,
-    bootstrap_method: "stdin_enter",
+    bootstrap_method: "argv_prompt",
     workspace_root: sessionStoreRoot,
     session_store_root: sessionStoreRoot,
     deprecated_cwd_session_root: deprecatedCwdSessionRoot,
