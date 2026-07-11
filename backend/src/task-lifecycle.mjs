@@ -153,6 +153,7 @@ export async function updateTask(store, task_id, updater) {
   const prevStatus = task.status;
   updater(task);
   task.updated_at = new Date().toISOString();
+  state.activities ||= [];
   state.activities.push({ time: task.updated_at, type: "task.updated", task_id, status: task.status });
 
   // Use shared notification helper for terminal task states (deduplicated per task/status/channel)

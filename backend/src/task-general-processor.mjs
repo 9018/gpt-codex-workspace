@@ -633,6 +633,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       task,
       goal,
       cwd: executionCwd,
+      workspaceRoot: config.defaultWorkspaceRoot || executionCwd,
       repoLockId: tuiLockAcquired ? repoLockPath : null,
     });
 

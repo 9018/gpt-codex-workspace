@@ -18,7 +18,7 @@
 
 import { execFileSync } from "node:child_process";
 import { acquireRepoLock, releaseRepoLock } from "../repo-lock.mjs";
-import { findTask } from "../task-lifecycle.mjs";
+import { findTask, updateTask } from "../task-lifecycle.mjs";
 import { ensureTaskGoal } from "../goal-task-lifecycle.mjs";
 import { resolveTaskRepositoryPlan, materializeTaskWorktree } from "../task-repo-resolution.mjs";
 import { isCodexTuiEnabled } from "../codex-execution-provider.mjs";
@@ -118,15 +118,33 @@ export function createCodexTuiToolsGroup({
     }
 
     const task = await findTaskFn(store, task_id);
-    task.metadata = { ...(task.metadata || {}), codex_execution_provider: "codex_tui_goal" };
-    await store.save?.(await store.load());
-    const goal = await resolveGoalForTask(task, context);
+    const claimed = await updateTask(store, task.id, (item) => {
+      if (item.status === "running" && item.metadata?.tui_session_owner === "manual") {
+        const err = new Error(`manual Codex TUI session is already starting or running for task ${item.id}`);
+        err.code = "codex_tui_task_already_claimed";
+        throw err;
+      }
+      item.status = "running";
+      item.metadata = {
+        ...(item.metadata || {}),
+        codex_execution_provider: "codex_tui_goal",
+        tui_session_owner: "manual",
+        manual_tui_session_starting: true,
+      };
+      item.logs ||= [];
+      item.logs.push({ time: new Date().toISOString(), message: "[tui] manual session start claimed task" });
+    });
+    const claimedTask = claimed.task;
+    const previousStatus = task.status;
+    let claimSettled = false;
+    try {
+    const goal = await resolveGoalForTask(claimedTask, context);
     if (!goal?.id) {
       return { kind: "codex_tui_goal_missing", status: "blocked", task_id: task.id, reason: "Task has no resolvable goal_id" };
     }
 
     // Phase 1: resolve plan (no git mutation)
-    const repoPlan = await resolveTaskRepositoryPlanFn({ task, goal, config, registry });
+    const repoPlan = await resolveTaskRepositoryPlanFn({ task: claimedTask, goal, config, registry });
     if (!repoPlan) {
       return { kind: "codex_tui_plan_failed", status: "blocked", task_id: task.id, goal_id: goal.id, reason: "Repository plan resolution returned null" };
     }
@@ -262,7 +280,13 @@ export function createCodexTuiToolsGroup({
         error_code: err?.code || null,
         finished_at: new Date().toISOString(),
       }).catch(() => {});
-      await releaseRepoLockFn(workspaceRoot, worktreePath, task.id).catch(() => {});
+      await releaseRepoLockFn(workspaceRoot, worktreePath, claimedTask.id).catch(() => {});
+      await updateTask(store, claimedTask.id, (item) => {
+        item.status = "failed";
+        item.metadata = { ...(item.metadata || {}), manual_tui_session_starting: false };
+        item.result = { ...(item.result || {}), provider: "codex_tui_goal", start_error: err?.message || String(err) };
+      }).catch(() => {});
+      claimSettled = true;
       return {
         kind: "codex_tui_start_failed",
         status: "failed",
@@ -284,6 +308,19 @@ export function createCodexTuiToolsGroup({
       }).catch(() => {});
     }
 
+    await updateTask(store, claimedTask.id, (item) => {
+      item.status = "running";
+      item.metadata = {
+        ...(item.metadata || {}),
+        codex_execution_provider: "codex_tui_goal",
+        tui_session_owner: "manual",
+        manual_tui_session_starting: false,
+        tui_session_id: session.id,
+      };
+      item.result = { ...(item.result || {}), provider: "codex_tui_goal", session_id: session.id, cwd: worktreePath };
+    });
+    claimSettled = true;
+
     return {
       kind: "codex_tui_session_started",
       session_id: session.id,
@@ -296,6 +333,19 @@ export function createCodexTuiToolsGroup({
       execution_id: execution.id,
       status: session.status,
     };
+    } finally {
+      if (!claimSettled) {
+        await updateTask(store, claimedTask.id, (item) => {
+          item.status = previousStatus;
+          item.metadata = {
+            ...(item.metadata || {}),
+            manual_tui_session_starting: false,
+          };
+          item.logs ||= [];
+          item.logs.push({ time: new Date().toISOString(), message: "[tui] manual session claim released before startup completed" });
+        }).catch(() => {});
+      }
+    }
   }
 
   return {

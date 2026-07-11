@@ -562,6 +562,21 @@ async function retryIntegrationForTask(store, config, task) {
 async function runSingleCodexTask(store, config, github, task, context, processGeneralTask) {
   let transitioned = false;
   try {
+    const latestState = await store.load();
+    const latestTask = typeof store.findTaskById === "function"
+      ? await store.findTaskById(task.id)
+      : latestState.tasks?.find((item) => item.id === task.id);
+    if (!latestTask || !CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES.includes(latestTask.status)) {
+      return {
+        task_id: task.id,
+        status: latestTask?.status || task.status,
+        skipped: true,
+        progressed: false,
+        reason: "task status changed before worker execution",
+      };
+    }
+    task = latestTask;
+
     // Auto-promote queued tasks to assigned.
     if (task.status === "queued") {
       await updateTask(store, task.id, (t) => {

@@ -4,6 +4,7 @@ import { buildCodexTuiBootstrapMessages } from "./codex-tui-goal-prompt.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
+const pendingSessionStarts = new Map();
 
 function uniqueStrings(values = []) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
@@ -84,7 +85,7 @@ function waitForTuiOutput(store, sessionId, readyTimeoutMs = 5_000) {
   });
 }
 
-export async function startCodexTuiGoalSession({
+async function startCodexTuiGoalSessionImpl({
   task,
   goal,
   cwd,
@@ -104,6 +105,23 @@ export async function startCodexTuiGoalSession({
   const adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
+
+  let existing = null;
+  try { existing = await store.readSession(sessionId, { maxChars: 0 }); } catch (err) { if (err?.code !== "ENOENT") throw err; }
+  if (existing && ["created", "running"].includes(existing.status)) {
+    if (existing.cwd !== cwd) {
+      const err = new Error(`codex TUI session ${sessionId} already exists in a different cwd`);
+      err.code = "codex_tui_session_conflict";
+      throw err;
+    }
+    if (activeSessions.has(sessionId) || (existing.pty_pid && isProcessAlive(existing.pty_pid))) return existing;
+    await store.updateSession(sessionId, {
+      status: "failed",
+      error: "stale session record found during restart",
+      error_code: "codex_tui_stale_start",
+      failed_at: new Date().toISOString(),
+    });
+  }
 
   let record = await store.createSession({
     sessionId,
@@ -174,6 +192,25 @@ export async function startCodexTuiGoalSession({
   };
 }
 
+export async function startCodexTuiGoalSession(args = {}) {
+  const sessionId = sessionIdFor(args.task, args.goal);
+  const pending = pendingSessionStarts.get(sessionId);
+  if (pending) {
+    if (pending.cwd !== args.cwd) {
+      const err = new Error(`codex TUI session ${sessionId} is already starting in a different cwd`);
+      err.code = "codex_tui_session_conflict";
+      throw err;
+    }
+    return pending.promise;
+  }
+
+  const promise = startCodexTuiGoalSessionImpl(args).finally(() => {
+    if (pendingSessionStarts.get(sessionId)?.promise === promise) pendingSessionStarts.delete(sessionId);
+  });
+  pendingSessionStarts.set(sessionId, { cwd: args.cwd, promise });
+  return promise;
+}
+
 export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
   const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
   await normalizeRecoveredSessionRecord(store, sessionId);
@@ -232,4 +269,5 @@ export function resetCodexTuiSessionManagerForTests() {
   }
   activeSessions.clear();
   sessionStores.clear();
+  pendingSessionStarts.clear();
 }

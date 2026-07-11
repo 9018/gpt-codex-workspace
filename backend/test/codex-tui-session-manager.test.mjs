@@ -162,3 +162,38 @@ test("spawn failure marks the durable session failed instead of leaving created"
   assert.equal(record.error_code, "codex_tui_unavailable");
   assert.match(record.error, /no PTY/);
 });
+
+
+test("concurrent starts for the same session are idempotent and conflicting cwd is rejected", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-concurrent-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-concurrent-cwd-")));
+  const otherCwd = track(await mkdtemp(join(tmpdir(), "codex-tui-concurrent-other-")));
+  let spawnCount = 0;
+  let releaseSpawn;
+  const spawnGate = new Promise((resolve) => { releaseSpawn = resolve; });
+  const adapter = {
+    async spawn() {
+      spawnCount += 1;
+      await spawnGate;
+      return { pid: 424242, write() {}, stop() {} };
+    },
+  };
+  const args = {
+    task: { id: "task_concurrent", title: "Concurrent" },
+    goal: { id: "goal_concurrent" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: adapter,
+  };
+  const first = startCodexTuiGoalSession(args);
+  const second = startCodexTuiGoalSession(args);
+  await assert.rejects(
+    () => startCodexTuiGoalSession({ ...args, cwd: otherCwd }),
+    (err) => err?.code === "codex_tui_session_conflict"
+  );
+  releaseSpawn();
+  const [a, b] = await Promise.all([first, second]);
+  assert.equal(spawnCount, 1);
+  assert.equal(a.id, b.id);
+  await stopCodexTuiSession(a.id, { workspaceRoot });
+});
