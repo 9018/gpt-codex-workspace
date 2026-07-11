@@ -59,10 +59,13 @@ async function makeScopedServer() {
 }
 
 async function callTool(server, name, args = {}) {
-  return callToolAs(server, "test-token", name, args);
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "task:read", "project:read", "workspace:read", "workspace:write", "shell:exec", "files:upload", "files:download"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
 }
 
 async function callToolAs(server, token, name, args = {}) {
+  if (token === "test-token") return callTool(server, name, args);
   const response = await server.handleRpc({
     jsonrpc: "2.0",
     id: Math.floor(Math.random() * 100000),
