@@ -86,6 +86,5 @@ G7 may consume this card in final integration and release verification after G6 
 
 ## Completion commit
 
-- d8d1cfa — G6 implementation, tests, and initial owned documentation.
-- 093c39d — owned-document completion evidence.
-- Compatibility follow-up restores the full bounded worker_status public payload contract.
+- `d8d1cfa` — G6 implementation and focused tests.
+- `093c39d` — owned documentation follow-up.
