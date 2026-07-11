@@ -188,7 +188,7 @@ test("checkRuntimeEnv returns warn when recommended vars missing", async () => {
 });
 
 test("checkProjectContext returns fail when missing files", () => {
-  const r = checkProjectContext("/tmp/nonexistent-gptwork");
+  const r = checkProjectContext(`/tmp/nonexistent-gptwork-${process.pid}-${Date.now()}`);
   assert.equal(r.status, "fail");
   assert.ok(r.fixable);
 });
@@ -268,7 +268,7 @@ test("checkCodexAvailability returns pass or warn", () => {
 });
 
 test("checkRequiredDirs returns fail for non-existent dirs", () => {
-  const r = checkRequiredDirs("/tmp/nonexistent-project");
+  const r = checkRequiredDirs(`/tmp/nonexistent-project-${process.pid}-${Date.now()}`);
   assert.equal(r.status, "fail");
   assert.ok(r.fixable);
 });

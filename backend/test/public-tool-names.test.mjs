@@ -55,11 +55,13 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "cleanup_tmp",
   "clear_repo_lock",
   "codex_tui_collect",
+  "codex_tui_progress",
   "codex_tui_read",
   "codex_tui_send",
   "codex_tui_start_goal",
   "codex_tui_status",
   "codex_tui_stop",
+  "codex_tui_subagents",
  "complete_agent_run",
   "complete_task",
   "context_prepare",
@@ -73,6 +75,8 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "create_task",
   "create_workspace",
   "create_workstream",
+  "create_workstream_fanout",
+  "create_workstream_join",
   "create_zip_archive",
   "delete_path",
   "delete_workspace",
@@ -80,6 +84,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "download_bundle_base64",
  "download_file_base64",
   "enqueue_goal",
+  "evaluate_workstream_join",
  "extract_zip_archive",
   "get_agent_run",
   "get_chatgpt_request",
@@ -93,6 +98,8 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "get_task_review_packet",
   "get_workspace_info",
   "get_workstream",
+  "get_workstream_capacity",
+  "get_workstream_execution_graph",
   "git_remote_changed_files",
   "git_remote_compare_local",
   "git_remote_diff",
@@ -127,6 +134,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "list_workspaces",
   "list_workstream_links",
   "list_workstreams",
+  "manual_release_workstream_join",
   "mkdir",
   "move_path",
   "notification_status",
@@ -153,6 +161,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
  "shell_exec",
  "show_changes",
   "start_next_queued_goal",
+  "start_workstream_ready_tasks",
  "stat_path",
   "sync_from_github",
   "sync_github_comments",
@@ -282,8 +291,8 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
       assert.equal(names.includes(placeholder), true,
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
-    assert.equal(names.length, 147,
-      `Expected 147 tools with placeholder flag set, got ${names.length}`);
+    assert.equal(names.length, EXPECTED_PUBLIC_TOOL_NAMES.length + 4,
+      `Expected ${EXPECTED_PUBLIC_TOOL_NAMES.length + 4} tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;

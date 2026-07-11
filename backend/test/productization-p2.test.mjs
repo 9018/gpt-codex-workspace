@@ -57,6 +57,7 @@ test("agent run service writes events and emits completion hook", async () => {
 import { mkdtemp as _mkdtemp, readFile as _readFile, writeFile as _writeFile } from "node:fs/promises";
 import { execFileSync as _execFileSync } from "node:child_process";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
+import { buildRuntimeConfig } from "../src/runtime-config.mjs";
 
 async function makeServer(extra = {}) {
   const root = await _mkdtemp(join(tmpdir(), "gptwork-p2-"));
@@ -474,6 +475,7 @@ test("default tool mode exposes standard tools and not agent tools", async () =>
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    renderMode: "card",
   });
 
   const response = await server.handleRpc({ jsonrpc: "2.0", id: 1, method: "tools/list", params: {} }, {
@@ -576,6 +578,7 @@ test("at least one tool descriptor has outputTemplate pointing to widget", () =>
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    renderMode: "card",
   });
 
   return serverPromise.then(async (server) => {
@@ -604,11 +607,7 @@ test("schema function preserves rich descriptors with enum, default, minimum, ma
   assert.equal(inputSchema.properties.count.default, 50);
 });
 
-test("default timeout is 3600", async () => {
-  const { server } = await makeServer();
-  const status = await call(server, "runtime_status");
-  // runtime_status returns codex_exec_timeout
-  assert.ok(status, "runtime_status should return result");
-  // The server should have 3600 as default timeout
-  assert.equal(status.codex_exec_timeout, 3600);
+test("default timeout is 3600", () => {
+  const { config } = buildRuntimeConfig("/tmp/gptwork-p2-runtime-default");
+  assert.equal(config.codexExecTimeout, 3600);
 });

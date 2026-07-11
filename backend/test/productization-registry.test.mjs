@@ -173,11 +173,12 @@ test("full tool mode keeps the complete compatibility tool surface", async () =>
 });
 
 test("resources/list exposes the GPTWork Apps SDK widget resource", async () => {
-  const server = await makeServer();
+  const server = await makeServer({ renderMode: "card" });
   const response = await server.handleRpc({ jsonrpc: "2.0", id: 2, method: "resources/list", params: {} }, {
     authorization: "Bearer test-token",
   });
 
-  assert.equal(response.result.resources[0].uri, "ui://widget/gptwork-card-v1.html");
-  assert.equal(response.result.resources[0].mimeType, "text/html");
+  const widget = response.result.resources.find((resource) => resource.uri === "ui://widget/gptwork-tool-card-v5.html");
+  assert.ok(widget, "v5 Apps SDK widget resource should be listed");
+  assert.equal(widget.mimeType, "text/html;profile=mcp-app");
 });
