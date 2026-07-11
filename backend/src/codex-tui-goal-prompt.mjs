@@ -29,8 +29,9 @@ function compactText(value, maxChars) {
  * @param {string} goalId - Goal identifier
  * @returns {string} Pipeline instructions
  */
-export function buildPipelinePhaseInstruction({ goalId } = {}) {
+export function buildPipelinePhaseInstruction({ goalId, goalDir = null } = {}) {
   const id = String(goalId || "").trim() || "<goal_id>";
+  const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
   return [
     "Subagent pipeline (parent TUI fixed):",
     "  1. context_curator (context bundle preparation)",
@@ -43,8 +44,8 @@ export function buildPipelinePhaseInstruction({ goalId } = {}) {
     "  8. finalizer (single closure agent)",
     "",
     "Progress is written atomically to:",
-    `  .gptwork/goals/${id}/progress.json`,
-    `  .gptwork/goals/${id}/subagents.json`,
+    `  ${dir}/progress.json`,
+    `  ${dir}/subagents.json`,
     "",
     "codex_tui_progress and codex_tui_subagents MCP tools",
     "return structured progress without ANSI screen parsing.",
@@ -63,28 +64,29 @@ export function buildPipelinePhaseInstruction({ goalId } = {}) {
  * @param {boolean} [options.includePipeline] - Include subagent pipeline instructions (default: true)
  * @returns {string} Goal objective text
  */
-export function buildCodexTuiGoalObjective({ goalId, taskTitle, includePipeline = true } = {}) {
+export function buildCodexTuiGoalObjective({ goalId, taskTitle, includePipeline = true, goalDir = null } = {}) {
   const id = String(goalId || "").trim();
   if (!id) throw new Error("goalId is required");
   const title = compactText(taskTitle || "Codex TUI goal", 260);
+  const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
 
   const parts = [
     `goal_id=${id}`,
     `task=${title}`,
     "",
     "Use Superpowers for this task.",
-    `Read .gptwork/goals/${id}/codex.entry.md before planning or editing.`,
+    `Read ${dir}/codex.entry.md before planning or editing.`,
     "",
     "Execution contract:",
-    `- Write .gptwork/goals/${id}/result.json`,
-    `- Write .gptwork/goals/${id}/result.md`,
+    `- Write ${dir}/result.json`,
+    `- Write ${dir}/result.md`,
     "- Include changed_files, tests, verification, blockers, and commit if any.",
     "- Do not declare completion until verification-before-completion has been performed.",
     "- For non-trivial implementation, use Superpowers planning/TDD/subagent/review workflows.",
   ];
 
   if (includePipeline) {
-    parts.push("", buildPipelinePhaseInstruction({ goalId: id }));
+    parts.push("", buildPipelinePhaseInstruction({ goalId: id, goalDir: dir }));
   }
 
   parts.push("",
@@ -101,18 +103,19 @@ export function buildCodexTuiGoalObjective({ goalId, taskTitle, includePipeline 
  * @param {string} options.goalId - Goal identifier (required)
  * @returns {string} Follow-up instruction text
  */
-export function buildCodexTuiFollowupInstruction({ goalId } = {}) {
+export function buildCodexTuiFollowupInstruction({ goalId, goalDir = null } = {}) {
   const id = String(goalId || "").trim();
   if (!id) throw new Error("goalId is required");
+  const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
   return [
     `Continue GPTWork goal_id=${id}.`,
     "Use Superpowers.",
-    `The entrypoint remains .gptwork/goals/${id}/codex.entry.md.`,
-    `The durable result contract remains .gptwork/goals/${id}/result.json and result.md.`,
+    `The entrypoint remains ${dir}/codex.entry.md.`,
+    `The durable result contract remains ${dir}/result.json and result.md.`,
     "",
     "Progress tracking:",
-    `  .gptwork/goals/${id}/progress.json`,
-    `  .gptwork/goals/${id}/subagents.json`,
+    `  ${dir}/progress.json`,
+    `  ${dir}/subagents.json`,
     "  codex_tui_progress, codex_tui_subagents MCP tools (no ANSI parsing).",
     "",
     "If context was compacted, re-read the entrypoint and continue from the current repository state.",

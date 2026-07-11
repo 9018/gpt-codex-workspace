@@ -1,6 +1,7 @@
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
 import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
+import { join } from "node:path";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -142,9 +143,11 @@ async function startCodexTuiGoalSessionImpl({
   // Launch the interactive Codex TUI with its supported initial PROMPT argv.
   // This is deterministic across node-pty and script(1), and avoids synthetic
   // keystrokes racing the terminal's initialization/input editor.
+  const canonicalGoalDir = join(sessionStoreRoot, ".gptwork", "goals", goal.id);
   const initialPrompt = buildCodexTuiGoalObjective({
     goalId: goal.id,
     taskTitle: task?.title || goal?.title || task?.id,
+    goalDir: canonicalGoalDir,
   });
   let ptySession;
   try {

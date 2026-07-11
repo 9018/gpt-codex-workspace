@@ -65,6 +65,7 @@ test("start passes the goal as the interactive Codex initial prompt", async () =
   assert.match(fakeAdapter.spawns[0].args[0], /goal_id=goal_1/);
   assert.match(fakeAdapter.spawns[0].args[0], /Use Superpowers/);
   assert.match(fakeAdapter.spawns[0].args[0], /codex\.entry\.md/);
+  assert.ok(fakeAdapter.spawns[0].args[0].includes(`${cwd}/.gptwork/goals/goal_1/codex.entry.md`));
   assert.deepEqual(fakeAdapter.writes, [], "initial prompt must not depend on synthetic TUI keystrokes");
 
   const read = await readCodexTuiSession(session.id);
@@ -121,6 +122,8 @@ test("stores session metadata under explicit workspaceRoot instead of cwd", asyn
   assert.equal(session.deprecated_cwd_session_root, false);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
   assert.equal(fakeAdapter.spawns[0].command, "codex-custom");
+  assert.ok(fakeAdapter.spawns[0].args[0].includes(`${workspaceRoot}/.gptwork/goals/goal_root/codex.entry.md`));
+  assert.ok(!fakeAdapter.spawns[0].args[0].includes(`${cwd}/.gptwork/goals/goal_root/codex.entry.md`));
 
   const workspaceStore = createCodexTuiSessionStore({ workspaceRoot });
   const cwdStore = createCodexTuiSessionStore({ workspaceRoot: cwd });
