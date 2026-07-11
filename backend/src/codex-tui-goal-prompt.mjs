@@ -129,7 +129,7 @@ export function buildCodexTuiFollowupInstruction({ goalId } = {}) {
  */
 export function buildCodexTuiBootstrapMessages({ goalId, taskTitle } = {}) {
   return [
-    `/goal ${buildCodexTuiGoalObjective({ goalId, taskTitle })}\n`,
-    `${buildCodexTuiFollowupInstruction({ goalId })}\n`,
+    `/goal ${buildCodexTuiGoalObjective({ goalId, taskTitle })}\r`,
+    `${buildCodexTuiFollowupInstruction({ goalId })}\r`,
   ];
 }

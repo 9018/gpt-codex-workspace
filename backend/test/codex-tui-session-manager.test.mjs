@@ -70,6 +70,9 @@ test("start creates session, spawns codex, sends bootstrap messages, and logs ou
   assert.match(fakeAdapter.writes[0], /Use Superpowers/);
   assert.match(fakeAdapter.writes[0], /codex\.entry\.md/);
   assert.match(fakeAdapter.writes[1], /Continue GPTWork goal_id=goal_1/);
+  assert.ok(fakeAdapter.writes[0].endsWith("\r"), "first bootstrap must submit a real TUI Enter (CR)");
+  assert.ok(fakeAdapter.writes[1].endsWith("\r"), "follow-up bootstrap must submit a real TUI Enter (CR)");
+  assert.ok(!fakeAdapter.writes[0].endsWith("\n"), "LF alone must not be used as TUI Enter");
 
   const read = await readCodexTuiSession(session.id);
   assert.match(read.log, /TUI ready/);
