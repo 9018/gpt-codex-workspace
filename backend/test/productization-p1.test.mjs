@@ -38,14 +38,9 @@ async function makeGitRepo(prefix = "gptwork-repo-") {
 }
 
 async function call(server, name, args = {}) {
-  const response = await server.handleRpc({
-    jsonrpc: "2.0",
-    id: 1,
-    method: "tools/call",
-    params: { name, arguments: args },
-  }, { authorization: "Bearer test-token" });
-  assert.ifError(response.error);
-  return response.result.structuredContent;
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", emitProgress() {} });
 }
 
 test("agent run tools create, list, append events, get, and complete runs", async () => {
