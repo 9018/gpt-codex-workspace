@@ -193,6 +193,29 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     if (base[key] !== undefined) modelPayload[key] = base[key];
   }
 
+  if (name === "worker_status") {
+    for (const key of [
+      "enabled",
+      "running",
+      "started_at",
+      "last_tick_started_at",
+      "last_tick_finished_at",
+      "last_tick_duration_ms",
+      "interval_ms",
+      "current_interval_ms",
+      "next_tick_due_at",
+      "limit",
+      "concurrency",
+      "last_tick_result",
+      "last_error",
+      "health",
+      "queue",
+      "queues",
+    ]) {
+      if (Object.prototype.hasOwnProperty.call(base, key)) modelPayload[key] = base[key];
+    }
+  }
+
   if (name === "workflow_advance") {
     const workflowAdvanceFields = [
       "workflow_id",
@@ -289,7 +312,7 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
   }
 
   if (name === "worker_status") {
-    for (const key of ["enabled", "running", "status", "queue", "counts", "last_tick_at", "health"]) {
+    for (const key of ["enabled", "running", "started_at", "last_tick_started_at", "last_tick_finished_at", "last_tick_duration_ms", "interval_ms", "current_interval_ms", "next_tick_due_at", "limit", "concurrency", "last_tick_result", "last_error", "status", "queue", "queues", "counts", "last_tick_at", "health"]) {
       if (base[key] !== undefined) modelPayload[key] = base[key];
     }
   }
