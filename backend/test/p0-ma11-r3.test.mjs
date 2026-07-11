@@ -132,7 +132,7 @@ test("MA11-R3: runHistoricalConvergence applies sweeps AND completes queued agen
       updated_at: new Date(now - 600_000).toISOString(),  // stale
       result: {
         commit: HEAD_COMMIT,
-        verification: { passed: true },
+        verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] },
         tests: "node --test passed",
       },
     }];

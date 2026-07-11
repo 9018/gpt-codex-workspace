@@ -184,7 +184,7 @@ test('G5: E2E release gate — full lifecycle of representative builder task', a
   });
 
   await WR.writeVerifierAgentRun(store, { task_id: taskId, goal_id: goalId,
-    verification: { passed: true, summary: 'All checks passed' },
+    verification: { passed: true, summary: 'All checks passed', commands: [{ cmd: 'node --test', exit_code: 0 }] },
   });
 
   await WR.writeReviewerAgentRun(store, { task_id: taskId, goal_id: goalId,
@@ -496,7 +496,7 @@ test('G5 regression: stale finalizer result gate', async () => {
   await WR.writeBuilderAgentRun(store, { task_id: taskId, goal_id: goalId,
     taskResult: { status: 'completed', changed_files: ['a.js'], commit: repo.commit.slice(0, 12), tests: 'pass' } });
   await WR.writeVerifierAgentRun(store, { task_id: taskId, goal_id: goalId,
-    verification: { passed: true } });
+    verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] } });
   await WR.writeReviewerAgentRun(store, { task_id: taskId, goal_id: goalId,
     reviewer_decision: { passed: true, decision: 'accepted' } });
   await WR.writeIntegratorAgentRun(store, { task_id: taskId, goal_id: goalId,

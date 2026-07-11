@@ -351,7 +351,7 @@ test("handleRepairCompletion: updates parent to completed when no worktree", asy
   assert.equal(goalUpdated, "completed");
 });
 
-test("handleRepairCompletion: marks parent failed when repair fails", async () => {
+test("handleRepairCompletion: preserves parent while repair budget remains", async () => {
   let parentUpdated = null;
 
   const parentTask = {
@@ -384,8 +384,9 @@ test("handleRepairCompletion: marks parent failed when repair fails", async () =
   });
 
   assert.equal(result.parent_updated, true);
-  assert.equal(result.parent_status, "failed");
-  assert.equal(parentUpdated, "failed");
+  assert.equal(result.parent_status, "waiting_for_repair");
+  assert.equal(result.repair_outcome, "continued");
+  assert.equal(parentUpdated, "waiting_for_repair");
 });
 
 // ---------------------------------------------------------------------------

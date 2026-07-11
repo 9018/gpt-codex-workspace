@@ -37,7 +37,7 @@ function buildCommand(cmd, promptArgs = []) {
 function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], command = "codex" } = {}) {
   // Launch codex bare via script(1). The prompt is NOT passed as argv;
   // it is submitted via stdin after the TUI is ready.
-  const proc = spawnImpl("script", ["-q", "-f", "-c", shellQuote(command), "/dev/null"], {
+  const proc = spawnImpl("script", ["-q", "-f", "-c", buildCommand(command, args), "/dev/null"], {
     cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],

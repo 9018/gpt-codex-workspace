@@ -166,7 +166,7 @@ describe("Repair parent-child loop", () => {
     assert.strictEqual(result.repair_outcome, "repaired");
   });
 
-  it("handleRepairCompletion should mark parent failed when repair fails", async () => {
+  it("handleRepairCompletion should preserve parent for the next bounded repair attempt", async () => {
     const { handleRepairCompletion } = await import("../src/repair-loop.mjs");
 
     const store = {
@@ -188,8 +188,9 @@ describe("Repair parent-child loop", () => {
     });
 
     assert.strictEqual(result.parent_updated, true);
-    assert.strictEqual(result.parent_status, "failed");
-    assert.strictEqual(result.repair_outcome, "failed");
+    assert.strictEqual(result.parent_status, "waiting_for_repair");
+    assert.strictEqual(result.repair_outcome, "continued");
+    assert.strictEqual(result.next_attempt, 1);
   });
 });
 

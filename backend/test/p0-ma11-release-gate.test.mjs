@@ -105,11 +105,12 @@ test("MA11: applyPipelineGateBeforeClosure blocks non-legacy tasks without agent
   assert.ok(initResult.runs.length > 0, "ensurePipelineRunsForTask should return runs");
 
   // Now create agent runs simulating the writeback path
-  const { writeBuilderAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeIntegratorAgentRun, writeFinalizerAgentRun } =
+  const { writePlannerAgentRun, writeBuilderAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeIntegratorAgentRun, writeFinalizerAgentRun } =
     await import(join(SRC_DIR, "agent-run-writeback.mjs"));
 
+  await writePlannerAgentRun(store, { task_id: "t-new", goal_id: "g1", planEvidence: { plan: "Implement a.js" } });
   await writeBuilderAgentRun(store, { task_id: "t-new", goal_id: "g1", taskResult: { summary: "done", changed_files: ["a.js"] }, summary: "Builder completed" });
-  await writeVerifierAgentRun(store, { task_id: "t-new", goal_id: "g1", verification: { passed: true } });
+  await writeVerifierAgentRun(store, { task_id: "t-new", goal_id: "g1", verification: { passed: true, commands: [{ cmd: "node --test", exit_code: 0 }] } });
   await writeReviewerAgentRun(store, { task_id: "t-new", goal_id: "g1", reviewer_decision: { passed: true, decision: "accepted" } });
   await writeIntegratorAgentRun(store, { task_id: "t-new", goal_id: "g1", integrationResult: { status: "ff_only_merged", merged: true } });
   await writeFinalizerAgentRun(store, { task_id: "t-new", goal_id: "g1", taskResult: { status: "completed" }, taskStatus: "completed" });

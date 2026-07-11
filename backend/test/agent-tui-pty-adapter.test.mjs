@@ -126,6 +126,7 @@ test("script fallback uses claude command", async () => {
   const adapter = createAgentTuiPtyAdapter({
     command: "claude",
     loadPty: async () => { throw createAgentTuiUnavailableError(); },
+    allowScriptFallback: true,
     spawnImpl: fakeChild.spawnImpl,
   });
 
