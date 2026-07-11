@@ -108,3 +108,31 @@ Do not put real tokens, `.env` contents, runtime secrets, GitHub tokens, notific
 ## License
 
 MIT
+
+## Workstream Productization
+
+GPTWork includes a complete Workstream productization contract (G1–G7) covering:
+
+- **Workstream identity and CRUD** with access control and execution/acceptance policies
+- **Context links** for ChatGPT conversations, Codex threads, and GitHub issues
+- **DAG orchestration**: fan-out/join, capacity limits, topological sort
+- **Drift/stall detection**: wrong phase/scope, stale progress, dead TUI, stale locks
+- **Acceptance controller**: verdict (passed/failed/partial/blocked), repair budget (max 2), ChatGPT escalation
+- **Tick controller**: bounded 5-transition advancement per cycle
+- **Hourly supervisor contract**: drift correction, stall recovery, direct edit preference, idempotency
+- **Apps SDK card view**: operations dashboard for Workstream health
+
+Verification commands:
+
+```bash
+# E2E productization + hourly supervisor tests (25 tests)
+node --test backend/test/e2e-workstream-productization.test.mjs backend/test/workstream-hourly-supervisor.test.mjs
+
+# All workstream tests
+node --test backend/test/workstream-*.test.mjs
+
+# Full test suite
+npm --prefix backend test
+```
+
+Full documentation: [docs/workstreams/tui-productization/README.md](docs/workstreams/tui-productization/README.md).

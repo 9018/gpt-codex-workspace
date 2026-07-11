@@ -407,3 +407,31 @@ MIT
 - **Init/Onboarding**: `gptwork init / doctor --local / fix` 产品化流程。
 - **Retention**: `retentionCleanup` 支持 git 分支修剪、worktree 诊断、storage_pressure 门禁。
 - **Status Dashboard**: `product_status` 单命令面板。
+
+## Workstream 产品化
+
+GPTWork 提供了完整的 Workstream 产品化契约（G1–G7）：
+
+- **Workstream 身份与 CRUD**：访问控制、执行/验收策略
+- **上下文链接**：ChatGPT 会话、Codex 线程、GitHub Issue 关联
+- **DAG 编排**：fan-out/join、容量限制、拓扑排序
+- **漂移/停滞检测**：阶段/范围错误、进度停滞、TUI 死亡、锁过期
+- **验收控制器**：判定（通过/失败/部分/阻塞）、修复预算（最多 2 次）、ChatGPT 升级
+- **Tick 控制器**：每周期最多 5 次状态转换
+- **小时巡检契约**：漂移纠正、停滞恢复、直接编辑优先、幂等性
+- **Apps SDK 卡片**：Workstream 健康运营仪表盘
+
+验证命令：
+
+```bash
+# E2E 产品化 + 小时巡检测试（25 项测试）
+node --test backend/test/e2e-workstream-productization.test.mjs backend/test/workstream-hourly-supervisor.test.mjs
+
+# 所有 Workstream 测试
+node --test backend/test/workstream-*.test.mjs
+
+# 完整测试套件
+npm --prefix backend test
+```
+
+完整文档：[docs/workstreams/tui-productization/README.md](docs/workstreams/tui-productization/README.md)。

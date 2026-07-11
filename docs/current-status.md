@@ -461,3 +461,62 @@ The evidence chain has been corrected with honest documentation.
 
 Close the acceptance evidence repair loop. Proceed to P0-Next-1 (Product Cockpit)
 per productization-next-goals plan.
+
+## Workstream Productization (G1–G7 Series)
+
+The G1–G7 series delivers a complete Workstream productization contract covering:
+
+| Goal | Scope | Status |
+|------|-------|--------|
+| G1 | Workstream identity and Context Links | ✅ Implemented + Verified |
+| G2 | Codex TUI task worktrees and executions | ✅ Implemented + Verified |
+| G3 | Structured TUI/subagent progress | ✅ Implemented + Verified |
+| G4 | DAG fan-out/join and capacity orchestration | ✅ Implemented + Verified |
+| G5 | Acceptance controller, tick, drift/stall recovery | ✅ Implemented + Verified |
+| G6 | Apps SDK Workstream product experience | ✅ Implemented + Verified |
+| G7 | Integration, e2e productization, hourly supervisor contract | 🟡 Implemented; full-suite convergence pending |
+
+### Key Artifacts
+
+- **Workstream Model**: `backend/src/workstream/workstream-model.mjs` — identity, context link, legacy normalization.
+- **Workstream Service**: `backend/src/workstream/workstream-service.mjs` — CRUD with access control.
+- **Context Links**: `backend/src/workstream/workstream-context-links.mjs` — link/resolve external contexts.
+- **Task DAG Service**: `backend/src/orchestration/task-dag-service.mjs` — durable DAG storage and CRUD.
+- **Fan-out/Join**: `backend/src/orchestration/task-fanout-service.mjs` + `task-join-service.mjs` — parallel execution with idempotent keys.
+- **Execution Capacity**: `backend/src/orchestration/execution-capacity.mjs` — per-repo, per-workstream, global limits.
+- **Drift/Stall Detection**: `backend/src/orchestration/workstream-drift-detector.mjs` + `workstream-stall-detector.mjs` — 4 drift types, 4 stall types.
+- **Tick Controller**: `backend/src/orchestration/workstream-tick.mjs` — 5-transition bounded tick.
+- **Acceptance Controller**: `backend/src/acceptance/workstream-acceptance-controller.mjs` — verdict + repair + escalation.
+- **Repair Task Factory**: `backend/src/acceptance/workstream-repair-task-factory.mjs` — budget, dedup, corrections.
+- **Apps SDK Card**: `backend/src/workstream/workstream-card-view-model.mjs` — operations dashboard view.
+- **E2E Productization Test**: `backend/test/e2e-workstream-productization.test.mjs` — 11 scenarios (identity → completion).
+- **Hourly Supervisor Test**: `backend/test/workstream-hourly-supervisor.test.mjs` — 14 supervisor contract scenarios.
+- **Workstream DAG Tests**: `backend/test/workstream-dag.test.mjs` — cycle detection, topological sort, join conditions.
+- **Fan-out/Join Tests**: `backend/test/workstream-fanout-join.test.mjs` — shard creation, join evaluation, manual release.
+- **Acceptance Controller Tests**: `backend/test/workstream-acceptance-controller.test.mjs` — verdict, repair, convergence, escalation.
+- **Drift/Stall Tests**: `backend/test/workstream-drift-stall.test.mjs` — individual drift/stall detection.
+- **Tick Tests**: `backend/test/workstream-tick.test.mjs` — transition budget, composite tick.
+- **Card View Model Tests**: `backend/test/workstream-card-view-model.test.mjs` — complete, minimal, DAG fallback, edge cases.
+- **Documentation**: `docs/workstreams/tui-productization/` — 7 documents covering all goals.
+
+### Verification Evidence
+
+```bash
+# Focused G7 e2e + supervisor tests (25/25 pass)
+node --test backend/test/e2e-workstream-productization.test.mjs backend/test/workstream-hourly-supervisor.test.mjs
+
+# Syntax check (562 files, all clean)
+npm --prefix backend run check:syntax
+
+# All focused workstream tests
+node --test backend/test/workstream-*.test.mjs
+
+# Full test suite
+npm --prefix backend test
+```
+
+### Next Steps
+
+- The root Goal (`goal_48d055ee-82b6-415b-8d98-65cb7662aaaf`) can be closed after G7 integration.
+- Workstream productization is the foundation for future multi-tenant, multi-project orchestration.
+- No additional goals are planned in this productization cycle.
