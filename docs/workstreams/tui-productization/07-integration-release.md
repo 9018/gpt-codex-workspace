@@ -1,6 +1,6 @@
 # G7 — Integration, Release, End-to-End and Hourly Supervisor Contract
 
-**Status:** Implemented; final full-suite convergence pending
+**Status:** Completed and release-verified
 **Workstream:** `ws_gptwork_tui_productization_20260711`
 **Root Goal:** `goal_48d055ee-82b6-415b-8d98-65cb7662aaaf`
 **Depends on:** G1, G2, G3, G4, G5, G6
@@ -107,7 +107,7 @@ Result: PASS.
 npm --prefix backend test
 ```
 
-Result: FAIL. Focused G7 tests pass, but the full backend suite still has contract and environment failures. G7 remains unaccepted until the suite is green.
+Result: PASS. Full backend suite completed with zero failures.
 
 ## Key Design Decisions
 
@@ -120,7 +120,7 @@ Result: FAIL. Focused G7 tests pass, but the full backend suite still has contra
 
 1. **Real worktree isolation**: Worktrees are modeled via DAG metadata in the e2e test. Full real-worktree end-to-end testing requires dispatching actual `codex exec` commands with isolated git worktrees.
 2. **Subagent progress store**: Structured subagent progress is modeled as DAG node metadata. Real subagent progress would use `subagent-progress-store.mjs` for atomic progress file writes.
-3. **Integration release gate**: The full release gate (`npm run release:check`) requires production environment configuration (worker enablement, tool mode).
+3. **Operational environment**: Release verification covers the configured local runtime. External provider availability, credentials, and remote service health remain environment-dependent.
 
 ## Documentation Gate
 
@@ -131,4 +131,6 @@ Result: FAIL. Focused G7 tests pass, but the full backend suite still has contra
 
 ## Completion Commit
 
-*(filled by integration commit)*
+Implementation and convergence commit: `2ad52bdf6de1c6c6b138c64db4e40d06a684d15d`
+
+Documentation completion commit: recorded by the commit that updates this section.
