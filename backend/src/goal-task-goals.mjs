@@ -3,7 +3,7 @@ import { defaultTokenContext, canAccessProject, canAccessWorkspace, requireProje
 import { publicGoalWorkspaceFiles, internalGoalWorkspaceFiles } from "./goal-files.mjs";
 import { ensureGoalState, normalizeLegacyModes } from "./task-lifecycle.mjs";
 import { titleFromGoal, normalizeGoalMessages, normalizeGoalMemories } from "./goal-lifecycle.mjs";
-import { buildGoalTask, normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
+import { buildGoalTask, normalizeAssignedTaskMode } from "./goal-task-task-factory.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
@@ -38,7 +38,7 @@ export async function createGoal(store, config, args, context = defaultTokenCont
   const goalId = `goal_${randomUUID()}`;
   const conversationId = `conv_${randomUUID()}`;
   const assignToCodex = args.assign_to_codex !== false;
-  const mode = normalizeCreatedTaskMode({ title: args.title || titleFromGoal(args), description: args.goal_prompt, mode: args.mode || "builder" });
+  const mode = normalizeAssignedTaskMode({ title: args.title || titleFromGoal(args), description: args.goal_prompt, mode: args.mode || "builder" });
   const acceptanceContract = buildAcceptanceContract({ ...args, mode });
   const messages = normalizeGoalMessages(args.messages, now, context.user_id);
   const memories = normalizeGoalMemories(args.memories, goalId, conversationId, now, context.user_id);

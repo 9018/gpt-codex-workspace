@@ -105,15 +105,7 @@ export function buildGoalTask(goal, conversation, createdBy) {
 
 export function normalizeCreatedTaskMode(args) {
   const requestedMode = String(args.mode || "").trim().toLowerCase();
-  if (requestedMode === "readonly" && isCodexSessionInventoryTaskKind({
-    title: args.title,
-    description: args.description || "",
-    assignee: "codex",
-    status: "assigned",
-    mode: "readonly"
-  })) {
-    return "readonly";
-  }
+  if (requestedMode === "readonly" && isCodexSessionInventoryTaskKind({ title: args.title, description: args.description || "", assignee: "codex", status: "assigned", mode: "readonly" })) return "readonly";
   return "builder";
 }
 

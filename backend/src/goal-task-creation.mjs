@@ -3,7 +3,7 @@ import { defaultTokenContext, requireProjectAccess, requireScope, requireWorkspa
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
 import { ensureGoalState } from "./task-lifecycle.mjs";
 import { ensureTaskGoal } from "./goal-task-ensure.mjs";
-import { defaultTaskExecutionFields, normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
+import { defaultTaskExecutionFields, normalizeCreatedTaskMode, normalizeAssignedTaskMode } from "./goal-task-task-factory.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { setInitialGraphNode } from "./task-graph-state.mjs";
 import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
@@ -24,7 +24,7 @@ export async function createTask(store, config, args, context = defaultTokenCont
   requireProjectAccess(context, args.project_id || "default");
   if (args.workspace_id) requireWorkspaceAccess(context, args.workspace_id);
   const now = new Date().toISOString();
-  const mode = normalizeCreatedTaskMode(args);
+  const mode = args.assignee ? normalizeAssignedTaskMode(args, args.mode) : normalizeCreatedTaskMode(args);
   const task = {
     id: `task_${randomUUID()}`,
     project_id: args.project_id || "default",
