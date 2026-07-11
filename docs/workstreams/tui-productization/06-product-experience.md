@@ -86,4 +86,4 @@ G7 may consume this card in final integration and release verification after G6 
 
 ## Completion commit
 
-Recorded after commit creation in Git history for this document and the G6 implementation.
+ — G6 implementation, tests, and initial owned documentation.
