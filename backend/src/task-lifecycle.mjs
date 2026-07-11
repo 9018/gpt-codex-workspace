@@ -141,8 +141,25 @@ export async function notifyTerminalTask(task) {
 }
 
 // ---------------------------------------------------------------------------
-// Task update
+// Task update — emits lifecycle events on status transitions
 // ---------------------------------------------------------------------------
+
+/**
+ * Emit a specific lifecycle event safely (non-critical).
+ */
+async function _emitLifecycleEventSafe(emitter, event, task, prevStatus, nextStatus) {
+  if (!emitter) return;
+  try {
+    await emitter({
+      task,
+      event,
+      previousStatus: prevStatus,
+      nextStatus: nextStatus,
+    });
+  } catch (leErr) {
+    /* Non-fatal */
+  }
+}
 
 export async function updateTask(store, task_id, updater) {
   const state = await store.load();
@@ -159,17 +176,17 @@ export async function updateTask(store, task_id, updater) {
   // Use shared notification helper for terminal task states (deduplicated per task/status/channel)
   await notifyTerminalTask(task);
 
-  // Emit lifecycle event for status transitions (non-terminal events get deduplicated Bark notifications)
+  // Emit lifecycle events for status transitions
   if (_lifecycleEventEmitter && prevStatus !== task.status) {
-    try {
-      await _lifecycleEventEmitter({
-        task,
-        event: "task_" + task.status,
-        previousStatus: prevStatus,
-        nextStatus: task.status,
-      });
-    } catch (leErr) {
-      /* Non-fatal: lifecycle event failures should not block task updates */
+    // Always emit the generic event matching the new status
+    await _emitLifecycleEventSafe(_lifecycleEventEmitter, "task_" + task.status, task, prevStatus, task.status);
+
+    // Emit specific events for key transitions
+    if (task.status === "running") {
+      // Emit task_started when transitioning to running for the first time
+      if (prevStatus === "assigned" || prevStatus === "queued") {
+        await _emitLifecycleEventSafe(_lifecycleEventEmitter, "task_started", task, prevStatus, task.status);
+      }
     }
   }
 

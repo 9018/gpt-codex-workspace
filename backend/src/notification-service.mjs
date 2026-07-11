@@ -8,6 +8,8 @@
  * EmitTaskLifecycleEvent is the unified entry point for all lifecycle
  * events (P0). It handles Bark notification, GitHub writeback, and
  * notification state persistence with stable dedupe keys.
+ *
+ * All user-facing notification text is in Chinese.
  */
 
 import {
@@ -17,6 +19,7 @@ import {
   formatNotification,
   formatCreatedNotification,
 } from "./bark-notifier.mjs";
+import { EVENT_ZH } from "./bark-config.mjs";
 
 /**
  * Create a notification service bound to a Bark notifier instance.
@@ -99,6 +102,11 @@ export function createNotificationService(barkNotifier) {
         if (barkNotifier._setTaskMetadata) {
           barkNotifier._setTaskMetadata(task.id, task.status, task.status);
         }
+      } else {
+        // Record failure with task metadata
+        if (barkNotifier._setTaskMetadata) {
+          barkNotifier._setTaskMetadata(task.id, task.status, task.status);
+        }
       }
       task.notifications ||= [];
       task.notifications.push(_buildNotificationRecord(nres));
@@ -127,9 +135,6 @@ export function createNotificationService(barkNotifier) {
       if (nres.ok) {
         task[channelKey] = true;
         task.notified_at = new Date().toISOString();
-        if (barkNotifier._setTaskMetadata) {
-          barkNotifier._setTaskMetadata(task.id, task.status, task.status);
-        }
       }
       if (barkNotifier._setTaskMetadata) {
         barkNotifier._setTaskMetadata(task.id, task.status, "created");
@@ -151,10 +156,12 @@ export function createNotificationService(barkNotifier) {
   const EVENT_GROUPS = {
     task_created: "task-created",
     task_started: "task-started",
+    task_running: "task-running",
     task_completed: "task-completed",
     task_failed: "task-failed",
     task_blocked: "task-blocked",
     task_timeout: "task-timeout",
+    task_cancelled: "task-cancelled",
     task_retry_wait: "task-retry",
     task_quota_wait: "task-quota",
     task_waiting_for_review: "task-review",
@@ -171,6 +178,13 @@ export function createNotificationService(barkNotifier) {
   };
 
   /**
+   * Resolve Chinese event label.
+   */
+  function _zhEvent(event) {
+    return EVENT_ZH[event] || event;
+  }
+
+  /**
    * Emit a lifecycle event for a task.
    *
    * Unified entry point for all lifecycle events. Handles:
@@ -179,6 +193,7 @@ export function createNotificationService(barkNotifier) {
    * 3. Diagnostics recording
    *
    * Bark failures are non-critical and do not throw.
+   * Failure details are recorded in task.notifications[].
    *
    * @param {object} options
    * @param {object} options.task - Task object (mutated in place for notification state)
@@ -192,6 +207,7 @@ export function createNotificationService(barkNotifier) {
    * @param {string} [options.commit] - Commit hash
    * @param {object} [options.verification] - Verification result
    * @param {string} [options.dedupeKey] - Override dedupe key (auto-computed if omitted)
+   * @param {boolean} [options.force] - Force notification even if dedup key exists
    * @returns {Promise<{ ok: boolean, dedupeKey: string, error?: string }>}
    */
   async function emitTaskLifecycleEvent({
@@ -206,6 +222,7 @@ export function createNotificationService(barkNotifier) {
     commit,
     verification,
     dedupeKey,
+    force,
   } = {}) {
     if (!task || !event) {
       return { ok: false, dedupeKey: "", error: "Missing task or event" };
@@ -214,9 +231,9 @@ export function createNotificationService(barkNotifier) {
     // Compute stable dedupe key
     const dk = dedupeKey || _buildDedupeKey(event, task.id, attempt, failureClass);
 
-    // Check deduplication
+    // Check deduplication (skip when force=true for repair/replay)
     const notifiedKey = `notified:${dk}`;
-    if (task[notifiedKey]) {
+    if (!force && task[notifiedKey]) {
       return { ok: true, dedupeKey: dk, deduplicated: true };
     }
     // Check task-level notification suppression BEFORE sending Bark
@@ -256,6 +273,11 @@ export function createNotificationService(barkNotifier) {
           if (barkNotifier._setTaskMetadata) {
             barkNotifier._setTaskMetadata(task.id, nextStatus || task.status, event);
           }
+        } else {
+          // Record failure metadata even on send failure
+          if (barkNotifier._setTaskMetadata) {
+            barkNotifier._setTaskMetadata(task.id, nextStatus || task.status, event);
+          }
         }
 
         task.notifications ||= [];
@@ -267,7 +289,7 @@ export function createNotificationService(barkNotifier) {
 
         return { ok: nres.ok, dedupeKey: dk, error: nres.ok ? null : (nres.reason || nres.error) };
       } catch (err) {
-        // Non-critical
+        // Non-critical - record failure details persistently
         task.notifications ||= [];
         task.notifications.push({
           channel: "bark",
@@ -277,6 +299,10 @@ export function createNotificationService(barkNotifier) {
           error_short: err.message || String(err),
           attempted_at: new Date().toISOString(),
         });
+        // Also record task metadata so notification_status reflects the attempt
+        if (barkNotifier._setTaskMetadata) {
+          barkNotifier._setTaskMetadata(task.id, nextStatus || task.status, event);
+        }
         return { ok: false, dedupeKey: dk, error: err.message };
       }
     }
@@ -301,19 +327,79 @@ export function createNotificationService(barkNotifier) {
     return map;
   }
 
+  /**
+   * Scan tasks for missed lifecycle notifications and replay them.
+   * Called during worker recovery (enabled_but_not_running → running).
+   *
+   * @param {object[]} tasks - Array of task objects
+   * @param {object} [opts]
+   * @param {string[]} [opts.targetEvents] - Events to scan for (default: all terminal + running)
+   * @param {boolean} [opts.dryRun] - If true, only report what would be sent
+   * @returns {Promise<{replayed: string[], errors: string[]}>}
+   */
+  async function recoverMissedNotifications(tasks, opts = {}) {
+    const targetEvents = opts.targetEvents || [
+      "task_created", "task_started", "task_running",
+      "task_completed", "task_failed", "task_timeout",
+      "task_cancelled", "task_blocked", "task_waiting_for_review",
+    ];
+    const replayed = [];
+    const errors = [];
+    const dryRun = opts.dryRun === true;
+
+    for (const task of (tasks || [])) {
+      for (const event of targetEvents) {
+        // Skip events that don't match the task's current lifecycle position
+        if (event === "task_created" && !["queued", "assigned", "running", "completed", "failed"].includes(task.status)) continue;
+        if (event === "task_started" && task.status !== "running") continue;
+        if (event === "task_running" && task.status !== "running") continue;
+        if (event === "task_completed" && task.status !== "completed") continue;
+        if (event === "task_failed" && task.status !== "failed") continue;
+        if (event === "task_timeout" && !["timed_out", "codex_timeout"].includes(task.status)) continue;
+        if (event === "task_cancelled" && task.status !== "cancelled") continue;
+        if (event === "task_blocked" && task.status !== "blocked") continue;
+        if (event === "task_waiting_for_review" && !["waiting_for_review", "waiting_review"].includes(task.status)) continue;
+
+        const dk = _buildDedupeKey(event, task.id);
+        const notifiedKey = `notified:${dk}`;
+        if (task[notifiedKey]) continue; // already notified
+
+        if (dryRun) {
+          replayed.push(`${task.id}:${event} (dry-run)`);
+          continue;
+        }
+
+        try {
+          await emitTaskLifecycleEvent({
+            task,
+            event,
+            nextStatus: task.status,
+            force: true,
+          });
+          replayed.push(`${task.id}:${event}`);
+        } catch (err) {
+          errors.push(`${task.id}:${event} - ${err.message}`);
+        }
+      }
+    }
+    return { replayed, errors };
+  }
+
   // ---------------------------------------------------------------------------
-  // Lifecycle event formatter
+  // Lifecycle event formatter (all Chinese content)
   // ---------------------------------------------------------------------------
 
   function _formatLifecycleEvent(event, task, taskResult, extra = {}) {
-    const shortTitle = (task.title || "(no title)").slice(0, 80);
+    const shortTitle = (task.title || "(无标题)").slice(0, 80);
     const emojiMap = {
       task_created: "\uD83C\uDD95",
       task_started: "\u25B6\uFE0F",
+      task_running: "\uD83D\uDCBB",
       task_completed: "\u2705",
       task_failed: "\u274C",
       task_blocked: "\uD83D\uDD34",
       task_timeout: "\u23F3",
+      task_cancelled: "\uD83D\uDEAB",
       task_retry_wait: "\uD83D\uDD04",
       task_quota_wait: "\uD83D\uDCB0",
       task_waiting_for_review: "\uD83D\uDC40",
@@ -329,28 +415,29 @@ export function createNotificationService(barkNotifier) {
       restart_completed: "\u2705",
     };
     const emoji = emojiMap[event] || "\uD83D\uDD14";
-    const title = `${emoji} GPTWork ${event}: ${shortTitle}`;
+    const zhLabel = _zhEvent(event);
+    const title = `${emoji} GPTWork ${zhLabel}: ${shortTitle}`;
 
-    let body = `Task: ${shortTitle}\n`;
-    body += `Event: ${event}\n`;
-    body += `Status: ${extra.nextStatus || task.status || "unknown"}\n`;
+    let body = `任务: ${shortTitle}\n`;
+    body += `事件: ${zhLabel}\n`;
+    body += `状态: ${extra.nextStatus || task.status || "未知"}\n`;
 
-    if (extra.previousStatus) body += `Previous: ${extra.previousStatus}\n`;
-    if (extra.attempt != null) body += `Attempt: ${extra.attempt}\n`;
-    if (extra.failureClass) body += `Failure: ${extra.failureClass}\n`;
+    if (extra.previousStatus) body += `之前状态: ${extra.previousStatus}\n`;
+    if (extra.attempt != null) body += `尝试: ${extra.attempt}\n`;
+    if (extra.failureClass) body += `失败类型: ${extra.failureClass}\n`;
     if (extra.githubIssue) body += `Issue: #${extra.githubIssue}\n`;
-    if (extra.commit) body += `Commit: ${extra.commit.slice(0, 7)}\n`;
+    if (extra.commit) body += `提交: ${extra.commit.slice(0, 7)}\n`;
 
     const taskResultData = taskResult || task.result || {};
     if (taskResultData.summary) {
       const lines = taskResultData.summary.split("\n").filter(l => l.trim()).slice(0, 2);
-      if (lines.length > 0) body += `Summary: ${lines.join(" | ").slice(0, 300)}\n`;
+      if (lines.length > 0) body += `摘要: ${lines.join(" | ").slice(0, 300)}\n`;
     }
     if (taskResultData.changed_files) {
       const files = Array.isArray(taskResultData.changed_files)
         ? taskResultData.changed_files.join(", ").slice(0, 200)
         : String(taskResultData.changed_files).slice(0, 200);
-      if (files.trim()) body += `Files: ${files}\n`;
+      if (files.trim()) body += `文件: ${files}\n`;
     }
 
     if (body.length > 4000) body = body.slice(0, 3997) + "...";
@@ -362,5 +449,6 @@ export function createNotificationService(barkNotifier) {
     notifyCreatedTaskIfNeeded,
     emitTaskLifecycleEvent,
     buildLifecycleEventMap,
+    recoverMissedNotifications,
   };
 }

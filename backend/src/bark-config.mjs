@@ -1,6 +1,51 @@
 export const DEFAULT_BARK_BASE = "https://api.day.app";
 export const DEFAULT_GROUP = "gptwork";
 
+// Chinese status labels for notification body.
+// Maps internal status strings to user-facing Chinese text.
+export const STATUS_ZH = {
+  created: "已创建",
+  assigned: "已分配",
+  queued: "已排队",
+  running: "运行中",
+  completed: "已完成",
+  failed: "已失败",
+  cancelled: "已取消",
+  timed_out: "已超时",
+  codex_timeout: "已超时",
+  waiting_for_review: "等待审核",
+  waiting_review: "等待审核",
+  waiting_for_lock: "等待锁",
+  waiting_for_repair: "等待修复",
+  blocked: "已阻塞",
+  draft: "草稿",
+  paused: "已暂停",
+  repair: "修复中",
+};
+
+// Chinese event labels for lifecycle notification title.
+export const EVENT_ZH = {
+  task_created: "新任务已创建",
+  task_started: "任务已启动",
+  task_running: "任务运行中",
+  task_completed: "任务已完成",
+  task_failed: "任务已失败",
+  task_blocked: "任务已阻塞",
+  task_timeout: "任务已超时",
+  task_cancelled: "任务已取消",
+  task_waiting_for_review: "任务等待审核",
+  task_waiting_for_repair: "任务等待修复",
+  repair_created: "修复任务已创建",
+  repair_started: "修复已启动",
+  repair_completed: "修复已完成",
+  repair_failed: "修复已失败",
+  github_imported: "已从 GitHub 导入",
+  github_synced: "已同步 GitHub",
+  github_sync_failed: "GitHub 同步失败",
+  restart_required: "需要重启",
+  restart_completed: "重启已完成",
+};
+
 // Status emoji mapping for title fallback when no icon is configured.
 export const STATUS_EMOJI = {
   completed: "\u2705",
@@ -20,13 +65,13 @@ export const STATUS_EMOJI = {
  */
 export function formatDuration(ms) {
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return `${seconds}秒`;
   const minutes = Math.floor(seconds / 60);
   const remainSecs = seconds % 60;
-  if (minutes < 60) return remainSecs ? `${minutes}m${remainSecs}s` : `${minutes}m`;
+  if (minutes < 60) return remainSecs ? `${minutes}分${remainSecs}秒` : `${minutes}分`;
   const hours = Math.floor(minutes / 60);
   const remainMins = minutes % 60;
-  return remainMins ? `${hours}h${remainMins}m` : `${hours}h`;
+  return remainMins ? `${hours}小时${remainMins}分` : `${hours}小时`;
 }
 
 /**
@@ -109,20 +154,3 @@ export function buildConfig(options = {}) {
     _sources
   };
 }
-
-/**
- * Create a Bark notifier instance.
- *
- * @param {object}   options
- * @param {boolean|string} [options.barkEnabled]
- * @param {string}   [options.barkUrl]
- * @param {string}   [options.barkKey]
- * @param {string}   [options.barkGroup]
- * @param {string}   [options.barkSound]
- * @param {string}   [options.barkLevel]
- * @param {string}   [options.barkIconUrl]
- * @param {string}   [options.barkClickUrl]
- * @param {number|string} [options.barkBadge]
- * @param {string}   [configSource]  Safe source label
- * @returns {object}
- */

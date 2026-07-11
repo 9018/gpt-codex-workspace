@@ -25,6 +25,7 @@ import { createHookBus } from "./hook-service.mjs";
 let notifyTerminalTaskIfNeeded = null;
 let notifyCreatedTaskIfNeeded = null;
 let emitTaskLifecycleEvent = null;
+let recoverMissedNotifications = null;
 
 const PROCESS_STARTED_AT = new Date();
 
@@ -146,12 +147,12 @@ export async function createGptWorkServer(options = {}) {
   if (options.barkIconUrl !== undefined) barkOptions.barkIconUrl = options.barkIconUrl;
   if (options.barkClickUrl !== undefined) barkOptions.barkClickUrl = options.barkClickUrl;
   const bark = createBarkNotifier(barkOptions, barkConfigSource);
-  ({ notifyTerminalTaskIfNeeded, notifyCreatedTaskIfNeeded, emitTaskLifecycleEvent } = createNotificationService(bark));
+  ({ notifyTerminalTaskIfNeeded, notifyCreatedTaskIfNeeded, emitTaskLifecycleEvent, recoverMissedNotifications } = createNotificationService(bark));
   const serverContext = createServerContext({ config, store, browser, github, bark, barkConfigSource, envLoadResult, earlyEnvResult });
 setTerminalNotifier(notifyTerminalTaskIfNeeded);
 setLifecycleEventEmitter(emitTaskLifecycleEvent);
   setCreatedTaskNotifier(notifyCreatedTaskIfNeeded);
-  const reconciler = createReconciler({ store, config, github, notifyTerminalTaskIfNeeded });
+  const reconciler = createReconciler({ store, config, github, notifyTerminalTaskIfNeeded, recoverMissedNotifications });
 
   // Create the repo registry
   const registry = new RepoRegistry({

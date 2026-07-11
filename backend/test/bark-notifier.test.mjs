@@ -169,7 +169,7 @@ test("send handles network failure without exposing details", async (t) => {
 
 test("testSend returns ok when enabled with key", async (t) => {
   t.mock.method(globalThis, "fetch", async (url) => {
-    assert.match(url, /Bark%20test/);
+    assert.match(url, /Bark%20%E6%B5%8B%E8%AF%95%E9%80%9A%E7%9F%A5/);
     return { ok: true, json: async () => ({ code: 200, message: "ok" }) };
   });
   const bark = createBarkNotifier({ barkKey: "test-key" });
@@ -501,7 +501,7 @@ test("test_bark_notification tool is available and works", async (t) => {
   const result = await callTool(server, "test_bark_notification");
   assert.equal(result.ok, true);
   assert.equal(fetchCount, 1);
-  assert.match(lastUrl, /Bark%20test/);
+  assert.match(lastUrl, /Bark%20%E6%B5%8B%E8%AF%95%E9%80%9A%E7%9F%A5/);
 });
 
 test("test_bark_notification returns error when not configured", async () => {
@@ -1073,14 +1073,14 @@ test("classifyNotification respects global disable flag", () => {
 test("formatNotification uses emoji for completed", () => {
   const { title } = formatNotification({ title: "My Task" }, "completed");
   assert.match(title, /\u2705/);
-  assert.match(title, /completed/);
+  assert.match(title, /已完成/);
   assert.match(title, /My Task/);
 });
 
 test("formatNotification uses emoji for failed", () => {
   const { title } = formatNotification({ title: "Failed Task" }, "failed");
   assert.match(title, /\u274C/);
-  assert.match(title, /failed/);
+  assert.match(title, /已失败/);
 });
 
 test("formatNotification uses emoji for timed_out", () => {
@@ -1098,8 +1098,8 @@ test("formatNotification includes task status and title in body", () => {
     { title: "Build feature X" },
     "completed"
   );
-  assert.match(body, /Task: Build feature X/);
-  assert.match(body, /Status: completed/);
+  assert.match(body, /任务: Build feature X/);
+  assert.match(body, /状态: 已完成/);
 });
 
 test("formatNotification includes mode and workspace when present", () => {
@@ -1107,8 +1107,8 @@ test("formatNotification includes mode and workspace when present", () => {
     { title: "Test", mode: "builder", workspace_id: "hosted-default" },
     "completed"
   );
-  assert.match(body, /Mode: builder/);
-  assert.match(body, /Workspace: hosted-default/);
+  assert.match(body, /模式: builder/);
+  assert.match(body, /工作区: hosted-default/);
 });
 
 test("formatNotification includes tests when present", () => {
@@ -1116,7 +1116,7 @@ test("formatNotification includes tests when present", () => {
     { title: "Test", result: { tests: "38/38 pass" } },
     "completed"
   );
-  assert.match(body, /Tests: 38\/38 pass/);
+  assert.match(body, /测试: 38\/38 pass/);
 });
 
 test("formatNotification includes commit and remote head when present", () => {
@@ -1127,8 +1127,8 @@ test("formatNotification includes commit and remote head when present", () => {
     },
     "completed"
   );
-  assert.match(body, /Commit: a2eeb89/);
-  assert.match(body, /Remote: a2eeb89/);
+  assert.match(body, /提交: a2eeb89/);
+  assert.match(body, /远端: a2eeb89/);
 });
 
 test("formatNotification includes duration when present in ms", () => {
@@ -1136,7 +1136,7 @@ test("formatNotification includes duration when present in ms", () => {
     { title: "Test", duration: 372000 },
     "completed"
   );
-  assert.match(body, /Duration: 6m12s/);
+  assert.match(body, /耗时: 6分12秒/);
 });
 
 test("formatNotification includes summary lines", () => {
@@ -1144,7 +1144,7 @@ test("formatNotification includes summary lines", () => {
     { title: "Test", result: { summary: "First line\nSecond line\nThird line" } },
     "completed"
   );
-  assert.match(body, /Summary: First line/);
+  assert.match(body, /摘要: First line/);
   assert.match(body, /Second line/);
   assert.ok(!body.includes("Third line"), "Should only include first 2 lines");
 });
@@ -1154,7 +1154,7 @@ test("formatNotification includes changed files when present", () => {
     { title: "Test", result: { changed_files: "file1.js, file2.js" } },
     "completed"
   );
-  assert.match(body, /Files: file1.js, file2.js/);
+  assert.match(body, /文件: file1.js, file2.js/);
 });
 
 test("formatNotification truncates long content", () => {
@@ -1186,7 +1186,7 @@ test("formatNotification includes result kind when present", () => {
     { title: "Test", result: { kind: "codex_executed" } },
     "completed"
   );
-  assert.match(body, /Kind: codex_executed/);
+  assert.match(body, /类型: codex_executed/);
 });
 
 // ================================================================
@@ -1196,13 +1196,13 @@ test("formatNotification includes result kind when present", () => {
 test("formatManualTestNotification uses test tube emoji", () => {
   const { title } = formatManualTestNotification();
   assert.match(title, /\uD83E\uDDEA/);
-  assert.match(title, /Bark test/);
+  assert.match(title, /Bark 测试通知/);
 });
 
 test("formatManualTestNotification includes diagnostic body", () => {
   const { body } = formatManualTestNotification();
-  assert.match(body, /manual Bark notification test/);
-  assert.match(body, /Timestamp:/);
+  assert.match(body, /手动 Bark 通知测试/);
+  assert.match(body, /时间:/);
 });
 
 // ================================================================
@@ -1218,7 +1218,7 @@ test("testSend uses rich format when key configured", async (t) => {
   const bark = createBarkNotifier({ barkKey: "test-rich-key" });
   await bark.testSend();
   assert.match(capturedUrl, /%F0%9F%A7%AA/);  // 🧪 emoji encoded
-  assert.match(capturedUrl, /GPTWork%20Bark%20test/);
+  assert.match(capturedUrl, /GPTWork.*Bark/);
 });
 
 // ================================================================
@@ -1320,7 +1320,7 @@ test("classifyCreatedNotification respects GPTWORK_BARK_NOTIFY_CREATED env var",
 test("formatCreatedNotification uses red square emoji", () => {
   const { title } = formatCreatedNotification({ title: "Test", assignee: "codex", status: "assigned" });
   assert.match(title, /\uD83C\uDD95/);
-  assert.match(title, /GPTWork task created/);
+  assert.match(title, /GPTWork 新任务/);
   assert.match(title, /Test/);
 });
 
@@ -1336,7 +1336,7 @@ test("formatCreatedNotification includes task id, status, mode, workspace, goal,
     assignee: "codex"
   });
   assert.match(body, /task_123/);
-  assert.match(body, /assigned/);
+  assert.match(body, /已分配/);
   assert.match(body, /builder/);
   assert.match(body, /ws-1/);
   assert.match(body, /goal_456/);
@@ -1487,7 +1487,7 @@ test('formatQuotaNotification includes taskId, goalId, provider, model in body',
 
 test('formatQuotaNotification includes suggested action in body', () => {
   const { body } = formatQuotaNotification({ errorType: 'quota_exhausted' });
-  assert.match(body, /switch model|change key|wait for reset|reduce concurrency/i);
+  assert.match(body, /切换模型|换 key|等待重置|降低并发/);
 });
 
 test('formatQuotaNotification truncates long detail', () => {

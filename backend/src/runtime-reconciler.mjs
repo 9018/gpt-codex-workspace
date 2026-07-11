@@ -1,6 +1,7 @@
 // == GPTWork runtime reconciler ==============================================
 // Orchestrates stale task detection, repo lock reconciliation,
-// restart-marker verification, and MA11-R6 blocker-manifest generation.
+// restart-marker verification, MA11-R6 blocker-manifest generation,
+// and notification recovery for missed lifecycle events.
 // ============================================================================
 
 import { appendFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
@@ -11,13 +12,40 @@ import { reconcileRuntimeRepoLocks } from "./runtime-reconciler-repo-locks.mjs";
 import { reconcileRestartMarkers } from "./runtime-reconciler-restart-markers.mjs";
 import { runHistoricalConvergence } from "./stale-state-sweeper.mjs";
 
-export function createReconciler({ store, config, github, notifyTerminalTaskIfNeeded }) {
+export function createReconciler({ store, config, github, notifyTerminalTaskIfNeeded, recoverMissedNotifications }) {
   return {
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {
       try {
         const state = await store.load();
         const logPath = process.env.GPTWORK_LOG_PATH;
         const reconciled = await reconcileRunningTasks({ state, store, config, notifyTerminalTaskIfNeeded, logPath });
+
+        // ── P0: Notification recovery for missed lifecycle events ──
+        // When the worker was enabled_but_not_running (e.g., after a restart),
+        // tasks may have completed without triggering lifecycle Bark notifications.
+        // This step replays missed notifications so notification_status reflects
+        // last_attempt, last_success, last_task_id, and last_task_event.
+        if (typeof recoverMissedNotifications === "function") {
+          try {
+            const recoveryResult = await recoverMissedNotifications(state.tasks || []);
+            if (recoveryResult.replayed.length > 0) {
+              if (logPath) {
+                for (const r of recoveryResult.replayed) {
+                  appendFileSync(logPath, `[gptwork-worker] notification recovery: ${r}\n`);
+                }
+              }
+            }
+            if (recoveryResult.errors.length > 0) {
+              if (logPath) {
+                for (const e of recoveryResult.errors) {
+                  appendFileSync(logPath, `[gptwork-worker] notification recovery error: ${e}\n`);
+                }
+              }
+            }
+          } catch (recoveryErr) {
+            if (logPath) appendFileSync(logPath, `[gptwork-worker] notification recovery error: ${recoveryErr.message}\n`);
+          }
+        }
 
         // ── P0-MA11-R6: Blocker manifest + deterministic convergence ──
         try {

@@ -1,50 +1,66 @@
-import { STATUS_EMOJI, formatDuration } from "./bark-config.mjs";
+import { STATUS_EMOJI, STATUS_ZH, formatDuration } from "./bark-config.mjs";
 
+/**
+ * Resolve Chinese display label for an internal status string.
+ * Falls back to the original if no mapping exists.
+ */
+function zhStatus(status) {
+  return STATUS_ZH[status] || status.replace(/_/g, " ");
+}
+
+/**
+ * Format a Bark notification for a task status change.
+ * All user-facing content is in Chinese.
+ *
+ * @param {object} task   Task object
+ * @param {string} status Task status string
+ * @returns {{ title: string, body: string }}
+ */
 export function formatNotification(task, status) {
-  const shortTitle = (task.title || "(no title)").slice(0, 80);
+  const shortTitle = (task.title || "(无标题)").slice(0, 80);
   const emoji = STATUS_EMOJI[status] || "\uD83D\uDD14";
-  const displayStatus = status.replace(/_/g, " ");
-  const title = `${emoji} GPTWork ${displayStatus}: ${shortTitle}`;
+  const zh = zhStatus(status);
+  const title = `${emoji} GPTWork ${zh}: ${shortTitle}`;
 
-  let body = `Task: ${shortTitle}\n`;
-  body += `Status: ${status}\n`;
+  let body = `任务: ${shortTitle}\n`;
+  body += `状态: ${zh}\n`;
 
   const mode = task.mode || "";
   const ws = task.workspace_id || "";
   if (mode || ws) {
-    if (mode) body += `Mode: ${mode}`;
+    if (mode) body += `模式: ${mode}`;
     if (mode && ws) body += " | ";
-    if (ws) body += `Workspace: ${ws}`;
+    if (ws) body += `工作区: ${ws}`;
     body += "\n";
   }
 
   if (task.result?.tests) {
-    body += `Tests: ${task.result.tests}\n`;
+    body += `测试: ${task.result.tests}\n`;
   }
 
   const commit = task.result?.commit ? task.result.commit.slice(0, 7) : "";
   const remoteHead = task.result?.remote_head ? task.result.remote_head.slice(0, 7) : "";
   if (commit || remoteHead) {
-    if (commit) body += `Commit: ${commit}`;
+    if (commit) body += `提交: ${commit}`;
     if (commit && remoteHead) body += " | ";
-    if (remoteHead) body += `Remote: ${remoteHead}`;
+    if (remoteHead) body += `远端: ${remoteHead}`;
     body += "\n";
   }
 
   if (task.duration) {
     const dur = typeof task.duration === "number" ? formatDuration(task.duration) : task.duration;
-    body += `Duration: ${dur}\n`;
+    body += `耗时: ${dur}\n`;
   } else if (task.result?.completed_at && task.created_at) {
     const durMs = new Date(task.result.completed_at) - new Date(task.created_at);
     if (durMs > 0) {
-      body += `Duration: ${formatDuration(durMs)}\n`;
+      body += `耗时: ${formatDuration(durMs)}\n`;
     }
   }
 
   if (task.result?.summary) {
     const lines = task.result.summary.split("\n").filter(l => l.trim()).slice(0, 2);
     if (lines.length > 0) {
-      body += `Summary: ${lines.join(" | ").slice(0, 300)}\n`;
+      body += `摘要: ${lines.join(" | ").slice(0, 300)}\n`;
     }
   }
 
@@ -52,12 +68,12 @@ export function formatNotification(task, status) {
     const files = Array.isArray(task.result.changed_files)
       ? task.result.changed_files.join(", ").slice(0, 200)
       : String(task.result.changed_files).slice(0, 200);
-    if (files.trim()) body += `Files: ${files}\n`;
+    if (files.trim()) body += `文件: ${files}\n`;
   }
 
-  if (task.result?.kind) body += `Kind: ${task.result.kind}\n`;
-  if (task.result?.reason) body += `Reason: ${task.result.reason}\n`;
-  if (task.result?.next_action) body += `Next: ${task.result.next_action}\n`;
+  if (task.result?.kind) body += `类型: ${task.result.kind}\n`;
+  if (task.result?.reason) body += `原因: ${task.result.reason}\n`;
+  if (task.result?.next_action) body += `下一步: ${task.result.next_action}\n`;
 
   // Truncate to mobile-friendly size
   if (body.length > 4000) body = body.slice(0, 3997) + "...";
@@ -67,41 +83,42 @@ export function formatNotification(task, status) {
 
 /**
  * Format a manual test notification.
- * Uses 🧪 prefix and rich body.
+ * Uses 🧪 prefix and Chinese rich body.
  *
  * @returns {{ title: string, body: string }}
  */
 export function formatManualTestNotification() {
-  const title = "\uD83E\uDDEA GPTWork Bark test";
+  const title = "\uD83E\uDDEA GPTWork Bark 测试通知";
   const body = [
-    "This is a manual Bark notification test.",
+    "这是一条手动 Bark 通知测试。",
     "",
-    "If you can read this, Bark notifications are working correctly.",
-    `Timestamp: ${new Date().toISOString()}`
+    "如果你能读到这条消息，说明 Bark 通知功能正常工作。",
+    `时间: ${new Date().toISOString()}`
   ].join("\n");
   return { title, body };
 }
 
 /**
  * Format a Bark notification for task creation.
+ * All user-facing content is in Chinese.
  *
  * @param {object} task   Task object
  * @returns {{ title: string, body: string }}
  */
 export function formatCreatedNotification(task) {
-  const shortTitle = (task.title || "(no title)").slice(0, 80);
+  const shortTitle = (task.title || "(无标题)").slice(0, 80);
   const emoji = "\uD83C\uDD95";
-  const title = `${emoji} GPTWork task created: ${shortTitle}`;
+  const title = `${emoji} GPTWork 新任务: ${shortTitle}`;
 
-  let body = `Task: ${shortTitle}\n`;
-  body += `Status: ${task.status || "unknown"}\n`;
+  let body = `任务: ${shortTitle}\n`;
+  body += `状态: ${zhStatus(task.status || "unknown")}\n`;
 
   const mode = task.mode || "";
   const ws = task.workspace_id || "";
   if (mode || ws) {
-    if (mode) body += `Mode: ${mode}`;
+    if (mode) body += `模式: ${mode}`;
     if (mode && ws) body += " | ";
-    if (ws) body += `Workspace: ${ws}`;
+    if (ws) body += `工作区: ${ws}`;
     body += "\n";
   }
 
@@ -110,11 +127,11 @@ export function formatCreatedNotification(task) {
   }
 
   if (task.goal_id) {
-    body += `Goal: ${task.goal_id}\n`;
+    body += `目标: ${task.goal_id}\n`;
   }
 
   if (task.created_at) {
-    body += `Created: ${task.created_at}\n`;
+    body += `创建时间: ${task.created_at}\n`;
   }
 
   if (body.length > 4000) body = body.slice(0, 3997) + "...";
@@ -124,6 +141,7 @@ export function formatCreatedNotification(task) {
 
 /**
  * Format a quota/rate-limit notification for Bark.
+ * Title is already in Chinese. Body uses mixed Chinese/English for clarity.
  *
  * @param {object} options
  * @param {string} options.taskId - Task ID
@@ -137,23 +155,22 @@ export function formatCreatedNotification(task) {
 export function formatQuotaNotification({ taskId, goalId, provider, model, errorType, detail } = {}) {
   const isQuota = errorType === "quota_exhausted" || !errorType || errorType.includes("quota");
   const title = isQuota
-    ? "\u26A0\uFE0F GPTWork Codex \u989D\u5EA6\u4E0D\u8DB3"
-    : "\u26A0\uFE0F GPTWork Codex \u9650\u6D41\u6216\u989D\u5EA6\u4E0D\u8DB3";
+    ? "\u26A0\uFE0F GPTWork Codex 额度不足"
+    : "\u26A0\uFE0F GPTWork Codex 限流或额度不足";
   const emojiPrefix = isQuota ? "\u26A0\uFE0F" : "\uD83D\uDD15";
 
-  let body = `${emojiPrefix} Codex/API ${isQuota ? "quota exhausted" : "rate limited"}`;
-  if (taskId) body += `\uFF0C\u4EFB\u52A1\u5DF2\u6682\u505C: ${taskId}`;
+  let body = `${emojiPrefix} Codex/API ${isQuota ? "额度耗尽" : "触发限流"}`;
+  if (taskId) body += `，任务已暂停: ${taskId}`;
   body += "\n\n";
 
-  if (taskId) body += `Task: ${taskId}\n`;
-  if (goalId) body += `Goal: ${goalId}\n`;
-  if (provider) body += `Provider: ${provider}\n`;
-  if (model) body += `Model: ${model}\n`;
-  body += `Error: ${errorType || "quota_exhausted"}\n`;
-  if (detail) body += `Detail: ${detail.slice(0, 200)}\n`;
+  if (taskId) body += `任务: ${taskId}\n`;
+  if (goalId) body += `目标: ${goalId}\n`;
+  if (provider) body += `提供商: ${provider}\n`;
+  if (model) body += `模型: ${model}\n`;
+  body += `错误: ${errorType || "quota_exhausted"}\n`;
+  if (detail) body += `详情: ${detail.slice(0, 200)}\n`;
 
-  body += "\n\u5EFA\u8BAE: \u5207\u6A21\u578B\u3001\u6362 key\u3001\u7B49\u5F85\u91CD\u7F6E\uFF0C\u6216\u964D\u4F4E\u5E76\u53D1\u3002\n";
-  body += "Suggested: switch model, change key, wait for reset, or reduce concurrency.\n";
+  body += "\n建议: 切换模型、换 key、等待重置，或降低并发。\n";
 
   // Truncate
   if (body.length > 4000) body = body.slice(0, 3997) + "...";
