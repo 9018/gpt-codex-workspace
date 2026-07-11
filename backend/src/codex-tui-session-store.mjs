@@ -1,3 +1,16 @@
+/**
+ * codex-tui-session-store.mjs — Persistent session store for Codex TUI sessions.
+ *
+ * Session records persist to <workspaceRoot>/.gptwork/codex-tui-sessions/<id>.json
+ * and include task/goal identifiers, execution path, repo lock, and optional
+ * worktree metadata for worktree-based execution tracking.
+ *
+ * Fields:
+ *   id, task_id, goal_id, cwd, repo_lock_id,
+ *   workstream_id, worktree_path, branch, base_commit, head_commit,
+ *   codex_thread_id, status, metadata, log
+ */
+
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -67,7 +80,25 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
   return {
     sessionsDir,
 
-    async createSession({ sessionId, taskId = null, goalId = null, cwd = null, repoLockId = null, metadata = {} } = {}) {
+    /**
+     * Create a new session record with optional worktree fields.
+     *
+     * @param {object} params
+     * @param {string} params.sessionId - Session identifier
+     * @param {string} [params.taskId] - Task identifier
+     * @param {string} [params.goalId] - Goal identifier
+     * @param {string} [params.cwd] - Working directory (task worktree path)
+     * @param {string} [params.repoLockId] - Repo lock identifier
+     * @param {string} [params.workstreamId] - Workstream identifier
+     * @param {string} [params.worktreePath] - Git worktree path
+     * @param {string} [params.branch] - Git branch name
+     * @param {string} [params.baseCommit] - Base commit SHA
+     * @param {string} [params.headCommit] - Head commit SHA
+     * @param {string} [params.codexThreadId] - Codex thread ID
+     * @param {object} [params.metadata] - Additional metadata
+     * @returns {Promise<object>} Created session record
+     */
+    async createSession({ sessionId, taskId = null, goalId = null, cwd = null, repoLockId = null, workstreamId = null, worktreePath = null, branch = null, baseCommit = null, headCommit = null, codexThreadId = null, metadata = {} } = {}) {
       const id = assertSafeCodexTuiSessionId(sessionId || `codex_tui_${randomUUID()}`);
       const createdAt = nowIso();
       const record = {
@@ -76,6 +107,12 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
         goal_id: goalId,
         cwd,
         repo_lock_id: repoLockId,
+        workstream_id: workstreamId,
+        worktree_path: worktreePath,
+        branch,
+        base_commit: baseCommit,
+        head_commit: headCommit,
+        codex_thread_id: codexThreadId,
         status: "created",
         created_at: createdAt,
         updated_at: createdAt,

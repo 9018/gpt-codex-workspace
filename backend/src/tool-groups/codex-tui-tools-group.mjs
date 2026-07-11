@@ -1,9 +1,28 @@
+/**
+ * codex-tui-tools-group.mjs — Codex TUI tool group with worktree-based execution.
+ *
+ * Startup flow:
+ *   1. resolve plan (no git mutation)
+ *   2. materialize worktree (git worktree add)
+ *   3. verify task worktree is valid
+ *   4. cwd = task_worktree_path
+ *   5. acquire lock on worktree path
+ *   6. start TUI session within worktree
+ *
+ * Session/Task/Execution persistence includes:
+ *   workstream_id, goal_id, task_id, worktree_path, branch,
+ *   base_commit, head_commit, session_id.
+ *
+ * All results and lock releases operate on the task worktree path.
+ */
+
 import { execFileSync } from "node:child_process";
 import { acquireRepoLock, releaseRepoLock } from "../repo-lock.mjs";
 import { findTask } from "../task-lifecycle.mjs";
 import { ensureTaskGoal } from "../goal-task-lifecycle.mjs";
-import { resolveTaskRepositoryPlan } from "../task-repo-resolution.mjs";
+import { resolveTaskRepositoryPlan, materializeTaskWorktree } from "../task-repo-resolution.mjs";
 import { isCodexTuiEnabled } from "../codex-execution-provider.mjs";
+import { createExecutionStore } from "../executions/execution-store.mjs";
 import {
   getCodexTuiSessionStatus,
   readCodexTuiSession,
@@ -47,6 +66,7 @@ export function createCodexTuiToolsGroup({
   findTaskFn = findTask,
   ensureTaskGoalFn = ensureTaskGoal,
   resolveTaskRepositoryPlanFn = resolveTaskRepositoryPlan,
+  materializeTaskWorktreeFn = materializeTaskWorktree,
   acquireRepoLockFn = acquireRepoLock,
   releaseRepoLockFn = releaseRepoLock,
   startCodexTuiGoalSessionFn = startCodexTuiGoalSession,
@@ -55,8 +75,11 @@ export function createCodexTuiToolsGroup({
   sendCodexTuiSessionInputFn = sendCodexTuiSessionInput,
   stopCodexTuiSessionFn = stopCodexTuiSession,
   collectCodexTuiCompletionFn = collectCodexTuiCompletion,
+  createExecutionStoreFn = createExecutionStore,
+  workstreamId = null,
 } = {}) {
   const metadata = tuiToolMetadata();
+  const workspaceRoot = config?.defaultWorkspaceRoot || config?.defaultWorkspaceRootPath;
 
   function sessionWorkspaceRoots() {
     return [config?.defaultRepoPath, config?.defaultWorkspaceRoot].filter(Boolean);
@@ -72,6 +95,18 @@ export function createCodexTuiToolsGroup({
     return linked.goal || null;
   }
 
+  /**
+   * Start a Codex TUI session within an isolated task worktree.
+   *
+   * Flow:
+   *   1. resolve plan (no git mutation)
+   *   2. materialize worktree (git worktree add)
+   *   3. verify task worktree is valid
+   *   4. cwd = task_worktree_path
+   *   5. acquire lock on worktree path
+   *   6. create execution record
+   *   7. start TUI session within worktree
+   */
   async function startGoalHandler({ task_id }, context) {
     if (!isCodexTuiEnabled(config)) {
       return { kind: "codex_tui_disabled", status: "disabled", provider: "codex_tui_goal", reason: "GPTWORK_CODEX_TUI_ENABLED is not true" };
@@ -83,55 +118,151 @@ export function createCodexTuiToolsGroup({
       return { kind: "codex_tui_goal_missing", status: "blocked", task_id: task.id, reason: "Task has no resolvable goal_id" };
     }
 
+    // Phase 1: resolve plan (no git mutation)
     const repoPlan = await resolveTaskRepositoryPlanFn({ task, goal, config, registry });
-    const cwd = repoPlan?.canonical_repo_path || config.defaultRepoPath || config.defaultWorkspaceRoot;
-    if (!cwd) {
+    if (!repoPlan) {
+      return { kind: "codex_tui_plan_failed", status: "blocked", task_id: task.id, goal_id: goal.id, reason: "Repository plan resolution returned null" };
+    }
+
+    const canonicalRepoPath = repoPlan.canonical_repo_path || repoPlan.source_root;
+    if (!canonicalRepoPath) {
       return { kind: "codex_tui_repo_missing", status: "blocked", task_id: task.id, goal_id: goal.id, reason: "No canonical repository path resolved" };
     }
 
-    const statusLines = gitStatusShort(cwd);
+    // Phase 2: materialize worktree (git worktree add)
+    const materialized = await materializeTaskWorktreeFn(repoPlan, { config });
+    if (!materialized?.worktree_lifecycle?.ok) {
+      return {
+        kind: "codex_tui_worktree_failed",
+        status: "blocked",
+        task_id: task.id,
+        goal_id: goal.id,
+        error: materialized?.worktree_lifecycle?.error || "Worktree materialization failed",
+        plan: repoPlan,
+        materialized,
+      };
+    }
+
+    const worktreePath = materialized.worktree_lifecycle.worktree_path || repoPlan.task_worktree_path;
+    const branch = materialized.worktree_lifecycle.branch_name || repoPlan.task_branch;
+
+    // Phase 3: verify task worktree is valid
+    try {
+      const gitCheck = execFileSync("git", ["rev-parse", "--is-inside-work-tree"], {
+        cwd: worktreePath,
+        encoding: "utf8",
+        timeout: 10000,
+      }).trim();
+      if (gitCheck !== "true") {
+        return {
+          kind: "codex_tui_worktree_invalid",
+          status: "blocked",
+          task_id: task.id,
+          goal_id: goal.id,
+          worktree_path: worktreePath,
+          error: "Path exists but is not a valid git worktree",
+        };
+      }
+    } catch (err) {
+      return {
+        kind: "codex_tui_worktree_invalid",
+        status: "blocked",
+        task_id: task.id,
+        goal_id: goal.id,
+        worktree_path: worktreePath,
+        error: `Worktree verification failed: ${err.message}`,
+      };
+    }
+
+    // Phase 4: cwd = task_worktree_path, check dirty status on worktree
+    const statusLines = gitStatusShort(worktreePath);
     if (statusLines.length > 0) {
       return {
         kind: "codex_tui_dirty_worktree",
         status: "blocked",
         task_id: task.id,
         goal_id: goal.id,
-        cwd,
+        cwd: worktreePath,
         dirty_paths: dirtyPaths(statusLines),
       };
     }
 
-    const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, cwd, {
+    // Phase 5: lock on worktree path
+    const lockResult = await acquireRepoLockFn(workspaceRoot, worktreePath, {
       taskId: task.id,
       runId: null,
       mode: task.mode || goal.mode || "builder",
     });
     if (!lockResult?.acquired) {
       return {
-        kind: "codex_tui_repo_locked",
+        kind: "codex_tui_worktree_locked",
         status: "blocked",
         task_id: task.id,
         goal_id: goal.id,
-        cwd,
+        cwd: worktreePath,
         held_by_task: lockResult?.heldByTask || null,
         held_by_run_id: lockResult?.heldByRunId || null,
-        reason: lockResult?.reason || "Repo lock is held by another task",
+        reason: lockResult?.reason || "Worktree lock is held by another task",
       };
     }
 
+    // Phase 6: create execution record
+    let baseCommit = null;
+    try {
+      baseCommit = execFileSync("git", ["rev-parse", repoPlan.base_ref || "HEAD"], {
+        cwd: canonicalRepoPath,
+        encoding: "utf8",
+        timeout: 10000,
+      }).trim();
+    } catch {}
+
+    const execStore = createExecutionStoreFn({ workspaceRoot: workspaceRoot || canonicalRepoPath });
+    const execution = await execStore.createExecution({
+      executionId: `exec_${task.id}`,
+      workstreamId,
+      goalId: goal.id,
+      taskId: task.id,
+      worktreePath,
+      branch,
+      baseCommit,
+      headCommit: null,
+      sessionId: null,
+      codexThreadId: null,
+      metadata: {
+        canonical_repo_path: canonicalRepoPath,
+        task_title: task.title || null,
+        provider: "codex_tui_goal",
+        plan: repoPlan,
+      },
+    });
+
+    // Phase 7: start TUI session within worktree, cwd = task_worktree_path
     const session = await startCodexTuiGoalSessionFn({
       task,
       goal,
-      cwd,
+      cwd: worktreePath,
+      workspaceRoot: workspaceRoot || canonicalRepoPath,
       repoLockId: lockResult.lock?.safe_repo_id || null,
     });
+
+    // Update execution with session info
+    if (session?.id) {
+      await execStore.updateExecution(execution.id, {
+        status: "running",
+        session_id: session.id,
+      }).catch(() => {});
+    }
 
     return {
       kind: "codex_tui_session_started",
       session_id: session.id,
       task_id: task.id,
       goal_id: goal.id,
-      cwd: session.cwd || cwd,
+      cwd: worktreePath,
+      worktree_path: worktreePath,
+      canonical_repo_path: canonicalRepoPath,
+      branch,
+      execution_id: execution.id,
       status: session.status,
     };
   }
@@ -139,7 +270,7 @@ export function createCodexTuiToolsGroup({
   return {
     codex_tui_start_goal: tool({
       name: "codex_tui_start_goal",
-      description: "Start a manual Codex TUI goal session for an existing task.",
+      description: "Start a manual Codex TUI goal session for an existing task using an isolated git worktree.",
       inputSchema: schema({ task_id: { type: "string", description: "Task ID to run through the Codex TUI provider." } }, ["task_id"]),
       ...metadata,
       handler: startGoalHandler,
@@ -167,7 +298,7 @@ export function createCodexTuiToolsGroup({
     }),
     codex_tui_stop: tool({
       name: "codex_tui_stop",
-      description: "Stop an active Codex TUI session.",
+      description: "Stop an active Codex TUI session and release its worktree lock.",
       inputSchema: schema({ session_id: "string" }, ["session_id"]),
       ...metadata,
       handler: async ({ session_id }) => {
@@ -175,7 +306,7 @@ export function createCodexTuiToolsGroup({
         try { before = await readCodexTuiSessionFn(session_id, { maxChars: 0, candidateWorkspaceRoots: sessionWorkspaceRoots() }); } catch {}
         const stopped = await stopCodexTuiSessionFn(session_id, { reason: "manual_stop", candidateWorkspaceRoots: sessionWorkspaceRoots() });
         if (before?.cwd && before?.task_id) {
-          try { await releaseRepoLockFn(config.defaultWorkspaceRoot, before.cwd, before.task_id); } catch {}
+          try { await releaseRepoLockFn(workspaceRoot, before.cwd, before.task_id); } catch {}
         }
         return stopped;
       },
@@ -185,7 +316,7 @@ export function createCodexTuiToolsGroup({
       description: "Collect durable completion evidence for a Codex TUI session without reading TUI screen text.",
       inputSchema: schema({ session_id: "string" }, ["session_id"]),
       ...metadata,
-      handler: async ({ session_id }) => collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot: config.defaultWorkspaceRoot }),
+      handler: async ({ session_id }) => collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot }),
     }),
   };
 }

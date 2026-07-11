@@ -1,3 +1,12 @@
+/**
+ * codex-tui-completion-collector.mjs — Collect durable completion evidence
+ * from a Codex TUI session, checking result files from the session's worktree
+ * path (cwd) rather than the canonical repository root.
+ *
+ * This ensures that TUI completion is always evaluated from the task worktree,
+ * not the canonical repo, enabling isolated per-task worktree execution.
+ */
+
 import { access, readFile } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -69,17 +78,54 @@ function parseResultJson(text) {
   }
 }
 
+/**
+ * Collect completion evidence from a Codex TUI session.
+ *
+ * Always checks git status and result files from the session's cwd
+ * (task worktree path), not the canonical repository root.
+ *
+ * @param {object} params
+ * @param {string} params.sessionId - TUI session ID
+ * @param {string} [params.workspaceRoot] - Workspace root (fallback for goal dir)
+ * @returns {Promise<object>} Completion snapshot
+ */
 export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {}) {
   if (!sessionId) throw new Error("sessionId is required");
-  if (!workspaceRoot) throw new Error("workspaceRoot is required");
 
-  const store = createCodexTuiSessionStore({ workspaceRoot });
-  const session = await store.readSession(sessionId, { maxChars: 0 });
-  const cwd = session.cwd || workspaceRoot;
-  const goalId = session.goal_id || null;
-  const taskId = session.task_id || null;
-  const resultJsonPath = goalId ? join(workspaceRoot, ".gptwork", "goals", goalId, "result.json") : null;
-  const resultMdPath = goalId ? join(workspaceRoot, ".gptwork", "goals", goalId, "result.md") : null;
+  // Read session to get cwd (worktree path) and goal_id
+  let session, cwd, goalId, taskId;
+  const root = workspaceRoot || process.cwd();
+
+  if (workspaceRoot) {
+    const store = createCodexTuiSessionStore({ workspaceRoot: root });
+    try {
+      session = await store.readSession(sessionId, { maxChars: 0 });
+    } catch {
+      // Fall back to workspace root as cwd
+      session = { cwd: root };
+    }
+  } else {
+    // Try candidate roots
+    for (const candidateRoot of [process.cwd(), join(process.cwd(), "..")]) {
+      try {
+        const store = createCodexTuiSessionStore({ workspaceRoot: candidateRoot });
+        session = await store.readSession(sessionId, { maxChars: 0 });
+        break;
+      } catch {}
+    }
+    if (!session) {
+      // Fall back entirely
+      session = { cwd: process.cwd(), goal_id: null, task_id: null };
+    }
+  }
+
+  cwd = session.cwd || root;
+  goalId = session.goal_id || null;
+  taskId = session.task_id || null;
+
+  // Resolve result paths from the session cwd (task worktree path)
+  const resultJsonPath = goalId ? join(cwd, ".gptwork", "goals", goalId, "result.json") : null;
+  const resultMdPath = goalId ? join(cwd, ".gptwork", "goals", goalId, "result.md") : null;
   const resultJsonPresent = resultJsonPath ? await fileExists(resultJsonPath) : false;
   const resultMdPresent = resultMdPath ? await fileExists(resultMdPath) : false;
   const resultJsonText = resultJsonPresent ? await readFile(resultJsonPath, "utf8") : "";
@@ -87,6 +133,7 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const parsedResultJson = parseResultJson(resultJsonText);
   const resultEvidence = resultMarkdownEvidence(resultMdText);
 
+  // Git status from the session cwd (task worktree)
   const statusLines = gitLines(cwd, ["status", "--short"]);
   const statusChangedFiles = changedFilesFromStatus(statusLines);
   const diffFiles = gitLines(cwd, ["diff", "--name-only"]);
@@ -114,6 +161,7 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     session_id: session.id,
     goal_id: goalId,
     task_id: taskId,
+    cwd,
     changed_files: changedFiles,
     tests,
     commit,
