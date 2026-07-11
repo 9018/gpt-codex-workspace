@@ -14,10 +14,10 @@
  */
 
 import { createWorkstreamFanout } from "./task-fanout-service.mjs";
-import { getExecutionGraph, getReadyNodes, updateDagNode } from "./task-dag-service.mjs";
+import { getExecutionGraph, getReadyNodes, updateDagNode, buildAdjacency } from "./task-dag-service.mjs";
 import { createWorkstreamJoin, evaluateJoinCondition, manualReleaseJoin } from "./task-join-service.mjs";
 import { getCapacityStatus, checkExecutionCapacity, checkTuiCapacity } from "./execution-capacity.mjs";
-import { checkJoinCondition, JOIN_CONDITIONS, validateDependencyGraph, detectCycle, stableTopologicalSort, buildAdjacency } from "./dependency-resolver.mjs";
+import { checkJoinCondition, JOIN_CONDITIONS, validateDependencyGraph, detectCycle, stableTopologicalSort } from "./dependency-resolver.mjs";
 
 export function createWorkstreamOrchestrationToolsGroup({ tool, schema, store }) {
   const common = {
