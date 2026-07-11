@@ -95,14 +95,14 @@ export function emitTaskProgress(context, task, phase, message) {
 export async function normalizeLegacyModes(store, state) {
   let changed = false;
   for (const task of state.tasks || []) {
-    if (task.mode === "readonly" && !isCodexSessionInventoryTaskKind(task)) {
+    if ((task.mode === "readonly" && !isCodexSessionInventoryTaskKind(task)) || task.mode === "standard") {
       task.mode = "builder";
       task.updated_at = task.updated_at || new Date().toISOString();
       changed = true;
     }
   }
   for (const goal of state.goals || []) {
-    if (goal.mode === "readonly") {
+    if (goal.mode === "readonly" || goal.mode === "standard") {
       goal.mode = "builder";
       goal.updated_at = goal.updated_at || new Date().toISOString();
       changed = true;

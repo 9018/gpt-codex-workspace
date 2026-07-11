@@ -194,6 +194,20 @@ test("ordinary tasks cannot be left in readonly mode", async () => {
   });
   assert.equal(draft.task.mode, "builder");
 
+  const legacyStandardDraft = await callTool(server, "create_task", {
+    title: "Legacy standard task",
+    description: "Old clients may still send the removed mode field.",
+    mode: "standard"
+  });
+  assert.equal(legacyStandardDraft.task.mode, "builder");
+
+  const legacyDeployDraft = await callTool(server, "create_task", {
+    title: "Legacy deploy task",
+    description: "Execution elevation must happen through assign_task_to_codex.",
+    mode: "deploy"
+  });
+  assert.equal(legacyDeployDraft.task.mode, "builder");
+
   const assigned = await callTool(server, "assign_task_to_codex", {
     task_id: draft.task.id,
     mode: "readonly"

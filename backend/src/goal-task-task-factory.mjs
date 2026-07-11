@@ -104,19 +104,17 @@ export function buildGoalTask(goal, conversation, createdBy) {
 
 
 export function normalizeCreatedTaskMode(args) {
-  const mode = String(args.mode || "").trim().toLowerCase();
-  const allowedModes = new Set(["readonly", "builder", "deploy", "admin"]);
-  if (mode && !allowedModes.has(mode)) throw new Error(`unsupported task mode: ${mode}`);
-  if (mode === "readonly") {
-    return isCodexSessionInventoryTaskKind({
-      title: args.title,
-      description: args.description || "",
-      assignee: "codex",
-      status: "assigned",
-      mode: "readonly"
-    }) ? "readonly" : "builder";
+  const requestedMode = String(args.mode || "").trim().toLowerCase();
+  if (requestedMode === "readonly" && isCodexSessionInventoryTaskKind({
+    title: args.title,
+    description: args.description || "",
+    assignee: "codex",
+    status: "assigned",
+    mode: "readonly"
+  })) {
+    return "readonly";
   }
-  return mode || "builder";
+  return "builder";
 }
 
 export function normalizeAssignedTaskMode(task, requestedMode = "") {

@@ -105,12 +105,16 @@ Codex 已接手。后端已保存 goal.md、context.json、transcript.md、paylo
 
 ## Modes
 
-Use these modes:
+`create_task` no longer exposes a `mode` parameter. Ordinary tasks are always created as `builder`.
+
+Execution elevation is selected after creation or through the goal flow:
 
 - `builder`: default implementation, edits, tests.
-- `deploy`: Docker, service deployment, port checks, health checks.
-- `admin`: privileged maintenance.
-- `readonly`: only for dedicated safe inventory tasks; ordinary tasks are promoted to `builder`.
+- `deploy`: Docker, service deployment, port checks, health checks; select through `assign_task_to_codex` or goal creation.
+- `admin`: privileged maintenance; select through `assign_task_to_codex` or goal creation.
+- `readonly`: reserved for `create_codex_session_inventory_task`; ordinary task creation cannot request it.
+
+Legacy clients may still send `mode`, but `create_task` ignores it and creates a `builder` task. Stored `standard` and ordinary `readonly` records are normalized to `builder`.
 
 ## Compatibility
 

@@ -454,12 +454,11 @@ test("create_task has rich JSON Schema descriptor", () => {
     title: { type: "string", description: "Task title summarizing the work to be done." },
     description: { type: "string", description: "Detailed task description." },
     assignee: { type: "string", default: "codex" },
-    workspace_id: { type: "string" },
-    mode: { type: "string", enum: ["standard", "readonly"] }
+    workspace_id: { type: "string" }
   }, ["title"]);
 
   assert.equal(inputSchema.properties.assignee.default, "codex");
-  assert.deepEqual(inputSchema.properties.mode.enum, ["standard", "readonly"]);
+  assert.equal(Object.hasOwn(inputSchema.properties, "mode"), false);
   assert.equal(inputSchema.properties.title.description, "Task title summarizing the work to be done.");
   assert.deepEqual(inputSchema.required, ["title"]);
 });

@@ -42,8 +42,7 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
   assert.equal(tools.create_task.inputSchema.properties.assignee.type, 'string');
   assert.equal(tools.create_task.inputSchema.properties.assignee.default, 'codex');
   assert.equal(tools.create_task.inputSchema.properties.workspace_id.type, 'string');
-  assert.equal(tools.create_task.inputSchema.properties.mode.type, 'string');
-  assert.deepEqual(tools.create_task.inputSchema.properties.mode.enum, ['standard', 'readonly']);
+  assert.equal(Object.hasOwn(tools.create_task.inputSchema.properties, 'mode'), false);
   assert.equal(tools.create_task.inputSchema.properties.notify.type, 'boolean');
   assert.equal(tools.create_task.inputSchema.properties.silent.type, 'boolean');
   assert.equal(tools.create_task.inputSchema.properties.suppress_notifications.type, 'boolean');

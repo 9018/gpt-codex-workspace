@@ -361,3 +361,19 @@ test("updateGoalStatus uses indexed lookup when available", async () => {
   assert.equal(lookupCount, 1);
   assert.equal(state.activities.length, 1);
 });
+
+test("normalizeLegacyModes normalizes standard task mode to builder", async () => {
+  const task = makeTask({ id: "t1", mode: "standard", title: "Legacy standard task", description: "Work" });
+  const state = { tasks: [task], goals: [] };
+  const store = makeStore(state);
+  await normalizeLegacyModes(store, state);
+  assert.equal(task.mode, "builder");
+});
+
+test("normalizeLegacyModes normalizes standard goal mode to builder", async () => {
+  const goal = makeGoal({ id: "g1", mode: "standard" });
+  const state = { goals: [goal], tasks: [] };
+  const store = makeStore(state);
+  await normalizeLegacyModes(store, state);
+  assert.equal(goal.mode, "builder");
+});

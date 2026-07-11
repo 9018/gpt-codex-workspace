@@ -21,7 +21,6 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       description: { type: "string", description: "Detailed task description or instructions." },
       assignee: { type: "string", description: "Who to assign the task to (e.g. codex, chatgpt).", default: "codex" },
       workspace_id: { type: "string", description: "Workspace ID for scoping." },
-      mode: { type: "string", description: "Execution mode for Codex.", enum: ["standard", "readonly"] },
       notify: { type: "boolean", description: "Set false to suppress ordinary task Bark notifications for this task." },
       silent: { type: "boolean", description: "Set true to suppress ordinary task Bark notifications for this task." },
       suppress_notifications: { type: "boolean", description: "Set true to suppress ordinary task Bark notifications for this task." },
