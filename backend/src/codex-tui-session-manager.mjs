@@ -67,6 +67,10 @@ async function normalizeRecoveredSessionRecord(store, sessionId, record = null) 
   return current;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, Number(ms) || 0)));
+}
+
 function waitForTuiOutput(store, sessionId, readyTimeoutMs = 5_000) {
   const start = Date.now();
   const deadline = start + readyTimeoutMs;
@@ -96,6 +100,8 @@ async function startCodexTuiGoalSessionImpl({
   command = "codex",
   evidenceWaitMs = null,
   requireSuperpowers = true,
+  startupSettleMs = 1_500,
+  bootstrapMessageGapMs = 500,
 } = {}) {
   if (!cwd) throw new Error("cwd is required");
   if (!goal?.id) throw new Error("goal.id is required");
@@ -135,6 +141,8 @@ async function startCodexTuiGoalSessionImpl({
       command,
       evidence_wait_ms: Number.isFinite(Number(evidenceWaitMs)) ? Number(evidenceWaitMs) : null,
       require_superpowers_for_tui: requireSuperpowers !== false,
+      startup_settle_ms: Math.max(0, Number(startupSettleMs) || 0),
+      bootstrap_message_gap_ms: Math.max(0, Number(bootstrapMessageGapMs) || 0),
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
   });
@@ -165,11 +173,15 @@ async function startCodexTuiGoalSessionImpl({
   // Phase 1: wait for TUI ready (first output on PTY)
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
 
-  // Phase 2: submit prompt via stdin + Enter
+  // Phase 2: terminal negotiation output is not proof that the input editor is ready.
+  // Give the full-screen TUI a bounded settle window, then stage messages so the
+  // follow-up cannot be swallowed by the same initialization/render cycle.
+  await sleep(startupSettleMs);
   const messages = buildCodexTuiBootstrapMessages({ goalId: goal.id, taskTitle: task?.title || goal?.title || task?.id });
   const bootstrapSentAt = new Date().toISOString();
-  for (const message of messages) {
-    ptySession.write(message);
+  for (let index = 0; index < messages.length; index += 1) {
+    ptySession.write(messages[index]);
+    if (index < messages.length - 1) await sleep(bootstrapMessageGapMs);
   }
 
   record = await store.updateSession(sessionId, {

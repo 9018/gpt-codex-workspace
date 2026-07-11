@@ -47,12 +47,15 @@ function makeFakeAdapter() {
 test("start creates session, spawns codex, sends bootstrap messages, and logs output", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-")));
   const fakeAdapter = makeFakeAdapter();
+  const startedAt = Date.now();
   const session = await startCodexTuiGoalSession({
     task: { id: "task_1", title: "TUI foundation" },
     goal: { id: "goal_1" },
     cwd,
     repoLockId: "lock_1",
     ptyAdapter: fakeAdapter,
+    startupSettleMs: 600,
+    bootstrapMessageGapMs: 100,
   });
 
   assert.equal(session.status, "running");
@@ -63,6 +66,7 @@ test("start creates session, spawns codex, sends bootstrap messages, and logs ou
   assert.equal(fakeAdapter.spawns.length, 1);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
   assert.equal(fakeAdapter.spawns[0].args, undefined, "spawn should have no args (prompt goes via stdin)");
+  assert.ok(Date.now() - startedAt >= 650, "bootstrap must wait for startup settle and stage the follow-up message");
   // Full bootstrap is written to stdin: writes[0]=/goal msg, writes[1]=followup
   assert.ok(fakeAdapter.writes.length >= 2, "at least 2 writes for /goal + followup");
   assert.match(fakeAdapter.writes[0], /^\/goal /);
