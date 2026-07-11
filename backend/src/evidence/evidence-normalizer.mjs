@@ -241,9 +241,8 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.repair_evidence || result.repair_marker) return 'repair';
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
   if (hasChangedFiles || hasValue(result.commit)) {
-    // Material changed files are authoritative evidence of a code change.
-    // No-mutation profiles (diagnostic/noop/cleanup) must not suppress
-    // commit and integration requirements when the result changed source files.
+    const contractKind = String(contract?.intent?.operation_kind || "");
+    if (contractKind === "docs_only") return "docs_only";
     return 'code_change';
   }
 

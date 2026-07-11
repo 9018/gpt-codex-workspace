@@ -457,9 +457,7 @@ export function shapeToolResult({ name, toolDescriptor, rawStructuredContent, su
     ? tagToolResult(name, toolDescriptor, rawStructuredContent, { includeCard: cardEnabled })
     : null;
 
-  const modelPayload = renderMode === "text"
-    ? { ...(tagged ? tagged.modelPayload : {}), ...(rawStructuredContent || {}) }
-    : (tagged ? tagged.modelPayload : rawStructuredContent);
+  const modelPayload = tagged ? tagged.modelPayload : rawStructuredContent;
   const cardPayload = tagged ? tagged.cardPayload : undefined;
 
   const generatedSummary = typeof summarizeToolResult === "function"
