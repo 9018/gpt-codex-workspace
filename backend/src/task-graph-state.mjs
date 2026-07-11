@@ -21,6 +21,8 @@
 
 export const GRAPH_NODES = Object.freeze({
   CREATED: 'created',
+  FANOUT_WAITING: 'fanout_waiting',
+  JOIN_WAITING: 'join_waiting',
   CONTEXT_PREPARED: 'context_prepared',
   BUILDER_RUNNING: 'builder_running',
   RESULT_PARSED: 'result_parsed',
@@ -61,6 +63,11 @@ function _allow(from, to) {
 
 // Normal forward progression
 _allow(GRAPH_NODES.CREATED, GRAPH_NODES.CONTEXT_PREPARED);
+_allow(GRAPH_NODES.CREATED, GRAPH_NODES.FANOUT_WAITING);
+_allow(GRAPH_NODES.FANOUT_WAITING, GRAPH_NODES.CONTEXT_PREPARED);
+_allow(GRAPH_NODES.CREATED, GRAPH_NODES.JOIN_WAITING);
+_allow(GRAPH_NODES.JOIN_WAITING, GRAPH_NODES.CONTEXT_PREPARED);
+_allow(GRAPH_NODES.JOIN_WAITING, GRAPH_NODES.FAILED_TERMINAL);
 _allow(GRAPH_NODES.CONTEXT_PREPARED, GRAPH_NODES.BUILDER_RUNNING);
 _allow(GRAPH_NODES.BUILDER_RUNNING, GRAPH_NODES.RESULT_PARSED);
 _allow(GRAPH_NODES.RESULT_PARSED, GRAPH_NODES.VERIFIED);
@@ -199,6 +206,8 @@ export function formatGraphDiagnostic(task) {
   // Why not closed — describe the next expected step based on current node
   const nextSteps = {
     [GRAPH_NODES.CREATED]: 'waiting for context preparation',
+    [GRAPH_NODES.FANOUT_WAITING]: 'waiting for fan-out parallelism',
+    [GRAPH_NODES.JOIN_WAITING]: 'waiting for join condition',
     [GRAPH_NODES.CONTEXT_PREPARED]: 'waiting for builder execution',
     [GRAPH_NODES.BUILDER_RUNNING]: 'waiting for result parsing',
     [GRAPH_NODES.RESULT_PARSED]: 'waiting for verification',

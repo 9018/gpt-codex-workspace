@@ -63,7 +63,7 @@ async function createTaskInStore(store, overrides = {}) {
 
 test("GRAPH_NODES has exactly 15 lifecycle nodes", () => {
   const values = Object.values(GRAPH_NODES);
-  assert.equal(values.length, 15);
+  assert.equal(values.length, 17);
   assert.ok(values.every((v) => typeof v === "string" && v.length > 0));
 });
 

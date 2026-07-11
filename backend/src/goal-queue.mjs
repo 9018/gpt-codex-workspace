@@ -202,6 +202,7 @@ export async function enqueueGoal(store, goalId, opts = {}) {
     goal_id: goalId,
     task_id: null,
     workspace_id: opts.workspace_id || goal.workspace_id || "hosted-default",
+    workstream_id: opts.workstream_id || goal.workstream_id || null,
     repo_id: normalizeRepoId(opts.repo_id || goal.repo_id || "", opts),
     position,
     status: QUEUE_STATUS_WAITING,
