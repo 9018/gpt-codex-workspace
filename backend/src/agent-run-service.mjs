@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { DEFAULT_AGENT_PIPELINE, normalizeAgentRole, validateAgentRoles } from "./subagent-policy.mjs";
 import { ARTIFACT_SCHEMA, AGENT_ROLE_ENUM, normalizeContractRole, validateAgentArtifactContract } from "./agent-artifact-contract.mjs";
 import { missingAgentRunEvidence } from "./evidence/operation-evidence-profiles.mjs";
+import { buildDefaultSubagentSkeleton, getPhaseForRole, isRepairRole } from "./subagents/subagent-policy.mjs";
+import { normalizeSubagentResult, normalizeSubagentResults, inferPipelineStatus, inferCurrentPhase, inferNextExpectedEvent, collectBlockers } from "./subagents/subagent-result-normalizer.mjs";
 
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
@@ -291,6 +293,12 @@ export function evaluateAgentGates(agentRuns = []) {
  * @param {object[]} agentRuns - Array of agent run objects
  * @returns {object} Consolidated completion artifact
  */
+
+// ---------------------------------------------------------------------------
+// G3: Subagent progress integration -- structured subagent state from agent runs
+// ---------------------------------------------------------------------------
+
+
 export function buildAgentCompletionArtifact(agentRuns = []) {
   const gateStatus = evaluateAgentGates(agentRuns);
   const artifacts = getAgentRunArtifacts(agentRuns);

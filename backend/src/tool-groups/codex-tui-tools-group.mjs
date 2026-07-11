@@ -31,6 +31,7 @@ import {
   stopCodexTuiSession,
 } from "../codex-tui-session-manager.mjs";
 import { collectCodexTuiCompletion } from "../codex-tui-completion-collector.mjs";
+import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 
 function gitStatusShort(repoPath) {
   try {
@@ -80,6 +81,10 @@ export function createCodexTuiToolsGroup({
 } = {}) {
   const metadata = tuiToolMetadata();
   const workspaceRoot = config?.defaultWorkspaceRoot || config?.defaultWorkspaceRootPath;
+  const progressStore = createCodexTuiSessionStore({ workspaceRoot });
+  const progressReadFn = progressStore;
+  const readGoalProgress = (g) => progressStore.readGoalProgress(g);
+  const readGoalSubagents = (g) => progressStore.readGoalSubagents(g);
 
   function sessionWorkspaceRoots() {
     return [config?.defaultRepoPath, config?.defaultWorkspaceRoot].filter(Boolean);
@@ -311,12 +316,60 @@ export function createCodexTuiToolsGroup({
         return stopped;
       },
     }),
-    codex_tui_collect: tool({
+codex_tui_collect: tool({
       name: "codex_tui_collect",
       description: "Collect durable completion evidence for a Codex TUI session without reading TUI screen text.",
       inputSchema: schema({ session_id: "string" }, ["session_id"]),
       ...metadata,
       handler: async ({ session_id }) => collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot }),
+    }),
+
+    // -- Structured subagent progress tools (no ANSI parsing) ----------------
+
+    codex_tui_progress: tool({
+      name: "codex_tui_progress",
+      description: "Read structured subagent pipeline progress for a goal without parsing ANSI TUI screen output. Returns phase, status, current_action, blockers, next_expected_event, last_progress_at, and subagent states.",
+      inputSchema: schema({ goal_id: "string" }, ["goal_id"]),
+      ...metadata,
+      handler: async ({ goal_id }) => {
+        const progress = await readGoalProgress(goal_id);
+        if (!progress) {
+          return {
+            kind: "no_progress",
+            goal_id,
+            status: "no_data",
+            detail: "No progress.json found for this goal. The goal may not have started execution yet.",
+          };
+        }
+        return {
+          kind: "subagent_progress",
+          goal_id,
+          ...progress,
+        };
+      },
+    }),
+    codex_tui_subagents: tool({
+      name: "codex_tui_subagents",
+      description: "Read structured subagent results for a goal without parsing ANSI TUI screen output. Returns an array of subagent results with role, status, summary, changed_files, artifacts, blockers, and timestamps.",
+      inputSchema: schema({ goal_id: "string" }, ["goal_id"]),
+      ...metadata,
+      handler: async ({ goal_id }) => {
+        const subagents = await readGoalSubagents(goal_id);
+        if (!subagents || !Array.isArray(subagents) || subagents.length === 0) {
+          return {
+            kind: "no_subagents",
+            goal_id,
+            subagents: [],
+            count: 0,
+          };
+        }
+        return {
+          kind: "subagent_results",
+          goal_id,
+          subagents,
+          count: subagents.length,
+        };
+      },
     }),
   };
 }
