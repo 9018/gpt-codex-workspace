@@ -47,7 +47,7 @@ test("open_project_context returns bounded first-step project context", async ()
   assert.ok(Array.isArray(context.file_tree));
   assert.ok(context.file_tree.length <= 80);
   assert.ok(context.recommended_next_tools.includes("create_encoded_goal"));
-  assert.match(response.result.content[0].text, /Project Context/);
+  assert.match(response.result.content[0].text, /项目上下文/);
 });
 
 test("open_project_context reports current blockers separately from raw legacy history", async () => {
@@ -210,9 +210,10 @@ test("P0 integrated context and cards keep raw history out of current blockers",
     params: { name: "worker_status", arguments: {} },
   }, { authorization: "Bearer test-token" });
   const workerText = workerResponse.result.content[0].text;
-  assert.match(workerText, /waiting_for_repair/);
+  assert.match(workerText, /阻塞：1/);
+  assert.doesNotMatch(workerText, /waiting_for_repair/);
   assert.match(JSON.stringify(workerResponse.result.structuredContent.queue), /waiting_for_repair/);
-  assert.match(JSON.stringify(workerResponse.result.structuredContent.card || {}), /waiting_for_repair/);
+  assert.equal(workerResponse.result.structuredContent.card, undefined);
 });
 
 test("gptwork CLI settings show/set edits runtime env file", async () => {
