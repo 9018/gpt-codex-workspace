@@ -1,6 +1,6 @@
 # G2: Codex TUI in Task Worktree
 
-**Status:** Implemented
+**Status:** Implemented + Verified
 **Workstream:** ws_gptwork_tui_productization_20260711
 **Root Goal:** goal_48d055ee-82b6-415b-8d98-65cb7662aaaf
 **Depends on:** G1 (Goal goal_4de62df1-b3d4-402d-94cb-903f05e2352a)
@@ -211,3 +211,34 @@ Verified by test `G2-3: two tasks get distinct worktree paths and cwds`.
 - The returned `cwd` is now the worktree path, not the canonical repo path.
   Callers that relied on `cwd` being the canonical repo must update.
 - Lock path changed to the worktree; any external lock watchers must adjust.
+
+## Repair Verification
+
+**Attempt 1 (goal_7939b7b1)** — repaired `changed_files_mismatch` finding.
+
+### Root Cause
+
+The previous execution (goal_7e9c6bfb) correctly committed all nine changed files
+in commit 8721310, but its result.json used path `backend/src/codex-tui-tools-group.mjs`
+(no `tool-groups/` prefix). The actual file lives at
+`backend/src/tool-groups/codex-tui-tools-group.mjs`. The acceptance agent's
+`changed_files_mismatch` check found zero matches for the wrong path and flagged
+every entry as missing.
+
+### Verification
+
+| Check | Result |
+|-------|--------|
+| All nine files exist in git HEAD | ✓ |
+| `backend/src/tool-groups/codex-tui-tools-group.mjs` (correct path) | ✓ |
+| `execution-service.test.mjs` — 7 tests | 7/7 pass |
+| `codex-tui-task-worktree.test.mjs` — 4 tests | 4/4 pass |
+| `codex-tui-tools-group.test.mjs` — 8 tests | 8/8 pass |
+| Two tasks get distinct worktree paths and cwds | ✓ (G2-3) |
+| cwd = task_worktree_path, not canonical repo | ✓ (G2-1) |
+| Git diff matches declared changed files | ✓ |
+
+### Git History
+
+- `8721310` — G2: Codex TUI executes in isolated task worktree (original implementation)
+- `HEAD` — latest commit from this repair attempt (verification + docs update)
