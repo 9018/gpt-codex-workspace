@@ -332,6 +332,73 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     }
   }
 
+  if (name === "workstream_status") {
+    for (const key of [
+      "workstream",
+      "workstreams",
+      "workstream_record",
+      "dag",
+      "execution_graph",
+      "tasks",
+      "task_list",
+      "tui",
+      "tui_progress",
+      "subagents",
+      "acceptance",
+      "acceptance_result",
+      "repair",
+      "repair_record",
+      "chatgpt_requests",
+      "escalations",
+      "pending_decisions",
+      "diagnostics",
+      "blockers",
+      "warnings",
+      "errors",
+      "next_actions",
+      "suggested_actions",
+      "summary",
+      "status",
+    ]) {
+      if (base[key] !== undefined) modelPayload[key] = base[key];
+    }
+
+    // Extract workstream identity if available
+    const ws = base.workstream || base.workstream_record || {};
+    if (ws.id) modelPayload.workstream_id = ws.id;
+    if (ws.title) modelPayload.workstream_title = ws.title;
+    if (ws.status) modelPayload.workstream_status_field = ws.status;
+    if (ws.phase) modelPayload.workstream_phase = ws.phase;
+
+    // Bounded task counts for model reasoning
+    if (Array.isArray(base.tasks)) {
+      modelPayload.task_count = base.tasks.length;
+      const statusCounts = {};
+      for (const t of base.tasks) {
+        const s = t.status || "unknown";
+        statusCounts[s] = (statusCounts[s] || 0) + 1;
+      }
+      modelPayload.task_status_counts = statusCounts;
+    }
+
+    // DAG summary for model reasoning
+    const d = base.dag || base.execution_graph || {};
+    if (d.node_count != null || d.nodes?.length != null) {
+      modelPayload.dag_node_count = d.node_count || d.nodes?.length;
+      modelPayload.dag_ready_count = d.ready_count || d.ready_nodes?.length;
+      modelPayload.dag_blocked_count = d.blocked_count || d.blocked_nodes?.length;
+    }
+
+    // ChatGPT requests pending summary
+    const reqs = base.chatgpt_requests || base.escalations || [];
+    if (Array.isArray(reqs) && reqs.length > 0) {
+      modelPayload.chatgpt_request_count = reqs.length;
+      modelPayload.chatgpt_pending_count = reqs.filter(r =>
+        !r.resolved && r.status !== "resolved" && r.status !== "completed"
+      ).length;
+    }
+  }
+
   // Legacy compat fields — bounded, sourced from card view model, never raw base
   if (legacy.keyValues) {
     modelPayload.keyValues = legacy.keyValues;

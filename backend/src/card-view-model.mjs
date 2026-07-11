@@ -7,12 +7,14 @@ import {
   isReviewOrRepairStatus,
   normalizeTaskStatus,
 } from "./task-status-taxonomy.mjs";
+import { buildWorkstreamStatusCard } from "./workstream/workstream-card-view-model.mjs";
 
 const CARD_VERSION = "gptwork-card-v1";
 const CARD_ENABLED_TOOLS = new Set([
   "gptwork_doctor",
   "gptwork_self_test",
   "show_changes",
+  "workstream_status",
   "read_handoff",
   "list_goals",
   "start_next_queued_goal",
@@ -677,6 +679,8 @@ export function buildCardViewModel(tool, data, meta = {}) {
       return buildGoalQueueCard(tool, payload, meta);
     case "run_assigned_codex_tasks":
       return buildRunAssignedCard(tool, payload, meta);
+    case "workstream_status":
+      return buildWorkstreamStatusCard(tool, payload, meta);
     case "product_status":
       return buildProductStatusCard(tool, payload, meta);
     default:
