@@ -241,14 +241,9 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.repair_evidence || result.repair_marker) return 'repair';
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
   if (hasChangedFiles || hasValue(result.commit)) {
-    // Check contract intent before defaulting to code_change.
-    // When the contract explicitly specifies a non-code_change operation kind
-    // that is compatible with having changed files (e.g. docs_only),
-    // respect the contract intent instead of inferring code_change.
-    const contractKind = contract?.intent?.operation_kind;
-    if (contractKind && contractKind !== 'unknown' && contractKind !== 'code_change') {
-      return String(contractKind);
-    }
+    // Material changed files are authoritative evidence of a code change.
+    // No-mutation profiles (diagnostic/noop/cleanup) must not suppress
+    // commit and integration requirements when the result changed source files.
     return 'code_change';
   }
 
