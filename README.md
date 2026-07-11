@@ -108,3 +108,12 @@ Do not put real tokens, `.env` contents, runtime secrets, GitHub tokens, notific
 ## License
 
 MIT
+
+## G7: Workstream Productization Integration
+
+The TUI Workstream productization (G1–G7) is fully integrated:
+
+- **End-to-end productization test**: `backend/test/e2e-workstream-productization.test.mjs` — covers creating Workstreams, context links, fan-out/join DAGs, acceptance controllers, repair/convergence, and full workstream flow.
+- **Hourly supervisor contract**: `backend/test/workstream-hourly-supervisor.test.mjs` — covers drift detection, stall recovery, ChatGPT direct edit priority, repair fallback, idempotency, and documentation enforcement.
+- **Doc**: `docs/workstreams/tui-productization/07-integration-release.md` — integration release notes.
+- **Current status**: `docs/current-status.md` — updated with G7 delivery details.

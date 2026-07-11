@@ -407,3 +407,12 @@ MIT
 - **Init/Onboarding**: `gptwork init / doctor --local / fix` 产品化流程。
 - **Retention**: `retentionCleanup` 支持 git 分支修剪、worktree 诊断、storage_pressure 门禁。
 - **Status Dashboard**: `product_status` 单命令面板。
+
+### G7: Workstream 产品化集成
+
+TUI Workstream 产品化 (G1–G7) 已完成全集成：
+
+- **端到端产品化测试**: `backend/test/e2e-workstream-productization.test.mjs` — 覆盖 Workstream 创建、上下文链接、fan-out/join DAG、验收控制器、修复/收敛、完整 Workstream 流程。
+- **小时巡检契约**: `backend/test/workstream-hourly-supervisor.test.mjs` — 覆盖漂移检测、停滞恢复、ChatGPT direct edit 优先、修复回退、幂等性、文档强制。
+- **集成发布文档**: `docs/workstreams/tui-productization/07-integration-release.md`
+- **当前状态**: `docs/current-status.md` 已更新 G7 交付详情。

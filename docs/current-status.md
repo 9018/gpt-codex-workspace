@@ -461,3 +461,43 @@ The evidence chain has been corrected with honest documentation.
 
 Close the acceptance evidence repair loop. Proceed to P0-Next-1 (Product Cockpit)
 per productization-next-goals plan.
+
+## G7: 集成、端到端发布、文档与小时巡检契约 (Completed)
+
+G7 将 G1–G6 的独立产出集成到统一的 Workstream 产品化系统中，新增两个集成测试套件并更新全局文档。
+
+### 端到端 Workstream 产品化测试
+
+`backend/test/e2e-workstream-productization.test.mjs` 覆盖：
+- **G1**: `createWorkstream` 创建 Workstream 和 CRUD，`linkWorkstreamContext` 绑定多上下文
+- **G2**: `checkWorktreeDirty` worktree 状态验证
+- **G3**: `DEFAULT_AGENT_PIPELINE` 和 `ALL_PIPELINE_ROLES` 结构化 subagent 管线
+- **G4**: `createWorkstreamFanout` 3 路并行 fan-out，`createWorkstreamJoin` all_completed/manual_release 合并，幂等性
+- **G5**: `evaluateAcceptance` 所有证据维度的验收决策，`runAcceptanceController` 控制流，`scheduleRepairAction` 修复编排
+- **G6**: 兼容性 normalizeLegacyGoalWorkstream/TaskWorkstream
+- **G7**: 完整 Workstream 流程（创建→链接→fan-out→join→验收→完成）
+
+### 小时巡检契约测试
+
+`backend/test/workstream-hourly-supervisor.test.mjs` 覆盖：
+- **正常推进**: `tickTaskAdvancement` 将 assigned→queued→running 的任务推进
+- **偏离纠正**: `detectDrift` 检测阶段错误、范围错误、停滞进度、终态队列不匹配
+- **停滞恢复**: `detectStall` 检测死 TUI 会话、停滞 worker、陈旧锁、终态不匹配
+- **ChatGPT direct edit 优先**: `scheduleRepairAction` 在有 corrections 时返回 direct_correction
+- **受限时 fallback repair task**: 无 corrections 时创建 repair goal，预算耗尽后 escalate
+- **幂等**: evaluateAcceptance、detectDrift、detectStall、tick* 函数、scheduleRepairAction 均幂等
+- **文档强制**: docs_only profile 要求 changed_files 含 .md 文件
+
+### 转移的文档
+
+| 文档 | 说明 |
+|---|---|
+| `docs/workstreams/tui-productization/07-integration-release.md` | G7 集成发布文档 |
+| `docs/workstreams/tui-productization/README.md` | 更新所有 Goal 状态为 completed |
+| `docs/workstreams/tui-productization/01-06.md` | 保留各子文档独立 commit |
+
+### 已验证
+
+- `npm run check:syntax` — 新文件语法无错误
+- `node --test 'test/e2e-workstream-productization.test.mjs'` — 所有测试通过
+- `node --test 'test/workstream-hourly-supervisor.test.mjs'` — 所有测试通过
