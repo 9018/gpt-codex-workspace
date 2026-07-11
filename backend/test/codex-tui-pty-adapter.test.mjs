@@ -101,6 +101,7 @@ test("pty adapter falls back to script when node-pty import fails", async () => 
   const output = [];
   const adapter = createCodexTuiPtyAdapter({
     loadPty: async () => { throw createCodexTuiUnavailableError(); },
+    allowScriptFallback: true,
     spawnImpl: fakeChild.spawnImpl,
   });
 
