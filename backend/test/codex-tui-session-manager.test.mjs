@@ -133,3 +133,32 @@ test("stores session metadata under explicit workspaceRoot instead of cwd", asyn
   assert.equal(stored.metadata.evidence_wait_ms, 1234);
   await assert.rejects(() => cwdStore.readSession(session.id, { maxChars: 0 }), /ENOENT|no such file/i);
 });
+
+test("spawn failure marks the durable session failed instead of leaving created", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-spawn-fail-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-spawn-fail-cwd-")));
+  const failingAdapter = {
+    async spawn() {
+      const err = new Error("no PTY");
+      err.code = "codex_tui_unavailable";
+      throw err;
+    },
+  };
+
+  await assert.rejects(
+    () => startCodexTuiGoalSession({
+      task: { id: "task_spawn_fail", title: "Spawn fail" },
+      goal: { id: "goal_spawn_fail" },
+      cwd,
+      workspaceRoot,
+      ptyAdapter: failingAdapter,
+    }),
+    /no PTY/
+  );
+
+  const store = createCodexTuiSessionStore({ workspaceRoot });
+  const record = await store.readSession("goal_spawn_fail_task_spawn_fail", { maxChars: 0 });
+  assert.equal(record.status, "failed");
+  assert.equal(record.error_code, "codex_tui_unavailable");
+  assert.match(record.error, /no PTY/);
+});

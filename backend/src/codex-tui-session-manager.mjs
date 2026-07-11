@@ -123,13 +123,24 @@ export async function startCodexTuiGoalSession({
 
   // Launch codex bare — no argv prompt.
   // Prompt is submitted via stdin after TUI is ready.
-  const ptySession = await adapter.spawn({
-    cwd,
-    command,
-    onData: (chunk) => {
-      store.appendSessionLog(sessionId, chunk).catch(() => {});
-    },
-  });
+  let ptySession;
+  try {
+    ptySession = await adapter.spawn({
+      cwd,
+      command,
+      onData: (chunk) => {
+        store.appendSessionLog(sessionId, chunk).catch(() => {});
+      },
+    });
+  } catch (err) {
+    await store.updateSession(sessionId, {
+      status: "failed",
+      error: err?.message || String(err),
+      error_code: err?.code || null,
+      failed_at: new Date().toISOString(),
+    }).catch(() => {});
+    throw err;
+  }
 
   activeSessions.set(sessionId, { store, ptySession });
 

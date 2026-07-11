@@ -65,7 +65,7 @@ function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], c
 export function createCodexTuiPtyAdapter({
   pty = undefined,
   loadPty = loadNodePty,
-  allowScriptFallback = false,
+  allowScriptFallback = true,
   spawnImpl = spawnChild,
   command: defaultCommand = "codex",
 } = {}) {

@@ -118,6 +118,8 @@ export function createCodexTuiToolsGroup({
     }
 
     const task = await findTaskFn(store, task_id);
+    task.metadata = { ...(task.metadata || {}), codex_execution_provider: "codex_tui_goal" };
+    await store.save?.(await store.load());
     const goal = await resolveGoalForTask(task, context);
     if (!goal?.id) {
       return { kind: "codex_tui_goal_missing", status: "blocked", task_id: task.id, reason: "Task has no resolvable goal_id" };
@@ -241,14 +243,38 @@ export function createCodexTuiToolsGroup({
       },
     });
 
-    // Phase 7: start TUI session within worktree, cwd = task_worktree_path
-    const session = await startCodexTuiGoalSessionFn({
-      task,
-      goal,
-      cwd: worktreePath,
-      workspaceRoot: workspaceRoot || canonicalRepoPath,
-      repoLockId: lockResult.lock?.safe_repo_id || null,
-    });
+    // Phase 7: start TUI session within worktree, cwd = task_worktree_path.
+    // Startup is transactional: a PTY failure must not leave a held lock or
+    // a half-created execution that appears to be running.
+    let session;
+    try {
+      session = await startCodexTuiGoalSessionFn({
+        task,
+        goal,
+        cwd: worktreePath,
+        workspaceRoot: workspaceRoot || canonicalRepoPath,
+        repoLockId: lockResult.lock?.safe_repo_id || null,
+      });
+    } catch (err) {
+      await execStore.updateExecution(execution.id, {
+        status: "failed",
+        error: err?.message || String(err),
+        error_code: err?.code || null,
+        finished_at: new Date().toISOString(),
+      }).catch(() => {});
+      await releaseRepoLockFn(workspaceRoot, worktreePath, task.id).catch(() => {});
+      return {
+        kind: "codex_tui_start_failed",
+        status: "failed",
+        provider: "codex_tui_goal",
+        task_id: task.id,
+        goal_id: goal.id,
+        execution_id: execution.id,
+        cwd: worktreePath,
+        error: err?.message || String(err),
+        error_code: err?.code || null,
+      };
+    }
 
     // Update execution with session info
     if (session?.id) {
