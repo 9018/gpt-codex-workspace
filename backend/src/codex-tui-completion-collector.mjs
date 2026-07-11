@@ -1,10 +1,8 @@
 /**
  * codex-tui-completion-collector.mjs — Collect durable completion evidence
- * from a Codex TUI session, checking result files from the session's worktree
- * path (cwd) rather than the canonical repository root.
- *
- * This ensures that TUI completion is always evaluated from the task worktree,
- * not the canonical repo, enabling isolated per-task worktree execution.
+ * from a Codex TUI session. Git evidence is read from the isolated task
+ * worktree, while canonical goal artifacts are resolved from the workspace
+ * root with a worktree-local fallback for backwards compatibility.
  */
 
 import { access, readFile } from "node:fs/promises";
@@ -123,9 +121,22 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   goalId = session.goal_id || null;
   taskId = session.task_id || null;
 
-  // Resolve result paths from the session cwd (task worktree path)
-  const resultJsonPath = goalId ? join(cwd, ".gptwork", "goals", goalId, "result.json") : null;
-  const resultMdPath = goalId ? join(cwd, ".gptwork", "goals", goalId, "result.md") : null;
+  // Goal artifacts are canonical workspace state. TUI sessions execute in an
+  // isolated worktree, but codex.entry.md instructs agents to write results to
+  // <workspaceRoot>/.gptwork/goals/<goalId>. Keep a worktree-local fallback so
+  // older sessions remain collectible.
+  const canonicalGoalDir = goalId ? join(root, ".gptwork", "goals", goalId) : null;
+  const worktreeGoalDir = goalId ? join(cwd, ".gptwork", "goals", goalId) : null;
+  const canonicalResultJsonPath = canonicalGoalDir ? join(canonicalGoalDir, "result.json") : null;
+  const canonicalResultMdPath = canonicalGoalDir ? join(canonicalGoalDir, "result.md") : null;
+  const worktreeResultJsonPath = worktreeGoalDir ? join(worktreeGoalDir, "result.json") : null;
+  const worktreeResultMdPath = worktreeGoalDir ? join(worktreeGoalDir, "result.md") : null;
+  const resultJsonPath = canonicalResultJsonPath && await fileExists(canonicalResultJsonPath)
+    ? canonicalResultJsonPath
+    : worktreeResultJsonPath;
+  const resultMdPath = canonicalResultMdPath && await fileExists(canonicalResultMdPath)
+    ? canonicalResultMdPath
+    : worktreeResultMdPath;
   const resultJsonPresent = resultJsonPath ? await fileExists(resultJsonPath) : false;
   const resultMdPresent = resultMdPath ? await fileExists(resultMdPath) : false;
   const resultJsonText = resultJsonPresent ? await readFile(resultJsonPath, "utf8") : "";

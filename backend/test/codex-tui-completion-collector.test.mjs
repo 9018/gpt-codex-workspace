@@ -239,3 +239,41 @@ test("collect returns null tests when result.md has no test evidence", async () 
   assert.equal(snapshot.commit, null, "commit is null when not in result.md or session");
   assert.equal(snapshot.result_md_present, true, "result.md exists");
 });
+
+test("collect resolves canonical goal artifacts from workspace root when session cwd is an isolated worktree", async () => {
+  const workspace = await makeGitRepo("codex-tui-collector-workspace-");
+  const worktree = track(await mkdtemp(join(tmpdir(), "codex-tui-collector-worktree-")));
+  execFileSync("git", ["clone", "--quiet", workspace, worktree]);
+  execFileSync("git", ["config", "user.email", "test@example.com"], { cwd: worktree });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: worktree });
+
+  const store = createCodexTuiSessionStore({ workspaceRoot: workspace });
+  await store.createSession({
+    sessionId: "session_split_roots",
+    taskId: "task_split_roots",
+    goalId: "goal_split_roots",
+    cwd: worktree,
+    repoLockId: "repo_lock_split_roots",
+  });
+
+  const goalDir = join(workspace, ".gptwork", "goals", "goal_split_roots");
+  await mkdir(goalDir, { recursive: true });
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: worktree, encoding: "utf8" }).trim();
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    changed_files: ["README.md"],
+    tests: [{ status: "passed" }],
+    verification: { passed: true },
+    commit,
+  }));
+  await writeFile(join(goalDir, "result.md"), `Summary: completed\n\nTests: node --test\nCommit: ${commit}\n`);
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_split_roots", workspaceRoot: workspace });
+
+  assert.equal(snapshot.result_json_present, true);
+  assert.equal(snapshot.result_md_present, true);
+  assert.equal(snapshot.result_json_path, join(goalDir, "result.json"));
+  assert.equal(snapshot.result_md_path, join(goalDir, "result.md"));
+  assert.equal(snapshot.commit, commit);
+  assert.equal(snapshot.ready_for_review, true);
+});
