@@ -3,6 +3,8 @@
 import http from "node:http";
 import https from "node:https";
 
+const HTTP_TIMEOUT_MS = 60000;
+
 const DEFAULT_ENDPOINT = "https://mcp.gptwork.cc.cd/mcp";
 const endpoint = process.env.GPTWORK_MCP_URL || DEFAULT_ENDPOINT;
 const token = process.env.GPTWORK_API_TOKEN || "";
@@ -72,7 +74,13 @@ async function handleMessage(message) {
   }
 
   const response = await forwardToRemote(message);
-  if (isRequest && response) writeFrame(response);
+  if (isRequest) {
+    if (response) {
+      writeFrame(response);
+    } else {
+      sendJsonRpcError(message.id, -32000, "Remote MCP server did not return a result response to the request");
+    }
+  }
 }
 
 async function forwardToRemote(payload) {
@@ -97,7 +105,15 @@ async function forwardToRemote(payload) {
     throw new Error(`Remote MCP returned HTTP ${result.statusCode}: ${result.body.slice(0, 500)}`);
   }
 
-  return parseRemoteResponse(result.body);
+  const { response, pendingFrames } = parseRemoteResponse(result.body);
+
+  // Forward intermediate notification frames (no "id") to the client
+  // BEFORE the final result frame so ordering is predictable.
+  for (const frame of pendingFrames) {
+    writeFrame(frame);
+  }
+
+  return response;
 }
 
 function request(url, body, headers) {
@@ -126,15 +142,27 @@ function request(url, body, headers) {
       }
     );
 
+    req.setTimeout(HTTP_TIMEOUT_MS, () => {
+      req.destroy();
+      reject(new Error(`HTTP request to ${url.hostname} timed out after ${HTTP_TIMEOUT_MS}ms`));
+    });
+
     req.on("error", reject);
     req.write(body);
     req.end();
   });
 }
 
+/**
+ * Parse the remote HTTP response body and return:
+ *   { response: object|null, pendingFrames: object[] }
+ *
+ * pendingFrames holds intermediate SSE messages that have no "id"
+ * (e.g. progress notifications). The caller must forward these first.
+ */
 function parseRemoteResponse(body) {
   const trimmed = body.trim();
-  if (!trimmed) return null;
+  if (!trimmed) return { response: null, pendingFrames: [] };
 
   if (trimmed.startsWith("event:") || trimmed.startsWith("data:")) {
     const dataLines = [];
@@ -142,25 +170,27 @@ function parseRemoteResponse(body) {
       if (line.startsWith("data:")) dataLines.push(line.slice(5).trimStart());
     }
 
+    const pendingFrames = [];
     let finalResponse = null;
     for (const line of dataLines) {
       if (!line || line === "[DONE]") continue;
-      const message = JSON.parse(line);
-
-      // Notification (no id) — forward to client immediately, keep scanning
-      if (!Object.prototype.hasOwnProperty.call(message, "id")) {
-        writeFrame(message);
-        continue;
+      try {
+        const message = JSON.parse(line);
+        if (!Object.prototype.hasOwnProperty.call(message, "id")) {
+          pendingFrames.push(message);
+          continue;
+        }
+        finalResponse = message;
+      } catch (e) {
+        writeLog(`SSE data line parse error: ${e.message} — line: ${line.slice(0, 120)}`);
       }
-
-      // Response with id — keep the latest one as final
-      finalResponse = message;
     }
 
-    return finalResponse;
+    return { response: finalResponse, pendingFrames };
   }
 
-  return JSON.parse(trimmed);
+  // Non-SSE JSON-RPC response (application/json)
+  return { response: JSON.parse(trimmed), pendingFrames: [] };
 }
 
 function endpointHasPathToken(value) {
