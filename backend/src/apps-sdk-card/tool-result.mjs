@@ -173,7 +173,23 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
   // through _meta instead of leaking raw tool results by default.
   if (base.ok !== undefined) modelPayload.ok = base.ok;
   if (base.results !== undefined) modelPayload.results = base.results;
-  for (const key of ["task", "tasks", "goal", "goals", "conversation", "workspace_files", "acceptance_bundle", "review_packet"]) {
+  for (const key of [
+    "task",
+    "tasks",
+    "goal",
+    "goals",
+    "conversation",
+    "workspace_files",
+    "acceptance_bundle",
+    "review_packet",
+    "workstream",
+    "workstreams",
+    "link",
+    "links",
+    "kind",
+    "external_id",
+    "count",
+  ]) {
     if (base[key] !== undefined) modelPayload[key] = base[key];
   }
 

@@ -72,6 +72,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "create_goal",
   "create_task",
   "create_workspace",
+  "create_workstream",
   "create_zip_archive",
   "delete_path",
   "delete_workspace",
@@ -91,6 +92,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "get_task_acceptance_bundle",
   "get_task_review_packet",
   "get_workspace_info",
+  "get_workstream",
   "git_remote_changed_files",
   "git_remote_compare_local",
   "git_remote_diff",
@@ -109,6 +111,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "handoff_to_agent",
   "health_check",
   "import_task_handoffs",
+  "link_workstream_context",
   "list_agent_runs",
   "list_chatgpt_requests",
   "list_codex_sessions_metadata",
@@ -122,6 +125,8 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "list_repositories",
   "list_tasks",
   "list_workspaces",
+  "list_workstream_links",
+  "list_workstreams",
   "mkdir",
   "move_path",
   "notification_status",
@@ -135,6 +140,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "repo_lock_status",
   "request_human_review",
   "resolve_canonical_repository",
+  "resolve_workstream_by_context",
   "retention_cleanup",
   "retention_status",
   "run_agent_pipeline",
@@ -154,9 +160,10 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "test_bark_notification",
  "test_workspace_connection",
   "tmp_status",
- "update_goal_queue_item",
+  "update_goal_queue_item",
  "update_task_status",
  "update_workspace",
+  "update_workstream",
   "upload_base64_file",
   "upload_bundle_base64",
   "upload_from_url",
@@ -275,8 +282,8 @@ test("tools/list includes placeholder tools when GPTWORK_EXPOSE_PLACEHOLDER_TOOL
       assert.equal(names.includes(placeholder), true,
         `Placeholder tool "${placeholder}" SHOULD be in tools/list when env flag is set`);
     }
-    assert.equal(names.length, 140,
-      `Expected 140 tools with placeholder flag set, got ${names.length}`);
+    assert.equal(names.length, 147,
+      `Expected 147 tools with placeholder flag set, got ${names.length}`);
   } finally {
     delete process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS;
     if (oldVal !== undefined) process.env.GPTWORK_EXPOSE_PLACEHOLDER_TOOLS = oldVal;

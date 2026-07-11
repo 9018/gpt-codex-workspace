@@ -10,6 +10,7 @@
  */
 
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
+import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 // ---------------------------------------------------------------------------
 // State guard
@@ -40,7 +41,7 @@ export function findGoalInState(state, { goal_id, task_id } = {}) {
 // ---------------------------------------------------------------------------
 
 export function taskPayloadFromTask(task) {
-  return {
+  const payload = {
     user_request: task.description || task.title,
     goal_prompt: [
       `Task: ${task.title}`,
@@ -59,6 +60,10 @@ export function taskPayloadFromTask(task) {
     ],
     memories: []
   };
+  for (const key of WORKSTREAM_IDENTITY_FIELDS) {
+    if (task[key] !== undefined) payload[key] = task[key];
+  }
+  return payload;
 }
 
 // ---------------------------------------------------------------------------

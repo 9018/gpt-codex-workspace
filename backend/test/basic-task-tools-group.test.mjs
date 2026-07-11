@@ -49,6 +49,13 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
   assert.equal(tools.create_task.inputSchema.properties.suppress_notifications.type, 'boolean');
   assert.equal(tools.create_task.inputSchema.properties.notification_policy.type, 'string');
   assert.equal(tools.create_task.inputSchema.properties.metadata.type, 'object');
+  assert.equal(tools.create_task.inputSchema.properties.workstream_id.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.root_goal_id.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.parent_goal_id.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.phase.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.iteration.type, 'integer');
+  assert.equal(tools.create_task.inputSchema.properties.shard_key.type, 'string');
+  assert.equal(tools.create_task.inputSchema.properties.workflow_id.type, 'string');
 
   // list_tasks: all optional
   assert.deepEqual(tools.list_tasks.inputSchema.required, []);

@@ -2,6 +2,7 @@ import { basename } from 'node:path';
 import { findTask, updateTask, normalizeLegacyModes } from '../task-lifecycle.mjs';
 import { getTaskAcceptanceBundle } from '../review/task-acceptance-bundle.mjs';
 import { getTaskReviewPacket } from '../review/review-packet-builder.mjs';
+import { normalizeLegacyTaskWorkstream } from '../workstream/workstream-model.mjs';
 
 /**
  * Factory for basic task MCP tool registration.
@@ -25,7 +26,14 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       silent: { type: "boolean", description: "Set true to suppress ordinary task Bark notifications for this task." },
       suppress_notifications: { type: "boolean", description: "Set true to suppress ordinary task Bark notifications for this task." },
       notification_policy: { type: "string", description: "Task notification policy. Use 'silent' to suppress ordinary task Bark notifications." },
-      metadata: { type: "object", description: "Optional structured task metadata, including notification policy flags." }
+      metadata: { type: "object", description: "Optional structured task metadata, including notification policy flags." },
+      workstream_id: { type: "string", description: "Optional Workstream identity for this Task." },
+      root_goal_id: { type: "string", description: "Optional root Goal identity for this Task." },
+      parent_goal_id: { type: "string", description: "Optional parent Goal identity for this Task." },
+      phase: { type: "string", description: "Optional Workstream phase." },
+      iteration: { type: "integer", description: "Optional non-negative Workstream iteration." },
+      shard_key: { type: "string", description: "Optional Workstream shard key." },
+      workflow_id: { type: "string", description: "Optional workflow identity." }
     }, ["title"]),
       ...common,
       handler: async (args, context) => {
@@ -47,7 +55,13 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         let tasks = state.tasks;
         if (status) tasks = tasks.filter((task) => task.status === status);
         if (assignee) tasks = tasks.filter((task) => task.assignee === assignee);
-        return { tasks: tasks.slice(-limit).reverse() };
+        const goalsById = new Map((state.goals || []).map((goal) => [goal.id, goal]));
+        return {
+          tasks: tasks
+            .slice(-limit)
+            .reverse()
+            .map((task) => normalizeLegacyTaskWorkstream(task, goalsById.get(task.goal_id))),
+        };
       },
     }),
     get_task: tool({
@@ -55,7 +69,16 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       description: "Return a task.",
       inputSchema: schema({ task_id: "string" }, ["task_id"]),
       ...common,
-      handler: async ({ task_id }) => ({ task: await findTask(store, task_id) }),
+      handler: async ({ task_id }) => {
+        const task = await findTask(store, task_id);
+        const state = await store.load();
+        const goal = task.goal_id
+          ? (typeof store.findGoalById === "function"
+              ? await store.findGoalById(task.goal_id)
+              : state.goals.find((item) => item.id === task.goal_id))
+          : null;
+        return { task: normalizeLegacyTaskWorkstream(task, goal) };
+      },
     }),
     get_task_acceptance_bundle: tool({
       name: "get_task_acceptance_bundle",

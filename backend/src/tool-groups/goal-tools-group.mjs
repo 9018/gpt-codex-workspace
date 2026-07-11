@@ -5,7 +5,7 @@ export function createGoalToolsGroup({ tool, schema, config, store, eventLogger,
     create_goal: tool({
       name: "create_goal",
       description: "Create a shared goal from a ChatGPT-written goal prompt. Use this when ChatGPT turns the user's request into a Codex-executable goal. Stores the raw request, goal prompt, conversation messages, durable memories, workspace-visible context files, and optionally creates an assigned Codex task linked to the same context.",
-      inputSchema: schema({ user_request: 'string', goal_prompt: 'string', context_summary: 'string', project_id: 'string', workspace_id: 'string', mode: 'string', assign_to_codex: 'boolean', title: 'string', messages: 'array', memories: 'array', acceptance_contract: 'object', payload: 'object', payload_base64: 'string', preview_text: 'string', bundles: 'array' }, ['user_request', 'goal_prompt']),
+      inputSchema: schema({ user_request: 'string', goal_prompt: 'string', context_summary: 'string', project_id: 'string', workspace_id: 'string', mode: 'string', assign_to_codex: 'boolean', title: 'string', messages: 'array', memories: 'array', acceptance_contract: 'object', payload: 'object', payload_base64: 'string', preview_text: 'string', bundles: 'array', workstream_id: 'string', root_goal_id: 'string', parent_goal_id: 'string', phase: 'string', iteration: 'integer', shard_key: 'string', workflow_id: 'string' }, ['user_request', 'goal_prompt']),
       modes: ["standard", "codex", "full"],
       ...common,
       handler: async (args, context) => {

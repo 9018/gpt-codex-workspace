@@ -54,6 +54,8 @@ export class StateStore {
     this._idxGoalsByTaskId = null;
     this._idxConversationsById = null;
     this._idxMemoriesByGoalId = null;
+    this._idxWorkstreamsById = null;
+    this._idxWorkstreamLinksById = null;
     this._idxCodexActiveTasksByStatus = null;
     this._idxCodexTerminalTasksByStatus = null;
   }
@@ -68,6 +70,8 @@ export class StateStore {
     this._idxGoalsByTaskId = new Map();
     this._idxConversationsById = new Map();
     this._idxMemoriesByGoalId = new Map();
+    this._idxWorkstreamsById = new Map();
+    this._idxWorkstreamLinksById = new Map();
 
     // Split codex task indexes: active (pending work) vs terminal (done/failed)
     const codexActiveStatuses = new Set(CODEX_QUEUE_ACTIVE_STATUSES);
@@ -101,6 +105,12 @@ export class StateStore {
     for (const mem of this.state.memories || []) {
       if (!this._idxMemoriesByGoalId.has(mem.goal_id)) this._idxMemoriesByGoalId.set(mem.goal_id, []);
       this._idxMemoriesByGoalId.get(mem.goal_id).push(mem);
+    }
+    for (const workstream of this.state.workstreams || []) {
+      this._idxWorkstreamsById.set(workstream.id, workstream);
+    }
+    for (const link of this.state.context_links || []) {
+      this._idxWorkstreamLinksById.set(link.id, link);
     }
     this._indexesReady = true;
   }
@@ -174,6 +184,18 @@ export class StateStore {
     if (this._idxGoalsById) return this._idxGoalsById.get(id) ?? null;
     const state = await this.load();
     return state.goals.find((goal) => goal.id === id) || null;
+  }
+
+  async findWorkstreamById(id) {
+    if (this._idxWorkstreamsById) return this._idxWorkstreamsById.get(id) ?? null;
+    const state = await this.load();
+    return (state.workstreams || []).find((workstream) => workstream.id === id) || null;
+  }
+
+  async findWorkstreamLinkById(id) {
+    if (this._idxWorkstreamLinksById) return this._idxWorkstreamLinksById.get(id) ?? null;
+    const state = await this.load();
+    return (state.context_links || []).find((link) => link.id === id) || null;
   }
 
   findGoalByTaskId(taskId) {
@@ -378,6 +400,8 @@ export class StateStore {
         created_at: now,
         updated_at: now
       }],
+      workstreams: [],
+      context_links: [],
       goals: [],
       agent_runs: [],
       goal_queue: [],
