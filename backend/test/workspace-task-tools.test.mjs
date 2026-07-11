@@ -116,6 +116,33 @@ test("task tools create, list, update, and complete tasks", async () => {
   assert.equal(completed.task.result.summary, "Done");
 });
 
+test("create_task persists optional workstream identity on the linked Task and Goal", async () => {
+  const server = await makeServer();
+  const identity = {
+    workstream_id: "ws_productization",
+    root_goal_id: "goal_root",
+    parent_goal_id: "goal_parent",
+    phase: "implementation",
+    iteration: 2,
+    shard_key: "backend",
+    workflow_id: "wf_productization",
+  };
+
+  const created = await callTool(server, "create_task", {
+    title: "Implement backend shard",
+    description: "Add the workstream backend primitives.",
+    assignee: "codex",
+    ...identity,
+  });
+
+  for (const [key, value] of Object.entries(identity)) {
+    assert.equal(created.task[key], value);
+    assert.equal(created.goal[key], value);
+  }
+  assert.match(created.task.conversation_id, /^conv_/);
+  assert.equal(created.task.conversation_id, created.goal.conversation_id);
+});
+
 test("create_task accepts an encoded envelope and links it as a readable goal", async () => {
   const server = await makeServer();
   const payload = {
@@ -136,11 +163,19 @@ test("create_task accepts an encoded envelope and links it as a readable goal", 
   const created = await callTool(server, "create_task", {
     title: "Encoded deploy",
     description: JSON.stringify(envelope),
-    mode: "deploy"
+    mode: "deploy",
+    workstream_id: "ws_encoded",
+    root_goal_id: "goal_encoded_root",
+    phase: "deploy",
+    iteration: 3,
   });
 
   assert.equal(created.goal.goal_prompt, payload.goal_prompt);
   assert.equal(created.goal.preview_text, envelope.preview_text);
+  assert.equal(created.goal.workstream_id, "ws_encoded");
+  assert.equal(created.goal.root_goal_id, "goal_encoded_root");
+  assert.equal(created.goal.phase, "deploy");
+  assert.equal(created.goal.iteration, 3);
   assert.equal(created.task.goal_id, created.goal.id);
   const goalMd = await callTool(server, "read_text_file", { path: created.workspace_files.goal_md });
   assert.match(goalMd.content, /更新部署并连接目标服务/);

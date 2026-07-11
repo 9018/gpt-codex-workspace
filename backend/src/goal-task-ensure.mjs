@@ -4,6 +4,7 @@ import { ensureGoalState, taskPayloadFromTask, updateTask } from "./task-lifecyc
 import { createGoal } from "./goal-task-goals.mjs";
 import { decodeTaskDescriptionEnvelope } from "./goal-task-utils.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
+import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 export async function ensureTaskGoal(store, config, taskId, context = defaultTokenContext("system"), options = {}) {
   const state = await store.load();
@@ -31,8 +32,13 @@ export async function ensureTaskGoal(store, config, taskId, context = defaultTok
 
   const encoded = decodeTaskDescriptionEnvelope(task.description || "");
   const payload = encoded?.payload || taskPayloadFromTask(task);
+  const workstreamIdentity = {};
+  for (const key of WORKSTREAM_IDENTITY_FIELDS) {
+    if (task[key] !== undefined) workstreamIdentity[key] = task[key];
+  }
   const created = await createGoal(store, config, {
     ...payload,
+    ...workstreamIdentity,
     title: payload.title || task.title,
     project_id: payload.project_id || task.project_id,
     workspace_id: payload.workspace_id || task.workspace_id,

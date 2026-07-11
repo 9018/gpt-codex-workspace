@@ -8,6 +8,7 @@ import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
+import { normalizeLegacyGoalWorkstream, WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 const REPAIR_METADATA_KEYS = [
   "root_task_id",
@@ -61,6 +62,9 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     updated_at: now
   };
   for (const key of REPAIR_METADATA_KEYS) {
+    if (args[key] !== undefined) goal[key] = args[key];
+  }
+  for (const key of WORKSTREAM_IDENTITY_FIELDS) {
     if (args[key] !== undefined) goal[key] = args[key];
   }
 
@@ -151,5 +155,5 @@ export async function listGoals(store, { status, assignee, workspace_id, limit =
   if (assignee) goals = goals.filter((goal) => goal.assignee === assignee);
   if (workspace_id) goals = goals.filter((goal) => goal.workspace_id === workspace_id);
   const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return { goals: goals.slice(-maxItems).reverse() };
+  return { goals: goals.slice(-maxItems).reverse().map(normalizeLegacyGoalWorkstream) };
 }

@@ -6,6 +6,7 @@ import { ensureTaskGoal } from "./goal-task-ensure.mjs";
 import { defaultTaskExecutionFields, normalizeCreatedTaskMode } from "./goal-task-task-factory.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { setInitialGraphNode } from "./task-graph-state.mjs";
+import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 function copyNotificationPolicyFields(task, args) {
   for (const key of ["notify", "silent", "suppress_notifications", "notification_policy"]) {
@@ -41,6 +42,9 @@ export async function createTask(store, config, args, context = defaultTokenCont
     created_at: now,
     updated_at: now
   };
+  for (const key of WORKSTREAM_IDENTITY_FIELDS) {
+    if (args[key] !== undefined) task[key] = args[key];
+  }
   setInitialGraphNode(task);
   copyNotificationPolicyFields(task, args);
   state.tasks.push(task);

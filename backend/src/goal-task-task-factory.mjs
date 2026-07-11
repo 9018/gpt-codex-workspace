@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { TASK_STATUSES } from "./task-status-taxonomy.mjs";
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
+import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 // ---------------------------------------------------------------------------
 // Active task statuses — any task in one of these statuses is considered
@@ -93,6 +94,9 @@ export function buildGoalTask(goal, conversation, createdBy) {
     "repair_of_worktree",
     "repair_of_branch",
   ]) {
+    if (goal[key] !== undefined) task[key] = goal[key];
+  }
+  for (const key of WORKSTREAM_IDENTITY_FIELDS) {
     if (goal[key] !== undefined) task[key] = goal[key];
   }
   return task;

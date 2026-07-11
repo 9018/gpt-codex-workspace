@@ -40,6 +40,7 @@ import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs
 import { createCodexTuiToolsGroup } from "./tool-groups/codex-tui-tools-group.mjs";
 import { createProductStatusToolsGroup } from "./tool-groups/product-status-tools-group.mjs";
 import { createGoalMergeToolsGroup } from "./tool-groups/goal-merge-tools-group.mjs";
+import { createWorkstreamToolsGroup } from "./tool-groups/workstream-tools-group.mjs";
 import { readGoalWorkspace } from "./goal-workspace-status.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
@@ -286,6 +287,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
+    ...createWorkstreamToolsGroup({ tool, schema, store }),
     ...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }),
     ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),
     ...createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }),

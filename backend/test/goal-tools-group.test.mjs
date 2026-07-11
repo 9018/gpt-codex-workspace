@@ -43,6 +43,13 @@ test('goal tool group exposes stable public tool names and schemas', () => {
   assert.equal(tools.create_goal.inputSchema.properties.memories, 'array');
   assert.equal(tools.create_goal.inputSchema.properties.acceptance_contract, 'object');
   assert.equal(tools.create_goal.inputSchema.properties.payload, 'object');
+  assert.equal(tools.create_goal.inputSchema.properties.workstream_id, 'string');
+  assert.equal(tools.create_goal.inputSchema.properties.root_goal_id, 'string');
+  assert.equal(tools.create_goal.inputSchema.properties.parent_goal_id, 'string');
+  assert.equal(tools.create_goal.inputSchema.properties.phase, 'string');
+  assert.equal(tools.create_goal.inputSchema.properties.iteration, 'integer');
+  assert.equal(tools.create_goal.inputSchema.properties.shard_key, 'string');
+  assert.equal(tools.create_goal.inputSchema.properties.workflow_id, 'string');
 
   // create_encoded_goal: required params
   assert.deepEqual(tools.create_encoded_goal.inputSchema.required, ['preview_text', 'payload_base64']);

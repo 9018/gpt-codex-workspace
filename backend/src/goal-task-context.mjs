@@ -6,6 +6,7 @@ import { ensureGoalState, findGoalInState, normalizeLegacyModes } from "./task-l
 import { normalizeGoalMessage, normalizeGoalMemory } from "./goal-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
+import { normalizeLegacyGoalWorkstream, normalizeLegacyTaskWorkstream } from "./workstream/workstream-model.mjs";
 
 export async function getGoalContext(store, config, { goal_id, task_id } = {}, context = defaultTokenContext("system")) {
   requireScope(context, "project:read");
@@ -41,7 +42,16 @@ export async function getGoalContext(store, config, { goal_id, task_id } = {}, c
         : state.tasks.find((item) => item.id === goal.task_id)) || null
     : null;
 
-  return { goal, conversation, memories, task, workspace_files: goalWorkspaceFiles(goal), codex_instruction: codexInstruction(goal) };
+  const goalView = normalizeLegacyGoalWorkstream(goal);
+  const taskView = task ? normalizeLegacyTaskWorkstream(task, goalView) : null;
+  return {
+    goal: goalView,
+    conversation,
+    memories,
+    task: taskView,
+    workspace_files: goalWorkspaceFiles(goal),
+    codex_instruction: codexInstruction(goal),
+  };
 }
 
 // ---------------------------------------------------------------------------
