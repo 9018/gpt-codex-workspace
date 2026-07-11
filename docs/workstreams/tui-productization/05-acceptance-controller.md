@@ -129,28 +129,16 @@ and prioritize ChatGPT direct correction or create bounded repair tasks.
 
 ### Test Results
 
+Exact verification command executed after integration:
+
+```bash
+node --test backend/test/workstream-acceptance-controller.test.mjs \
+  backend/test/workstream-repair-budget.test.mjs \
+  backend/test/workstream-drift-stall.test.mjs \
+  backend/test/workstream-tick.test.mjs
 ```
-> node --test backend/test/workstream-acceptance-controller.test.mjs
-  backend/test/workstream-acceptance-controller.test.mjs
-  ...
-  tests 12
-  pass 12
 
-> node --test backend/test/workstream-repair-budget.test.mjs
-  ...
-  tests 8
-  pass 8
-
-> node --test backend/test/workstream-tick.test.mjs
-  ...
-  tests 6
-  pass 6
-
-> node --test backend/test/workstream-drift-stall.test.mjs
-  ...
-  tests 10
-  pass 10
-```
+Result: exit code `0`; `76/76` tests passed.
 
 ## Compatibility Notes
 
@@ -192,4 +180,4 @@ experience layer can surface through dashboards and notifications.
 
 ## Completion Commit
 
-[Commit hash reported in result.json]
+`d0718bb9b3cd06dfd9b80df61c345fdc2995cedb` (implementation completion commit; this documentation evidence correction is recorded in the following commit).
