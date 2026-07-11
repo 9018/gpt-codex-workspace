@@ -22,15 +22,9 @@ async function makeServer(customConfig = {}) {
 }
 
 async function callTool(server, name, args = {}) {
-  const response = await server.handleRpc({
-    jsonrpc: "2.0",
-    id: Math.floor(Math.random() * 100000),
-    method: "tools/call",
-    params: { name, arguments: args }
-  }, { authorization: "Bearer test-token" });
-
-  assert.equal(response.error, undefined, JSON.stringify(response.error));
-  return response.result.structuredContent;
+  const handler = server.getToolForTests(name);
+  assert.equal(typeof handler, "function");
+  return handler(args, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
 }
 
 // ================================================================

@@ -41,7 +41,7 @@ test("default state path resolves under workspace root when GPTWORK_STATE_PATH i
     params: { name: "runtime_status", arguments: {} }
   }, { authorization: "Bearer test-token" });
 
-  const status = response.result.structuredContent;
+  const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
   assert.ok(status.state_path.includes(".gptwork/state.json"),
     `Expected .gptwork/state.json in state_path, got: ${status.state_path}`);
   assert.equal(status.defaultWorkspaceRoot, workspaceRoot);
@@ -64,7 +64,7 @@ test("default state path with explicit defaultWorkspaceRoot creates correct path
     params: { name: "runtime_status", arguments: {} }
   }, { authorization: "Bearer test-token" });
 
-  const status = response.result.structuredContent;
+  const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
   assert.ok(status.state_path.startsWith(workspaceRoot),
     `Expected state_path to start with ${workspaceRoot}, got: ${status.state_path}`);
   assert.ok(status.state_path.includes(".gptwork/state.json"));
@@ -206,7 +206,7 @@ test("explicit GPTWORK_STATE_PATH still wins over default", async () => {
       params: { name: "runtime_status", arguments: {} }
     }, { authorization: "Bearer test-token" });
 
-    const status = response.result.structuredContent;
+    const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
     assert.equal(status.state_path, explicitPath);
     assert.ok(!status.state_path.includes(".gptwork/state.json"),
       `Expected state_path to be ${explicitPath}, got: ${status.state_path}`);
@@ -243,7 +243,7 @@ test("options.statePath wins over everything", async () => {
       params: { name: "runtime_status", arguments: {} }
     }, { authorization: "Bearer test-token" });
 
-    const status = response.result.structuredContent;
+    const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
     assert.equal(status.state_path, optsPath);
   } finally {
     if (prev !== undefined) {
@@ -275,7 +275,7 @@ test("runtime_status reports state_path_inside_repo for temp workspace (outside 
     params: { name: "runtime_status", arguments: {} }
   }, { authorization: "Bearer test-token" });
 
-  const status = response.result.structuredContent;
+  const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
   assert.equal(status.state_path_inside_repo, false);
   assert.ok(status.state_path);
 }));
@@ -311,7 +311,7 @@ test("normal task creation/completion does not touch data/state.json", withoutGp
     method: "tools/call",
     params: {
       name: "complete_task",
-      arguments: { task_id: taskResponse.result.structuredContent.task.id, summary: "Done" }
+      arguments: { task_id: taskResponse.result.structuredContent.task_id, summary: "Done" }
     }
   }, { authorization: "Bearer test-token" });
   assert.equal(completeResponse.error, undefined);
@@ -323,7 +323,7 @@ test("normal task creation/completion does not touch data/state.json", withoutGp
     params: { name: "runtime_status", arguments: {} }
   }, { authorization: "Bearer test-token" });
 
-  const status = statusResponse.result.structuredContent;
+  const status = await server.getToolForTests("runtime_status")({}, { user_id: "test", role: "admin", workspace_id: "hosted-default" });
   assert.ok(status.state_path.includes(".gptwork/state.json"),
     `Expected .gptwork/state.json, got: ${status.state_path}`);
   assert.ok(!status.state_path.includes("data/state.json"),

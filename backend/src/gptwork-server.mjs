@@ -197,6 +197,10 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
       return store;
     },
 
+    getToolForTests(name) {
+      return tools[name]?.handler || null;
+    },
+
     async reconcileStaleTasks(context = defaultTokenContext("worker")) {
       return reconciler.reconcileStaleTasks(context);
     },    // P2.1: Generate a human-readable summary from structured tool results
