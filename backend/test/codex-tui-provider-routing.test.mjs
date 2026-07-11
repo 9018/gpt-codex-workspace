@@ -129,6 +129,39 @@ test("codex_tui_goal metadata routes to session manager and does not invoke code
   assert.equal(store.state.tasks[0].result.tests, null);
 });
 
+test("worker does not start or materialize when a manual TUI owner already claimed the task", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "codex-tui-manual-owner-")));
+  const store = makeStore(root, {
+    status: "running",
+    metadata: {
+      codex_execution_provider: "codex_tui_goal",
+      tui_session_owner: "manual",
+      manual_tui_session_starting: true,
+    },
+  });
+  let materialized = false;
+  let started = false;
+
+  const result = await processGeneralTaskWithDeps(
+    store,
+    { defaultWorkspaceRoot: root, defaultRepoPath: root, enableTaskWorktrees: true, codexTuiEnabled: true },
+    store.state.tasks[0],
+    {},
+    {},
+    baseDeps(root, {
+      materializeTaskWorktreeFn: async () => { materialized = true; throw new Error("must not materialize"); },
+      startCodexTuiGoalSessionFn: async () => { started = true; throw new Error("must not start"); },
+    }),
+  );
+
+  assert.equal(result.kind, "codex_tui_owned_by_manual");
+  assert.equal(result.status, "running");
+  assert.equal(materialized, false);
+  assert.equal(started, false);
+  assert.equal(store.state.tasks[0].metadata.tui_session_owner, "manual");
+  assert.equal(store.state.tasks[0].status, "running");
+});
+
 test("codex_tui_goal ready evidence enters acceptance integration finalizer path", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-ready-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });

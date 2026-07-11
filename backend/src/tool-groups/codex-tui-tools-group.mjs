@@ -119,8 +119,9 @@ export function createCodexTuiToolsGroup({
 
     const task = await findTaskFn(store, task_id);
     const claimed = await updateTask(store, task.id, (item) => {
-      if (item.status === "running" && item.metadata?.tui_session_owner === "manual") {
-        const err = new Error(`manual Codex TUI session is already starting or running for task ${item.id}`);
+      const existingOwner = item.metadata?.tui_session_owner;
+      if (existingOwner) {
+        const err = new Error(`${existingOwner} Codex TUI session already owns task ${item.id}`);
         err.code = "codex_tui_task_already_claimed";
         throw err;
       }
@@ -337,10 +338,10 @@ export function createCodexTuiToolsGroup({
       if (!claimSettled) {
         await updateTask(store, claimedTask.id, (item) => {
           item.status = previousStatus;
-          item.metadata = {
-            ...(item.metadata || {}),
-            manual_tui_session_starting: false,
-          };
+          item.metadata = { ...(item.metadata || {}) };
+          delete item.metadata.tui_session_owner;
+          delete item.metadata.manual_tui_session_starting;
+          delete item.metadata.tui_session_id;
           item.logs ||= [];
           item.logs.push({ time: new Date().toISOString(), message: "[tui] manual session claim released before startup completed" });
         }).catch(() => {});

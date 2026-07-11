@@ -162,10 +162,11 @@ test("G2-1: codex_tui_start_goal reports failure when worktree materialization f
   const repo = await makeGitRepo("g2-1-wt-fail-");
   const taskId = "task_wt_fail";
 
+  const state = makeState(repo, taskId, "goal_wt_fail");
   const tools = createCodexTuiToolsGroup({
     tool: fakeTool,
     schema: fakeSchema,
-    store: makeStore(makeState(repo, taskId, "goal_wt_fail")),
+    store: makeStore(state),
     config: { defaultWorkspaceRoot: repo, defaultRepoPath: repo, codexTuiEnabled: true },
     resolveTaskRepositoryPlanFn: async () => ({
       canonical_repo_path: "/nonexistent/repo",
@@ -180,6 +181,8 @@ test("G2-1: codex_tui_start_goal reports failure when worktree materialization f
   const result = await tools.codex_tui_start_goal.handler({ task_id: taskId }, {});
   assert.equal(result.kind, "codex_tui_worktree_failed");
   assert.equal(result.status, "blocked");
+  assert.equal(state.tasks[0].metadata?.tui_session_owner, undefined);
+  assert.equal(state.tasks[0].metadata?.manual_tui_session_starting, undefined);
 });
 
 // ===========================================================================

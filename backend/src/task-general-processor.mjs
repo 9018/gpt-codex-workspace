@@ -614,6 +614,47 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       return pluginMissingResult;
     }
 
+    let workerClaimedTui = false;
+    let manualOwner = null;
+    await updateTaskFn(store, task.id, (item) => {
+      const existingOwner = item.metadata?.tui_session_owner;
+      if (existingOwner === "manual") {
+        manualOwner = {
+          session_id: item.metadata?.tui_session_id || item.result?.session_id || null,
+          starting: item.metadata?.manual_tui_session_starting === true,
+        };
+        return;
+      }
+      if (existingOwner && existingOwner !== "worker") {
+        manualOwner = { session_id: item.metadata?.tui_session_id || null, starting: true };
+        return;
+      }
+      item.status = "running";
+      item.metadata = {
+        ...(item.metadata || {}),
+        codex_execution_provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+        tui_session_owner: "worker",
+        worker_tui_session_starting: true,
+      };
+      item.logs ||= [];
+      item.logs.push({ time: new Date().toISOString(), message: "[worker] claimed Codex TUI execution ownership" });
+      workerClaimedTui = true;
+    });
+    if (!workerClaimedTui) {
+      return {
+        kind: "codex_tui_owned_by_manual",
+        provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+        status: "running",
+        task_id: task.id,
+        goal_id: goal?.id || null,
+        session_id: manualOwner?.session_id || null,
+        starting: manualOwner?.starting === true,
+        skipped: true,
+        reason: "Manual Codex TUI execution already owns this task",
+      };
+    }
+
+
     // Acquire repo lock before starting TUI session
     const tuiLockPath = executionCwd || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath;
     let tuiLockAcquired = false;
@@ -662,6 +703,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
     await updateTaskFn(store, task.id, (item) => {
       item.status = "waiting_for_review";
+      item.metadata = {
+        ...(item.metadata || {}),
+        tui_session_owner: "worker",
+        worker_tui_session_starting: false,
+        tui_session_id: session.id,
+      };
       item.result = sessionStartedResult;
       item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal session started: ${session.id}` });
     });

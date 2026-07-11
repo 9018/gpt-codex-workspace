@@ -90,6 +90,31 @@ test("codex_tui_start_goal rejects when disabled", async () => {
   assert.equal(result.status, "disabled");
 });
 
+test("codex_tui_start_goal refuses a task already claimed by the worker", async () => {
+  const state = makeState("/tmp/repo", "task_worker_owned", "goal_worker_owned");
+  state.tasks[0].status = "running";
+  state.tasks[0].metadata = {
+    codex_execution_provider: "codex_tui_goal",
+    tui_session_owner: "worker",
+    worker_tui_session_starting: true,
+  };
+  let materialized = false;
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store: makeStore(state),
+    config: { defaultWorkspaceRoot: "/tmp/gptwork", defaultRepoPath: "/tmp/repo", codexTuiEnabled: true },
+    materializeTaskWorktreeFn: async () => { materialized = true; throw new Error("must not materialize"); },
+  });
+
+  await assert.rejects(
+    tools.codex_tui_start_goal.handler({ task_id: "task_worker_owned" }, {}),
+    (err) => err?.code === "codex_tui_task_already_claimed" && /worker/.test(err.message),
+  );
+  assert.equal(materialized, false);
+  assert.equal(state.tasks[0].metadata.tui_session_owner, "worker");
+});
+
 test("codex_tui_start_goal refuses a dirty task worktree", async () => {
   const repo = await makeGitRepo();
   const taskId = "task_dirty_wt";
