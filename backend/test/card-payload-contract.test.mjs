@@ -34,6 +34,7 @@ async function makeServer(extra = {}) {
     defaultWorkspaceRoot: join(root, "workspace"),
     tokens: ["test-token"],
     requireAuth: true,
+    renderMode: "card",
     ...extra,
   });
 }

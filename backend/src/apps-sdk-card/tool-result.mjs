@@ -173,6 +173,12 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
   // through _meta instead of leaking raw tool results by default.
   if (base.ok !== undefined) modelPayload.ok = base.ok;
   if (base.results !== undefined) modelPayload.results = base.results;
+  const omitDeepQueryFields = new Set(
+    name === "list_tasks" ? ["tasks"]
+      : name === "get_task" ? ["task"]
+        : name === "create_task" ? ["task", "goal", "conversation"]
+        : []
+  );
   for (const key of [
     "task",
     "tasks",
@@ -190,7 +196,15 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     "external_id",
     "count",
   ]) {
-    if (base[key] !== undefined) modelPayload[key] = base[key];
+    if (!omitDeepQueryFields.has(key) && base[key] !== undefined) modelPayload[key] = base[key];
+  }
+
+  if (name === "get_task" && base.task && typeof base.task === "object") {
+    const task = pickTaskForModel(base.task);
+    if (task?.id !== undefined) modelPayload.task_id = task.id;
+    if (task?.goal_id !== undefined) modelPayload.goal_id = task.goal_id;
+    if (task?.status !== undefined) modelPayload.task_status = task.status;
+    if (task?.title !== undefined) modelPayload.title = task.title;
   }
 
   if (name === "worker_status") {
