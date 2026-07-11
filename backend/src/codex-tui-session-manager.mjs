@@ -2,6 +2,7 @@ import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
 import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
 import { join } from "node:path";
+import { mkdir, rm, symlink } from "node:fs/promises";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -144,10 +145,16 @@ async function startCodexTuiGoalSessionImpl({
   // This is deterministic across node-pty and script(1), and avoids synthetic
   // keystrokes racing the terminal's initialization/input editor.
   const canonicalGoalDir = join(sessionStoreRoot, ".gptwork", "goals", goal.id);
+  const runtimeGoalRoot = join(cwd, ".gptwork", "runtime-goals");
+  const runtimeGoalDir = join(runtimeGoalRoot, goal.id);
+  await mkdir(runtimeGoalRoot, { recursive: true });
+  await rm(runtimeGoalDir, { recursive: true, force: true });
+  await symlink(canonicalGoalDir, runtimeGoalDir, "dir");
+  const portableGoalDir = `.gptwork/runtime-goals/${goal.id}`;
   const initialPrompt = buildCodexTuiGoalObjective({
     goalId: goal.id,
     taskTitle: task?.title || goal?.title || task?.id,
-    goalDir: canonicalGoalDir,
+    goalDir: portableGoalDir,
   });
   let ptySession;
   try {
