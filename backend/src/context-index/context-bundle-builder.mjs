@@ -148,6 +148,49 @@ function trimUtf8ToBytes(text, maxBytes) {
   return buf.subarray(0, maxBytes).toString("utf8").replace(/\uFFFD+$/u, "");
 }
 
+
+// ---------------------------------------------------------------------------
+// Phase 2: Intent detection for retrieval filtering
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine if a goal has readonly or diagnostic intent.
+ * @param {object} goal
+ * @returns {boolean}
+ */
+function isReadonlyOrDiagnosticGoal(goal) {
+  if (!goal) return false;
+  const mode = (goal.mode || "").toLowerCase();
+  const title = (goal.title || "").toLowerCase();
+  const userRequest = (goal.user_request || "").toLowerCase();
+  const goalPrompt = (goal.goal_prompt || "").toLowerCase();
+  const combined = `${title} ${userRequest} ${goalPrompt}`;
+
+  // Direct mode check
+  if (["readonly", "diagnostic"].includes(mode)) return true;
+  // Text-based intent detection
+  const readonlySignals = [
+    "read-only", "readonly", "read only",
+    "diagnostic", "inspect", "report findings",
+    "do not modify", "do not change", "no mutations",
+    "do not write", "do not edit",
+  ];
+  const mutationSignals = [
+    "edit", "modify", "write file", "update config",
+    "restart", "deploy", "commit", "reboot",
+    "systemctl", "sed -i", "rm ",
+  ];
+  const hasReadonlySignal = readonlySignals.some((s) => combined.includes(s));
+  const hasMutationSignal = mutationSignals.some((s) => combined.includes(s));
+  if (hasReadonlySignal && !hasMutationSignal) return true;
+  if (hasReadonlySignal && hasMutationSignal) {
+    const roCount = readonlySignals.filter((s) => combined.includes(s)).length;
+    const mutCount = mutationSignals.filter((s) => combined.includes(s)).length;
+    return roCount >= mutCount;
+  }
+  return false;
+}
+
 function selectBundleChunks(chunks = [], { goal = null, task = null, maxTokens = DEFAULT_MAX_TOKENS, maxChunks = DEFAULT_MAX_CHUNKS } = {}) {
   const cap = clampPositiveInt(maxChunks, DEFAULT_MAX_CHUNKS, 1, 20);
   const sourceBudget = Math.max(220, Math.floor(clampPositiveInt(maxTokens, DEFAULT_MAX_TOKENS, 256, 16000) * 0.52));
@@ -156,6 +199,10 @@ function selectBundleChunks(chunks = [], { goal = null, task = null, maxTokens =
   const bucketCounts = new Map();
   let used = 0;
   const quotas = DEFAULT_SOURCE_QUOTAS;
+
+  // Phase 2: Intent compatibility filtering
+  // Determine if current goal is readonly/diagnostic
+  const isReadonlyGoal = isReadonlyOrDiagnosticGoal(goal);
 
   const candidates = [];
   const input = Array.isArray(chunks) ? chunks : [];
@@ -166,6 +213,17 @@ function selectBundleChunks(chunks = [], { goal = null, task = null, maxTokens =
     const id = chunk.id || `${chunk.metadata?.goal_id || "unknown"}:${chunk.metadata?.source_type || "unknown"}:${chunk.metadata?.chunk_index ?? originalIndex}`;
     if (seen.has(id)) continue;
     seen.add(id);
+
+    // Phase 2: Filter out mutation chunks when current goal is readonly/diagnostic
+    if (isReadonlyGoal && chunk.metadata?.goal_id && chunk.metadata?.goal_id !== goal?.id) {
+      const chunkText = (chunk.text || "").toLowerCase();
+      const hasMutationContent = /\b(systemctl\s+(restart|stop|start|enable|disable)|sed\s+-i\b|rm\s+(-\w+\s+)?(\/|\.)|git\s+(commit|push|merge|rebase|checkout\s+-b)|deploy|restart\s+(service|app|nginx|docker|system)|reboot|kubectl\s+(apply|delete|create|patch|rollout)|docker\s+(rm|kill|stop|start|restart|compose\s+(up|down)))/.test(chunkText);
+      if (hasMutationContent) {
+        // Mark as excluded but continue iterating (don't add to candidates)
+        continue;
+      }
+    }
+
 
     const baseScore = Number.isFinite(Number(chunk.score)) ? Number(chunk.score) : 0;
     const { boost, reason } = evidenceBoostFor(goal, task, chunk);

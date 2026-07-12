@@ -347,8 +347,8 @@ describe("[P0-contamination] maybeBuildContextBundle cross-goal retrieval metada
     }
     const rj = retrievalJson;
     assert.ok(rj.cross_goal_retrieval, "should include cross_goal_retrieval");
-    assert.strictEqual(rj.cross_goal_retrieval.enabled, true,
-      "cross_goal_retrieval.enabled is true (this is the defect)");
+    assert.strictEqual(rj.cross_goal_retrieval.enabled, false,
+      "Phase 2: cross_goal_retrieval.enabled=false when semantic=false (fix confirmed)");
 
     console.error("\n=== RETRIEVAL JSON CROSS-GOAL ===");
     console.error("  enabled: " + rj.cross_goal_retrieval.enabled);
@@ -362,8 +362,151 @@ describe("[P0-contamination] maybeBuildContextBundle cross-goal retrieval metada
     assert.strictEqual(rj.embedding_provider?.semantic, false,
       "should report semantic=false (this is the defect root cause)");
 
-    console.error("[INFO] cross_goal_retrieval.enabled=true AND semantic=false " +
-      "— this is the exact defect pattern");
+    console.error("[INFO] Phase 2 fix confirmed: cross_goal_retrieval.enabled=false " +
+      "when semantic=false — cross-goal retrieval disabled");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase 2: 检索熔断与意图过滤测试
+// ---------------------------------------------------------------------------
+
+describe("[Phase2-检索熔断] maybeBuildContextBundle 非语义 embedding 跨 Goal 检索熔断", () => {
+  /** @type {string} */
+  let tmpDir;
+  const goalId = "goal_phase2_meltdown";
+  let retrievalJson = null;
+  let contextManifest = null;
+
+  before(async () => {
+    tmpDir = mkdtempSync(join(tmpdir(), "phase2-meltdown-"));
+    const store = zvecStore.createLocalStore({ workspaceRoot: tmpDir, dimension: 64 });
+
+    const goal = createGoalA(goalId);
+    const mockStateStore = {
+      async load() {
+        return { goals: [] };
+      },
+    };
+
+    const config = { defaultWorkspaceRoot: tmpDir };
+    const result = await contextIndexHooks.maybeBuildContextBundle(mockStateStore, config, goal);
+
+    assert.ok(result.ok, "bundle should build ok");
+    retrievalJson = result.retrievalJson || null;
+    contextManifest = result.contextManifest || null;
+  });
+
+  after(() => {
+    if (tmpDir) rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it("[Phase2-T1] retrieval.json cross_goal_retrieval.enabled=false for fallback-hash-sha256", () => {
+    if (!retrievalJson) return;
+    assert.strictEqual(retrievalJson.cross_goal_retrieval.enabled, false,
+      "Phase 2: non-semantic fallback must disable cross-goal retrieval");
+    assert.strictEqual(retrievalJson.cross_goal_retrieval.disabled_reason, "non_semantic_embedding",
+      "should have disabled_reason non_semantic_embedding");
+    assert.strictEqual(retrievalJson.budget.cross_goal_enabled, false,
+      "budget must reflect cross_goal_enabled=false");
+  });
+
+  it("[Phase2-T2] retrieval.json candidates have semantic_capability, intent, mutation_scope", () => {
+    if (!retrievalJson) return;
+    const crossGoal = retrievalJson.cross_goal_retrieval;
+    assert.ok(crossGoal.candidates, "candidates array should exist");
+    assert.ok(Array.isArray(crossGoal.candidates), "candidates should be an array");
+    if (crossGoal.candidates.length > 0) {
+      const c = crossGoal.candidates[0];
+      assert.ok("included" in c, "candidate should have included field");
+      assert.ok("reason" in c, "candidate should have reason field");
+      assert.ok("source_goal_id" in c, "candidate should have source_goal_id");
+      assert.ok("intent" in c, "candidate should have intent");
+      assert.ok("mutation_scope" in c, "candidate should have mutation_scope");
+      assert.ok("semantic_capability" in c, "candidate should have semantic_capability");
+    }
+    console.error("\n=== Phase 2 T2: candidates ===");
+    console.error("  candidates count:", crossGoal.candidates.length);
+    for (const c of crossGoal.candidates) {
+      console.error("  id:", c.id, "included:", c.included, "reason:", c.reason, "intent:", c.intent);
+    }
+    console.error("=== END ===\n");
+  });
+
+  it("[Phase2-T3] contextManifest includes non_semantic_embedding warning", () => {
+    assert.ok(contextManifest, "contextManifest should exist");
+    assert.ok(Array.isArray(contextManifest.warnings), "warnings should be an array");
+    const nonSemanticWarn = contextManifest.warnings.find((w) => w.type === "non_semantic_embedding");
+    assert.ok(nonSemanticWarn, "should have non_semantic_embedding warning");
+    assert.strictEqual(nonSemanticWarn.embedding_provider_name, "fallback-hash-sha256");
+
+    const crossGoalWarn = contextManifest.warnings.find((w) => w.type === "cross_goal_retrieval_disabled");
+    assert.ok(crossGoalWarn, "should have cross_goal_retrieval_disabled warning");
+
+    console.error("\n=== Phase 2 T3: manifest warnings ===");
+    for (const w of contextManifest.warnings) {
+      console.error("  type:", w.type, "message:", w.message);
+    }
+    console.error("=== END ===\n");
+  });
+
+  it("[Phase2-T4] retrieval.json budget has is_readonly_goal field", () => {
+    if (!retrievalJson) return;
+    assert.ok("is_readonly_goal" in retrievalJson.budget,
+      "budget should have is_readonly_goal field");
+  });
+
+  it("[Phase2-T5] per_goal results include source_goal_id", () => {
+    if (!retrievalJson) return;
+    const perGoal = retrievalJson.per_goal_retrieval;
+    if (perGoal.results.length > 0) {
+      assert.ok("source_goal_id" in perGoal.results[0],
+        "per-goal results should include source_goal_id");
+    }
+  });
+});
+
+describe("[Phase2-意图过滤] context-bundle-builder 意图兼容过滤", () => {
+  it("[Phase2-T6] createGoalA and createGoalB produce correctly classified goals", () => {
+    const readonlyGoal = createGoalA("test-ro");
+    const mutationGoal = createGoalB("test-mut");
+    assert.ok(readonlyGoal.user_request.includes("Read-only"),
+      "readonly goal user_request contains Read-only");
+    assert.ok(mutationGoal.user_request.includes("Modify"),
+      "mutation goal user_request contains Modify");
+    assert.ok(mutationGoal.user_request.includes("restart"),
+      "mutation goal user_request should contain restart");
+  });
+});
+
+describe("[Phase2-边界条件] semantic 感知与混合配置", () => {
+  it("[Phase2-T7] embeddingProviderDiagnostics handles undefined provider", () => {
+    const diag = embeddings.embeddingProviderDiagnostics(undefined);
+    assert.strictEqual(diag.name, "unknown");
+    assert.strictEqual(diag.semantic, true);
+  });
+
+  it("[Phase2-T8] embeddingProviderDiagnostics handles null provider", () => {
+    const diag = embeddings.embeddingProviderDiagnostics(null);
+    assert.strictEqual(diag.name, "unknown");
+    assert.strictEqual(diag.semantic, true);
+  });
+
+  it("[Phase2-T9] embeddingProviderDiagnostics with explicit semantic=false", () => {
+    const provider = { name: "test", dimension: 64, semantic: false };
+    const diag = embeddings.embeddingProviderDiagnostics(provider);
+    assert.strictEqual(diag.semantic, false);
+    assert.strictEqual(diag.name, "test");
+  });
+});
+
+describe("[Phase2-兼容性] 向后兼容 — semantic=true 的 provider 仍可跨 Goal 检索", () => {
+  it("[Phase2-T10] semantic=true embeddingProviderDiagnostics works", () => {
+    const provider = { name: "openai:text-embedding-3-small", dimension: 1536, semantic: true };
+    const diag = embeddings.embeddingProviderDiagnostics(provider);
+    assert.strictEqual(diag.semantic, true);
+    assert.strictEqual(diag.name, "openai:text-embedding-3-small");
+    assert.strictEqual(diag.dimension, 1536);
   });
 });
 

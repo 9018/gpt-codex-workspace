@@ -70,6 +70,91 @@ function mergeRetrievedChunks({ perGoalRetrieved = [], crossGoalRetrieved = [], 
   return selected;
 }
 
+// ---------------------------------------------------------------------------
+// Intent & mutation scope analysis for retrieval filtering (Phase 2)
+// ---------------------------------------------------------------------------
+
+/**
+ * Determine if a goal has readonly or diagnostic intent.
+ * @param {object} goal
+ * @returns {boolean}
+ */
+function isReadonlyOrDiagnosticGoal(goal) {
+  if (!goal) return false;
+  const mode = (goal.mode || "").toLowerCase();
+  const title = (goal.title || "").toLowerCase();
+  const userRequest = (goal.user_request || "").toLowerCase();
+  const goalPrompt = (goal.goal_prompt || "").toLowerCase();
+  const combined = `${title} ${userRequest} ${goalPrompt}`;
+
+  // Direct mode check
+  if (["readonly", "diagnostic"].includes(mode)) return true;
+  // Text-based intent detection
+  const readonlySignals = [
+    "read-only", "readonly", "read only",
+    "diagnostic", "inspect", "report findings",
+    "do not modify", "do not change", "no mutations",
+    "do not write", "do not edit",
+  ];
+  const mutationSignals = [
+    "edit", "modify", "write file", "update config",
+    "restart", "deploy", "commit", "reboot",
+    "systemctl", "sed -i", "rm ",
+  ];
+  const hasReadonlySignal = readonlySignals.some((s) => combined.includes(s));
+  const hasMutationSignal = mutationSignals.some((s) => combined.includes(s));
+  if (hasReadonlySignal && !hasMutationSignal) return true;
+  if (hasReadonlySignal && hasMutationSignal) {
+    const roCount = readonlySignals.filter((s) => combined.includes(s)).length;
+    const mutCount = mutationSignals.filter((s) => combined.includes(s)).length;
+    return roCount >= mutCount;
+  }
+  return false;
+}
+
+/**
+ * Analyze a chunk's text for mutation-related content.
+ * @param {object} chunk
+ * @returns {{ hasMutationContent: boolean, reason: string }}
+ */
+function analyzeChunkMutationContent(chunk) {
+  const text = (chunk?.text || "").toLowerCase();
+  const signals = [
+    { pattern: /\bsystemctl\s+(restart|stop|start|enable|disable)\b/, label: "service_restart" },
+    { pattern: /\bsed\s+-i\b/, label: "inline_edit" },
+    { pattern: /\brm\s+(-\w+\s+)?(\/|\.)/, label: "file_delete" },
+    { pattern: /\bgit\s+(commit|push|merge|rebase|checkout\s+-b)\b/, label: "git_mutation" },
+    { pattern: /\bdeploy\b/, label: "deploy" },
+    { pattern: /\brestart\s+(service|app|nginx|docker|system)/, label: "restart" },
+    { pattern: /\breboot\b/, label: "reboot" },
+    { pattern: /\b(edit|modify|write\s+to|update)\s+(file|config|settings|path)\b/, label: "file_mutation" },
+    { pattern: /\bkubectl\s+(apply|delete|create|patch|rollout)\b/, label: "k8s_mutation" },
+    { pattern: /\bdocker\s+(rm|kill|stop|start|restart|compose\s+(up|down))\b/, label: "docker_mutation" },
+  ];
+  const matches = [];
+  for (const { pattern, label } of signals) {
+    if (pattern.test(text)) matches.push(label);
+  }
+  return {
+    hasMutationContent: matches.length > 0,
+    reason: matches.length > 0 ? `mutation_signals:${matches.join(",")}` : "none",
+  };
+}
+
+/**
+ * Analyze a chunk's intent and mutation_scope from text and metadata.
+ * @param {object} chunk
+ * @returns {{ intent: string, mutation_scope: string }}
+ */
+function analyzeChunkIntent(chunk) {
+  const { hasMutationContent } = analyzeChunkMutationContent(chunk);
+  return {
+    intent: hasMutationContent ? "mutation_imperative" : "readonly_diagnostic",
+    mutation_scope: hasMutationContent ? "files_and_services" : "none",
+  };
+}
+
+
 function retrievalDiagnosticsFrom(results) {
   return results?.retrievalDiagnostics || null;
 }
@@ -190,6 +275,7 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
  * Build a retrieval metadata JSON object from retrieval results.
  */
 function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeName, stored, workload, budget = {}) {
+  const crossGoalEnabled = budget.crossGoalEnabled !== undefined ? Boolean(budget.crossGoalEnabled) : true;
   const embeddingProvider = budget.embeddingProvider ||
     perGoalRetrieved.embeddingProvider ||
     crossGoalRetrieved.embeddingProvider ||
@@ -197,6 +283,73 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
   const diagnostics = mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved);
   const selectedChunks = Array.isArray(budget.selectedChunks) ? budget.selectedChunks : [];
   const selectionMetadata = budget.selectionMetadata || null;
+
+  // Build candidate-level tracking with intent, mutation_scope, semantic_capability
+  const crossGoalCandidates = crossGoalRetrieved.map((r) => {
+    const isCrossGoal = r.metadata?.goal_id !== goalId;
+    const { intent, mutation_scope } = analyzeChunkIntent(r);
+    const semanticCapability = embeddingProvider?.semantic !== false;
+    let included = true;
+    let reason = "cross_goal_candidate";
+
+    if (crossGoalEnabled) {
+      if (embeddingProvider?.semantic === false) {
+        included = false;
+        reason = "non_semantic_embedding_cannot_distinguish";
+      } else if (isCrossGoal && budget.isReadonlyGoal && intent === "mutation_imperative") {
+        included = false;
+        reason = "intent_mismatch_readonly_vs_mutation";
+      }
+    } else {
+      included = false;
+      reason = isCrossGoal ? "cross_goal_retrieval_disabled" : "current_goal_retrieval";
+    }
+
+    return {
+      id: r.id,
+      score: r.score ?? null,
+      source_goal_id: r.metadata?.goal_id || null,
+      source_type: r.metadata?.source_type || "unknown",
+      tokens: r.tokens,
+      included,
+      reason,
+      intent,
+      mutation_scope,
+      semantic_capability: semanticCapability,
+      text_preview: r.text?.substring(0, 200),
+    };
+  });
+
+  const perGoalCandidates = perGoalRetrieved.map((r) => {
+    const { intent, mutation_scope } = analyzeChunkIntent(r);
+    const semanticCapability = embeddingProvider?.semantic !== false;
+    return {
+      id: r.id,
+      score: r.score ?? null,
+      source_goal_id: r.metadata?.goal_id || null,
+      source_type: r.metadata?.source_type || "unknown",
+      tokens: r.tokens,
+      included: true,
+      reason: "per_goal_retrieval",
+      intent,
+      mutation_scope,
+      semantic_capability: semanticCapability,
+      text_preview: r.text?.substring(0, 200),
+    };
+  });
+
+  const crossGoalDisabledWarning = !crossGoalEnabled ? [{
+    type: "cross_goal_retrieval_disabled",
+    message: "Cross-goal retrieval disabled; embedding provider is non-semantic",
+    count: crossGoalRetrieved.length,
+  }] : [];
+  const intentMismatchCount = crossGoalCandidates.filter((c) => c.reason === "intent_mismatch_readonly_vs_mutation").length;
+  const intentMismatchWarning = intentMismatchCount > 0 ? [{
+    type: "intent_mismatch",
+    message: `Readonly goal retrieving ${intentMismatchCount} mutation chunk(s)`,
+    count: intentMismatchCount,
+  }] : [];
+
   return {
     goal_id: goalId,
     store_name: storeName,
@@ -209,19 +362,15 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     store_capabilities: diagnostics.store_capabilities,
     embedding_provider: embeddingProvider,
     cross_goal_retrieval: {
-      enabled: true,
+      enabled: crossGoalEnabled,
+      disabled_reason: crossGoalEnabled ? null : "non_semantic_embedding",
       retrieval_mode: diagnostics.cross_goal?.retrieval_mode || diagnostics.retrieval_mode,
       fallback_reason: diagnostics.cross_goal?.fallback_reason || null,
       retrieved_count: crossGoalRetrieved.length,
       cross_goal_chunks: crossGoalRetrieved.filter((r) => r.metadata?.goal_id !== goalId).length,
-      results: crossGoalRetrieved.map((r) => ({
-        id: r.id,
-        score: r.score ?? null,
-        goal_id: r.metadata?.goal_id || null,
-        source_type: r.metadata?.source_type || "unknown",
-        tokens: r.tokens,
-        text_preview: r.text?.substring(0, 200),
-      })),
+      candidate_count: crossGoalCandidates.length,
+      candidates: crossGoalCandidates,
+      retrieval_warnings: [...crossGoalDisabledWarning, ...intentMismatchWarning],
     },
     per_goal_retrieval: {
       retrieval_mode: diagnostics.per_goal?.retrieval_mode || diagnostics.retrieval_mode,
@@ -229,6 +378,7 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
       retrieved_count: perGoalRetrieved.length,
       results: perGoalRetrieved.map((r) => ({
         id: r.id,
+        source_goal_id: r.metadata?.goal_id || null,
         score: r.score ?? null,
         source_type: r.metadata?.source_type || "unknown",
         tokens: r.tokens,
@@ -245,6 +395,7 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
       results: selectedChunks.map((chunk) => ({
         id: chunk.id,
         goal_id: chunk.metadata?.goal_id || null,
+        source_goal_id: chunk.metadata?.goal_id || null,
         source_type: chunk.metadata?.source_type || "unknown",
         score: chunk.score ?? null,
         tokens: chunk.tokens ?? null,
@@ -256,7 +407,9 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     },
     budget: {
       cross_goal_top_k: budget.crossGoalTopK ?? null,
+      cross_goal_enabled: crossGoalEnabled,
       per_goal_top_k: budget.perGoalTopK ?? null,
+      is_readonly_goal: budget.isReadonlyGoal ?? null,
       merged_chunk_limit: budget.mergedChunkLimit ?? null,
       bundle_max_tokens: budget.bundleMaxTokens ?? null,
       max_goals_scanned: budget.maxGoalsScanned ?? null,
@@ -364,8 +517,18 @@ export async function maybeBuildContextBundle(
     }
 
     // ================================================================
-    // P0: Two-phase retrieval — cross-goal + per-goal
+    // P0: Two-phase retrieval with Phase 2 hardening
+    // - Cross-goal retrieval: skipped when semantic=false (non-semantic fallback)
+    // - Per-goal retrieval: always runs for current goal precision
     // ================================================================
+
+    // Phase 2 hardening: check semantic capability from embedding provider
+    const embeddingProvider = indexResult.embeddingProvider;
+    const isSemantic = embeddingProvider?.semantic !== false;
+    const crossGoalEnabled = isSemantic;
+    console.warn(
+      `[context-index] embedding provider="${embeddingProvider?.name}" semantic=${embeddingProvider?.semantic} crossGoalEnabled=${crossGoalEnabled}`
+    );
 
     // Phase 1: Cross-goal retrieval (no goal_id filter)
     // This searches ALL indexed goals in the workspace for related context.
@@ -378,7 +541,7 @@ export async function maybeBuildContextBundle(
     const bundleMaxTokens = positiveInt(config?.contextBundleMaxTokens, DEFAULT_BUNDLE_MAX_TOKENS, 256, 16000);
     const maxGoalsScanned = positiveInt(config?.contextMaxGoalsScanned, DEFAULT_MAX_GOALS_SCANNED, 1, 100);
 
-    const crossGoalRetrieved = crossGoalTopK > 0 ? await retrieveContext({
+    const crossGoalRetrieved = crossGoalEnabled && crossGoalTopK > 0 ? await retrieveContext({
       goalId: null,           // no goal filter — search scoped prior goals
       queryText,
       topK: crossGoalTopK,
@@ -392,6 +555,9 @@ export async function maybeBuildContextBundle(
       },
       filters: retrievalScope,
     }) : [];
+    if (!crossGoalEnabled && crossGoalTopK > 0) {
+      console.warn(`[context-index] Cross-goal retrieval skipped: semantic=${embeddingProvider?.semantic} name="${embeddingProvider?.name}"`);
+    }
 
     // Phase 2: Per-goal retrieval (current goal only)
     // This ensures the current goal's context is always represented,
@@ -432,7 +598,8 @@ export async function maybeBuildContextBundle(
       maxChunks: mergedChunkLimit,
     });
 
-    // Build retrieval JSON with cross-goal metadata
+    // Build retrieval JSON with cross-goal metadata and intent filtering
+    const isReadonlyGoal = isReadonlyOrDiagnosticGoal(goal);
     const retrievalJson = buildRetrievalJson(
       goal.id,
       crossGoalRetrieved,
@@ -441,24 +608,59 @@ export async function maybeBuildContextBundle(
       indexResult.stored,
       mergedChunks,
       {
+        crossGoalEnabled,
         crossGoalTopK,
         perGoalTopK,
         mergedChunkLimit,
         bundleMaxTokens,
         maxGoalsScanned,
         filters: retrievalScope,
-        embeddingProvider: indexResult.embeddingProvider,
+        embeddingProvider,
+        isReadonlyGoal,
         selectedChunks: bundleResult.selectedChunks,
         selectionMetadata: bundleResult.selectionMetadata,
       },
     );
+
+    // Build warnings for context manifest (Phase 2)
+    const manifestWarnings = [];
+    if (embeddingProvider?.semantic === false) {
+      manifestWarnings.push({
+        type: "non_semantic_embedding",
+        message: `Embedding provider "${embeddingProvider.name}" is non-semantic (semantic=${embeddingProvider.semantic})`,
+        embedding_provider_name: embeddingProvider.name,
+        dimension: embeddingProvider.dimension,
+        count: 1,
+      });
+    }
+    if (!crossGoalEnabled) {
+      manifestWarnings.push({
+        type: "cross_goal_retrieval_disabled",
+        message: "Cross-goal retrieval disabled due to non-semantic embedding",
+        cross_goal_top_k: crossGoalTopK,
+        count: crossGoalRetrieved.length,
+      });
+    }
+    // Add intent mismatch warning from retrieval JSON if present
+    if (retrievalJson?.cross_goal_retrieval?.candidates) {
+      const intentMismatchCount = retrievalJson.cross_goal_retrieval.candidates.filter(
+        (c) => c.reason === "intent_mismatch_readonly_vs_mutation"
+      ).length;
+      if (intentMismatchCount > 0) {
+        manifestWarnings.push({
+          type: "intent_mismatch",
+          message: `Readonly goal has ${intentMismatchCount} cross-goal chunk(s) with mutation intent`,
+          count: intentMismatchCount,
+        });
+      }
+    }
 
     return {
       ok: true,
       bundle: bundleResult.bundle,
       tokenEstimate: bundleResult.tokenEstimate,
       retrievalJson,
-      contextManifest: buildContextManifest({ goal, workspaceFiles, bundleResult, retrievalJson }),
+      contextManifest: buildContextManifest({ goal, workspaceFiles, bundleResult, retrievalJson, warnings: manifestWarnings }),
     };
   } catch (err) {
     const warning = `Context index/bundle generation failed for goal ${goal.id}: ${err.message}`;
