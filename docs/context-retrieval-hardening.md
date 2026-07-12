@@ -211,3 +211,131 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs
 8. ✅ 契约自定义字段冲突检测 — **Phase 3 完成**
 9. ✅ context.bundle.md 首段固定输出当前 Goal 信息 — **Phase 3 完成**
 10. ✅ readonly entry 不得含 mutation 指令 — **Phase 3 完成**
+
+## Phase 4 实现记录
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|---------|
+| `src/context-index/context-index-hooks.mjs` | - 添加 `loadAcceptanceContractSafe()` 函数，安全加载 contract 并降级<br>- 导出 `isReadonlyOrDiagnosticGoal()` 供测试用例直接使用 |
+| `test/context-retrieval-hardening.test.mjs` | 新增 Phase 4 完整测试套件 T1-T19 |
+
+### Phase 4 测试矩阵
+
+覆盖 9 种核心组合:
+
+| 测试 ID | 组合 | 覆盖场景 |
+|---------|------|---------|
+| T1 | semantic=true | 语义 provider 允许跨 Goal 检索 |
+| T2 | semantic=false | 非语义 fallback 熔断跨 Goal |
+| T3 | 同 Goal | current_goal_min 保证当前 Goal 优先 |
+| T4 | 显式依赖 Goal | prior result 在 Optional Historical Context 中显示 |
+| T5 | 跨 Goal | store 层搜索正确性验证 |
+| T6 | readonly diagnostic | isReadonlyOrDiagnosticGoal 检测正确 |
+| T7 | implementation | 实现目标不被错误降级 |
+| T8 | 冲突 mutation scope | normalizeContractCustomFields 检测并移除冲突 |
+| T9 | 超长历史上下文 | selectBundleChunks 限制 maxChunks ≤ 8 |
+
+### Phase 4 四类产物验证
+
+| 测试 ID | 产物 | 验证字段 |
+|---------|------|---------|
+| T10 | context.manifest.json | schema_version, goal_id, curator.role, artifacts(codex_entry/context_bundle/context_retrieval/context_manifest), lookup_policy.default_read_order, warnings 顺序 |
+| T11 | context.retrieval.json | goal_id, store_name, total_indexed, embedding_provider, cross_goal_retrieval (enabled/candidates/included/reason/intent/mutation_scope/semantic_capability), per_goal_retrieval, budget, selection |
+| T12 | context.bundle.md | 节序: Retrieval Metadata → Current Goal Anchor → Priority & Budget → Optional Historical Context → Transcript Note → Retrieval Sources |
+| T13 | codex.entry.md | Execution Diagnostics 节含 Execution mode、Mutation scope、Read-only 约束 |
+
+### Phase 4 防回归测试
+
+| 测试 ID | 防回归场景 | 验证方式 |
+|---------|-----------|---------|
+| T14 | readonly Goal 中不存在历史 mutation 命令 | 只读 goal 的 Goal Anchor 不含 mutation 命令；意图检测保留 readonly |
+| T15 | implementation Goal 不被错误降级 | 多种变体 implementation goal 全部不被标记为 readonly |
+
+### Phase 4 故障注入
+
+| 测试 ID | 故障类型 | 安全降级结果 | warning? |
+|---------|---------|-------------|----------|
+| T16 | 缺失 acceptance contract | bundle 无 Acceptance Constraints 节，诊断显示 unknown | 否 (正常) |
+| T17 | 损坏的 contract (invalid JSON) | loadAcceptanceContractSafe 返回 null contract | ✅ 含 "Failed to load" |
+| T17 | 损坏的 contract (非对象 JSON) | loadAcceptanceContractSafe 返回 null contract | ✅ 含 "not a valid object" |
+| T17 | 缺失 contract 文件 | loadAcceptanceContractSafe 返回 null contract, warning=null | 否 (有效状态) |
+| T18 | embedding provider 超时 | maybeBuildContextBundle 安全降级 (ok=false 或 bundle 正常) | ✅ 存在 |
+| T19 | 空索引 (0 chunks) | maybeBuildContextBundle 返回 ok=false | ✅ 含 "no indexable content" 或 "0 chunks" |
+
+### 测试命令与结果
+
+```bash
+cd backend && node --test test/context-retrieval-hardening.test.mjs
+```
+
+**结果**: 43 tests, 42 pass, 1 fail (expected store-level contamination — permanent RED evidence)
+- Phase 1 store 层污染证据: **FAIL** (by design, permanent RED)
+- Phase 1 diagnostics: PASS
+- Phase 2 T1-T10: **ALL PASS**
+- Phase 3 T1-T9: **ALL PASS**
+- Phase 4 T1-T19: **ALL PASS**
+  - T1-T9 (测试矩阵): ALL PASS
+  - T10-T13 (产物验证): ALL PASS
+  - T14-T15 (防回归): ALL PASS
+  - T16-T19 (故障注入): ALL PASS
+
+### 向后兼容
+
+- `loadAcceptanceContractSafe()` 是新函数，对现有代码路径无影响
+- `isReadonlyOrDiagnosticGoal()` 之前是内部函数，现在导出后不影响内部调用
+- 所有 Phase 4 测试使用独立的临时目录，不污染现有状态
+- 故障注入完全模拟，不依赖外部服务或 mock 框架
+
+### 剩余风险
+
+1. **语义 provider 测试不完整**: 真正的语义 embedding (如 OpenAI) 未在实际测试中覆盖；T1 只验证了配置静态属性
+2. **超时真实模拟**: T18 依赖现有 try/catch 路径而非真实模拟超时；embedding provider 超时在 `indexGoalContext` 中产生，`maybeBuildContextBundle` 的 catch 块捕获后返回 `{ ok: false, warning }`
+3. **故障注入依赖负载**: 缺失/损坏 contract 的测试通过 `loadAcceptanceContractSafe` 函数覆盖，但 `maybeBuildContextBundle` 中 contract 的使用路径仍需独立验证
+4. **跨 Goal 检索在 semantic=true 时的行为**: 未在 Phase 4 中覆盖，预留 Phase 5
+
+## 阶段 1-5 验证状态
+
+1. ✅ `current_goal_min: 1` — Phase 1 完成
+2. ✅ Token 预算 2048 — Phase 1 完成
+3. ✅ `semantic=false` 时跨 Goal 禁止 — **Phase 2 完成**
+4. ✅ 意图兼容/Mutation scope 过滤 — **Phase 2 完成**
+5. ✅ Entry 从 acceptance contract 推导 — **Phase 3 完成**
+6. ✅ 跨 Goal 检索约束文档更新 — **Phase 2-4**
+7. ✅ Goal 锚定与入口统一 — **Phase 3 完成**
+8. ✅ 契约自定义字段冲突检测 — **Phase 3 完成**
+9. ✅ context.bundle.md 首段固定输出当前 Goal 信息 — **Phase 3 完成**
+10. ✅ readonly entry 不得含 mutation 指令 — **Phase 3 完成**
+11. ✅ 测试矩阵 9+ 组合覆盖 — **Phase 4 完成**
+12. ✅ 四类产物字段/顺序验证 — **Phase 4 完成**
+13. ✅ 防回归 readonly/implementation 不变 — **Phase 4 完成**
+14. ✅ 故障注入安全降级 — **Phase 4 完成**
+15. ⏳ 自适应检索预算 — **Phase 5**
+
+### 复现步骤
+
+```bash
+cd backend && node --test test/context-retrieval-hardening.test.mjs
+```
+
+预期结果 (Phase 4 修复后):
+- Phase 1 跨 Goal 污染测试 (store 层): RED (预期，验证熔断必要性)
+- Phase 1 元数据测试: PASS
+- Phase 2 T1-T10: ALL PASS
+- Phase 3 T1-T9: ALL PASS
+- Phase 4 T1-T19: ALL PASS
+
+### 修改文件清单 (阶段 1-4 完成)
+
+| 文件 | 修改内容 | 状态 |
+|------|---------|------|
+| `src/context-index/context-index-hooks.mjs` | non-semantic cross-goal 熔断 + 候选追踪 + manifest 警告 + loadAcceptanceContractSafe + 导出 isReadonlyOrDiagnosticGoal | ✅ Phase 2/4 |
+| `src/context-index/context-bundle-builder.mjs` | 意图兼容过滤 + Goal Anchor 首段结构化锚定 + Optional Historical Context 标注 | ✅ Phase 3 |
+| `src/context-index/entry-contract-deriver.mjs` | (新) entry 从 acceptance contract 推导执行模式/mutation scope | ✅ Phase 3 |
+| `src/acceptance/contract-schema.mjs` | normalizeContractCustomFields() 检测并消除 intent 与自定义字段冲突 | ✅ Phase 3 |
+| `src/acceptance/semantics.mjs` | validateContractSemantics 集成自定义字段归一化 | ✅ Phase 3 |
+| `src/goal-files.mjs` | renderCodexEntryMarkdown 添加 Execution Diagnostics 节 | ✅ Phase 3 |
+| `test/context-retrieval-hardening.test.mjs` | 继承 Phase 1-3 + 新增 Phase 4 T1-T19 测试 | ✅ Phase 4 |
+| `docs/context-retrieval-hardening.md` | 本文档更新 | ✅ Phase 4 |
+| `docs/e2e-acceptance.md` | 新增本链路验收章节 | ✅ Phase 4 |

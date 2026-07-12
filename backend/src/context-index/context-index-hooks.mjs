@@ -79,7 +79,7 @@ function mergeRetrievedChunks({ perGoalRetrieved = [], crossGoalRetrieved = [], 
  * @param {object} goal
  * @returns {boolean}
  */
-function isReadonlyOrDiagnosticGoal(goal) {
+export function isReadonlyOrDiagnosticGoal(goal) {
   if (!goal) return false;
   const mode = (goal.mode || "").toLowerCase();
   const title = (goal.title || "").toLowerCase();
@@ -264,6 +264,41 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
     return results;
   } catch {
     return [];
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4: Fault injection support for safe degradation testing
+// These validate resilience in edge cases without mocking whole modules.
+// ---------------------------------------------------------------------------
+
+/**
+ * Load acceptance contract from the workspace, gracefully degrading on errors.
+ * Phase 4: Fault injection -- missing/corrupted contracts are caught here.
+ * @param {string} workspaceRoot
+ * @param {string} goalId
+ * @returns {Promise<{ contract: object|null, warning: string|null }>}
+ */
+export async function loadAcceptanceContractSafe(workspaceRoot, goalId) {
+  if (!workspaceRoot || !goalId) {
+    return { contract: null, warning: "No workspaceRoot or goalId provided" };
+  }
+  const contractPath = join(workspaceRoot, ".gptwork", "goals", goalId, "acceptance.contract.json");
+  if (!existsSync(contractPath)) {
+    return { contract: null, warning: null }; /* missing is valid -- no contract configured */
+  }
+  try {
+    const raw = await readFile(contractPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+      return { contract: null, warning: `acceptance.contract.json is not a valid object (goal ${goalId})` };
+    }
+    return { contract: parsed, warning: null };
+  } catch (err) {
+    return {
+      contract: null,
+      warning: `Failed to load acceptance.contract.json (goal ${goalId}): ${err.message}`,
+    };
   }
 }
 

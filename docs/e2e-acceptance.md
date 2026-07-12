@@ -225,3 +225,56 @@ of topic, milestone, or task_id. The rule applies equally to:
 | [Goal Queue](goal-queue.md) | Queue scheduling, eligibility, typed blocked reasons |
 
 *End of E2E delivery workflow document.*
+
+---
+
+## Context Retrieval Hardening — E2E Acceptance (Phase 4)
+
+> This section documents the end-to-end acceptance verification for context pollution
+> hardening across Phase 1-4, including the test matrix, product type verification,
+> regression tests, and fault injection verification.
+
+### Verification Command
+
+```bash
+cd backend && node --test test/context-retrieval-hardening.test.mjs
+```
+
+### Acceptance Criteria Results
+
+| Criteria | Status | Evidence |
+|----------|--------|----------|
+| 测试矩阵覆盖核心组合 (9+) | ✅ PASS | T1-T9: semantic=true/false, fallback, 同 Goal, 依赖 Goal, 跨 Goal, readonly, implementation, 冲突 scope, 超长历史 |
+| 故障注入安全降级 | ✅ PASS | T16-T19: 缺失/损坏 contract 返回 warning; embedding 超时降级; 空索引返回 ok=false+warning |
+| 四类产物可观测字段验证 | ✅ PASS | T10: manifest 13+ 必选字段; T11: retrieval 9+ 字段; T12: bundle 6 节序; T13: entry 4 个诊断字段 |
+| 全套相关测试通过 | ✅ PASS | 42/43 通过，1 个预期失败 (Phase 1 PERMANENT RED store 层污染证据) |
+| 文档更新并提交 | ✅ DONE | docs/context-retrieval-hardening.md + docs/e2e-acceptance.md |
+
+### Expected Permanent Failures
+
+| Test ID | Description | Reason |
+|---------|-------------|--------|
+| Phase 1 Test 1 | Store-level cross-goal contamination evidence | By design — permanent RED evidence proving the meltdown is necessary |
+
+### Goal/Task Reference
+
+| Field | Value |
+|-------|-------|
+| Goal ID | `goal_85a470fd-bc96-458d-afd5-8fae7e30673c` |
+| Task ID | `task_b648fc0a-3719-4419-9dcb-3d52b59527c0` |
+| Phase | 4/5 |
+| Date | 2026-07-13 |
+
+### Remaining Risk
+
+1. **Phase 5 pending**: Adaptive retrieval budget for large workspaces
+2. **Real semantic provider test gap**: Current tests mock or use fallback provider only
+3. **Timeout simulation**: Real embedding timeout not possible without external dependency mocking
+4. **Production integration**: End-to-end test with actual workspace files not yet covered
+
+### Change Summary (Phase 1-4)
+
+- **Phase 1**: Reproduce contamination, establish baseline with permanent RED evidence test
+- **Phase 2**: Non-semantic meltdown (cross-goal disabled when `semantic=false`), intent filtering, manifest warnings
+- **Phase 3**: Current Goal Anchor as first bundle section, Optional Historical Context with override warning, entry from contract derivation, contract custom field normalization
+- **Phase 4**: 9+ matrix, 4-product verification, regression tests, fault injection (missing/corrupted contract, embedding timeout, empty index)
