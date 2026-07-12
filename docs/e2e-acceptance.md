@@ -278,3 +278,63 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs
 - **Phase 2**: Non-semantic meltdown (cross-goal disabled when `semantic=false`), intent filtering, manifest warnings
 - **Phase 3**: Current Goal Anchor as first bundle section, Optional Historical Context with override warning, entry from contract derivation, contract custom field normalization
 - **Phase 4**: 9+ matrix, 4-product verification, regression tests, fault injection (missing/corrupted contract, embedding timeout, empty index)
+
+---
+
+## Context Retrieval Hardening — Phase 5 E2E Acceptance
+
+> Final phase: real TUI empirical evidence, review, and closure.
+
+### Verification Commands
+
+```bash
+cd backend && node --test test/phase5-e2e-acceptance.test.mjs
+cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-e2e-acceptance.test.mjs
+```
+
+### Acceptance Criteria Results
+
+| Criteria | Status | Evidence |
+|----------|--------|----------|
+| Readonly diagnostic Goal with mutation history | ✅ PASS | R1-T1: Goal Anchor 首段, 无 mutation 命令; transcript.md 含完整的修改/提交/部署指令 |
+| 五类产物验证 | ✅ PASS | R1-T1-T5: bundle, manifest, retrieval, contract, entry 全部验证通过 |
+| 跨 Goal 非语义召回熔断 | ✅ PASS | R1-T2/T3: cross_goal_retrieval.enabled=false, warnings 含 non_semantic_embedding |
+| 冲突候选排除原因 | ✅ PASS | R1-T3: candidates 含 source_goal_id/reason/included 字段 |
+| Entry readonly/none | ✅ PASS | R1-T5: Execution Diagnostics 显示 readonly, read-only 约束 |
+| Codex TUI 真实实证 | ✅ PASS | R2-T1: codex exec readonly prompt — HEAD 不变, repo clean, diff empty |
+| Implementation 不被降级 | ✅ PASS | R3-T1-T4: isReadonlyOrDiagnosticGoal=false, bundle 不含 readonly 标签 |
+| 全套相关测试通过 | ✅ PASS | 54 tests, 53 pass, 1 expected fail (Phase 1 PERMANENT RED) |
+
+### Goal/Task Reference
+
+| Field | Value |
+|-------|-------|
+| Goal ID | `goal_11732e6c-ff98-4399-bd80-c695fbc0fedd` |
+| Task ID | `task_d72a9010-7dd8-4802-9885-9e94df3a781b` |
+| Phase | 5/5 (Final) |
+| Date | 2026-07-13 |
+| Commit | `063c1ac` |
+
+### Rollback Plan
+
+To roll back Phase 5:
+1. Revert commit `063c1ac`: `git revert 063c1ac`
+2. Delete the Phase 5 test file: `rm backend/test/phase5-e2e-acceptance.test.mjs`
+3. Restore Phase 4 docs: `git checkout HEAD~1 -- docs/context-retrieval-hardening.md docs/e2e-acceptance.md docs/current-status.md`
+
+### Known Limitations
+
+1. **Real semantic provider test gap**: All tests use fallback-hash-sha256 (non-semantic). Real semantic embedding (OpenAI) not tested.
+2. **Timeout simulation**: Embedding timeout during `indexGoalContext` is caught by general try/catch — not a real timeout injection.
+3. **Cross-goal retrieval with semantic=true**: Disabled by design for non-semantic fallback; behavior with semantic providers not verified in Phase 5.
+4. **Codex TUI test**: Uses `codex exec` (non-interactive) rather than full interactive TUI session. The non-interactive path covers the same execution engine.
+
+### Final Conclusion
+
+上下文污染修复闭环完成。所有 5 阶段验证通过：
+
+- Phase 1: 复现污染 + 永久 RED 证据
+- Phase 2: 非语义检索熔断 + 意图过滤
+- Phase 3: Goal 锚定 + 契约归一化
+- Phase 4: 完整测试矩阵 + 故障注入
+- Phase 5: 真实 TUI 实证 + 五类产物验证 + implementation 防降级 + 文档闭环

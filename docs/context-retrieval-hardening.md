@@ -339,3 +339,82 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs
 | `test/context-retrieval-hardening.test.mjs` | 继承 Phase 1-3 + 新增 Phase 4 T1-T19 测试 | ✅ Phase 4 |
 | `docs/context-retrieval-hardening.md` | 本文档更新 | ✅ Phase 4 |
 | `docs/e2e-acceptance.md` | 新增本链路验收章节 | ✅ Phase 4 |
+
+## Phase 5 实现记录
+
+### 测试命令与结果
+
+```bash
+cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-e2e-acceptance.test.mjs
+```
+
+**结果**: Phase 5 e2e 测试: **11/11 PASS**
+
+#### Phase 5 测试矩阵
+
+| 测试 ID | 验证内容 | 结果 |
+|---------|---------|------|
+| R1-T1 | context.bundle.md Goal Anchor 为首段, 无 mutation 命令 | ✅ PASS |
+| R1-T2 | context.manifest.json warnings: non_semantic_embedding, cross_goal_retrieval_disabled | ✅ PASS |
+| R1-T3 | context.retrieval.json: cross_goal_retrieval.enabled=false, 候选排除原因 | ✅ PASS |
+| R1-T4 | acceptance.contract.json: diagnostic/readonly/none | ✅ PASS |
+| R1-T5 | codex.entry.md Execution Diagnostics: readonly/none, 无 mutation 指令 | ✅ PASS |
+| R2-T1 | 真实 Codex TUI (codex exec) 不修改仓库，输出诊断内容 | ✅ PASS (17s) |
+| R3-T1 | isReadonlyOrDiagnosticGoal 对 implementation goal 返回 false | ✅ PASS |
+| R3-T2 | code_change contract 不被识别为 readonly | ✅ PASS |
+| R3-T3 | normalizeContractCustomFields 检测冲突 | ✅ PASS |
+| R3-T4 | Implementation smoke Goal bundle 不含 readonly 标签 | ✅ PASS |
+| R4-T1 | validateContractSemantics 集成归一化 | ✅ PASS |
+
+#### Phase 5 五类产物验证状态
+
+| 产物 | 验证字段 | 状态 |
+|------|---------|------|
+| context.bundle.md | Goal Anchor 首段, Retrieval Metadata 前置, Goal Title 在锚段, 无 mutation 命令 | ✅ |
+| context.manifest.json | schema_version, goal_id, warnings (non_semantic_embedding, cross_goal_retrieval_disabled) | ✅ |
+| context.retrieval.json | embedding_provider semantic=false, cross_goal_retrieval.enabled=false, candidates 含排除原因 | ✅ |
+| acceptance.contract.json | intent.operation_kind=diagnostic, execution_mode=readonly, mutation_scope=none | ✅ |
+| codex.entry.md | Execution Diagnostics 显示 readonly/none, read-only 约束, 无 mutation 指令 | ✅ |
+
+#### 真实 TUI 实证
+
+- **命令**: `codex exec 'Read-only diagnostic: check the README.md exists and report its contents...'`
+- **验证**: HEAD 不变, git status clean, git diff empty
+- **输出**: 176 chars, 含诊断分析内容
+- **结论**: Codex TUI 在 readonly prompt 下不被带偏, 无仓库修改
+
+## 阶段 1-5 最终验证状态
+
+1. ✅ `current_goal_min: 1` — Phase 1 完成
+2. ✅ Token 预算 2048 — Phase 1 完成
+3. ✅ `semantic=false` 时跨 Goal 禁止 — **Phase 2 完成**
+4. ✅ 意图兼容/Mutation scope 过滤 — **Phase 2 完成**
+5. ✅ Entry 从 acceptance contract 推导 — **Phase 3 完成**
+6. ✅ 跨 Goal 检索约束文档更新 — **Phase 2-4**
+7. ✅ Goal 锚定与入口统一 — **Phase 3 完成**
+8. ✅ 契约自定义字段冲突检测 — **Phase 3 完成**
+9. ✅ context.bundle.md 首段固定输出当前 Goal 信息 — **Phase 3 完成**
+10. ✅ readonly entry 不得含 mutation 指令 — **Phase 3 完成**
+11. ✅ 测试矩阵 9+ 组合覆盖 — **Phase 4 完成**
+12. ✅ 四类产物字段/顺序验证 — **Phase 4 完成**
+13. ✅ 防回归 readonly/implementation 不变 — **Phase 4 完成**
+14. ✅ 故障注入安全降级 — **Phase 4 完成**
+15. ✅ 自适应检索预算 — **Phase 5 完成**
+16. ✅ readonly diagnostic Goal 强锚定实证 — **Phase 5 完成**
+17. ✅ implementation Goal 不被错误降级 — **Phase 5 完成**
+18. ✅ 真实 Codex TUI 实证明证 — **Phase 5 完成**
+
+## 闭环证据
+
+| 证据项 | 值 |
+|--------|-----|
+| Goal ID | goal_11732e6c-ff98-4399-bd80-c695fbc0fedd |
+| Task ID | task_d72a9010-7dd8-4802-9885-9e94df3a781b |
+| Commit | `` |
+| 回归命令 | `cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-e2e-acceptance.test.mjs` |
+| 回归结果 | 54 tests, 53 pass, 1 expected fail (permanent RED) |
+| 测试产物路径 | `backend/test/phase5-e2e-acceptance.test.mjs` |
+| Codex TUI 测试 | `codex exec` readonly prompt, repo clean |
+| 已知限制 | 1) 真实语义 provider 测试未覆盖; 2) embedding 超时模拟为近似; 3) 跨 Goal 检索在 semantic=true 时未完全覆盖 |
+| 回滚方式 | `git revert <commit>` 移除 Phase 5 测试文件; 回滚 docs/ 到 Phase 4 状态 |
+| 最终结论 | 上下文污染修复闭环完成 — 5 阶段全部验证通过 |

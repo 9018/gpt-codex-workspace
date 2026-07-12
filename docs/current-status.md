@@ -520,3 +520,48 @@ npm --prefix backend test
 - The root Goal (`goal_48d055ee-82b6-415b-8d98-65cb7662aaaf`) can be closed after G7 integration.
 - Workstream productization is the foundation for future multi-tenant, multi-project orchestration.
 - No additional goals are planned in this productization cycle.
+
+## Phase 5: Context Pollution Hardening — TUI Empirical, Review, and Closure
+
+### Summary
+
+Phase 5 completes the context pollution hardening fix with real TUI empirical evidence, 
+bidirectional readonly/implementation verification, and full documentation closure.
+
+### Modified Files
+
+| File | Change | Status |
+|------|--------|--------|
+| `backend/test/phase5-e2e-acceptance.test.mjs` | (New) Phase 5 e2e acceptance test suite | ✅ COMPLETED |
+| `docs/context-retrieval-hardening.md` | Phase 5 implementation records, final verification status | ✅ COMPLETED |
+| `docs/e2e-acceptance.md` | Phase 5 acceptance criteria, rollback plan, known limitations | ✅ COMPLETED |
+| `docs/current-status.md` | This entry | ✅ COMPLETED |
+
+### Verification Evidence
+
+```bash
+cd backend && node --test test/phase5-e2e-acceptance.test.mjs
+# 11/11 PASS — Phase 5 e2e tests
+# - R1: 5 artifact verification tests
+# - R2: Real Codex TUI non-diversion test (17s exec with repo clean)
+# - R3: Implementation smoke test (no downgrade)
+# - R4: Contract semantics integration test
+
+cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-e2e-acceptance.test.mjs
+# 54 tests, 53 pass, 1 expected fail (permanent RED store-level contamination evidence)
+```
+
+### Goal/Task Reference
+
+| Field | Value |
+|-------|-------|
+| Goal ID | `goal_11732e6c-ff98-4399-bd80-c695fbc0fedd` |
+| Task ID | `task_d72a9010-7dd8-4802-9885-9e94df3a781b` |
+| Commit | `063c1ac` (Phase 4 base) |
+| Remote HEAD | Pending integration |
+
+### Next Steps
+
+1. The root context pollution hardening is complete across all 5 phases.
+2. Real semantic embedding (OpenAI) provider test can be added as future work when zvec is configured.
+3. Interactive Codex TUI session test (beyond `codex exec` non-interactive) could be done manually.
