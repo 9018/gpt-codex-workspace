@@ -1,6 +1,7 @@
 import { basename } from "node:path";
 import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { buildEntryExecutionDiagnostics } from "./context-index/entry-contract-deriver.mjs";
 
 /**
  * Build the workspace file paths for a given goal.
@@ -236,6 +237,7 @@ export function renderCodexEntryMarkdown(goal, conversation, memories, task, wor
     "- Keep result.json concise: status, summary, changed_files, tests, commit, remote_head, warnings, followups, verification.",
     "- Also print the legacy STATUS/SUMMARY/CHANGED_FILES/TESTS/COMMIT/REMOTE_HEAD report to stdout at the end.",
     "",
+    buildEntryExecutionDiagnostics(goal?.acceptance_contract).trim(),
     "## Execution Rules",
     "",
     "- Make the smallest goal-aligned reversible change.",

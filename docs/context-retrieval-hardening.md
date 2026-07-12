@@ -117,6 +117,64 @@ pass 14
 fail 1   (期望的 store 层污染测试)
 ```
 
+
+
+## Phase 3 实现记录
+
+### 修改文件
+
+| 文件 | 修改内容 |
+|------|---------|
+| `src/context-index/context-bundle-builder.mjs` | - `buildGoalAnchorSection()` 替代 `buildContextSummarySection()`，固定输出 Goal Title、User Request、Goal Prompt、Metadata、Acceptance Constraints<br>- `buildHistoricalContextNote()` 新增，历史内容标注为 Optional Historical Context<br>- `buildPriorityBudgetSection()` 新增，展示当前 Goal 最低预算和最高优先级<br>- `_appendContractConstraints()` 新增，从 acceptance contract 提取约束显示<br>- 节序重组：Goal Anchor → Priority & Budget → Optional Historical Context → Transcript Note → Retrieval Sources |
+| `src/context-index/entry-contract-deriver.mjs` | (新) 提供 `isReadonlyOrDiagnosticContract()`, `getExecutionModeLabel()`, `getMutationScopeLabel()`, `buildEntryExecutionDiagnostics()`, `sanitizeReadonlyInstructions()` 函数 |
+| `src/acceptance/contract-schema.mjs` | 新增 `normalizeContractCustomFields()` — 检测并消除 top-level `execution_mode` / `mutation_scope` 与 `intent.*` 块的冲突 |
+| `src/acceptance/semantics.mjs` | `validateContractSemantics()` 集成自定义字段归一化，`intent` 块为单一权威来源 |
+| `src/goal-files.mjs` | `renderCodexEntryMarkdown()` 新增 `Execution Diagnostics` 节，显示推导出的 execution mode 和 mutation scope |
+| `test/context-retrieval-hardening.test.mjs` | 新增 Phase 3 测试 T1-T9 |
+
+### 关键决策
+
+1. **Goal Anchor 优先**：`context.bundle.md` 首段 `## Current Goal Anchor` 固定输出当前 Goal 标题、User Request、Goal Prompt、Metadata 和 Acceptance Constraints（若有 contract）。随后是 `## Optional Historical Context`，明确标注"不得覆盖 Goal Anchor"。
+2. **Entry 从 contract 推导**：`codex.entry.md` 新增 `## Execution Diagnostics` 节，显示从 `acceptance.contract.json.intent` 推导的 Execution mode 和 Mutation scope。readonly diagnostic 显示 "Execution mode: readonly diagnostic"、"Mutation scope: none"。
+3. **自定义字段归一化**：`normalizeContractCustomFields()` 检测 top-level `execution_mode`/`mutation_scope` 与 `intent` 块的冲突，移除冲突的 top-level 字段并产生 warning。`validateContractSemantics()` 集成此检查。
+4. **Readonly sanitize**：`sanitizeReadonlyInstructions()` 将 readonly mode 下的 mutation 命令（restart/deploy/commit 等）替换为安全分析指令。
+5. **历史内容隔离**：旧 conversation/result section 标注为 `## Optional Historical Context`，明确提示不覆盖当前 Goal。
+
+### 测试命令与结果
+
+```bash
+cd backend && node --test test/context-retrieval-hardening.test.mjs
+```
+
+**结果**: 24 tests, 23 pass, 1 fail (expected store-level contamination)
+- Phase 1 store 层污染证据: **FAIL** (by design, permanent RED)
+- Phase 1 diagnostics: PASS
+- Phase 2 T1-T10: **ALL PASS**
+- Phase 3 T1-T9: **ALL PASS**
+  - T1: 验证 Current Goal Anchor 在 bundle 首段
+  - T2: 验证 Optional Historical Context 标注和 override warning
+  - T3: 验证 Acceptance Constraints 显示
+  - T4: 验证 normalizeContractCustomFields 检测冲突
+  - T5: 验证 clean contract 无 warning
+  - T6: 验证 validateContractSemantics 集成归一化
+  - T7: 验证 entry-contract-deriver 只读诊断输出
+  - T8: 验证 sanitizeReadonlyInstructions 移除 mutation 命令
+  - T9: 验证 renderCodexEntryMarkdown 包含 Execution Diagnostics
+
+### 向后兼容
+
+- 无 contract 时，`buildGoalAnchorSection` 只显示 Goal 信息，无 Acceptance Constraints
+- `normalizeContractCustomFields` 只在检测到冲突时产生 warning，clean contract 无影响
+- `buildEntryExecutionDiagnostics` 无 contract 时返回 "unknown"
+- 旧 bundle 格式仍然可用（`buildContextBundle` 不破坏现有调用）
+- `selectBundleChunks` 保持 Phase 2 意图兼容过滤
+
+### 剩余风险
+
+1. Entry 推导依赖 contract 存在；无 contract 的 goal 无法推导
+2. Sanitize 使用简单的文本替换，可能过度替换（如 "commit" 在 git 上下文中被替换）
+3. 跨 Goal 检索约束仍需 Phase 4-5 完善
+
 ## 复现步骤
 
 ```bash
@@ -133,9 +191,13 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs
 | 文件 | 修改内容 | 状态 |
 |------|---------|------|
 | `src/context-index/context-index-hooks.mjs` | non-semantic cross-goal 熔断 + 候选追踪 + manifest 警告 | ✅ Phase 2 |
-| `src/context-index/context-bundle-builder.mjs` | 意图兼容过滤 | ✅ Phase 2 |
-| `test/context-retrieval-hardening.test.mjs` | 继承 Phase 1 测试 + 新增 Phase 2 测试 | ✅ Phase 2 |
-| `docs/context-retrieval-hardening.md` | 本文档更新 | ✅ Phase 2 |
+| `src/context-index/context-bundle-builder.mjs` | 意图兼容过滤 + Goal Anchor 首段结构化锚定 + Optional Historical Context 标注 | ✅ Phase 3 |
+| `src/context-index/entry-contract-deriver.mjs` | (新) entry 从 acceptance contract 推导执行模式/mutation scope | ✅ Phase 3 |
+| `src/acceptance/contract-schema.mjs` | normalizeContractCustomFields() 检测并消除 intent 与自定义字段冲突 | ✅ Phase 3 |
+| `src/acceptance/semantics.mjs` | validateContractSemantics 集成自定义字段归一化 | ✅ Phase 3 |
+| `src/goal-files.mjs` | renderCodexEntryMarkdown 添加 Execution Diagnostics 节 | ✅ Phase 3 |
+| `test/context-retrieval-hardening.test.mjs` | 继承 Phase 1-2 测试 + 新增 Phase 3 T1-T9 测试 | ✅ Phase 3 |
+| `docs/context-retrieval-hardening.md` | 本文档更新 | ✅ Phase 3 |
 
 ## 阶段 1-5 验证状态
 
@@ -143,5 +205,9 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs
 2. ✅ Token 预算 2048 — Phase 1 完成
 3. ✅ `semantic=false` 时跨 Goal 禁止 — **Phase 2 完成**
 4. ✅ 意图兼容/Mutation scope 过滤 — **Phase 2 完成**
-5. ⏳ Entry 从 acceptance contract 推导 — **Phase 4**
+5. ✅ Entry 从 acceptance contract 推导 — **Phase 3 完成**
 6. ⏳ cross-goal 检索约束文档更新 — **Phase 2-5**
+7. ✅ Goal 锚定与入口统一 — **Phase 3 完成**
+8. ✅ 契约自定义字段冲突检测 — **Phase 3 完成**
+9. ✅ context.bundle.md 首段固定输出当前 Goal 信息 — **Phase 3 完成**
+10. ✅ readonly entry 不得含 mutation 指令 — **Phase 3 完成**

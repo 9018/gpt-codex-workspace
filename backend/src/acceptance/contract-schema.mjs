@@ -70,3 +70,56 @@ export function requirementIds(contract) {
 export function assertionIds(contract) {
   return new Set(normalizeList(contract?.state_assertions).map((item) => String(item?.id || "")));
 }
+
+
+/**
+ * Normalize top-level custom fields that conflict with the canonical intent block.
+ *
+ * Some acceptance contracts have both:
+ *   intent: { operation_kind: "diagnostic", execution_mode: "readonly", mutation_scope: "none" }
+ * AND custom top-level:
+ *   execution_mode: "implementation", mutation_scope: "code_tests_docs"
+ *
+ * This function detects the conflict and:
+ * 1. Removes the conflicting top-level fields
+ * 2. Adds a warning to contract warnings
+ * 3. The intent block is the single source of truth
+ *
+ * @param {object} contract - The acceptance contract (mutated in place)
+ * @returns {{ warnings: string[] }} Warnings about detected conflicts
+ */
+export function normalizeContractCustomFields(contract) {
+  const warnings = [];
+  if (!contract || typeof contract !== "object") return { warnings };
+
+  const intent = contract.intent || {};
+  const topLevelFields = [];
+
+  if ("execution_mode" in contract && contract.execution_mode !== undefined) {
+    topLevelFields.push({ field: "execution_mode", value: contract.execution_mode, intentField: intent.execution_mode || "readonly" });
+  }
+  if ("mutation_scope" in contract && contract.mutation_scope !== undefined) {
+    topLevelFields.push({ field: "mutation_scope", value: contract.mutation_scope, intentField: intent.mutation_scope || "none" });
+  }
+
+  for (const { field, value, intentField } of topLevelFields) {
+    if (String(value) !== String(intentField)) {
+      warnings.push(
+        `Top-level '${field}: ${value}' conflicts with canonical intent.${field}: ${intentField}. ` +
+        `Removed top-level '${field}'. The intent block is the single source of truth.`
+      );
+      delete contract[field];
+    }
+  }
+
+  // Also check if contract has both top-level execution_mode/mutation_scope (deprecated pattern)
+  // and ensure only the intent block is authoritative
+  if (topLevelFields.length > 0) {
+    warnings.push(
+      "Top-level execution_mode/mutation_scope fields are legacy custom fields. " +
+      "The canonical location is intent.execution_mode and intent.mutation_scope."
+    );
+  }
+
+  return { warnings };
+}

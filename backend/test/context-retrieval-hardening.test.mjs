@@ -511,3 +511,249 @@ describe("[Phase2-兼容性] 向后兼容 — semantic=true 的 provider 仍可�
 });
 
 
+
+
+// ---------------------------------------------------------------------------
+// Phase 3: 当前 Goal 强锚定与入口统一
+// ---------------------------------------------------------------------------
+
+describe("[Phase3-Goal锚定] context.bundle.md 首段输出当前 Goal 结构化锚定", () => {
+  it("[Phase3-T1] buildContextBundle 输出 Current Goal Anchor 为首个内容 Section", async () => {
+    const bundleBuilder = await import("../src/context-index/context-bundle-builder.mjs");
+    const goal = {
+      id: "goal_phase3_anchor",
+      title: "Phase 3 Anchor Test",
+      user_request: "Test user request for anchor verification.",
+      goal_prompt: "Test goal prompt for anchor verification.",
+      mode: "builder",
+      status: "open",
+      workspace_id: "test-ws",
+      project_id: "test-project",
+      repo_id: "test-repo",
+    };
+    const result = bundleBuilder.buildContextBundle({
+      goal,
+      chunks: [
+        { id: "gc1", text: "## Title Phase 3 Anchor Test", tokens: 10, metadata: { source_type: "goal", goal_id: goal.id }, score: 0.5 },
+        { id: "rc1", text: "## Previous result summary", tokens: 10, metadata: { source_type: "result", goal_id: goal.id }, score: 0.2 },
+      ],
+    });
+
+    assert.ok(result.ok !== false, "buildContextBundle should return bundle");
+    const bundle = result.bundle;
+
+    // Verify Current Goal Anchor section appears before Optional Historical Context
+    const anchorIdx = bundle.indexOf("## Current Goal Anchor");
+    const historicalIdx = bundle.indexOf("## Optional Historical Context");
+    assert.ok(anchorIdx >= 0, "Bundle must contain ## Current Goal Anchor section");
+
+    // If historical context exists, verify anchor precedes it
+    if (historicalIdx >= 0) {
+      assert.ok(anchorIdx < historicalIdx,
+        "Current Goal Anchor must appear before Optional Historical Context");
+    }
+
+    // Verify structured sub-sections within anchor
+    assert.ok(bundle.includes("### Goal Title"), "Anchor must contain Goal Title");
+    assert.ok(bundle.includes("### User Request"), "Anchor must contain User Request");
+    assert.ok(bundle.includes("### Goal Prompt"), "Anchor must contain Goal Prompt");
+    assert.ok(bundle.includes("### Goal Metadata"), "Anchor must contain Goal Metadata");
+
+    // Verify goal content is rendered properly
+    assert.ok(bundle.includes(goal.title), "Anchor must contain goal title text");
+    assert.ok(bundle.includes(goal.user_request), "Anchor must contain user request text");
+    assert.ok(bundle.includes(goal.goal_prompt), "Anchor must contain goal prompt text");
+
+    // Verify Priority & Budget section
+    assert.ok(bundle.includes("### Priority & Budget"),
+      "Bundle must contain Priority & Budget section");
+  });
+
+  it("[Phase3-T2] Optional Historical Context section is labeled with override warning", async () => {
+    const bundleBuilder = await import("../src/context-index/context-bundle-builder.mjs");
+    const goal = {
+      id: "goal_phase3_historical",
+      title: "Historical Label Test",
+      user_request: "Test historical labeling.",
+      goal_prompt: "Goal prompt for historical label test.",
+      mode: "builder",
+      status: "open",
+    };
+    const result = bundleBuilder.buildContextBundle({
+      goal,
+      chunks: [
+        { id: "gc1", text: "## Title Historical Label Test", tokens: 10, metadata: { source_type: "goal", goal_id: goal.id }, score: 0.5 },
+        { id: "cc1", text: "## Prior conversation excerpt", tokens: 10, metadata: { source_type: "conversation", goal_id: "other_goal" }, score: 0.1 },
+      ],
+    });
+
+    const bundle = result.bundle;
+    const historicalIdx = bundle.indexOf("## Optional Historical Context");
+    assert.ok(historicalIdx >= 0, "Bundle with conversation/result must contain ## Optional Historical Context");
+
+    // Verify the section explicitly states it must not override Goal Anchor
+    assert.ok(bundle.includes("MUST NOT override the Current Goal Anchor"),
+      "Historical context section must state it does not override Goal Anchor");
+    assert.ok(bundle.includes("Goal Anchor prevails"),
+      "Historical context section must state Goal Anchor prevails on conflict");
+  });
+
+  it("[Phase3-T3] Acceptance Constraints section appears in anchor when contract provided", async () => {
+    const bundleBuilder = await import("../src/context-index/context-bundle-builder.mjs");
+    const goal = {
+      id: "goal_phase3_contract",
+      title: "Contract Display Test",
+      user_request: "Test contract display.",
+      goal_prompt: "Goal prompt with contract.",
+      mode: "builder",
+      status: "open",
+    };
+    const contract = {
+      intent: { operation_kind: "diagnostic", execution_mode: "readonly", mutation_scope: "none", semantic_confidence: "high" },
+      blocking_requirements: [{ id: "diag_report", description: "Produce diagnostic report.", evidence: ["report"] }],
+      requirements: { requires_commit: false },
+    };
+    const result = bundleBuilder.buildContextBundle({
+      goal,
+      contract,
+      chunks: [
+        { id: "gc1", text: "## Title Contract Display Test", tokens: 10, metadata: { source_type: "goal", goal_id: goal.id }, score: 0.5 },
+      ],
+    });
+
+    const bundle = result.bundle;
+    assert.ok(bundle.includes("### Acceptance Constraints"),
+      "Anchor must contain Acceptance Constraints when contract is provided");
+    assert.ok(bundle.includes("diagnostic"), "Must show operation_kind from contract");
+    assert.ok(bundle.includes("readonly"), "Must show execution_mode from contract");
+    assert.ok(bundle.includes("none"), "Must show mutation_scope from contract");
+  });
+});
+
+describe("[Phase3-契约归一化] acceptance contract 自定义字段与 intent 不一致修复", () => {
+  it("[Phase3-T4] normalizeContractCustomFields detects top-level vs intent conflict", async () => {
+    const schema = await import("../src/acceptance/contract-schema.mjs");
+    const contract = {
+      intent: { operation_kind: "diagnostic", execution_mode: "readonly", mutation_scope: "none", semantic_confidence: "high" },
+      execution_mode: "implementation",
+      mutation_scope: "code_tests_docs",
+    };
+    const result = schema.normalizeContractCustomFields(contract);
+
+    assert.ok(result.warnings.length > 0, "Should produce warnings for conflicting fields");
+    assert.ok(!("execution_mode" in contract),
+      "Top-level execution_mode must be removed after normalization");
+    assert.ok(!("mutation_scope" in contract),
+      "Top-level mutation_scope must be removed after normalization");
+    assert.strictEqual(contract.intent.execution_mode, "readonly",
+      "intent block execution_mode preserved");
+    assert.strictEqual(contract.intent.mutation_scope, "none",
+      "intent block mutation_scope preserved");
+
+    const allWarnings = result.warnings.join(" ");
+    assert.ok(allWarnings.includes("execution_mode"), "Warning should mention execution_mode");
+    assert.ok(allWarnings.includes("mutation_scope"), "Warning should mention mutation_scope");
+  });
+
+  it("[Phase3-T5] normalizeContractCustomFields preserves clean contracts", async () => {
+    const schema = await import("../src/acceptance/contract-schema.mjs");
+    const clean = {
+      intent: { operation_kind: "code_change", execution_mode: "worktree", mutation_scope: "repo", semantic_confidence: "high" },
+    };
+    const result = schema.normalizeContractCustomFields(clean);
+    assert.strictEqual(result.warnings.length, 0, "Clean contract should produce no warnings");
+    assert.strictEqual(clean.intent.execution_mode, "worktree", "intent preserved");
+  });
+
+  it("[Phase3-T6] validateContractSemantics integrates custom field normalization", async () => {
+    const semantics = await import("../src/acceptance/semantics.mjs");
+    const problematic = {
+      intent: { operation_kind: "diagnostic", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+      execution_mode: "implementation",
+      mutation_scope: "code_tests_docs",
+    };
+    const result = semantics.validateContractSemantics(problematic);
+
+    assert.ok(result.normalized, "Should return normalized contract");
+    assert.ok(!("execution_mode" in result.normalized),
+      "Top-level execution_mode removed after validation normalization");
+    assert.ok(!("mutation_scope" in result.normalized),
+      "Top-level mutation_scope removed after validation normalization");
+    assert.ok(result.warnings.length > 0,
+      "Should include custom field warnings");
+  });
+});
+
+describe("[Phase3-入口推导] codex.entry.md 从 acceptance contract 推导执行模式", () => {
+  it("[Phase3-T7] entry-contract-deriver produces readonly diagnostic display", async () => {
+    const d = await import("../src/context-index/entry-contract-deriver.mjs");
+    const readonlyContract = {
+      intent: { operation_kind: "diagnostic", execution_mode: "readonly", mutation_scope: "none", semantic_confidence: "high" }
+    };
+    assert.ok(d.isReadonlyOrDiagnosticContract(readonlyContract), "readonly contract detected");
+    assert.strictEqual(d.getExecutionModeLabel(readonlyContract), "readonly diagnostic", "execution mode label");
+    assert.strictEqual(d.getMutationScopeLabel(readonlyContract), "none", "mutation scope label");
+    assert.strictEqual(d.getMutationScopeDisplay(readonlyContract), "none", "mutation scope display");
+
+    const mutationContract = {
+      intent: { operation_kind: "code_change", execution_mode: "worktree", mutation_scope: "repo", semantic_confidence: "high" }
+    };
+    assert.ok(!d.isReadonlyOrDiagnosticContract(mutationContract), "mutation contract NOT readonly");
+    assert.strictEqual(d.getMutationScopeDisplay(mutationContract), "repo", "mutation contract mutation scope");
+    assert.strictEqual(d.getMutationScopeLabel(mutationContract), "repo (code, tests, docs)", "mutation scope label");
+
+    const diag = d.buildEntryExecutionDiagnostics(readonlyContract);
+    assert.ok(diag.includes("Execution mode"), "diag must include Execution mode");
+    assert.ok(diag.includes("Mutation scope"), "diag must include Mutation scope");
+    assert.ok(diag.includes("readonly diagnostic"), "diag must include readonly diagnostic");
+    assert.ok(diag.includes("none"), "diag must include none mutation scope");
+    assert.ok(diag.includes("Read-only constraint"), "readonly diag must include constraint warning");
+    assert.ok(diag.includes("do not execute mutation commands"), "readonly diag must prohibit mutation");
+  });
+
+  it("[Phase3-T8] sanitizeReadonlyInstructions strips mutation commands", async () => {
+    const d = await import("../src/context-index/entry-contract-deriver.mjs");
+    const readonlyText = "Make changes to the file, then restart the service and deploy.";
+    const sanitized = d.sanitizeReadonlyInstructions(readonlyText, true);
+
+    // These should NOT contain the mutation commands
+    const mutationWords = ["restart", "deploy"];
+    const mutationFound = mutationWords.filter((w) => sanitized.toLowerCase().includes(w));
+    assert.strictEqual(mutationFound.length, 0,
+      `Sanitized readonly instructions should not contain mutation commands. Found: ${mutationFound.join(", ")}`);
+
+    // Non-readonly text should be unchanged
+    const normalText = d.sanitizeReadonlyInstructions(readonlyText, false);
+    assert.strictEqual(normalText, readonlyText, "Non-readonly text unchanged");
+  });
+});
+
+describe("[Phase3-渲染] renderCodexEntryMarkdown includes execution diagnostics section", () => {
+  it("[Phase3-T9] renderCodexEntryMarkdown includes Execution Diagnostics when contract present", async () => {
+    const goalFiles = await import("../src/goal-files.mjs");
+    const goal = {
+      id: "goal_phase3_entry",
+      title: "Entry Test",
+      user_request: "Test entry diagnostics.",
+      goal_prompt: "Test prompt.",
+      mode: "builder",
+      workspace_id: "test-ws",
+      acceptance_contract: {
+        intent: { operation_kind: "diagnostic", execution_mode: "readonly", mutation_scope: "none", semantic_confidence: "high" }
+      }
+    };
+    const workspaceFiles = { dir: "/tmp", context_bundle_md: "ctx.md", context_manifest_json: "ctx.manifest.json", context_json: "ctx.json", goal_md: "goal.md", transcript_md: "transcript.md", acceptance_contract_json: "acceptance.contract.json", result_md: "result.md", context_retrieval_json: "retrieval.json", attachments_dir: "attachments" };
+    const entry = goalFiles.renderCodexEntryMarkdown(goal, null, null, null, workspaceFiles);
+
+    assert.ok(entry.includes("## Execution Diagnostics"),
+      "codex.entry.md must include Execution Diagnostics section");
+    assert.ok(entry.includes("readonly diagnostic"),
+      "codex.entry.md must show readonly diagnostic mode from contract");
+    assert.ok(entry.includes("Mutation scope"),
+      "codex.entry.md must show Mutation scope");
+    assert.ok(entry.includes("none"),
+      "codex.entry.md must show mutation scope none");
+    assert.ok(entry.includes("do not execute mutation commands"),
+      "codex.entry.md must include readonly constraint that prohibits mutation");
+  });
+});

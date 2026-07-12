@@ -8,6 +8,7 @@ import {
   assertionIds,
   cloneJson,
   disableAutoCompletion,
+  normalizeContractCustomFields,
   normalizeList,
   normalizeReviewPolicy,
   requirementIds
@@ -45,6 +46,8 @@ function meansMerged(assertion) {
 
 export function validateContractSemantics(contract = {}) {
   const normalized = cloneJson(contract) || {};
+  // Phase 3: Normalize any top-level custom fields that conflict with canonical intent block
+  const customFieldWarnings = normalizeContractCustomFields(normalized);
   normalized.requirements = { ...(normalized.requirements || {}) };
   normalized.verification_plan = { ...(normalized.verification_plan || {}) };
   normalized.blocking_requirements = normalizeList(normalized.blocking_requirements);
@@ -54,7 +57,7 @@ export function validateContractSemantics(contract = {}) {
   normalized.review_policy = normalizeReviewPolicy(normalized.review_policy || {});
 
   const errors = [];
-  const warnings = [];
+  const warnings = [...customFieldWarnings.warnings];
   const intent = normalized.intent || {};
   const operationKind = intent.operation_kind;
   const mutationScope = intent.mutation_scope;

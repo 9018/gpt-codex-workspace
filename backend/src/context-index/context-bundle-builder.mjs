@@ -317,21 +317,63 @@ function selectBundleChunks(chunks = [], { goal = null, task = null, maxTokens =
 // ---------------------------------------------------------------------------
 
 /**
- * Build the selected context summary section.
+ * Build the Goal Anchor section — fixed first section after metadata.
+ *
+ * This MUST always output:
+ * 1. Current Goal title
+ * 2. Original user request
+ * 3. Goal Prompt
+ * 4. Acceptance constraints
+ *
+ * It is the primary anchoring mechanism — no historical or cross-goal content
+ * may appear before this section.
+ *
+ * @param {object} goal
+ * @param {object} [contract] - Optional acceptance contract for constraint hints
+ * @returns {string}
  */
-function buildContextSummarySection(goal, chunks) {
+function buildGoalAnchorSection(goal, contract) {
   const lines = [
-    "## Selected Context Summary",
+    "## Current Goal Anchor",
+    "",
+    "*This section is the primary execution anchor. The current Goal always appears first, with highest priority and minimum token budget. Historical and cross-goal content below is explicitly labeled Optional Historical Context.*",
     "",
   ];
 
-  if (chunks.length > 0) {
-    // Include the highest-scored goal chunk for context
-    const goalChunk = chunks.find((c) => c.metadata?.source_type === "goal");
-    if (goalChunk) {
-      lines.push(truncateText(goalChunk.text, DEFAULT_SUMMARY_CHARS));
-      lines.push("");
-    }
+  // 1. Goal title
+  lines.push("### Goal Title");
+  lines.push("");
+  lines.push(goal?.title || "untitled");
+  lines.push("");
+
+  // 2. User Request
+  lines.push("### User Request");
+  lines.push("");
+  lines.push(goal?.user_request || "*(none)*");
+  lines.push("");
+
+  // 3. Goal Prompt
+  lines.push("### Goal Prompt");
+  lines.push("");
+  lines.push(goal?.goal_prompt || "*(none)*");
+  lines.push("");
+
+  // 4. Goal-level metadata
+  lines.push("### Goal Metadata");
+  lines.push("");
+  lines.push(`- Status: **${goal?.status || "unknown"}**`);
+  lines.push(`- Mode: ${goal?.mode || "builder"}`);
+  lines.push(`- Workspace: ${goal?.workspace_id || "unknown"}`);
+  if (goal?.project_id) lines.push(`- Project: ${goal.project_id}`);
+  if (goal?.repo_id) lines.push(`- Repo: ${goal.repo_id}`);
+  lines.push("");
+
+  // 5. Acceptance constraints from contract (if available)
+  if (contract) {
+    lines.push("### Acceptance Constraints");
+    lines.push("");
+    _appendContractConstraints(lines, contract);
+    lines.push("");
   } else if (goal?.context_summary) {
     lines.push(goal.context_summary);
     lines.push("");
@@ -344,8 +386,72 @@ function buildContextSummarySection(goal, chunks) {
   return lines.join("\n");
 }
 
+
+
+/**
+ * Extract acceptance constraints from contract for display in bundle.
+ * @param {string[]} lines
+ * @param {object} contract
+ */
+function _appendContractConstraints(lines, contract) {
+  const intent = contract.intent || {};
+  const blockingReqs = Array.isArray(contract.blocking_requirements) ? contract.blocking_requirements : [];
+  const quality = Array.isArray(contract.non_blocking_quality_expectations) ? contract.non_blocking_quality_expectations : [];
+
+  lines.push(`- **Operation kind**: ${intent.operation_kind || "not specified"}`);
+  lines.push(`- **Execution mode**: ${intent.execution_mode || "not specified"}`);
+  lines.push(`- **Mutation scope**: ${intent.mutation_scope || "not specified"}`);
+  lines.push(`- **Semantic confidence**: ${intent.semantic_confidence || "not specified"}`);
+  lines.push("");
+
+  if (blockingReqs.length > 0) {
+    lines.push("**Blocking requirements:**");
+    for (const req of blockingReqs) {
+      if (req.id && req.description) {
+        lines.push(`- \`${req.id}\`: ${req.description}`);
+      }
+    }
+    lines.push("");
+  }
+
+  if (quality.length > 0) {
+    lines.push("**Quality expectations:**");
+    for (const q of quality) {
+      if (q.id && q.description) {
+        lines.push(`- \`${q.id}\`: ${q.description}`);
+      }
+    }
+    lines.push("");
+  }
+
+  if (contract.requirements) {
+    lines.push("**Required evidence:**");
+    const reqs = contract.requirements;
+    if (reqs.requires_commit !== undefined) lines.push(`- Requires commit: ${reqs.requires_commit}`);
+    if (reqs.requires_integration !== undefined) lines.push(`- Requires integration: ${reqs.requires_integration}`);
+    if (reqs.requires_restart !== undefined) lines.push(`- Requires restart: ${reqs.requires_restart}`);
+    lines.push("");
+  }
+}
+
+/**
+ * Build the optional historical context note.
+ * @returns {string}
+ */
+function buildHistoricalContextNote() {
+  return [
+    "## Optional Historical Context",
+    "",
+    "*Content below this section is historical context from prior goals, conversations, or results.* ",
+    "*It is included for reference only and MUST NOT override the Current Goal Anchor above.* ",
+    "*If there is a conflict between this section and the Goal Anchor, the Goal Anchor prevails.*",
+    "",
+  ].join("\n");
+}
+
 /**
  * Build the relevant prior conversation section.
+ * Now labeled as Optional Historical Context: Conversation.
  */
 function buildConversationSection(chunks) {
   const convChunks = chunks.filter((c) => c.metadata?.source_type === "conversation");
@@ -388,6 +494,39 @@ function buildResultsSection(chunks) {
     lines.push(`- ${truncateText(chunk.text, DEFAULT_RESULT_CHARS)}${score}`);
     lines.push("");
   }
+
+  return lines.join("\n");
+}
+
+
+
+/**
+ * Build the current Goal priority & budget summary for the bundle.
+ * Displayed after the Goal Anchor section to show current Goal has
+ * minimum guaranteed token/chunk budget.
+ *
+ * @param {object} selectionMetadata
+ * @returns {string}
+ */
+function buildPriorityBudgetSection(selectionMetadata) {
+  const lines = [
+    "### Priority & Budget",
+    "",
+  ];
+
+  if (selectionMetadata?.quotas) {
+    const q = selectionMetadata.quotas;
+    lines.push("- **Current Goal minimum chunks**: " + (q.currentGoalMin ?? 1));
+    lines.push("- **Maximum result chunks**: " + (q.resultMax ?? 2));
+    lines.push("- **Maximum conversation chunks**: " + (q.conversationMax ?? 3));
+  }
+
+  if (selectionMetadata?.source_budget_tokens) {
+    lines.push("- **Source budget (tokens)**: " + selectionMetadata.source_budget_tokens);
+  }
+
+  lines.push("- **Priority**: Current Goal content always appears first and is never demoted by historical content.");
+  lines.push("");
 
   return lines.join("\n");
 }
@@ -475,7 +614,7 @@ function buildRetrievalSourcesSection(chunks) {
  */
 export function buildContextBundle(options = {}) {
   const { chunks = [], goal, task = null, workspaceFiles } = options;
-  const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 256, 16000);
+  const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 512, 16000);
   const maxChunks = clampPositiveInt(options.maxChunks, DEFAULT_MAX_CHUNKS, 1, 20);
   const selectionResult = selectBundleChunks(chunks, {
     goal,
@@ -485,6 +624,8 @@ export function buildContextBundle(options = {}) {
   });
   const bundleChunks = selectionResult.selected;
   const selectionMetadata = selectionResult.metadata;
+  // Acceptance contract for constraint display — passed via options or looked up
+  const contract = options.acceptanceContract || options.contract || null;
 
   const sections = [];
 
@@ -518,24 +659,31 @@ export function buildContextBundle(options = {}) {
   }
   sections.push("");
 
-  // Section 3: selected context summary
-  sections.push(buildContextSummarySection(goal, bundleChunks));
+  // Section 3: Goal Anchor (current Goal always first, with highest priority)
+  sections.push(buildGoalAnchorSection(goal, contract));
 
-  // Section 4: relevant prior conversation
+  // Section 4: priority & budget summary for current Goal
+  sections.push(buildPriorityBudgetSection(selectionMetadata));
+
+  // Section 5: Optional Historical Context (labeled, does not override Goal Anchor)
+  // Only emit if there actually is historical content
+  const historicalSections = [];
   const convSection = buildConversationSection(bundleChunks);
-  if (convSection) sections.push(convSection);
-
-  // Section 5: relevant prior tasks/results
+  if (convSection) historicalSections.push(convSection);
   const resSection = buildResultsSection(bundleChunks);
-  if (resSection) sections.push(resSection);
+  if (resSection) historicalSections.push(resSection);
+
+  if (historicalSections.length > 0) {
+    sections.push(buildHistoricalContextNote());
+    for (const hSection of historicalSections) {
+      sections.push(hSection);
+    }
+  }
 
   // Section 6: constraints and acceptance hints
-  sections.push(buildConstraintsSection(goal));
-
-  // Section 7: omitted/full transcript note
   sections.push(buildTranscriptNoteSection(workspaceFiles));
 
-  // Section 8: retrieval sources
+  // Section 7: retrieval sources
   sections.push(buildRetrievalSourcesSection(bundleChunks));
 
   const bundle = sections.join("\n");
