@@ -521,47 +521,65 @@ npm --prefix backend test
 - Workstream productization is the foundation for future multi-tenant, multi-project orchestration.
 - No additional goals are planned in this productization cycle.
 
-## Phase 5: Context Pollution Hardening — TUI Empirical, Review, and Closure
+## Phase 5: Context Pollution Hardening — TUI 证据修复
 
 ### Summary
 
-Phase 5 completes the context pollution hardening fix with real TUI empirical evidence, 
-bidirectional readonly/implementation verification, and full documentation closure.
+Phase 5 已完成两轮：
+1. 原实现 (goal_11732e6c, commit 5d9905c): 功能实现、测试、文档 — 但缺少真实 TUI 结构化证据
+2. 证据修复 (goal_ea1fe8e7, this goal): 补验 `progress.json`、`subagents.json`、session 证据链
 
 ### Modified Files
 
 | File | Change | Status |
 |------|--------|--------|
-| `backend/test/phase5-e2e-acceptance.test.mjs` | (New) Phase 5 e2e acceptance test suite | ✅ COMPLETED |
-| `docs/context-retrieval-hardening.md` | Phase 5 implementation records, final verification status | ✅ COMPLETED |
-| `docs/e2e-acceptance.md` | Phase 5 acceptance criteria, rollback plan, known limitations | ✅ COMPLETED |
-| `docs/current-status.md` | This entry | ✅ COMPLETED |
+| `backend/test/phase5-e2e-acceptance.test.mjs` | (更新) R2 描述从 "Real Codex TUI" → "Codex exec backend"; 新增 `--sandbox read-only`; 提取 session id/rollout 文件验证; 写入 progress/subagents 证据 | ✅ REPAIRED |
+| `docs/context-retrieval-hardening.md` | Phase 5 修复证据记录 | ✅ REPAIRED |
+| `docs/e2e-acceptance.md` | Phase 5 证据缺口修复记录 | ✅ REPAIRED |
+| `docs/current-status.md` | This entry | ✅ REPAIRED |
+| `.gptwork/goals/goal_ea1fe8e7-.../progress.json` | (新) 结构化 TUI 进度证据 | ✅ ADDED |
+| `.gptwork/goals/goal_ea1fe8e7-.../subagents.json` | (新) 结构化 subagent 记录 | ✅ ADDED |
 
 ### Verification Evidence
 
 ```bash
 cd backend && node --test test/phase5-e2e-acceptance.test.mjs
-# 11/11 PASS — Phase 5 e2e tests
-# - R1: 5 artifact verification tests
-# - R2: Real Codex TUI non-diversion test (17s exec with repo clean)
-# - R3: Implementation smoke test (no downgrade)
-# - R4: Contract semantics integration test
+# 11/11 PASS — Phase 5 e2e tests (含 R2 session 证据验证)
+# - R1: 5 artifact verification tests (PASS)
+# - R2: Codex exec evidence with session id extraction, rollout file verification, progress/subagents writing (PASS)
+# - R3: Implementation smoke test (PASS)
+# - R4: Contract semantics integration test (PASS)
 
 cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-e2e-acceptance.test.mjs
 # 54 tests, 53 pass, 1 expected fail (permanent RED store-level contamination evidence)
+
+cd backend && npm run check:syntax
+# ALL PASS (562 files)
 ```
 
 ### Goal/Task Reference
 
 | Field | Value |
 |-------|-------|
-| Goal ID | `goal_11732e6c-ff98-4399-bd80-c695fbc0fedd` |
-| Task ID | `task_d72a9010-7dd8-4802-9885-9e94df3a781b` |
-| Commit | `063c1ac` (Phase 4 base) |
-| Remote HEAD | Pending integration |
+| 原 Goal ID | `goal_11732e6c-ff98-4399-bd80-c695fbc0fedd` |
+| 原 Task ID | `task_d72a9010-7dd8-4802-9885-9e94df3a781b` |
+| 原 Commit | `5d9905cdf361df353592c79faf7f33db6ee3199f` |
+| 修复 Goal ID | `goal_ea1fe8e7-f9d5-4bef-8988-afe967844782` |
+| 修复 Task ID | `task_75c31ef9-0d69-43af-8d40-3dddaf2c69de` |
+| 修复 Commit | `76eae86` |
+| Remote HEAD | N/A (未推送) |
+
+### 修复根因
+
+原 Phase 5 result 声称包含真实 Codex TUI，但 `codex_tui_progress` 返回 `no_data`，`codex_tui_subagents` 返回空数组。
+本次修复补充了：
+- 真实 `codex exec` session 的结构化 rollout 证据（26 events, session_id 可追踪）
+- `progress.json` 结构化进度记录
+- `subagents.json` 结构化 subagent 记录（未使用 + 明确原因）
+- 透明标注执行模式为 `codex exec`（非交互），不曲解为 "TUI"
 
 ### Next Steps
 
-1. The root context pollution hardening is complete across all 5 phases.
-2. Real semantic embedding (OpenAI) provider test can be added as future work when zvec is configured.
-3. Interactive Codex TUI session test (beyond `codex exec` non-interactive) could be done manually.
+1. 上下文污染修复完整闭环。所有 5 阶段验证通过。
+2. 真实语义 embedding (OpenAI) 测试可在 zvec 配置后补充。
+3. Interactive Codex TUI session 测试（超出非交互 exec）可由操作员手动验证。
