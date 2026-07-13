@@ -595,3 +595,19 @@ All pass. Original permanent RED test (cross-goal retrieval contamination) prese
 - Rollback: `git revert <commit>` or reset to `b8073c7`.
 - Next step: Acceptance automation now reads valid collector/result verification naturally through
   the existing `task.result.verification` field written by `codex_tui_collect`.
+
+## GPTWork automation closure repair — 2026-07-13
+
+- Goal: `goal_b95e7f32-6032-4ea7-a912-b23a27beb9f3`
+- Stalled Task: `task_a0f3bcca-460c-4133-85df-1474b2c6c2d3`
+- Changed files:
+  - `backend/src/acceptance/contract-builder.mjs`
+  - `backend/src/tool-groups/codex-tui-tools-group.mjs`
+  - `backend/test/acceptance-contract-builder.test.mjs`
+  - `backend/test/codex-tui-collect-state-sync.test.mjs`
+- Test command: `node --test --test-reporter=dot test/codex-tui-collect-state-sync.test.mjs test/acceptance-contract-builder.test.mjs`
+- Result: all selected tests passed after reproducing three RED failures first.
+- Implementation commit: `4bf366f6809b7dca142d5deb6ac930e19ecfd5bc`
+- Risk: explicit operation kind now correctly overrides semantic inference; callers relying on accidental inference precedence may observe corrected contracts.
+- Rollback: revert `4bf366f6809b7dca142d5deb6ac930e19ecfd5bc`.
+- Next step: reconcile the abandoned worker task and stale repo lock, then verify queue/worker state is clean.

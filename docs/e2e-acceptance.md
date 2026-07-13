@@ -432,3 +432,12 @@ The automation closed-loop for TUI tasks now includes:
 
 - Goal: `goal_7868c210-660e-431b-b494-59e6f9dfb2d0`
 - Task: `task_26df0560-2aaf-4f96-ab91-9534b8a8ae48`
+
+## Automation closure repair evidence — 2026-07-13
+
+- Goal/Task: `goal_b95e7f32-6032-4ea7-a912-b23a27beb9f3` / `task_a0f3bcca-460c-4133-85df-1474b2c6c2d3`
+- Commit: `4bf366f6809b7dca142d5deb6ac930e19ecfd5bc`
+- Verification: contract-string normalization, top-level operation-kind precedence, and assigned-to-review TUI collect synchronization all pass their focused tests.
+- Changed files: two production modules and two focused regression test files.
+- Risk/rollback: revert the implementation commit if downstream contract consumers regress.
+- Next step: state/lock reconciliation and end-to-end queue health verification.

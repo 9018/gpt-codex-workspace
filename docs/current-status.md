@@ -658,3 +658,10 @@ node --test backend/test/docs-only-safe-integration.test.mjs        # 5/5 pass
 
 Acceptance automation can now naturally read collector/result verification through
 `task.result.verification` without needing an extra lookup into result.json.
+
+## 2026-07-13 GPTWork closure repair
+
+- Direct ChatGPT repair completed after the worker task stalled without result, verification, commit, or heartbeat progress.
+- Implementation commit: `4bf366f6809b7dca142d5deb6ac930e19ecfd5bc`.
+- Tests: focused contract-builder and TUI collect state-sync suites passed.
+- Remaining operational action: mark the abandoned task terminal, release its stale lock, and re-run recovery diagnostics.
