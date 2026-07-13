@@ -110,7 +110,8 @@ export function normalizeCreatedTaskMode(args) {
 }
 
 export function normalizeAssignedTaskMode(task, requestedMode = "") {
-  const mode = String(requestedMode || "").trim().toLowerCase();
+  const requested = String(requestedMode || "").trim().toLowerCase();
+  const mode = requested === "implementation" || requested === "code_change" ? "builder" : requested;
   const allowedModes = new Set(["readonly", "builder", "deploy", "admin"]);
   if (mode) {
     if (!allowedModes.has(mode)) throw new Error(`unsupported task mode: ${mode}`);
@@ -118,7 +119,9 @@ export function normalizeAssignedTaskMode(task, requestedMode = "") {
     return mode;
   }
   if (isCodexSessionInventoryTaskKind({ ...task, assignee: "codex" })) return "readonly";
-  return task.mode && task.mode !== "readonly" ? task.mode : "builder";
+  const taskMode = String(task.mode || "").trim().toLowerCase();
+  if (taskMode === "implementation" || taskMode === "code_change") return "builder";
+  return taskMode && taskMode !== "readonly" ? taskMode : "builder";
 }
 
 /**

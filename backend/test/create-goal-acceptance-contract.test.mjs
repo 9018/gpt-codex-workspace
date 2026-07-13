@@ -112,3 +112,31 @@ test("conflicting explicit acceptance_contract is marked for review instead of a
   assert.equal(contract.completion_policy.auto_complete_when_blocking_requirements_pass, false);
   assert.ok(contract.semantic_validation.errors.some((error) => /restart.*commit/i.test(error.message)));
 });
+
+test("create_goal accepts implementation as a product alias and creates a builder worktree task", async () => {
+  const server = await makeServer();
+  const created = await callTool(server, "create_goal", {
+    title: "implementation alias canary",
+    user_request: "Create a docs canary and test it",
+    goal_prompt: "Write the file, run tests, commit, and integrate.",
+    mode: "implementation",
+    assign_to_codex: true,
+    acceptance_contract: {
+      operation_kind: "implementation",
+      execution_mode: "builder",
+      mutation_scope: "docs_and_tests_only",
+      requires_commit: true,
+      requires_integration: true,
+    },
+  });
+
+  assert.equal(created.goal.mode, "builder");
+  assert.equal(created.task.mode, "builder");
+  assert.equal(created.task.execution_mode, "worktree");
+  assert.equal(created.task.worktree.enabled, true);
+  assert.equal(created.goal.acceptance_contract.intent.operation_kind, "code_change");
+  assert.equal(created.goal.acceptance_contract.intent.execution_mode, "worktree");
+  assert.equal(created.goal.acceptance_contract.intent.mutation_scope, "repo");
+  assert.equal(created.goal.acceptance_contract.requirements.requires_commit, true);
+  assert.equal(created.goal.acceptance_contract.requirements.requires_integration, true);
+});

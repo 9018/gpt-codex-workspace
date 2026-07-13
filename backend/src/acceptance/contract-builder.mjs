@@ -11,6 +11,56 @@ import {
 } from "./contract-schema.mjs";
 import { validateContractSemantics } from "./semantics.mjs";
 
+
+const OPERATION_KIND_ALIASES = Object.freeze({
+  implementation: "code_change",
+  builder: "code_change",
+});
+
+const EXECUTION_MODE_ALIASES = Object.freeze({
+  builder: "worktree",
+  implementation: "worktree",
+});
+
+const MUTATION_SCOPE_ALIASES = Object.freeze({
+  code_tests_docs: "repo",
+  docs_and_tests_only: "repo",
+  docs_tests_only: "repo",
+});
+
+function normalizeProductContractAliases(explicit = {}) {
+  const normalized = cloneJson(explicit) || {};
+  const topKind = String(normalized.operation_kind || "").trim().toLowerCase();
+  const intentKind = String(normalized.intent?.operation_kind || "").trim().toLowerCase();
+  if (OPERATION_KIND_ALIASES[topKind]) normalized.operation_kind = OPERATION_KIND_ALIASES[topKind];
+  if (normalized.intent && OPERATION_KIND_ALIASES[intentKind]) normalized.intent.operation_kind = OPERATION_KIND_ALIASES[intentKind];
+
+  const topExecution = String(normalized.execution_mode || "").trim().toLowerCase();
+  const intentExecution = String(normalized.intent?.execution_mode || "").trim().toLowerCase();
+  const canonicalExecution = EXECUTION_MODE_ALIASES[topExecution] || EXECUTION_MODE_ALIASES[intentExecution];
+  if (canonicalExecution) {
+    normalized.intent = { ...(normalized.intent || {}), execution_mode: canonicalExecution };
+    delete normalized.execution_mode;
+  }
+
+  const topScope = String(normalized.mutation_scope || "").trim().toLowerCase();
+  const intentScope = String(normalized.intent?.mutation_scope || "").trim().toLowerCase();
+  const canonicalScope = MUTATION_SCOPE_ALIASES[topScope] || MUTATION_SCOPE_ALIASES[intentScope];
+  if (canonicalScope) {
+    normalized.intent = { ...(normalized.intent || {}), mutation_scope: canonicalScope };
+    delete normalized.mutation_scope;
+  }
+
+  normalized.requirements = { ...(normalized.requirements || {}) };
+  for (const field of ["requires_commit", "requires_integration", "requires_restart", "requires_deployment_check"]) {
+    if (typeof normalized[field] === "boolean") {
+      normalized.requirements[field] = normalized[field];
+      delete normalized[field];
+    }
+  }
+  return normalized;
+}
+
 const OPERATION_PATTERNS = [
   ["data_migration", /\b(migrat(e|ion)|schema migration|backfill|rollback plan|database migration)\b|数据迁移|回滚/iu],
   ["external_sync", /\b(sync|synchroni[sz]e|external system|google drive|canva|github issue|remote service)\b|同步|外部系统/iu],
@@ -33,7 +83,8 @@ const OPERATION_PATTERNS = [
 
 function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } = {}) {
   const text = `${mode}\n${user_request}\n${goal_prompt}`;
-  const normalizedMode = String(mode || "").toLowerCase();
+  const requestedMode = String(mode || "").toLowerCase();
+  const normalizedMode = requestedMode === "implementation" || requestedMode === "code_change" ? "builder" : requestedMode;
   if (normalizedMode === "deploy") return { operation_kind: "deploy", semantic_confidence: "high" };
   if (normalizedMode === "readonly" && /validat(e|ion)|检查|验证/iu.test(text)) return { operation_kind: "readonly_validation", semantic_confidence: "medium" };
   if (normalizedMode === "readonly") return { operation_kind: "diagnostic", semantic_confidence: "medium" };
@@ -129,7 +180,8 @@ function normalizeExplicitContract(explicit) {
 }
 
 export function buildAcceptanceContract(args = {}) {
-  const { normalized: explicit, intentCorrupted } = normalizeExplicitContract(args.acceptance_contract || args.acceptanceContract);
+  const rawExplicit = normalizeProductContractAliases(args.acceptance_contract || args.acceptanceContract);
+  const { normalized: explicit, intentCorrupted } = normalizeExplicitContract(rawExplicit);
   // P0: Top-level explicit fields beat intent block enrichment.
   // The intent block may contain auto-classified or corrupted values
   // (e.g. data_migration from semantic inference), while the top-level

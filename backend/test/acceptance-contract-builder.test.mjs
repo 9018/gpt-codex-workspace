@@ -365,3 +365,25 @@ test("B5: top-level args.operation_kind overrides inference when acceptance_cont
   assert.equal(contract.intent.execution_mode, "worktree",
     "code_change execution_mode should be worktree");
 });
+
+test("product-layer implementation aliases normalize into canonical builder contract", () => {
+  const contract = buildAcceptanceContract({
+    mode: "implementation",
+    user_request: "Create a docs canary and test it, then commit and integrate",
+    goal_prompt: "Write the file, run tests, commit, and merge.",
+    acceptance_contract: {
+      operation_kind: "implementation",
+      execution_mode: "builder",
+      mutation_scope: "docs_and_tests_only",
+      requires_commit: true,
+      requires_integration: true,
+    },
+  });
+
+  assert.equal(contract.intent.operation_kind, "code_change");
+  assert.equal(contract.intent.execution_mode, "worktree");
+  assert.equal(contract.intent.mutation_scope, "repo");
+  assert.equal(contract.requirements.requires_commit, true);
+  assert.equal(contract.requirements.requires_integration, true);
+  assert.equal(contract.semantic_validation.valid, true);
+});

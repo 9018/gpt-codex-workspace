@@ -471,7 +471,10 @@ test("14d. recovery_command_runner npm_check_syntax validates backend src files"
     const server = await makeServer({ toolMode: "full", defaultRepoPath: REPO_ROOT });
     const response = await callTool(server, "recovery_command_runner", {
       command: "npm_check_syntax",
-      timeout_ms: 30000,
+      // The full test suite runs many Node subprocesses concurrently. Keep the
+      // API default unchanged, but give this integration test enough budget to
+      // validate all backend source files under contention.
+      timeout_ms: 60000,
     });
 
     assert.equal(response.error, undefined, JSON.stringify(response.error));
