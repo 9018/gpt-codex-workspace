@@ -583,3 +583,19 @@ cd backend && npm run check:syntax
 1. 上下文污染修复完整闭环。所有 5 阶段验证通过。
 2. 真实语义 embedding (OpenAI) 测试可在 zvec 配置后补充。
 3. Interactive Codex TUI session 测试（超出非交互 exec）可由操作员手动验证。
+
+## Status Correction: Context-Pollution Phase 5 Is Partial
+
+This status entry supersedes the preceding Phase 5 statements that say all five stages are fully closed.
+
+- Goal chain implementation through Phase 5 is integrated; Phase 5 implementation commit is `5d9905cdf361df353592c79faf7f33db6ee3199f`.
+- Final evidence Goal/Task: `goal_f8bf7c86-2ad8-4cec-bdd3-781c84f0392d` / `task_5a07dd1d-7202-41d7-8189-35342793777d`.
+- The real outer `codex_tui_goal` session produced structured progress, explicit no-subagent evidence, and a result. The validation operation inside the evidence remained `codex exec --sandbox read-only`.
+- Consequently, tests, artifact checks, and no-mutation evidence pass, but the hard operator-driven interactive-TUI criterion remains open.
+- Canonical status: **PARTIAL / waiting_for_review**, not fully closed.
+
+Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, `docs/current-status.md`.
+
+Verification: `git diff --check`. Existing focused evidence: `54 tests, 53 pass, 1 intentional permanent RED`; it is not reclassified as interactive-TUI evidence.
+
+Risk: overstating closure can incorrectly unblock dependent product decisions. Rollback: revert the documentation correction commit. Next action: collect genuine interactive TUI evidence or formally revise the acceptance criterion. Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.

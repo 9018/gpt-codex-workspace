@@ -372,3 +372,22 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-
 - Phase 3: Goal 锚定 + 契约归一化
 - Phase 4: 完整测试矩阵 + 故障注入
 - Phase 5: 真实 TUI 实证 + 五类产物验证 + implementation 防降级 + 文档闭环
+
+## Phase 5 Acceptance Correction — 2026-07-13
+
+This correction supersedes the earlier `Codex TUI 真实实证 = PASS` and `Final Conclusion = closed` statements.
+
+| Item | Correct status | Evidence |
+|---|---|---|
+| Phase 1–4 implementation and regression coverage | PASS | Integrated commits `43c7f333`, `f028eeb`, `b6b25086`, `063c1ac1` |
+| Phase 5 code/tests/docs | PASS | Integrated commit `5d9905cdf361df353592c79faf7f33db6ee3199f` |
+| Readonly/no-mutation execution | PASS | `codex exec --sandbox read-only`, HEAD unchanged, clean status, empty diff |
+| Structured progress/subagent/result artifacts | PASS | Final evidence Goal `goal_f8bf7c86-2ad8-4cec-bdd3-781c84f0392d` |
+| Real operator-driven interactive Codex TUI validation | **OPEN** | Outer TUI provider was real, but the recorded validation backend remained `codex_exec` |
+| Overall five-stage closure | **PARTIAL / waiting_for_review** | Task `task_5a07dd1d-7202-41d7-8189-35342793777d` |
+
+Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, `docs/current-status.md`.
+
+Verification command: `git diff --check` (documentation-only correction). Existing `54 tests, 53 pass, 1 intentional permanent RED` evidence is retained but is not interactive-TUI proof.
+
+Risk: semantic conflation between a real TUI host session and an inner non-interactive `codex exec` validation. Rollback: revert the documentation correction commit. Next action: genuine operator-driven interactive TUI evidence, or a formally approved acceptance-contract change. Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.

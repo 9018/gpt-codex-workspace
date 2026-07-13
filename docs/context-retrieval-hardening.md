@@ -496,3 +496,48 @@ cd backend && node --test test/context-retrieval-hardening.test.mjs test/phase5-
 | 已知限制 | 1) 真实语义 provider 测试未覆盖; 2) embedding 超时模拟为近似; 3) 跨 Goal 检索在 semantic=true 时未完全覆盖 |
 | 回滚方式 | `git revert <commit>` 移除 Phase 5 测试文件; 回滚 docs/ 到 Phase 4 状态 |
 | 最终结论 | 上下文污染修复闭环完成 — 5 阶段全部验证通过 |
+
+## Phase 5 Acceptance Correction — Interactive TUI Evidence Remains Open
+
+> This section supersedes earlier statements that described the five-stage chain as fully closed.
+
+### Status
+
+- Original Phase 5 Goal: `goal_11732e6c-ff98-4399-bd80-c695fbc0fedd`
+- Original Phase 5 Task: `task_d72a9010-7dd8-4802-9885-9e94df3a781b`
+- Integrated implementation commit: `5d9905cdf361df353592c79faf7f33db6ee3199f`
+- Earlier evidence-repair Goal/Task: `goal_ea1fe8e7-f9d5-4bef-8988-afe967844782` / `task_75c31ef9-0d69-43af-8d40-3dddaf2c69de`
+- Final evidence Goal/Task: `goal_f8bf7c86-2ad8-4cec-bdd3-781c84f0392d` / `task_5a07dd1d-7202-41d7-8189-35342793777d`
+- Current verdict: **PARTIAL / waiting_for_review**
+
+### Evidence Assessment
+
+The outer `codex_tui_goal` provider did start a real isolated TUI session and subsequently produced `progress.json`, `subagents.json`, and `result.json`. However, the validation recorded inside those artifacts was executed with `codex exec --sandbox read-only`; it was not an operator-driven interactive Codex TUI turn. Therefore:
+
+- readonly/no-mutation evidence is valid;
+- the focused test evidence remains valid;
+- structured progress and explicit no-subagent reasoning are now present;
+- the hard acceptance item “real interactive Codex TUI empirical validation” is **not satisfied** and must not be replaced by `satisfied_with_note`.
+
+### Changed Files
+
+This correction changes documentation only:
+
+- `docs/context-retrieval-hardening.md`
+- `docs/e2e-acceptance.md`
+- `docs/current-status.md`
+
+### Verification
+
+```bash
+git diff --check
+```
+
+Expected result: exit code 0. Existing focused evidence remains `54 tests, 53 pass, 1 intentional permanent RED`; this documentation correction does not rerun or reinterpret it as interactive-TUI proof.
+
+### Risk, Rollback, and Next Action
+
+- Risk: leaving the earlier wording unqualified could cause acceptance automation or operators to treat `codex exec` as interactive TUI evidence.
+- Rollback: revert the documentation correction commit; this is not recommended unless the acceptance criterion is formally changed.
+- Next action: either (a) an operator performs and records a genuine interactive TUI validation with before/after HEAD, clean status, empty diff, progress/subagent/result artifacts, or (b) product owners formally revise the acceptance criterion to allow non-interactive `codex exec` equivalence. Until one occurs, the chain is not fully closed.
+- Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.
