@@ -614,7 +614,7 @@ function buildRetrievalSourcesSection(chunks) {
  */
 export function buildContextBundle(options = {}) {
   const { chunks = [], goal, task = null, workspaceFiles } = options;
-  const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 512, 16000);
+  const maxTokens = clampPositiveInt(options.maxTokens, DEFAULT_MAX_TOKENS, 128, 16000);
   const maxChunks = clampPositiveInt(options.maxChunks, DEFAULT_MAX_CHUNKS, 1, 20);
   const selectionResult = selectBundleChunks(chunks, {
     goal,
@@ -662,8 +662,10 @@ export function buildContextBundle(options = {}) {
   // Section 3: Goal Anchor (current Goal always first, with highest priority)
   sections.push(buildGoalAnchorSection(goal, contract));
 
-  // Section 4: priority & budget summary for current Goal
+  // Section 4: compatibility summary + priority & budget for current Goal
+  sections.push("## Selected Context Summary\n\nThe current Goal anchor is authoritative; retrieved context below is bounded and advisory.\n");
   sections.push(buildPriorityBudgetSection(selectionMetadata));
+  sections.push(buildConstraintsSection(goal));
 
   // Section 5: Optional Historical Context (labeled, does not override Goal Anchor)
   // Only emit if there actually is historical content

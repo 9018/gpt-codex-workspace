@@ -383,3 +383,53 @@ test("codex_exec provider responses 404 blocks and does not enter acceptance or 
   assert.equal(finalized.taskResult.acceptance_findings[0].code, "provider_endpoint_not_found");
   assert.match(finalized.taskResult.next_action, /provider endpoint/i);
 });
+
+test("TUI evidence timeout stops the live session and enters automatic retry_wait", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "codex-tui-timeout-retry-")));
+  const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
+  let stopped = null;
+  let released = 0;
+
+  const result = await processGeneralTaskWithDeps(
+    store,
+    {
+      defaultWorkspaceRoot: root,
+      defaultRepoPath: root,
+      enableTaskWorktrees: true,
+      codexTuiEnabled: true,
+      codexTuiEvidenceWaitMs: 5,
+    },
+    store.state.tasks[0],
+    {},
+    {},
+    baseDeps(root, {
+      startCodexTuiGoalSessionFn: async (args) => ({
+        id: "session_timeout",
+        task_id: args.task.id,
+        goal_id: args.goal.id,
+        cwd: args.cwd,
+        status: "running",
+      }),
+      runCodexTuiEvidenceCycleFn: async () => ({
+        evidence_ready: false,
+        status: "timed_out",
+        reason: "tui_result_json_timeout",
+        finding: { severity: "blocker", code: "tui_result_json_timeout", message: "result.json timed out" },
+      }),
+      stopCodexTuiSessionFn: async (sessionId, options) => {
+        stopped = { sessionId, options };
+        return { id: sessionId, status: "stopped" };
+      },
+      releaseLockForTaskFn: async () => { released += 1; },
+    }),
+  );
+
+  assert.equal(stopped?.sessionId, "session_timeout");
+  assert.equal(stopped?.options?.reason, "evidence_timeout");
+  assert.equal(released, 1);
+  assert.equal(store.state.tasks[0].status, "retry_wait");
+  assert.equal(store.state.tasks[0].result.failure_class, "result_missing");
+  assert.equal(store.state.tasks[0].metadata.tui_session_owner, undefined);
+  assert.equal(store.state.tasks[0].metadata.tui_session_id, "session_timeout");
+  assert.equal(result.status, "retry_wait");
+});

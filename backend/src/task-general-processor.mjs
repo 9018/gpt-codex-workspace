@@ -21,7 +21,7 @@ import { classifyFailure, failureClassIsTerminalNonRepairable } from './failure-
 import { sanitizeTaskBranchName } from './task-worktree-manager.mjs';
 import { convergeTaskAfterRun, detectAcceptanceProfile } from "./task-convergence.mjs";
 import { isCodexTuiEnabled, taskUsesCodexTuiGoal, CODEX_EXECUTION_PROVIDERS } from "./codex-execution-provider.mjs";
-import { startCodexTuiGoalSession } from "./codex-tui-session-manager.mjs";
+import { startCodexTuiGoalSession, stopCodexTuiSession } from "./codex-tui-session-manager.mjs";
 import { runCodexTuiEvidenceCycle } from "./codex-tui-evidence-cycle.mjs";
 import { analyzeDeliveryRecoveryCandidate, runDeliveryRecovery } from "./delivery-result-recovery.mjs";
 import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion } from "./auto-integration-completion.mjs";
@@ -432,6 +432,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const convergeTaskAfterRunFn = deps.convergeTaskAfterRunFn || convergeTaskAfterRun;
   const startCodexTuiGoalSessionFn = deps.startCodexTuiGoalSessionFn || startCodexTuiGoalSession;
   const runCodexTuiEvidenceCycleFn = deps.runCodexTuiEvidenceCycleFn || runCodexTuiEvidenceCycle;
+  const stopCodexTuiSessionFn = deps.stopCodexTuiSessionFn || stopCodexTuiSession;
   const analyzeDeliveryRecoveryCandidateFn = deps.analyzeDeliveryRecoveryCandidateFn || analyzeDeliveryRecoveryCandidate;
   const runDeliveryRecoveryFn = deps.runDeliveryRecoveryFn || runDeliveryRecovery;
   const now = new Date().toISOString();
@@ -730,16 +731,28 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     });
 
     if (!collected?.evidence_ready) {
-      // Release repo lock on evidence failure
+      const evidenceTimedOut = collected?.status === "timed_out";
+      if (evidenceTimedOut) {
+        try {
+          await stopCodexTuiSessionFn(session.id, {
+            reason: "evidence_timeout",
+            workspaceRoot: config.defaultWorkspaceRoot,
+          });
+        } catch { /* state transition must still proceed */ }
+      }
       if (tuiLockAcquired && tuiLockPath) {
         try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch { /* non-fatal */ }
       }
-      // P0: Non-ready evidence is terminal — mark as failed/timed_out, not waiting_for_review
-      const terminalStatus = collected?.status === "timed_out" ? "timed_out" : "failed";
+      const terminalStatus = evidenceTimedOut ? "retry_wait" : "failed";
       await updateTaskFn(store, task.id, (item) => {
         item.status = terminalStatus;
+        item.metadata = { ...(item.metadata || {}), tui_session_id: session.id };
+        delete item.metadata.tui_session_owner;
+        delete item.metadata.worker_tui_session_starting;
         item.result = {
           ...sessionStartedResult,
+          status: terminalStatus,
+          failure_class: evidenceTimedOut ? "result_missing" : "tui_result_missing",
           tui_phase: "blocked_missing_evidence",
           expected_result_json: collected?.expected_result_json || null,
           expected_result_md: collected?.expected_result_md || null,
@@ -748,7 +761,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             passed: false,
             findings: [collected?.finding || {
               severity: "blocker",
-              code: collected?.status === "timed_out" ? "tui_result_json_timeout" : "tui_result_json_failed",
+              code: evidenceTimedOut ? "tui_result_json_timeout" : "tui_result_json_failed",
               message: `TUI session evidence collection resulted in terminal state: ${collected?.reason || "no evidence"} after evidence wait period.`,
             }],
           },
