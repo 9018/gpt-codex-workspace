@@ -598,4 +598,4 @@ Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, 
 
 Verification: `git diff --check`. Existing focused evidence: `54 tests, 53 pass, 1 intentional permanent RED`; it is not reclassified as interactive-TUI evidence.
 
-Risk: overstating closure can incorrectly unblock dependent product decisions. Rollback: revert the documentation correction commit. Next action: collect genuine interactive TUI evidence or formally revise the acceptance criterion. Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.
+Risk: overstating closure can incorrectly unblock dependent product decisions. Rollback: revert the documentation correction commit. Next action: collect genuine interactive TUI evidence or formally revise the acceptance criterion. Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.

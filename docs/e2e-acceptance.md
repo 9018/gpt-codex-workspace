@@ -390,4 +390,4 @@ Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, 
 
 Verification command: `git diff --check` (documentation-only correction). Existing `54 tests, 53 pass, 1 intentional permanent RED` evidence is retained but is not interactive-TUI proof.
 
-Risk: semantic conflation between a real TUI host session and an inner non-interactive `codex exec` validation. Rollback: revert the documentation correction commit. Next action: genuine operator-driven interactive TUI evidence, or a formally approved acceptance-contract change. Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.
+Risk: semantic conflation between a real TUI host session and an inner non-interactive `codex exec` validation. Rollback: revert the documentation correction commit. Next action: genuine operator-driven interactive TUI evidence, or a formally approved acceptance-contract change. Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.

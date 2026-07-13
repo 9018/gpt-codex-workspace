@@ -540,4 +540,4 @@ Expected result: exit code 0. Existing focused evidence remains `54 tests, 53 pa
 - Risk: leaving the earlier wording unqualified could cause acceptance automation or operators to treat `codex exec` as interactive TUI evidence.
 - Rollback: revert the documentation correction commit; this is not recommended unless the acceptance criterion is formally changed.
 - Next action: either (a) an operator performs and records a genuine interactive TUI validation with before/after HEAD, clean status, empty diff, progress/subagent/result artifacts, or (b) product owners formally revise the acceptance criterion to allow non-interactive `codex exec` equivalence. Until one occurs, the chain is not fully closed.
-- Documentation correction implementation commit: `PENDING_DOC_CORRECTION_COMMIT`.
+- Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.
