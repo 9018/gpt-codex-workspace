@@ -157,13 +157,16 @@ async function startCodexTuiGoalSessionImpl({
     goalDir: portableGoalDir,
   });
   let ptySession;
+  let bootstrapOutput = "";
   try {
     ptySession = await adapter.spawn({
       cwd,
       command,
       args: [initialPrompt],
       onData: (chunk) => {
-        store.appendSessionLog(sessionId, chunk).catch(() => {});
+        const text = String(chunk ?? "");
+        bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
+        store.appendSessionLog(sessionId, text).catch(() => {});
       },
     });
   } catch (err) {
@@ -178,17 +181,27 @@ async function startCodexTuiGoalSessionImpl({
 
   activeSessions.set(sessionId, { store, ptySession });
 
-  // The initial prompt is submitted by Codex itself during startup. First PTY
-  // output is retained as observability evidence, not as an input-readiness gate.
-  const bootstrapSentAt = new Date().toISOString();
+  // Codex versions differ in how an argv prompt is handled: some submit it
+  // immediately, while others only place it in the composer. Wait for the first
+  // rendered frame, then send exactly one Enter only when the screen does not
+  // already show an active run. This avoids both a permanently idle composer and
+  // duplicate input on versions that auto-submit.
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
+  const alreadyRunning = /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt)/iu.test(bootstrapOutput);
+  let bootstrapMethod = "argv_prompt_auto_submitted";
+  if (!alreadyRunning) {
+    ptySession.write("\r");
+    await store.appendSessionLog(sessionId, "[bootstrap-input] ENTER\n").catch(() => {});
+    bootstrapMethod = "argv_prompt_enter";
+  }
+  const bootstrapSentAt = new Date().toISOString();
 
   record = await store.updateSession(sessionId, {
     status: "running",
     pty_pid: ptySession.pid ?? null,
     started_at: bootstrapSentAt,
     bootstrap_sent_at: bootstrapSentAt,
-    bootstrap_method: "argv_prompt",
+    bootstrap_method: bootstrapMethod,
     first_output_at: firstOutputAt,
     submitted: true,
   });
@@ -196,7 +209,7 @@ async function startCodexTuiGoalSessionImpl({
     ...record,
     bootstrap_sent_at: bootstrapSentAt,
     first_output_at: firstOutputAt,
-    bootstrap_method: "argv_prompt",
+    bootstrap_method: bootstrapMethod,
     workspace_root: sessionStoreRoot,
     session_store_root: sessionStoreRoot,
     deprecated_cwd_session_root: deprecatedCwdSessionRoot,
