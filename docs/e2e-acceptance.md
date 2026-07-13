@@ -391,3 +391,44 @@ Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, 
 Verification command: `git diff --check` (documentation-only correction). Existing `54 tests, 53 pass, 1 intentional permanent RED` evidence is retained but is not interactive-TUI proof.
 
 Risk: semantic conflation between a real TUI host session and an inner non-interactive `codex exec` validation. Rollback: revert the documentation correction commit. Next action: genuine operator-driven interactive TUI evidence, or a formally approved acceptance-contract change. Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.
+
+## TUI Collect → State Sync → Controlled Integration (2026-07-13)
+
+The automation closed-loop for TUI tasks now includes:
+
+### 1. TUI Collect State Writeback
+
+`codex_tui_collect` in `backend/src/tool-groups/codex-tui-tools-group.mjs` now:
+
+- Returns the completion snapshot (unchanged behavior).
+- When `snapshot.ready_for_review === true`, writes evidence to `task.result`
+  (provider, session_id, commit, tests, changed_files, verification).
+- Transitions `task.status` from `running` → `waiting_for_review`.
+- Clears `tui_session_owner` but preserves `session_id`.
+- Is idempotent: repeated calls do not corrupt state.
+- Does NOT transition when snapshot has blockers (dirty worktree, missing result.md).
+
+### 2. Acceptance Contract Sanitization
+
+`backend/src/acceptance/contract-builder.mjs`:
+
+- Strips character-indexed numeric keys from `intent` (serialization artifacts).
+- Top-level explicit `operation_kind` takes precedence over `intent.operation_kind`.
+- Corrupted enrichment fields (wrong `mutation_scope`, `execution_mode`) are restored
+  from profile defaults when `intent` has character-indexed keys.
+
+### 3. Safe Docs-Only Integration
+
+`backend/src/docs-only-safe-integration.mjs` provides `integrateDocsOnlyCommit()`:
+
+- Verifies commit object exists.
+- Verifies all changed files are docs-only (`.md`, `.txt`, `.rst`, `.adoc`, `docs/*`).
+- Verifies canonical repo is clean (`.gptwork/` excluded).
+- Acquires integration lock for idempotency.
+- Detects already-integrated commits (no-op second call).
+- Reports structured result with status, commit, error details.
+
+### Relevant Goal/Task
+
+- Goal: `goal_7868c210-660e-431b-b494-59e6f9dfb2d0`
+- Task: `task_26df0560-2aaf-4f96-ab91-9534b8a8ae48`

@@ -76,6 +76,7 @@ export function createCodexTuiToolsGroup({
   sendCodexTuiSessionInputFn = sendCodexTuiSessionInput,
   stopCodexTuiSessionFn = stopCodexTuiSession,
   collectCodexTuiCompletionFn = collectCodexTuiCompletion,
+  updateTaskFn = updateTask,
   createExecutionStoreFn = createExecutionStore,
   workstreamId = null,
 } = {}) {
@@ -398,7 +399,53 @@ codex_tui_collect: tool({
       description: "Collect durable completion evidence for a Codex TUI session without reading TUI screen text.",
       inputSchema: schema({ session_id: "string" }, ["session_id"]),
       ...metadata,
-      handler: async ({ session_id }) => collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot }),
+      handler: async ({ session_id }) => {
+        const snapshot = await collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot });
+
+        // When the session evidence is complete and ready for review,
+        // write the result back to the task and transition its status.
+        // This is the single boundary where TUI completion evidence becomes
+        // durable task state. Do NOT transition when snapshot has blockers.
+        if (snapshot.ready_for_review && snapshot.task_id) {
+          try {
+            await updateTask(store, snapshot.task_id, (item) => {
+              // Only transition from running — do not regress already-transitioned tasks
+              if (item.status === 'running') {
+                item.status = 'waiting_for_review';
+              }
+              // Write durable evidence to task result
+              item.result = {
+                ...(item.result || {}),
+                provider: 'codex_tui_goal',
+                session_id: snapshot.session_id,
+                commit: snapshot.commit,
+                tests: snapshot.tests,
+                changed_files: snapshot.changed_files || [],
+                verification: snapshot.result_json?.verification || {
+                  passed: true,
+                  commands: snapshot.tests ? [{ cmd: snapshot.tests }] : [],
+                },
+                worktree_clean: snapshot.worktree_clean,
+                result_md_present: snapshot.result_md_present,
+                result_json_present: snapshot.result_json_present,
+              };
+              // Clear session owner but preserve session_id in metadata
+              if (item.metadata) {
+                delete item.metadata.tui_session_owner;
+                item.metadata.tui_session_id = snapshot.session_id;
+              }
+              item.logs ||= [];
+              item.logs.push({
+                time: new Date().toISOString(),
+                message: '[tui] collect: complete evidence, transitioned to waiting_for_review',
+              });
+            });
+          } catch (err) {
+            // Non-fatal: snapshot is still returned, task state update failed
+          }
+        }
+        return snapshot;
+      },
     }),
 
     // -- Structured subagent progress tools (no ANSI parsing) ----------------

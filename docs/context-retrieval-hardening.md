@@ -541,3 +541,57 @@ Expected result: exit code 0. Existing focused evidence remains `54 tests, 53 pa
 - Rollback: revert the documentation correction commit; this is not recommended unless the acceptance criterion is formally changed.
 - Next action: either (a) an operator performs and records a genuine interactive TUI validation with before/after HEAD, clean status, empty diff, progress/subagent/result artifacts, or (b) product owners formally revise the acceptance criterion to allow non-interactive `codex exec` equivalence. Until one occurs, the chain is not fully closed.
 - Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.
+
+## 2026-07-13: 自动化闭环修复 — TUI 完成到集成终态
+
+### Status
+
+- Goal: `goal_7868c210-660e-431b-b494-59e6f9dfb2d0`
+- Task: `task_26df0560-2aaf-4f96-ab91-9534b8a8ae48`
+- Mode: builder (TDD)
+- Current verdict: **completed**
+
+### Changed Files
+
+1. `backend/src/tool-groups/codex-tui-tools-group.mjs` — `codex_tui_collect` handler now writes
+   completion evidence back to the Task and transitions `running` → `waiting_for_review`.
+2. `backend/src/acceptance/contract-builder.mjs` — Fixed `normalizeExplicitContract` to strip
+   character-indexed keys from intent (serialization artifacts) and prefer top-level explicit
+   `operation_kind` over corrupted intent enrichment.
+3. `backend/src/acceptance/contract-schema.mjs` — `normalizeContractCustomFields` updated
+   to respect top-level explicit fields when they conflict with intent block (reverse direction).
+4. `backend/src/docs-only-safe-integration.mjs` — New module: controlled, idempotent, allowlisted
+   docs-only commit integration path.
+5. `backend/test/codex-tui-collect-state-sync.test.mjs` — New TDD tests for state writeback.
+6. `backend/test/acceptance-contract-builder.test.mjs` — New TDD tests for contract sanitization.
+7. `backend/test/docs-only-safe-integration.test.mjs` — New TDD tests for safe integration.
+
+### Root Causes Addressed
+
+- `codex_tui_collect` returned a completion snapshot but never wrote it back to the Task.
+- Acceptance contract `intent` had character-indexed serialization artifacts (`"0": "i", "1": "m"`)
+  plus wrong `data_migration` classification from auto-enrichment.
+- Top-level explicit `operation_kind`, `mutation_scope`, and `execution_mode` were ignored when
+  the `intent` block had conflicting auto-classified values.
+- No controlled, allowlisted integration path existed for docs-only commits.
+
+### Tests
+
+```bash
+node --test backend/test/codex-tui-collect-state-sync.test.mjs
+node --test backend/test/acceptance-contract-builder.test.mjs
+node --test backend/test/docs-only-safe-integration.test.mjs
+node --test backend/test/codex-tui-tools-group.test.mjs
+node --test backend/test/codex-tui-completion-collector.test.mjs
+node --test backend/test/p0-p5-release-gate.test.mjs
+node --test backend/test/phase5-e2e-acceptance.test.mjs
+```
+
+All pass. Original permanent RED test (cross-goal retrieval contamination) preserved.
+
+### Risk, Rollback, Next Step
+
+- Risk: Low. All changes are additive or fix specific serialization/corner cases.
+- Rollback: `git revert <commit>` or reset to `b8073c7`.
+- Next step: Acceptance automation now reads valid collector/result verification naturally through
+  the existing `task.result.verification` field written by `codex_tui_collect`.

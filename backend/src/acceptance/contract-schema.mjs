@@ -105,15 +105,13 @@ export function normalizeContractCustomFields(contract) {
   for (const { field, value, intentField } of topLevelFields) {
     if (String(value) !== String(intentField)) {
       warnings.push(
-        `Top-level '${field}: ${value}' conflicts with canonical intent.${field}: ${intentField}. ` +
-        `Removed top-level '${field}'. The intent block is the single source of truth.`
+        "Top-level '" + field + ": " + value + "' conflicts with canonical intent." + field + ": " + intentField + ". " +
+        "Removed top-level '" + field + "'. The intent block is the single source of truth."
       );
       delete contract[field];
     }
   }
 
-  // Also check if contract has both top-level execution_mode/mutation_scope (deprecated pattern)
-  // and ensure only the intent block is authoritative
   if (topLevelFields.length > 0) {
     warnings.push(
       "Top-level execution_mode/mutation_scope fields are legacy custom fields. " +

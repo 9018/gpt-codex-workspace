@@ -100,16 +100,44 @@ function mergeVerificationPlan(defaultPlan = {}, explicitPlan = {}) {
   };
 }
 
+function hasCharacterIndexedKeys(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  for (const key of Object.keys(obj)) {
+    if (/^\d+$/.test(key)) return true;
+  }
+  return false;
+}
+
 function normalizeExplicitContract(explicit) {
-  if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) return {};
-  return cloneJson(explicit) || {};
+  if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) return { normalized: {}, intentCorrupted: false };
+  const normalized = cloneJson(explicit) || {};
+  // Detect and strip character-indexed keys from intent (serialization
+  // artifacts where a string was serialized as {"0":"i","1":"m",...}).
+  // Track whether the intent was corrupted so callers can restore defaults.
+  const intentCorrupted = hasCharacterIndexedKeys(normalized.intent);
+  if (intentCorrupted && normalized.intent && typeof normalized.intent === "object") {
+    for (const key of Object.keys(normalized.intent)) {
+      if (/^\d+$/.test(key)) {
+        delete normalized.intent[key];
+      }
+    }
+  }
+  return { normalized, intentCorrupted };
 }
 
 export function buildAcceptanceContract(args = {}) {
-  const explicit = normalizeExplicitContract(args.acceptance_contract || args.acceptanceContract);
-  const explicitKind = explicit.intent?.operation_kind;
+  const { normalized: explicit, intentCorrupted } = normalizeExplicitContract(args.acceptance_contract || args.acceptanceContract);
+  // P0: Top-level explicit fields beat intent block enrichment.
+  // The intent block may contain auto-classified or corrupted values
+  // (e.g. data_migration from semantic inference), while the top-level
+  // fields are set deliberately by the caller.
+  const explicitTopKind = explicit.operation_kind;
+  const explicitIntentKind = explicit.intent?.operation_kind;
+  const explicitKind = KNOWN_OPERATION_KINDS.has(explicitTopKind) ? explicitTopKind
+    : KNOWN_OPERATION_KINDS.has(explicitIntentKind) ? explicitIntentKind
+    : undefined;
   const inferred = inferOperationKind(args);
-  const operationKind = KNOWN_OPERATION_KINDS.has(explicitKind) ? explicitKind : inferred.operation_kind;
+  const operationKind = explicitKind || inferred.operation_kind;
   const defaults = getDefaultAcceptanceContractProfile(operationKind);
 
   const contract = {
@@ -143,6 +171,17 @@ export function buildAcceptanceContract(args = {}) {
 
   contract.intent.operation_kind = operationKind;
   if (!explicit.intent?.semantic_confidence) contract.intent.semantic_confidence = inferred.semantic_confidence;
+
+  // When explicit intent had character-indexed keys (serialization artifact),
+  // restore mutation_scope and execution_mode from profile defaults to prevent
+  // corrupted enrichment fields from leaking into the contract.
+  if (intentCorrupted) {
+    const profileDefaults = getDefaultAcceptanceContractProfile(operationKind);
+    if (profileDefaults?.intent) {
+      contract.intent.mutation_scope = profileDefaults.intent.mutation_scope || defaults.intent.mutation_scope;
+      contract.intent.execution_mode = profileDefaults.intent.execution_mode || defaults.intent.execution_mode;
+    }
+  }
 
   if (contract.intent.semantic_confidence === "low") {
     addReviewReason(contract, "semantic_ambiguity");

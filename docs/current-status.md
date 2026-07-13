@@ -599,3 +599,62 @@ Changed files: `docs/context-retrieval-hardening.md`, `docs/e2e-acceptance.md`, 
 Verification: `git diff --check`. Existing focused evidence: `54 tests, 53 pass, 1 intentional permanent RED`; it is not reclassified as interactive-TUI evidence.
 
 Risk: overstating closure can incorrectly unblock dependent product decisions. Rollback: revert the documentation correction commit. Next action: collect genuine interactive TUI evidence or formally revise the acceptance criterion. Documentation correction implementation commit: `fc670f8dcb4811af9ab9f3876d9831c38c88ed96`.
+
+## 2026-07-13: 自动化闭环修复 — TUI 完成到集成终态
+
+### Summary
+
+This goal addressed five root causes exposed during a real TUI acceptance:
+
+| # | Root Cause | Fix |
+|---|-----------|-----|
+| 1 | `codex_tui_collect` returns snapshot but does not write back to Task | Handler now calls `updateTask` to write evidence and transition `running` → `waiting_for_review` |
+| 2 | Acceptance contract `intent` corrupted with character-indexed keys + wrong `data_migration` classification | `normalizeExplicitContract` strips numeric keys; top-level explicit beats intent enrichment |
+| 3 | `verification_missing` despite valid collector snapshot | Fixed via state writeback — `task.result.verification` populated by collect |
+| 4 | Task stuck in `running` after clean session | Idempotent state reconciliation built into collect handler |
+| 5 | No controlled path for docs-only integration | New `integrateDocsOnlyCommit()` with allowlist, locking, idempotency |
+
+### Changed Files
+
+- `backend/src/tool-groups/codex-tui-tools-group.mjs` — collect state writeback
+- `backend/src/acceptance/contract-builder.mjs` — intent sanitization, top-level priority
+- `backend/src/acceptance/contract-schema.mjs` — field conflict resolution direction
+- `backend/src/docs-only-safe-integration.mjs` — new doc integration module
+- `backend/test/codex-tui-collect-state-sync.test.mjs` — new TDD tests (4)
+- `backend/test/acceptance-contract-builder.test.mjs` — new TDD tests (3)
+- `backend/test/docs-only-safe-integration.test.mjs` — new TDD tests (5)
+- `docs/context-retrieval-hardening.md` — updated
+- `docs/e2e-acceptance.md` — updated
+- `docs/current-status.md` — updated
+
+### Verification
+
+```bash
+node --test backend/test/codex-tui-collect-state-sync.test.mjs      # 4/4 pass
+node --test backend/test/acceptance-contract-builder.test.mjs       # 16/16 pass
+node --test backend/test/docs-only-safe-integration.test.mjs        # 5/5 pass
+# Composite: 164 acceptance/tui-related tests pass
+# P0-P5 gate: 26/26 pass
+# Phase5 E2E: 77/77 pass
+# Context retrieval hardening permanent RED: preserved
+```
+
+### Goal/Task
+
+- Goal: `goal_7868c210-660e-431b-b494-59e6f9dfb2d0`
+- Task: `task_26df0560-2aaf-4f96-ab91-9534b8a8ae48`
+- Canonical main: `b8073c7`
+
+### Risk
+
+- Low. All changes are narrow-focus bug fixes with TDD verification.
+- The permanent RED cross-goal contamination test is preserved unchanged.
+
+### Rollback
+
+`git revert <commit-hash>` or reset to `b8073c7`.
+
+### Next Step
+
+Acceptance automation can now naturally read collector/result verification through
+`task.result.verification` without needing an extra lookup into result.json.

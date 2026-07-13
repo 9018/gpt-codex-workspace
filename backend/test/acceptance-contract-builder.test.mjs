@@ -184,3 +184,127 @@ test("normalizes an explicit contract while preserving caller intent", () => {
   assert.ok(contract.blocking_requirements.some((item) => item.id === "custom_health_probe"));
   assert.ok(contract.blocking_requirements.some((item) => item.id === "runtime_health_evidence"));
 });
+
+// ===========================================================================
+// B1: Explicit interactive_tui/docs_only contract must not be replaced by
+// data_migration semantic classification, even when intent block has
+// corrupted character-indexed keys (serialization artifacts).
+// ===========================================================================
+
+test("B1: top-level operation_kind in explicit contract beats corrupted intent classification", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Continue interactive TUI: fix goal convergence and add tests",
+    goal_prompt: "修复自动化收敛问题并增加测试。TUI session 完成 docs-only 闭包验收。",
+    mode: "builder",
+    acceptance_contract: {
+      // Simulate the corrupted intent from the real bug:
+      // intent has character-indexed keys + wrong data_migration classification
+      intent: {
+        "0": "i", "1": "m", "2": "p", "3": "l", "4": "e", "5": "m", "6": "e",
+        "7": "n", "8": "t", "9": "a", "10": "t", "11": "i", "12": "o", "13": "n",
+        operation_kind: "data_migration",
+        mutation_scope: "external_system",
+        execution_mode: "admin",
+        semantic_confidence: "medium",
+      },
+      // Top-level fields are the CORRECT explicit contract:
+      operation_kind: "code_change",
+      mutation_scope: "code_tests_docs",
+    },
+  });
+
+  // STORM: This currently fails — contract.intent.operation_kind is "data_migration"
+  assert.equal(contract.intent.operation_kind, "code_change",
+    "explicit top-level operation_kind must override corrupted intent classification");
+  // mutation_scope should come from the correct explicit contract, not intent
+  assert.equal(contract.intent.mutation_scope, "repo",
+    "mutation_scope should be resolved correctly, not from corrupted intent external_system");
+  // execution_mode should be from the correct profile, not corrupted intent's admin
+  assert.equal(contract.intent.execution_mode, "worktree",
+    "execution_mode should match the code_change profile, not intent's admin");
+
+  // Must NOT have data_migration blockers (backup, dry_run, apply, counts, rollback)
+  const blockerIds = contract.blocking_requirements.map((b) => b.id);
+  assert.ok(!blockerIds.includes("backup_evidence"), "must not have data_migration backup_evidence blocker");
+  assert.ok(!blockerIds.includes("dry_run_evidence"), "must not have data_migration dry_run_evidence blocker");
+  assert.ok(!blockerIds.includes("migration_apply_evidence"), "must not have data_migration apply_evidence blocker");
+  assert.ok(!blockerIds.includes("before_after_counts"), "must not have data_migration counts blocker");
+
+  // Must have code_change blockers instead
+  assert.ok(blockerIds.includes("commit_present"), "should have code_change commit_present blocker");
+  assert.ok(blockerIds.includes("verification_report"), "should have verification_report blocker");
+
+  // Character-indexed keys should be stripped from intent
+  assert.equal(contract.intent["0"], undefined, "character-indexed key '0' should be stripped from intent");
+  assert.equal(contract.intent["13"], undefined, "character-indexed key '13' should be stripped from intent");
+});
+
+// ===========================================================================
+// B2: Explicit docs_only contract with intent enrichment should not create
+// data_migration blockers even when text also mentions "migration"
+// ===========================================================================
+
+test("B2: explicit docs_only contract must not be replaced even when text mentions migration", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Accept docs-only commit after TUI session: migration_fixer.md was wrong classification",
+    goal_prompt: "Fix classification for docs-only commit. Previous misclassification as data_migration caused blockers.",
+    mode: "builder",
+    acceptance_contract: {
+      intent: {
+        "0": "i",
+        operation_kind: "docs_only",
+        mutation_scope: "repo",
+        execution_mode: "worktree",
+        semantic_confidence: "high",
+      },
+    },
+  });
+
+  // Should be docs_only, NOT data_migration
+  assert.equal(contract.intent.operation_kind, "docs_only",
+    "explicit docs_only contract must be respected");
+  assert.equal(contract.requirements.requires_commit, true, "docs_only requires commit");
+  assert.equal(contract.requirements.requires_integration, false, "docs_only does not require integration");
+
+  // Should NOT have data_migration blockers
+  const blockerIds = contract.blocking_requirements.map((b) => b.id);
+  assert.ok(!blockerIds.includes("backup_evidence"), "no backup blocker for docs_only");
+  assert.ok(!blockerIds.includes("dry_run_evidence"), "no dry_run blocker for docs_only");
+
+  // Should have docs_only blockers
+  assert.ok(blockerIds.includes("docs_changed"), "docs_only should have docs_changed blocker");
+  assert.ok(blockerIds.includes("commit_present"), "docs_only should have commit_present blocker");
+
+  // Character-indexed key should be stripped
+  assert.equal(contract.intent["0"], undefined, "character-indexed key '0' should be stripped");
+});
+
+// ===========================================================================
+// B3: When intent has ONLY character-indexed keys (no valid enrichment),
+// the inference from user_request/goal_prompt should determine the contract
+// ===========================================================================
+
+test("B3: intent with only character-indexed keys falls through to semantic inference", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "修复后端自动推进问题并增加测试",
+    goal_prompt: "Implement runtime-fix for goal convergence and add tests.",
+    mode: "builder",
+    acceptance_contract: {
+      intent: {
+        "0": "i", "1": "m", "2": "p", "3": "l", "4": "e", "5": "m", "6": "e",
+        "7": "n", "8": "t", "9": "a", "10": "t", "11": "i", "12": "o", "13": "n",
+      },
+      // No operation_kind at top level or in intent enrichment
+    },
+  });
+
+  // Should fall through to inference (code_change because of "修复" + "implement")
+  assert.equal(contract.intent.operation_kind, "code_change",
+    "should infer code_change from user_request when intent has only character keys");
+  assert.equal(contract.requirements.requires_commit, true, "code_change requires commit");
+  assert.equal(contract.requirements.requires_integration, true, "code_change requires integration");
+
+  // Character-indexed keys should be stripped
+  assert.equal(contract.intent["0"], undefined, "character-indexed key '0' must be stripped");
+  assert.equal(contract.intent["13"], undefined, "character-indexed key '13' must be stripped");
+});
