@@ -111,6 +111,9 @@ function hasCharacterIndexedKeys(obj) {
 function normalizeExplicitContract(explicit) {
   if (!explicit || typeof explicit !== "object" || Array.isArray(explicit)) return { normalized: {}, intentCorrupted: false };
   const normalized = cloneJson(explicit) || {};
+  if (typeof normalized.intent === "string") {
+    normalized.intent = { operation_kind: normalized.intent };
+  }
   // Detect and strip character-indexed keys from intent (serialization
   // artifacts where a string was serialized as {"0":"i","1":"m",...}).
   // Track whether the intent was corrupted so callers can restore defaults.
@@ -131,7 +134,7 @@ export function buildAcceptanceContract(args = {}) {
   // The intent block may contain auto-classified or corrupted values
   // (e.g. data_migration from semantic inference), while the top-level
   // fields are set deliberately by the caller.
-  const explicitTopKind = explicit.operation_kind;
+  const explicitTopKind = explicit.operation_kind || args.operation_kind;
   const explicitIntentKind = explicit.intent?.operation_kind;
   const explicitKind = KNOWN_OPERATION_KINDS.has(explicitTopKind) ? explicitTopKind
     : KNOWN_OPERATION_KINDS.has(explicitIntentKind) ? explicitIntentKind

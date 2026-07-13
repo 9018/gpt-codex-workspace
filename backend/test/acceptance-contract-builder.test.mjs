@@ -308,3 +308,60 @@ test("B3: intent with only character-indexed keys falls through to semantic infe
   assert.equal(contract.intent["0"], undefined, "character-indexed key '0' must be stripped");
   assert.equal(contract.intent["13"], undefined, "character-indexed key '13' must be stripped");
 });
+
+// ===========================================================================
+// B4: intent as string — must not expand characters
+// ===========================================================================
+
+test("B4: explicit intent as string is not expanded by characters", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Fix backend code and add tests",
+    goal_prompt: "Implement the fix and commit.",
+    mode: "builder",
+    acceptance_contract: {
+      intent: "code_change",
+    },
+  });
+
+  // STORM: Currently "code_change" string spreads as {0:"c",1:"o",...}
+  // overwriting intent defaults with character keys
+  assert.equal(contract.intent.operation_kind, "code_change",
+    "intent string should map to operation_kind");
+  assert.equal(contract.requirements.requires_commit, true,
+    "code_change requires commit");
+  assert.equal(contract.intent.mutation_scope, "repo",
+    "mutation_scope should be from code_change profile");
+  assert.equal(contract.intent.execution_mode, "worktree",
+    "execution_mode should be from code_change profile");
+  assert.equal(contract.intent["0"], undefined,
+    "no character-indexed key '0' from string expansion");
+  assert.equal(contract.intent["1"], undefined,
+    "no character-indexed key '1' from string expansion");
+});
+
+// ===========================================================================
+// B5: top-level operation_kind in args must be used when explicit contract
+// has no operation_kind (e.g. only acceptance_contract.intent has it as
+// a string)
+// ===========================================================================
+
+test("B5: top-level args.operation_kind overrides inference when acceptance_contract is empty", () => {
+  const contract = buildAcceptanceContract({
+    operation_kind: "code_change",
+    requires_commit: true,
+    user_request: "Sync external system state and run migration",
+    goal_prompt: "Synchronize with external service and run data migration.",
+    mode: "builder",
+  });
+
+  // STORM: Currently args.operation_kind="code_change" is ignored,
+  // and inference picks "external_sync" or "data_migration" from text
+  assert.equal(contract.intent.operation_kind, "code_change",
+    "top-level args.operation_kind must override inference");
+  assert.equal(contract.requirements.requires_commit, true,
+    "code_change profile requires commit");
+  assert.equal(contract.intent.mutation_scope, "repo",
+    "code_change mutation_scope should be repo");
+  assert.equal(contract.intent.execution_mode, "worktree",
+    "code_change execution_mode should be worktree");
+});

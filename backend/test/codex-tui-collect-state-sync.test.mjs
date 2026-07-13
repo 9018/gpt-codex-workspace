@@ -271,3 +271,77 @@ test("A4: Repeated TUI collect is idempotent and does not corrupt state", async 
   assert.equal(task.result.commit, commit);
   assert.equal(task.result.verification?.passed, true);
 });
+
+// ===========================================================================
+// Failing test A5: Assigned→waiting_for_review — task in 'assigned' state
+// with manual TUI ownership should also transition
+// ===========================================================================
+
+test("A5: TUI collect transitions task from assigned to waiting_for_review when evidence is complete", async () => {
+  const repo = await makeGitRepo();
+  const commit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+
+  // Use "assigned" status, simulating worker-skipped manual TUI session
+  const state = {
+    tasks: [{
+      id: "task_assigned_sync",
+      goal_id: "goal_assigned_sync",
+      title: "TUI assigned sync test",
+      status: "assigned",
+      mode: "builder",
+      metadata: {
+        codex_execution_provider: "codex_tui_goal",
+        tui_session_owner: "manual",
+        tui_session_id: "session_assigned",
+      },
+      result: { provider: "codex_tui_goal", session_id: "session_assigned" },
+      logs: [],
+      artifacts: [],
+    }],
+    goals: [{ id: "goal_assigned_sync", task_id: "task_assigned_sync", title: "TUI assigned sync goal" }],
+  };
+
+  const store = {
+    _state: state,
+    async load() { return this._state; },
+    async save() {},
+    async findTaskById(taskId) { return this._state.tasks.find((t) => t.id === taskId) || null; },
+    findGoalByTaskId(taskId) { return this._state.goals.find((g) => g.task_id === taskId) || null; },
+  };
+
+  const sessionStore = createCodexTuiSessionStore({ workspaceRoot: repo });
+  await sessionStore.createSession({
+    sessionId: "session_assigned",
+    taskId: "task_assigned_sync",
+    goalId: "goal_assigned_sync",
+    cwd: repo,
+    repoLockId: "lock_1",
+    metadata: { commit },
+  });
+
+  const goalDir = join(repo, ".gptwork", "goals", "goal_assigned_sync");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.md"), `Summary: TUI session completed.\n\nTests: npm test\nCommit: ${commit}\n`);
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed", summary: "TUI session completed",
+    changed_files: [], tests: [{ command: "npm test", status: "passed" }],
+    verification: { passed: true }, commit,
+  }));
+
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store,
+    config: { defaultWorkspaceRoot: repo, defaultRepoPath: repo, codexTuiEnabled: true },
+  });
+
+  const snapshot = await tools.codex_tui_collect.handler({ session_id: "session_assigned" });
+
+  assert.equal(snapshot.ready_for_review, true, "snapshot should be ready for review");
+
+  // STORM: This fails currently — task stays 'assigned'.
+  const updatedTask = await store.findTaskById("task_assigned_sync");
+  assert.equal(updatedTask.status, "waiting_for_review",
+    "task transitions from assigned to waiting_for_review after complete TUI collect");
+  assert.equal(updatedTask.result.provider, "codex_tui_goal", "provider written");
+});
