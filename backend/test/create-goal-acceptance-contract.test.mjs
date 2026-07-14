@@ -78,6 +78,9 @@ test("create_encoded_goal preserves explicit acceptance_contract and legacy call
 
   assert.equal(encoded.goal.acceptance_contract.intent.operation_kind, "diagnostic");
   assert.equal(encoded.goal.acceptance_contract.requirements.requires_commit, false);
+  assert.equal(encoded.goal.acceptance_contract.requirements.requires_integration, false);
+  assert.equal(encoded.goal.acceptance_contract.requires_commit, false);
+  assert.equal(encoded.goal.acceptance_contract.requires_integration, false);
   assert.ok(encoded.goal.acceptance_contract.blocking_requirements.some((item) => item.id === "custom_report_artifact"));
   assert.equal(encoded.internal_files.acceptance_contract_json, `.gptwork/goals/${encoded.goal.id}/acceptance.contract.json`);
 

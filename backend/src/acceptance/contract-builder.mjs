@@ -246,8 +246,15 @@ export function buildAcceptanceContract(args = {}) {
   contract.intent.execution_mode = "full";
 
   // Apply full contract defaults for new v2 fields
-  if (contract.requires_commit === undefined) contract.requires_commit = FULL_CONTRACT_DEFAULTS.requires_commit;
-  if (contract.requires_integration === undefined) contract.requires_integration = FULL_CONTRACT_DEFAULTS.requires_integration;
+  // Legacy top-level aliases must mirror canonical requirements. Applying
+  // full-mode defaults here incorrectly upgrades diagnostic/readonly contracts
+  // to code-change semantics even when requirements explicitly disable them.
+  contract.requires_commit = typeof contract.requirements?.requires_commit === "boolean"
+    ? contract.requirements.requires_commit
+    : FULL_CONTRACT_DEFAULTS.requires_commit;
+  contract.requires_integration = typeof contract.requirements?.requires_integration === "boolean"
+    ? contract.requirements.requires_integration
+    : FULL_CONTRACT_DEFAULTS.requires_integration;
   if (!Array.isArray(contract.required_checks)) contract.required_checks = [];
   if (!contract.retry_policy) contract.retry_policy = { ...FULL_CONTRACT_DEFAULTS.retry_policy };
   if (!contract.acceptance_policy) contract.acceptance_policy = { ...FULL_CONTRACT_DEFAULTS.acceptance_policy };
