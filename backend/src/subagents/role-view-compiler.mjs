@@ -5,6 +5,12 @@
  */
 
 const ROLE_POLICIES = Object.freeze({
+  context_curator: {
+    role_kind: "canonical",
+    include: ["objective", "background", "confirmed_findings", "scope", "constraints", "acceptance_criteria", "open_questions", "workstream_decisions"],
+    write_product_code: false,
+    run_commands: true,
+  },
   explorer: {
     role_kind: "advisory",
     include: ["objective", "background", "confirmed_findings", "scope", "open_questions"],

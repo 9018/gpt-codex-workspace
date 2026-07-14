@@ -27,7 +27,7 @@ const SUBAGENTS_FILENAME = "subagents.json";
 const VALID_STATUSES = new Set(["pending", "running", "completed", "failed", "blocked", "skipped", "cancelled"]);
 const VALID_PHASES = new Set([
   "context_curation", "analysis", "planning", "building",
-  "verification", "review", "repair", "finalization",
+  "verification", "review", "repair", "integration", "finalization",
 ]);
 
 // -- Helpers -----------------------------------------------------------------
@@ -116,6 +116,11 @@ export function createSubagentProgressStore({ workspaceRoot }) {
         );
         const normalized = {
           role: incoming.role || "",
+          role_kind: incoming.role_kind || "canonical",
+          blocking: incoming.blocking !== false,
+          agent_run_id: incoming.agent_run_id || null,
+          input_context_digest: incoming.input_context_digest || null,
+          role_view_path: incoming.role_view_path || null,
           round: incoming.round || 1,
           phase: incoming.phase || merged.phase,
           status: normalizeStatus(incoming.status),
@@ -172,6 +177,11 @@ export function createSubagentProgressStore({ workspaceRoot }) {
 
     const normalized = subagents.map((s) => ({
       role: s.role || "",
+      role_kind: s.role_kind || "canonical",
+      blocking: s.blocking !== false,
+      agent_run_id: s.agent_run_id || null,
+      input_context_digest: s.input_context_digest || null,
+      role_view_path: s.role_view_path || null,
       round: s.round || 1,
       phase: s.phase || "",
       status: normalizeStatus(s.status),

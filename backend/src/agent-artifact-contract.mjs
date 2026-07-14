@@ -1,3 +1,4 @@
+import { evaluateArtifactFreshness } from "./evidence/artifact-freshness.mjs";
 export const AGENT_ROLE_ENUM = Object.freeze([
   "context_curator",
   "planner",
@@ -179,8 +180,40 @@ export function validateAgentArtifactContract(agentRun = {}) {
     artifact_kind: kind,
   }));
 
+  if (agentRun.require_fresh_artifacts === true) {
+    for (const kind of required) {
+      const artifact = artifacts.find((candidate) => artifactKindForValue(candidate) === kind);
+      if (!artifact || typeof artifact !== "object") {
+        if (artifact && !missingArtifacts.includes(kind)) {
+          findings.push({
+            severity: "blocker",
+            code: "artifact_freshness_unknown",
+            message: `${role} ${kind} artifact has no freshness envelope`,
+            role,
+            artifact_kind: kind,
+          });
+        }
+        continue;
+      }
+      const envelope = artifact.metadata?.context_digest
+        ? { ...artifact.metadata, ...artifact }
+        : artifact;
+      const freshness = evaluateArtifactFreshness({
+        artifact: envelope,
+        expectedContextDigest: agentRun.input_context_digest || null,
+        expectedHead: agentRun.expected_head || null,
+        expectedInputs: agentRun.expected_input_artifact_digests || {},
+      });
+      findings.push(...freshness.findings.map((finding) => ({
+        ...finding,
+        role,
+        artifact_kind: kind,
+      })));
+    }
+  }
+
   return {
-    valid: missingArtifacts.length === 0,
+    valid: missingArtifacts.length === 0 && findings.length === 0,
     role,
     required_artifacts: required,
     missing_artifacts: missingArtifacts,

@@ -19,7 +19,7 @@
  */
 
 import assert from "node:assert";
-import { describe, it, before, after } from "node:test";
+import { test, describe, it, before, after } from "node:test";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync, existsSync, readFileSync } from "node:fs";
 import { join, dirname } from "node:path";
 import { tmpdir } from "node:os";
@@ -1506,4 +1506,28 @@ describe("[Phase4-故障注入] 安全降级与 warning 验证", () => {
     assert.ok(!result.bundle, "no bundle should be produced for empty goal");
     console.error("  Empty index warning:", result.warning);
   });
+});
+
+test("v2 context retrieval excludes raw conversation and unrelated workstreams by default", async () => {
+  const { buildIndexChunks } = await import("../src/context-index/retriever.mjs");
+  const chunks = await buildIndexChunks({
+    goal: {
+      id: "goal_current", workspace_id: "hosted-default", project_id: "default",
+      workstream_id: "ws_current", user_request: "Do current task",
+      task_context: { raw_conversation_injected: false }
+    },
+    task: { id: "task_current", workstream_id: "ws_current", raw_conversation_injected: false },
+    conversation: { messages: [{ role: "user", content: "RAW CHAT SHOULD NOT INDEX" }] },
+    priorResults: [
+      { summary: "accepted same workstream", workstream_id: "ws_current", accepted: true, goal_id: "goal_old" },
+      { summary: "unrelated workstream", workstream_id: "ws_other", accepted: true, goal_id: "goal_other" },
+      { summary: "failed same workstream", workstream_id: "ws_current", accepted: false, goal_id: "goal_failed" }
+    ]
+  });
+  assert.ok(!chunks.some((chunk) => chunk.metadata.source_type === "conversation"));
+  const resultTexts = chunks.filter((chunk) => chunk.metadata.source_type === "result").map((chunk) => chunk.text).join("\n");
+  assert.match(resultTexts, /accepted same workstream/);
+  assert.doesNotMatch(resultTexts, /unrelated workstream/);
+  assert.doesNotMatch(resultTexts, /failed same workstream/);
+  assert.ok(chunks.every((chunk) => chunk.metadata.workstream_id === "ws_current"));
 });

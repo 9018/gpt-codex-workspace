@@ -17,8 +17,10 @@
  */
 
 import { randomUUID } from "node:crypto";
+import { prepareTaskAgentContext } from "./subagents/task-agent-context.mjs";
 import {
   DEFAULT_AGENT_PIPELINE,
+  TASK_ISOLATED_AGENT_PIPELINE,
   DEFAULT_AGENT_BACKEND_BY_ROLE,
   REPAIRER_ROLE,
   normalizeAgentRole,
@@ -72,14 +74,28 @@ export const BLOCKING_GATE_ROLES = Object.freeze(["verifier", "reviewer", "final
 export async function createDefaultAgentPipeline(store, args = {}, context = {}) {
   const { goal_id, task_id } = args;
 
-  // Create the pipeline via the existing runAgentPipeline service
+  const state = await store.load();
+  const task = (state.tasks || []).find((item) => item.id === task_id) || {};
+  const effectiveRoles = getEffectivePipelineRoles(task);
+  let prepared = null;
+  if (task.pipeline_version === "task_pipeline_v2") {
+    prepared = await prepareTaskAgentContext(store, { task_id, goal_id });
+  }
+  // Create the task-local pipeline. task_pipeline_v2 excludes Workstream integrator.
   const result = await runAgentPipeline(store, {
     goal_id: goal_id || "",
     task_id: task_id || "",
-    roles: [...DEFAULT_AGENT_PIPELINE],
-    execution_order: [...DEFAULT_AGENT_PIPELINE],
+    workstream_id: task.workstream_id || null,
+    roles: effectiveRoles,
+    execution_order: effectiveRoles,
     review_gate_after: DEFAULT_REVIEW_GATE_AFTER,
+    input_context_digest: prepared?.task_context_digest || task.task_context_digest || null,
+    workstream_context_revision: prepared?.workstream_context_revision || null,
+    role_view_paths: prepared?.role_views || {},
+    require_fresh_artifacts: task.pipeline_version === "task_pipeline_v2",
   }, context);
+  result.advisory_runs = prepared?.advisory_runs || [];
+  result.role_views = prepared?.role_views || {};
 
   return result;
 }
@@ -97,7 +113,9 @@ export async function createDefaultAgentPipeline(store, args = {}, context = {})
  * @returns {Promise<{ runs: object[], created: number, skipped: number }>}
  */
 export async function ensurePipelineRunsForTask(store, { task_id, goal_id, roles } = {}, context = {}) {
-  const pipelineRoles = validateAgentRoles(roles || DEFAULT_AGENT_PIPELINE);
+  const state = await store.load();
+  const task = (state.tasks || []).find((item) => item.id === task_id) || {};
+  const pipelineRoles = validateAgentRoles(roles || getEffectivePipelineRoles(task));
 
   // Check existing runs for this task
   const existing = await listAgentRuns(store, { task_id, limit: 100 });
@@ -216,10 +234,16 @@ export async function evaluateTaskPipelineGates(store, { task_id, allowMissingGa
 export async function checkPipelineGateBlocking(store, { task_id, allowMissingGates = false } = {}) {
   const gateStatus = await evaluateTaskPipelineGates(store, { task_id, allowMissingGates });
 
-  // Only consider blocking roles
+  const state = await store.load();
+  const task = (state.tasks || []).find((item) => item.id === task_id) || {};
+  const blockingRoles = task.pipeline_version === "task_pipeline_v2"
+    ? ["verifier", "reviewer", "finalizer"]
+    : [...BLOCKING_GATE_ROLES];
+
+  // Only consider blocking roles for this pipeline version.
   const blockingReasons = [];
   for (const gate of (gateStatus.gates || [])) {
-    if (!BLOCKING_GATE_ROLES.includes(gate.contract_role)) continue;
+    if (!blockingRoles.includes(gate.contract_role)) continue;
     if (!gate.satisfied) {
       blockingReasons.push(...(Array.isArray(gate.missing_artifacts) ? gate.missing_artifacts : []).map(a => `${gate.contract_role}: missing ${a}`));
     }
@@ -442,6 +466,9 @@ export function getEffectivePipelineRoles(task = {}) {
   const roles = task.agent_roles || task.pipeline_roles || task.roles;
   if (Array.isArray(roles) && roles.length > 0) {
     return roles.map(role => mapLegacyRole(role));
+  }
+  if (task.pipeline_version === "task_pipeline_v2") {
+    return [...TASK_ISOLATED_AGENT_PIPELINE];
   }
   return [...DEFAULT_AGENT_PIPELINE];
 }

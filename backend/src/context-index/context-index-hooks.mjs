@@ -37,7 +37,7 @@ function positiveInt(value, fallback, min = 1, max = 50) {
 
 function scopedRetrievalFilters(goal) {
   const filters = {};
-  for (const key of ["workspace_id", "project_id", "repo_id"]) {
+  for (const key of ["workspace_id", "project_id", "repo_id", "workstream_id"]) {
     const value = goal?.[key];
     if (value !== undefined && value !== null && value !== "") filters[key] = value;
   }
@@ -220,7 +220,20 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
   try {
     const state = await store.load();
     const priorGoals = (state.goals || [])
-      .filter((g) => g.id !== goal.id && g.workspace_id === goal.workspace_id)
+      .filter((g) => {
+        if (g.id === goal.id || g.workspace_id !== goal.workspace_id) return false;
+        if (!goal.workstream_id) return true;
+        if (g.workstream_id !== goal.workstream_id) return false;
+        const task = (state.tasks || []).find((item) => item.goal_id === g.id);
+        const result = task?.result || {};
+        const accepted = task?.status === "completed"
+          && (result.verification?.passed === true || result.unified_decision?.status === "completed")
+          && (result.integration?.merged === true
+            || result.integration?.satisfied === true
+            || ["merged", "skipped", "already_integrated", "not_required"].includes(String(result.integration?.status || ""))
+            || result.auto_integration_completion?.completed === true);
+        return accepted;
+      })
       .sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
       .slice(0, 5);
 
@@ -237,6 +250,9 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
             goal_id: prior.id,
             title: prior.title || "untitled",
             status: content.status || prior.status || "unknown",
+            workstream_id: prior.workstream_id || null,
+            task_id: (state.tasks || []).find((item) => item.goal_id === prior.id)?.id || null,
+            accepted: true,
           });
           continue;
         } catch {
@@ -253,9 +269,12 @@ export async function loadPriorResults(store, workspaceRoot, goal) {
             goal_id: prior.id,
             title: prior.title || "untitled",
             status: prior.status || "unknown",
+            workstream_id: prior.workstream_id || null,
+            task_id: (state.tasks || []).find((item) => item.goal_id === prior.id)?.id || null,
+            accepted: true,
           });
         } else {
-          results.push({ summary: `Goal ${prior.id}: ${prior.title || "untitled"}`, goal_id: prior.id, title: prior.title || "untitled", status: prior.status || "unknown" });
+          results.push({ summary: `Goal ${prior.id}: ${prior.title || "untitled"}`, goal_id: prior.id, title: prior.title || "untitled", status: prior.status || "unknown", workstream_id: prior.workstream_id || null, task_id: (state.tasks || []).find((item) => item.goal_id === prior.id)?.id || null, accepted: true });
         }
       } catch {
         // Skip unreadable results

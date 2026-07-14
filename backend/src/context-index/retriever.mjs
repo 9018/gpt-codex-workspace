@@ -52,6 +52,7 @@ export async function buildIndexChunks(ctx) {
     goal_id: goal.id,
     conversation_id: goal.conversation_id || "",
     task_id: task?.id || goal.task_id || "",
+    workstream_id: task?.workstream_id || goal.workstream_id || "",
     created_at: now,
   };
 
@@ -70,7 +71,11 @@ export async function buildIndexChunks(ctx) {
 
   // 2. Conversation messages
   const messages = conversation?.messages || [];
-  if (messages.length > 0) {
+  const boundedTaskContext = Boolean(task?.task_context_digest || goal.task_context);
+  const rawConversationInjected = boundedTaskContext
+    ? (task?.raw_conversation_injected === true || goal.task_context?.raw_conversation_injected === true)
+    : true;
+  if (messages.length > 0 && rawConversationInjected) {
     const msgChunks = chunkMessages(messages, {
       metadata: { ...baseMeta, source_type: "conversation" },
     });
@@ -86,11 +91,27 @@ export async function buildIndexChunks(ctx) {
 
   // 3. Prior task result summaries
   if (Array.isArray(priorResults)) {
-    for (let i = 0; i < priorResults.length; i++) {
-      const text = priorResults[i].summary || priorResults[i].result_text || "";
+    const activeWorkstreamId = baseMeta.workstream_id || null;
+    const eligiblePriorResults = priorResults.filter((result) => {
+      if (!activeWorkstreamId) return true;
+      if (result?.accepted !== true) return false;
+      return result?.workstream_id === activeWorkstreamId;
+    });
+    for (let i = 0; i < eligiblePriorResults.length; i++) {
+      const prior = eligiblePriorResults[i];
+      const text = prior.summary || prior.result_text || "";
       if (!text) continue;
       const rChunks = chunkResult(text, {
-        metadata: { ...baseMeta, source_type: "result", result_index: i },
+        metadata: {
+          ...baseMeta,
+          goal_id: prior.goal_id || baseMeta.goal_id,
+          task_id: prior.task_id || "",
+          workstream_id: prior.workstream_id || baseMeta.workstream_id,
+          source_type: "result",
+          result_index: i,
+          accepted: true,
+          status: prior.status || "accepted"
+        },
       });
       for (const c of rChunks) {
         chunks.push({

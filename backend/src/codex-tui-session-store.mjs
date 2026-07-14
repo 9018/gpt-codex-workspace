@@ -127,12 +127,20 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
      * @param {object} [params.metadata] - Additional metadata
      * @returns {Promise<object>} Created session record
      */
-    async createSession({ sessionId, taskId = null, goalId = null, cwd = null, repoLockId = null, workstreamId = null, worktreePath = null, branch = null, baseCommit = null, headCommit = null, codexThreadId = null, metadata = {} } = {}) {
+    async createSession({
+      sessionId, taskId = null, goalId = null, cwd = null, repoLockId = null,
+      workstreamId = null, executionId = null, worktreePath = null,
+      branch = null, baseCommit = null, headCommit = null,
+      codexThreadId = null, taskContextDigest = null,
+      taskContextRevision = null, workstreamContextDigest = null,
+      workstreamContextRevision = null, activeDeltaRevision = 0,
+      metadata = {}
+    } = {}) {
       const id = assertSafeCodexTuiSessionId(sessionId || `codex_tui_${randomUUID()}`);
       const createdAt = nowIso();
       const record = {
         id,
-        runtime_version: 2,
+        runtime_version: 3,
         last_process_heartbeat_at: null,
         last_output_at: null,
         last_meaningful_progress_at: null,
@@ -141,11 +149,17 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
         cwd,
         repo_lock_id: repoLockId,
         workstream_id: workstreamId,
+        execution_id: executionId,
         worktree_path: worktreePath,
         branch,
         base_commit: baseCommit,
         head_commit: headCommit,
         codex_thread_id: codexThreadId,
+        task_context_digest: taskContextDigest,
+        task_context_revision: taskContextRevision,
+        workstream_context_digest: workstreamContextDigest,
+        workstream_context_revision: workstreamContextRevision,
+        active_delta_revision: Number(activeDeltaRevision || 0),
         status: "created",
         created_at: createdAt,
         updated_at: createdAt,
@@ -163,7 +177,23 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
       } catch (err) {
         if (err?.code !== "ENOENT") throw err;
       }
-      return { ...record, log: tailText(log, maxChars) };
+      const normalized = Number(record.runtime_version || 1) < 3
+        ? {
+            ...record,
+            runtime_version: 3,
+            execution_id: record.execution_id || null,
+            task_context_digest: record.task_context_digest || null,
+            task_context_revision: record.task_context_revision || null,
+            workstream_context_digest: record.workstream_context_digest || null,
+            workstream_context_revision: record.workstream_context_revision || null,
+            active_delta_revision: Number(record.active_delta_revision || 0),
+            compatibility_warnings: [
+              ...(record.compatibility_warnings || []),
+              "legacy_session_without_context_binding"
+            ]
+          }
+        : record;
+      return { ...normalized, log: tailText(log, maxChars) };
     },
 
     async updateSession(sessionId, patch = {}) {

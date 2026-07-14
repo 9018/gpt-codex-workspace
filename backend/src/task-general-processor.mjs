@@ -28,6 +28,7 @@ import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCom
 import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution-backends.mjs";
 import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writePlannerAgentRun, completeQueuedAgentRuns, skipDownstreamAgentRunsForBlocker } from "./agent-run-writeback.mjs";
 import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
+import { syncAgentRunProgress } from "./subagent-progress-bridge.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -1551,11 +1552,13 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "reviewer", err));
 
   // Agent run writeback: integrator
-  await writeIntegratorAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    integrationResult: taskResult.integration || {},
-  }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
+  if (taskResult.integration?.status || taskResult.integration?.satisfied === true || taskResult.auto_integration_completion?.attempted === true) {
+    await writeIntegratorAgentRun(store, {
+      task_id: task.id,
+      goal_id: goal?.id,
+      integrationResult: taskResult.integration || {},
+    }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
+  }
 
   // P0-MA12-G1: Write finalizer agent_run with result artifact before pipeline gate evaluation
   // so evaluateTaskPipelineGates sees the completed finalizer with kind=result artifact
@@ -1604,6 +1607,18 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       taskStatus = gateResult.taskStatus;
       taskResult = gateResult.taskResult;
     }
+  }
+
+  // P0-MA12-G5: Sync agent run progress to progress.json/subagents.json
+  // This bridges the agent-run lifecycle to the subagent progress store
+  // that the parent TUI reads via codex_tui_progress / codex_tui_subagents.
+  if (goal && config?.defaultWorkspaceRoot) {
+    syncAgentRunProgress({
+      store,
+      workspaceRoot: config.defaultWorkspaceRoot,
+      goalId: goal.id,
+      taskId: task.id,
+    }).catch(() => {});
   }
 
   return finalizeCodexTaskRunFn({

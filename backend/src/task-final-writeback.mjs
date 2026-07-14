@@ -27,6 +27,7 @@ import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finali
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
+import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 function recordAgentRunWritebackFailure(taskResult, role, err) {
   if (!taskResult || typeof taskResult !== "object") return;
   const message = String(err?.message || err || "agent run writeback failed").slice(0, 500);
@@ -658,11 +659,13 @@ export async function finalizeCodexTaskRun({
     taskResult,
     summary: taskResult.summary || '',
   }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "builder", err));
-  await writeIntegratorAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    integrationResult: taskResult.integration || {},
-  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
+  if (taskResult.integration?.status || taskResult.integration?.satisfied === true || taskResult.auto_integration_completion?.attempted === true) {
+    await writeIntegratorAgentRun(store, {
+      task_id: task.id,
+      goal_id: goal?.id,
+      integrationResult: taskResult.integration || {},
+    }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
+  }
   await writeVerifierAgentRun(store, {
     task_id: task.id,
     goal_id: goal?.id,
@@ -786,6 +789,17 @@ export async function finalizeCodexTaskRun({
     : await updateTaskFn(store, task.id, (item) => {
       applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config });
     });
+
+  if (taskStatus === "completed" && (task.workstream_id || goal?.workstream_id)) {
+    const outcomeUpdate = await updateWorkstreamContextFromCompletedTask({
+      store,
+      workspaceRoot: config.defaultWorkspaceRoot,
+      task: result?.task || { ...task, status: taskStatus },
+      goal,
+      result: taskResult,
+    }).catch((error) => ({ applied: false, reason: error.message }));
+    taskResult.workstream_context_update = outcomeUpdate;
+  }
 
   if (repoLockPath) {
     let keptForRestart = false;

@@ -106,6 +106,20 @@ export function previewCodexContextCard(data) {
     lines.push(formatKeyValue('project.env', proj.project_env.ok ? `${proj.project_env.keys.length} key(s)` : 'missing'));
   }
 
+  const v2 = data.context_v2 || {};
+  if (v2.task_context?.digest) {
+    lines.push(formatKeyValue('task context', `${v2.task_context.revision || '-'} ${String(v2.task_context.digest).slice(0, 20)}…`));
+  }
+  if (v2.workstream_context?.id) {
+    lines.push(formatKeyValue('workstream context', `${v2.workstream_context.id} r${v2.workstream_context.revision ?? '-'}`));
+  }
+  if (v2.raw_conversation) {
+    lines.push(formatKeyValue('raw conversation', `stored=${v2.raw_conversation.stored} injected=${v2.raw_conversation.injected}`));
+  }
+  if (Array.isArray(v2.role_views)) {
+    lines.push(formatKeyValue('role views', String(v2.role_views.length)));
+  }
+
   // Context size
   const sz = ctx.size_metrics || {};
   const sizeParts = [];
@@ -128,7 +142,10 @@ export function previewCodexContextCard(data) {
   }
 
   // Warnings
-  const warnings = ctx.warnings || [];
+  const warnings = [
+    ...(ctx.warnings || []),
+    ...(data.context_v2?.warnings || []),
+  ];
   const warningMsgs = warnings.map((w) => {
     const msg = typeof w === 'string' ? w : (w.message || w.code || String(w));
     return msg;

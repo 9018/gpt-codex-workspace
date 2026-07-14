@@ -35,6 +35,7 @@ function makeStore(state) {
     state,
     async load() { return state; },
     async save() {},
+    async mutate(fn) { const result = await fn(state); return result; },
     async findTaskById(taskId) { return state.tasks.find((task) => task.id === taskId) || null; },
   };
 }
@@ -70,6 +71,8 @@ test("codex TUI tools are registered and discoverable through server tools", () 
     "codex_tui_status",
     "codex_tui_read",
     "codex_tui_send",
+    "codex_tui_preview_task_delta",
+    "codex_tui_send_task_delta",
     "codex_tui_stop",
     "codex_tui_collect",
   ]) {
@@ -315,11 +318,58 @@ test("codex_tui_start_goal acquires lock on worktree, starts a session, and dele
   assert.deepEqual(await tools.codex_tui_status.handler({ session_id: "session_1" }), { id: "session_1", status: "running" });
   assert.deepEqual(await tools.codex_tui_read.handler({ session_id: "session_1", max_chars: 5 }), { id: "session_1", task_id: taskId, cwd: "worktree_cwd", log: "hello", maxChars: 5 });
   assert.deepEqual(await tools.codex_tui_send.handler({ session_id: "session_1", text: "continue\n" }), { id: "session_1", log: "[input] continue\n" });
-  assert.deepEqual(await tools.codex_tui_stop.handler({ session_id: "session_1" }), { id: "session_1", status: "stopped", reason: "manual_stop" });
+  assert.deepEqual(await tools.codex_tui_stop.handler({ session_id: "session_1" }), {
+    id: "session_1", status: "stopped", reason: "manual_stop", task_state: "repairing", reconciled: true
+  });
 
   // Clean up worktree
   const { removeTaskWorktree } = await import("../src/task-worktree-manager.mjs");
   await removeTaskWorktree(taskId, { workspaceRoot: repo, repoId: "default", canonicalRepoPath: repo });
+});
+
+
+
+test("codex TUI delta tools preview and send a same-task structured delta", async () => {
+  const sent = [];
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store: makeStore({ tasks: [], goals: [] }),
+    config: { defaultWorkspaceRoot: "/tmp/gptwork", defaultRepoPath: "/tmp/repo", codexTuiEnabled: true },
+    readCodexTuiSessionFn: async () => ({
+      id: "session_delta",
+      task_id: "task_delta",
+      goal_id: "goal_delta",
+      task_context_digest: "sha256:delta",
+      active_delta_revision: 0,
+      metadata: { workspace_root: "/tmp/gptwork" }
+    }),
+    sendCodexTuiTaskDeltaFn: async (sessionId, delta) => {
+      sent.push({ sessionId, delta });
+      return { id: sessionId, active_delta_revision: delta.revision };
+    },
+  });
+  const delta = {
+    schema_version: "gptwork.task_delta.v1",
+    task_id: "task_delta",
+    goal_id: "goal_delta",
+    session_id: "session_delta",
+    base_context_digest: "sha256:delta",
+    revision: 1,
+    kind: "review_findings",
+    required_next_role: "repairer",
+    repair_round: 1,
+    findings: [],
+    allowed_scope: [],
+    evidence_refs: []
+  };
+
+  const preview = await tools.codex_tui_preview_task_delta.handler({ session_id: "session_delta", delta });
+  assert.equal(preview.valid, true);
+  assert.match(preview.instruction, /BEGIN GPTWORK TASK DELTA/);
+  const result = await tools.codex_tui_send_task_delta.handler({ session_id: "session_delta", delta });
+  assert.equal(result.active_delta_revision, 1);
+  assert.equal(sent.length, 1);
 });
 
 test("codex_tui_collect delegates to the completion collector", async () => {

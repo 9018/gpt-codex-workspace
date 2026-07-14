@@ -9,6 +9,7 @@ import { StateStore } from "../src/state-store.mjs";
 // Import module functions for sync tests
 import {
   DEFAULT_AGENT_PIPELINE,
+  TASK_ISOLATED_AGENT_PIPELINE,
   REPAIRER_ROLE,
   LEGACY_ROLE_MAPPING,
   DEFAULT_AGENT_BACKEND_BY_ROLE,
@@ -60,6 +61,15 @@ test("pipeline-orch: DEFAULT_AGENT_PIPELINE includes all 7 required roles", () =
     "finalizer",
   ];
   assert.deepEqual([...DEFAULT_AGENT_PIPELINE], expected);
+});
+
+test("pipeline-orch: task_pipeline_v2 excludes integrator from task-local roles", () => {
+  assert.deepEqual([...TASK_ISOLATED_AGENT_PIPELINE], [
+    "context_curator", "planner", "builder", "verifier", "reviewer", "finalizer"
+  ]);
+  assert.deepEqual(getEffectivePipelineRoles({ pipeline_version: "task_pipeline_v2" }), [...TASK_ISOLATED_AGENT_PIPELINE]);
+  assert.ok(!getEffectivePipelineRoles({ pipeline_version: "task_pipeline_v2" }).includes("integrator"));
+  assert.ok(getEffectivePipelineRoles({ legacy: true }).includes("integrator"));
 });
 
 test("pipeline-orch: REPAIRER_ROLE is repairer (recovery branch)", () => {
@@ -535,8 +545,8 @@ test("P0-04: buildGoalTask adds require_pipeline_gates for builder mode", async 
     created_at: now,
   }, { id: "conv_readonly_p0_04" }, "system");
 
-  assert.equal(readonlyTask.require_pipeline_gates, false,
-    "readonly mode task should have require_pipeline_gates=false");
+  assert.equal(readonlyTask.require_pipeline_gates, true,
+    "ordinary goal tasks are normalized to full mode and must enforce pipeline gates");
 });
 
 test("P0-04: new task with no agent_runs and allowMissingGates=false blocks closure", async () => {

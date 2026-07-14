@@ -74,6 +74,45 @@ test("start passes the goal as the interactive Codex initial prompt", async () =
 });
 
 
+
+
+test("start persists workstream, execution and context bindings", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-binding-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-binding-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_binding", title: "Binding" },
+    goal: { id: "goal_binding" },
+    cwd,
+    workspaceRoot,
+    repoLockId: "lock_binding",
+    workstreamId: "ws_binding",
+    executionId: "exec_binding",
+    worktreePath: cwd,
+    branch: "gptwork/task/task_binding",
+    baseCommit: "abc123",
+    headCommit: "abc123",
+    taskContextDigest: "sha256:task-binding",
+    taskContextRevision: 2,
+    workstreamContextDigest: "sha256:ws-binding",
+    workstreamContextRevision: 7,
+    ptyAdapter: fakeAdapter,
+  });
+
+  assert.equal(session.runtime_version, 3);
+  assert.equal(session.workstream_id, "ws_binding");
+  assert.equal(session.execution_id, "exec_binding");
+  assert.equal(session.worktree_path, cwd);
+  assert.equal(session.branch, "gptwork/task/task_binding");
+  assert.equal(session.base_commit, "abc123");
+  assert.equal(session.head_commit, "abc123");
+  assert.equal(session.task_context_digest, "sha256:task-binding");
+  assert.equal(session.task_context_revision, 2);
+  assert.equal(session.workstream_context_digest, "sha256:ws-binding");
+  assert.equal(session.workstream_context_revision, 7);
+  assert.equal(session.active_delta_revision, 0);
+});
+
 test("start does not send bootstrap Enter when Codex already auto-submitted the argv prompt", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-auto-submit-")));
   const fakeAdapter = makeFakeAdapter();

@@ -102,3 +102,43 @@ test("artifact schema documents required artifact kinds by role", () => {
   assert.ok(ARTIFACT_SCHEMA.kinds.context_manifest.extensions.includes(".json"));
   assert.ok(ARTIFACT_SCHEMA.kinds.result.extensions.includes(".json"));
 });
+
+
+test("pipeline v2 rejects a required artifact produced for stale context", () => {
+  const run = {
+    role: "verifier",
+    status: "completed",
+    require_fresh_artifacts: true,
+    input_context_digest: "sha256:current",
+    expected_head: "head-current",
+    output_artifacts: [{
+      kind: "verification",
+      path: ".gptwork/goals/g/verification.json",
+      context_digest: "sha256:old",
+      git: { input_head: "head-current", output_head: "head-current" },
+      input_artifact_digests: {}
+    }]
+  };
+  const result = validateAgentArtifactContract(run);
+  assert.equal(result.valid, false);
+  assert.ok(result.findings.some((finding) => finding.code === "artifact_context_stale"));
+});
+
+test("pipeline v2 accepts a fresh required artifact", () => {
+  const run = {
+    role: "reviewer",
+    status: "completed",
+    require_fresh_artifacts: true,
+    input_context_digest: "sha256:current",
+    expected_head: "head-current",
+    output_artifacts: [{
+      kind: "reviewer_decision",
+      path: ".gptwork/goals/g/reviewer_decision.json",
+      context_digest: "sha256:current",
+      git: { input_head: "head-current", output_head: "head-current" },
+      input_artifact_digests: {}
+    }]
+  };
+  const result = validateAgentArtifactContract(run);
+  assert.equal(result.valid, true);
+});

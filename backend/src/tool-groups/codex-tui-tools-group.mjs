@@ -27,12 +27,14 @@ import {
   getCodexTuiSessionStatus,
   readCodexTuiSession,
   sendCodexTuiSessionInput,
+  sendCodexTuiTaskDelta,
   startCodexTuiGoalSession,
   stopCodexTuiSession,
 } from "../codex-tui-session-manager.mjs";
 import { collectCodexTuiCompletion } from "../codex-tui-completion-collector.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
+import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
 
 
 export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false } = {}) {
@@ -102,6 +104,7 @@ export function createCodexTuiToolsGroup({
   getCodexTuiSessionStatusFn = getCodexTuiSessionStatus,
   readCodexTuiSessionFn = readCodexTuiSession,
   sendCodexTuiSessionInputFn = sendCodexTuiSessionInput,
+  sendCodexTuiTaskDeltaFn = sendCodexTuiTaskDelta,
   stopCodexTuiSessionFn = stopCodexTuiSession,
   collectCodexTuiCompletionFn = collectCodexTuiCompletion,
   updateTaskFn = updateTask,
@@ -274,7 +277,7 @@ export function createCodexTuiToolsGroup({
     const execStore = createExecutionStoreFn({ workspaceRoot: workspaceRoot || canonicalRepoPath });
     const execution = await execStore.createExecution({
       executionId: `exec_${task.id}`,
-      workstreamId,
+      workstreamId: task.workstream_id || goal.workstream_id || workstreamId || null,
       goalId: goal.id,
       taskId: task.id,
       worktreePath,
@@ -288,6 +291,10 @@ export function createCodexTuiToolsGroup({
         task_title: task.title || null,
         provider: "codex_tui_goal",
         plan: repoPlan,
+        task_context_digest: task.task_context_digest || goal.task_context?.contract_digest || null,
+        task_context_revision: task.task_context_revision || goal.task_context?.revision || null,
+        workstream_context_digest: task.workstream_context_digest || null,
+        workstream_context_revision: task.workstream_context_revision || null,
       },
     });
 
@@ -302,6 +309,16 @@ export function createCodexTuiToolsGroup({
         cwd: worktreePath,
         workspaceRoot: workspaceRoot || canonicalRepoPath,
         repoLockId: lockResult.lock?.safe_repo_id || null,
+        workstreamId: task.workstream_id || goal.workstream_id || workstreamId || null,
+        executionId: execution.id,
+        worktreePath,
+        branch,
+        baseCommit,
+        headCommit: baseCommit,
+        taskContextDigest: task.task_context_digest || goal.task_context?.contract_digest || null,
+        taskContextRevision: task.task_context_revision || goal.task_context?.revision || null,
+        workstreamContextDigest: task.workstream_context_digest || null,
+        workstreamContextRevision: task.workstream_context_revision || null,
       });
     } catch (err) {
       await execStore.updateExecution(execution.id, {
@@ -406,6 +423,24 @@ export function createCodexTuiToolsGroup({
       inputSchema: schema({ session_id: "string", text: "string" }, ["session_id", "text"]),
       ...metadata,
       handler: async ({ session_id, text }) => sendCodexTuiSessionInputFn(session_id, text, { candidateWorkspaceRoots: sessionWorkspaceRoots() }),
+    }),
+    codex_tui_preview_task_delta: tool({
+      name: "codex_tui_preview_task_delta",
+      description: "Validate and preview a structured same-task TUI delta without sending it.",
+      inputSchema: schema({ session_id: "string", delta: "object" }, ["session_id", "delta"]),
+      ...metadata,
+      handler: async ({ session_id, delta }) => {
+        const session = await readCodexTuiSessionFn(session_id, { maxChars: 0, candidateWorkspaceRoots: sessionWorkspaceRoots() });
+        validateTaskDelta(delta, session);
+        return { valid: true, session_id, revision: delta.revision, instruction: renderDeltaInstruction(delta) };
+      },
+    }),
+    codex_tui_send_task_delta: tool({
+      name: "codex_tui_send_task_delta",
+      description: "Persist and send a validated structured delta to the active TUI session for the same Task.",
+      inputSchema: schema({ session_id: "string", delta: "object" }, ["session_id", "delta"]),
+      ...metadata,
+      handler: async ({ session_id, delta }) => sendCodexTuiTaskDeltaFn(session_id, delta, { candidateWorkspaceRoots: sessionWorkspaceRoots() }),
     }),
     codex_tui_stop: tool({
       name: "codex_tui_stop",

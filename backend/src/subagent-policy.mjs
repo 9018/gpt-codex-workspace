@@ -25,6 +25,19 @@ export const DEFAULT_AGENT_PIPELINE = Object.freeze([
   "finalizer",
 ]);
 
+/** Task-local pipeline for task_pipeline_v2. Integration is Workstream-scoped. */
+export const TASK_ISOLATED_AGENT_PIPELINE = Object.freeze([
+  "context_curator",
+  "planner",
+  "builder",
+  "verifier",
+  "reviewer",
+  "finalizer",
+]);
+
+/** Workstream-scoped integration roles. */
+export const WORKSTREAM_INTEGRATION_PIPELINE = Object.freeze(["integrator"]);
+
 /** Recovery branch role -- not part of the default main pipeline. */
 export const REPAIRER_ROLE = "repairer";
 

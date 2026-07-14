@@ -110,7 +110,7 @@ export async function normalizeLegacyModes(store, state) {
       changed = true;
     }
   }
-  if (changed) await store.save();
+  if (changed && typeof store.save === "function") await store.save();
 }
 
 // ---------------------------------------------------------------------------

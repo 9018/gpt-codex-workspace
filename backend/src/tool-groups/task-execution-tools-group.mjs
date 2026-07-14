@@ -9,6 +9,7 @@ import { goalWorkspaceFiles } from '../goal-files.mjs';
 import { buildCodexContext, formatSize } from '../codex-context-builder.mjs';
 import { buildCodexPrompt } from '../codex-prompt-builder.mjs';
 import { getRepoStatus } from '../repo-registry.mjs';
+import { buildContextPreviewV2 } from '../context-preview-v2.mjs';
 
 /**
  * Factory for task execution and preview MCP tool registration.
@@ -94,8 +95,22 @@ export function createExecutionToolsGroup({
           workspaceRoot: workspace.root,
           defaultRepoPath: config.defaultRepoPath,
         });
+        const context_v2 = await buildContextPreviewV2({
+          workspaceRoot: workspace.root,
+          task,
+          goal: goal || {},
+          contextJson: ctx,
+        });
         return {
           context: ctx,
+          context_v2,
+          task_context: context_v2.task_context,
+          workstream_context: context_v2.workstream_context,
+          raw_conversation: context_v2.raw_conversation,
+          role_views: context_v2.role_views,
+          excluded_sources: context_v2.excluded_sources,
+          freshness: context_v2.freshness,
+          warnings_v2: context_v2.warnings,
           preview,
           preview_text: preview,
           actual_prompt_bytes: promptBytes,

@@ -62,7 +62,7 @@ function sameScopeValue(goal, metadata, key) {
 
 function isScopedToGoal(goal, chunk) {
   const metadata = chunk?.metadata || {};
-  return ["workspace_id", "project_id", "repo_id"].every((key) => sameScopeValue(goal, metadata, key));
+  return ["workspace_id", "project_id", "repo_id", "workstream_id"].every((key) => sameScopeValue(goal, metadata, key));
 }
 
 function isCurrentGoalChunk(goal, chunk) {

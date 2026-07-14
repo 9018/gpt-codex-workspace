@@ -4,6 +4,8 @@ import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
 import { join } from "node:path";
 import { detectMeaningfulOutput } from "./codex-tui-progress-utils.mjs";
 import { mkdir, rm, symlink } from "node:fs/promises";
+import { validateTaskDelta, renderDeltaInstruction } from "./codex-tui-task-delta.mjs";
+import { createTaskContextStore } from "./context-contract/task-context-store.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -95,6 +97,17 @@ async function startCodexTuiGoalSessionImpl({
   workspaceRoot = null,
   candidateWorkspaceRoots = [],
   repoLockId = null,
+  workstreamId = null,
+  executionId = null,
+  worktreePath = null,
+  branch = null,
+  baseCommit = null,
+  headCommit = null,
+  taskContextDigest = null,
+  taskContextRevision = null,
+  workstreamContextDigest = null,
+  workstreamContextRevision = null,
+  activeDeltaRevision = 0,
   ptyAdapter = null,
   command = "codex",
   evidenceWaitMs = null,
@@ -132,6 +145,17 @@ async function startCodexTuiGoalSessionImpl({
     goalId: goal.id,
     cwd,
     repoLockId,
+    workstreamId,
+    executionId,
+    worktreePath: worktreePath || cwd,
+    branch,
+    baseCommit,
+    headCommit,
+    taskContextDigest,
+    taskContextRevision,
+    workstreamContextDigest,
+    workstreamContextRevision,
+    activeDeltaRevision,
     metadata: {
       workspace_root: sessionStoreRoot,
       session_store_root: sessionStoreRoot,
@@ -258,6 +282,25 @@ export async function sendCodexTuiSessionInput(sessionId, text, options = {}) {
   ptySession.write(text);
   await store.appendSessionLog(sessionId, `[input] ${String(text ?? "")}`);
   return store.readSession(sessionId);
+}
+
+
+export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
+  const store = await storeForSession(sessionId, options);
+  const session = await store.readSession(sessionId, { maxChars: 0 });
+  validateTaskDelta(delta, session);
+  const instruction = renderDeltaInstruction(delta);
+  const workspaceRoot = session.metadata?.workspace_root || options.workspaceRoot;
+  if (!workspaceRoot) throw new Error("workspace root unavailable for task delta");
+  const contextStore = createTaskContextStore({ workspaceRoot });
+  await contextStore.appendDelta(`.gptwork/goals/${session.goal_id}`, delta);
+  await sendCodexTuiSessionInput(sessionId, `${instruction}
+`, options);
+  return store.updateSession(sessionId, {
+    active_delta_revision: delta.revision,
+    last_delta_kind: delta.kind,
+    last_delta_at: new Date().toISOString(),
+  });
 }
 
 export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots = [], releaseLockFn = null } = {}) {

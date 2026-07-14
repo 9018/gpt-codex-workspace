@@ -4,6 +4,7 @@ import { ARTIFACT_SCHEMA, AGENT_ROLE_ENUM, normalizeContractRole, validateAgentA
 import { missingAgentRunEvidence } from "./evidence/operation-evidence-profiles.mjs";
 import { buildDefaultSubagentSkeleton, getPhaseForRole, isRepairRole } from "./subagents/subagent-policy.mjs";
 import { normalizeSubagentResult, normalizeSubagentResults, inferPipelineStatus, inferCurrentPhase, inferNextExpectedEvent, collectBlockers } from "./subagents/subagent-result-normalizer.mjs";
+import { syncAgentRunProgress } from "./subagent-progress-bridge.mjs";
 
 const STATUSES = new Set(["queued", "running", "completed", "failed", "waiting_for_review", "cancelled", "skipped"]);
 
@@ -18,6 +19,17 @@ function ensureAgentRuns(state) {
 
 function normalizeStatus(status, fallback = "queued") {
   return STATUSES.has(status) ? status : fallback;
+}
+
+
+async function syncProgressBestEffort(store, agentRun) {
+  if (!store?.defaultWorkspaceRoot || !agentRun?.goal_id || !agentRun?.task_id) return;
+  await syncAgentRunProgress({
+    store,
+    workspaceRoot: store.defaultWorkspaceRoot,
+    goalId: agentRun.goal_id,
+    taskId: agentRun.task_id,
+  }).catch(() => {});
 }
 
 function normalizeStoredAgentRole(role) {
@@ -37,7 +49,25 @@ export async function createAgentRun(store, args = {}, context = {}) {
       contract_role: normalizeAgentRole(args.role),
       agent: args.agent || "codex",
       status: normalizeStatus(args.status),
-      input_artifacts: Array.isArray(args.input_artifacts) ? args.input_artifacts : [],
+      workstream_id: args.workstream_id || null,
+      execution_id: args.execution_id || null,
+      session_id: args.session_id || null,
+      phase: args.phase || null,
+      round: Number(args.round || 0),
+      input_context_digest: args.input_context_digest || null,
+      workstream_context_revision: args.workstream_context_revision || null,
+      input_head: args.input_head || null,
+      expected_head: args.expected_head || null,
+      expected_input_artifact_digests: args.expected_input_artifact_digests || {},
+      require_fresh_artifacts: args.require_fresh_artifacts === true,
+      role_view_path: args.role_view_paths?.[normalizeAgentRole(args.role)]?.path || args.role_view_path || null,
+      role_view_digest: args.role_view_paths?.[normalizeAgentRole(args.role)]?.digest || args.role_view_digest || null,
+      input_artifacts: [
+        ...(args.role_view_paths?.[normalizeAgentRole(args.role)]
+          ? [{ kind: "role_view", path: args.role_view_paths[normalizeAgentRole(args.role)].path, digest: args.role_view_paths[normalizeAgentRole(args.role)].digest }]
+          : []),
+        ...(Array.isArray(args.input_artifacts) ? args.input_artifacts : [])
+      ],
       output_artifacts: Array.isArray(args.output_artifacts) ? args.output_artifacts : [],
       summary: args.summary || "",
       events: [],
@@ -49,6 +79,7 @@ export async function createAgentRun(store, args = {}, context = {}) {
   });
   await context.eventLogger?.append("agent_run.created", { agent_run_id: result.agent_run.id, goal_id: result.agent_run.goal_id, task_id: result.agent_run.task_id, role: result.agent_run.role, agent: result.agent_run.agent });
   await context.hookBus?.emit("onAgentRunStarted", { agent_run: result.agent_run });
+  await syncProgressBestEffort(store, result.agent_run);
   return result;
 }
 
@@ -102,6 +133,7 @@ export async function completeAgentRun(store, args = {}, context = {}) {
   });
   await context.eventLogger?.append("agent_run.completed", { agent_run_id: result.agent_run.id, status: result.agent_run.status, summary: result.agent_run.summary });
   await context.hookBus?.emit("onAgentRunCompleted", { agent_run: result.agent_run });
+  await syncProgressBestEffort(store, result.agent_run);
   return result;
 }
 
@@ -145,6 +177,7 @@ export async function cancelAgentRun(store, args = {}, context = {}) {
   });
   await context.eventLogger?.append("agent_run.cancelled", { agent_run_id: result.agent_run.id, reason: args.reason || "" });
   await context.hookBus?.emit("onAgentRunCancelled", { agent_run: result.agent_run });
+  await syncProgressBestEffort(store, result.agent_run);
   return result;
 }
 
