@@ -98,3 +98,17 @@ it('accepted task requiring integration transitions to integrating instead of co
   });
   assert.equal(store.state.tasks[0].status, 'integrating');
 });
+
+
+it('real stop_retry clears stale TUI ownership and points goal at retry', async () => {
+  const task = { id: 'real_parent', goal_id: 'real_goal', status: 'running', attempt: 0, execution_mode: 'worktree', worktree: { enabled: true }, title: 'canary', mode: 'full', metadata: { codex_execution_provider: 'codex_tui_goal', tui_session_owner: 'manual', tui_session_id: 's' }, acceptance_contract: { mode: 'full', retry_policy: { max_attempts: 2, no_progress_timeout_ms: 1, wake_grace_ms: 0, backoff_ms: [0] } } };
+  const store = makeStore({ tasks: [task], goals: [{ id: 'real_goal', task_id: 'real_parent' }], goal_queue: [{ task_id: 'real_parent', status: 'running' }], activities: [] });
+  const { reconcileTaskRuntime } = await import('../src/runtime/task-runtime-reconciler.mjs');
+  const out = await reconcileTaskRuntime({ store, taskId: task.id, context: { session: { id: 's', status: 'running', pty_pid: 99999999, started_at: '2020-01-01T00:00:00Z', last_meaningful_progress_at: '2020-01-01T00:00:00Z' } } });
+  const retry = store.state.tasks.find((t) => t.id === out.retry_task_id);
+  assert.equal(store.state.tasks[0].status, 'cancelled');
+  assert.equal(store.state.tasks[0].metadata.tui_session_owner, undefined);
+  assert.equal(retry.metadata.codex_execution_provider, 'codex_tui_goal');
+  assert.deepEqual(retry.acceptance_contract, task.acceptance_contract);
+  assert.equal(store.state.goals[0].task_id, retry.id);
+});

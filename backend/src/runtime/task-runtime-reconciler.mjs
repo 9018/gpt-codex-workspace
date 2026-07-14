@@ -58,6 +58,12 @@ function lightweightTx(state) {
         if (item) { item.task_id = retryId; item.status = 'waiting'; item.updated_at = new Date().toISOString(); }
       },
     },
+    goals: {
+      async replaceTask(goalId, retryId) {
+        const goal = (state.goals || []).find((entry) => entry.id === goalId);
+        if (goal) { goal.task_id = retryId; goal.status = 'assigned'; goal.updated_at = new Date().toISOString(); }
+      },
+    },
     scheduler: { async schedule() {} },
   };
 }
@@ -107,6 +113,11 @@ export async function reconcileTaskRuntime(options = {}) {
         transition(state, task, 'collecting', `[runtime] evidence available after stop (${trigger})`);
         output = result(true, aggregate, action, { reason: 'stopped; evidence ready' }); return;
       }
+      task.metadata = { ...(task.metadata || {}) };
+      delete task.metadata.tui_session_owner;
+      delete task.metadata.manual_tui_session_starting;
+      delete task.metadata.worker_tui_session_starting;
+      delete task.metadata.tui_session_id;
       transition(state, task, 'repairing', `[runtime] stopped for automatic retry (${trigger})`);
       const retryFn = retryTask || (async ({ tx: innerTx, aggregate: innerAggregate, failure }) => defaultCreateRetry(innerTx, innerAggregate, failure));
       const retryResult = await retryFn({ tx, aggregate, failure: { class: 'no_meaningful_progress', reason: trigger } });

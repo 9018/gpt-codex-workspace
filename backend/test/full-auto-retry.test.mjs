@@ -38,3 +38,35 @@ describe("full-auto-retry", () => {
     assert.equal(hashContract(null), null);
   });
 });
+
+it("retry inherits contract/provider, updates goal pointer, and terminalizes parent", async () => {
+  const { createRetryIterationAtomic } = await import("../src/task-retry.mjs");
+  const state = {
+    tasks: [{
+      id: "parent", goal_id: "goal", status: "running", attempt: 0,
+      acceptance_contract: { mode: "full", retry_policy: { max_attempts: 2, backoff_ms: [0] } },
+      metadata: { codex_execution_provider: "codex_tui_goal", tui_session_owner: "manual", tui_session_id: "old" },
+      execution_mode: "worktree", worktree: { enabled: true }, title: "canary", mode: "full",
+    }],
+    goals: [{ id: "goal", task_id: "parent", status: "assigned" }],
+    goal_queue: [{ task_id: "parent", status: "running" }],
+  };
+  const tx = {
+    tasks: {
+      async create(payload) { const task = { status: "queued", ...payload }; state.tasks.push(task); return task; },
+      async setState(id, status, patch = {}) { const task = state.tasks.find((t) => t.id === id); task.status = status; task.result = { ...(task.result || {}), ...patch }; },
+    },
+    locks: { async releaseForTask() {} },
+    queue: { async replaceIteration(parent, retry) { state.goal_queue[0].task_id = retry; state.goal_queue[0].status = "waiting"; } },
+    goals: { async replaceTask(goalId, retry) { state.goals[0].task_id = retry; } },
+    scheduler: { async schedule() {} },
+  };
+  const result = await createRetryIterationAtomic(tx, { task: state.tasks[0] }, { class: "no_meaningful_progress" });
+  const retry = state.tasks.find((t) => t.id === result.retry_task_id);
+  assert.deepEqual(retry.acceptance_contract, state.tasks[0].acceptance_contract);
+  assert.equal(retry.metadata.codex_execution_provider, "codex_tui_goal");
+  assert.equal(retry.metadata.tui_session_owner, undefined);
+  assert.equal(state.tasks[0].status, "cancelled");
+  assert.equal(state.goals[0].task_id, retry.id);
+  assert.equal(state.goal_queue[0].task_id, retry.id);
+});

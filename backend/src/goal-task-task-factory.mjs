@@ -81,6 +81,7 @@ export function buildGoalTask(goal, conversation, createdBy) {
     status: "assigned",
     mode,
     legacy_mode: legacyMode && legacyMode !== "full" ? legacyMode : undefined,
+    acceptance_contract: goal.acceptance_contract ? structuredClone(goal.acceptance_contract) : null,
     ...defaultTaskExecutionFields(mode),
     logs: [],
     artifacts: [],

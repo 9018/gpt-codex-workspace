@@ -317,12 +317,24 @@ export async function createRetryIterationAtomic(tx, aggregate, failure) {
     workspace_id: task.workspace_id,
     title: task.title,
     mode: "full",
+    execution_mode: task.execution_mode || "worktree",
+    worktree: task.worktree ? structuredClone(task.worktree) : undefined,
+    metadata: task.metadata?.codex_execution_provider ? {
+      codex_execution_provider: task.metadata.codex_execution_provider,
+    } : {},
   });
 
   // Update queue: replace the current queue item's iteration
   if (tx.queue && typeof tx.queue.replaceIteration === "function") {
     await tx.queue.replaceIteration(task.id, retryTask.id);
   }
+  if (tx.goals && typeof tx.goals.replaceTask === "function") {
+    await tx.goals.replaceTask(task.goal_id, retryTask.id);
+  }
+  await tx.tasks.setState(task.id, "cancelled", {
+    superseded_by_retry_task_id: retryTask.id,
+    failure_class: failure.class || failure.failure_class || "unknown",
+  });
 
   // Schedule retry with backoff
   const backoffDelay = policy.backoff_ms?.[nextAttempt - 1] || 0;
