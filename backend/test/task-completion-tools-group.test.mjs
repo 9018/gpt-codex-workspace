@@ -81,3 +81,23 @@ test('strict acceptance tasks complete only when result and verification evidenc
   assert.equal(assessment.ready, true);
   assert.deepEqual(assessment.missing, []);
 });
+
+
+test('strict acceptance recognizes canonical contract verification schema', () => {
+  const assessment = assessTaskCompletionReadiness({
+    acceptance_contract: { acceptance_policy: { fail_on_missing_evidence: true } },
+    result: {
+      status: 'completed',
+      verification: { passed: true, status: 'passed' },
+      contract_verification: {
+        contract_valid: true,
+        blocking_passed: true,
+        completion_eligible: true,
+        requires_review: false,
+      },
+    },
+  });
+
+  assert.equal(assessment.ready, true);
+  assert.deepEqual(assessment.missing, []);
+});

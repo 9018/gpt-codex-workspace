@@ -5,7 +5,11 @@ import { validateResultContract, DIAGNOSIS_CODES } from '../task-result-status.m
 
 function evidencePassed(value) {
   if (!value || typeof value !== 'object') return false;
-  return value.passed === true || value.status === 'passed' || value.status === 'completed';
+  if (value.passed === true || value.status === 'passed' || value.status === 'completed') return true;
+  return value.contract_valid === true
+    && value.blocking_passed === true
+    && value.completion_eligible === true
+    && value.requires_review !== true;
 }
 
 export function assessTaskCompletionReadiness(task = {}) {
