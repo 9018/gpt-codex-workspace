@@ -2,6 +2,27 @@ import { updateGoalStatus, updateTask } from '../task-lifecycle.mjs';
 import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
 import { validateResultContract, DIAGNOSIS_CODES } from '../task-result-status.mjs';
 
+
+function evidencePassed(value) {
+  if (!value || typeof value !== 'object') return false;
+  return value.passed === true || value.status === 'passed' || value.status === 'completed';
+}
+
+export function assessTaskCompletionReadiness(task = {}) {
+  const contract = task.acceptance_contract || {};
+  const strict = contract.acceptance_policy?.fail_on_missing_evidence === true;
+  if (!strict) return { ready: true, strict: false, missing: [] };
+
+  const result = task.result;
+  const verification = task.verification || result?.verification;
+  const contractVerification = task.contract_verification || result?.contract_verification;
+  const missing = [];
+  if (!result || result.status !== 'completed') missing.push('result');
+  if (!evidencePassed(verification)) missing.push('verification');
+  if (!evidencePassed(contractVerification)) missing.push('contract_verification');
+  return { ready: missing.length === 0, strict: true, missing };
+}
+
 /**
  * Factory for task completion and review MCP tool registration.
  * Dependencies are passed in to avoid circular imports from gptwork-server.mjs.
@@ -31,6 +52,26 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
             const existingTask = typeof store.findTaskById === "function"
               ? await store.findTaskById(task_id)
               : (store.state?.tasks || []).find(t => t.id === task_id);
+            const readiness = assessTaskCompletionReadiness(existingTask || {});
+            if (readiness.ready && readiness.strict) {
+              resultFields = {
+                ...existingTask.result,
+                summary: summary || existingTask.result?.summary || "",
+                completed_at: new Date().toISOString(),
+              };
+            }
+            if (!readiness.ready) {
+              targetStatus = "waiting_for_review";
+              resultFields = {
+                ...(existingTask?.result && typeof existingTask.result === "object" ? existingTask.result : {}),
+                summary: summary || "Task requires completion evidence before terminal transition",
+                completion_requested_at: new Date().toISOString(),
+                policy_override_required: true,
+                diagnosis_codes: readiness.missing.map((item) => `missing_${item}`),
+                review_message: `Completion blocked: missing ${readiness.missing.join(", ")}. Use admin_override=true only for an audited emergency override.`,
+              };
+            }
+
             if (existingTask?.goal_id) {
               linkedGoalId = existingTask.goal_id;
               const linkedGoal = typeof store.findGoalById === "function"
@@ -38,7 +79,7 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
                 : (store.state?.goals || []).find(g => g.id === existingTask.goal_id);
               const subagent = linkedGoal?.subagent_policy || {};
 
-              if (subagent.mode === 'required') {
+              if (targetStatus === "completed" && subagent.mode === 'required') {
                 // Check if the task already has a result with valid contract
                 const existingResult = existingTask?.result;
                 if (existingResult && existingResult.status === "completed") {
@@ -70,7 +111,16 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
                 }
               }
             }
-          } catch (e) { /* non-fatal: proceed with normal completion */ }
+          } catch (e) {
+            targetStatus = "waiting_for_review";
+            resultFields = {
+              summary: summary || "Task completion readiness could not be verified",
+              completion_requested_at: new Date().toISOString(),
+              policy_override_required: true,
+              diagnosis_codes: ["completion_readiness_check_failed"],
+              review_message: `Completion readiness check failed closed: ${e?.message || String(e)}`,
+            };
+          }
         }
 
         if (admin_override) {

@@ -1396,7 +1396,7 @@ test("complete_task without admin_override marks waiting_for_review when goal ha
   assert.ok(completed.task.result.review_message, "review_message should be present");
 });
 
-test("complete_task without admin_override completes normally with default optional policy", async () => {
+test("strict deploy task without evidence waits for review even with optional subagents", async () => {
   const server = await makeServer();
 
   // Default subagent_policy is now optional — no review gate triggered
@@ -1418,14 +1418,13 @@ test("complete_task without admin_override completes normally with default optio
     summary: "Default optional completion"
   });
 
-  // Should complete normally without waiting_for_review
-  assert.equal(completed.task.status, "completed");
-  assert.equal(completed.task.result.summary, "Default optional completion");
+  assert.equal(completed.task.status, "waiting_for_review");
+  assert.ok(completed.task.result.diagnosis_codes.includes("missing_result"));
 });
 
 
 
-test("complete_task with summary completes linked goal", async () => {
+test("strict deploy summary alone does not complete linked goal", async () => {
   const server = await makeServer();
   const created = await callTool(server, "create_goal", {
     user_request: "Linked goal completion test",
@@ -1438,10 +1437,10 @@ test("complete_task with summary completes linked goal", async () => {
     task_id: created.task.id,
     summary: "Verified completion evidence present"
   });
-  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.status, "waiting_for_review");
 
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
-  assert.equal(context.goal.status, "completed");
+  assert.notEqual(context.goal.status, "completed");
 });
 
 test("complete_task with no summary does not complete linked goal", async () => {
@@ -1456,13 +1455,13 @@ test("complete_task with no summary does not complete linked goal", async () => 
   const completed = await callTool(server, "complete_task", {
     task_id: created.task.id
   });
-  assert.equal(completed.task.status, "completed");
+  assert.equal(completed.task.status, "waiting_for_review");
 
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
   assert.notEqual(context.goal.status, "completed");
 });
 
-test("complete_task superseded stale-running summary completes linked goal idempotently", async () => {
+test("strict deploy superseded summary remains review-gated idempotently", async () => {
   const server = await makeServer();
   const created = await callTool(server, "create_goal", {
     user_request: "Superseded convergence test",
@@ -1477,11 +1476,11 @@ test("complete_task superseded stale-running summary completes linked goal idemp
   };
   const first = await callTool(server, "complete_task", args);
   const second = await callTool(server, "complete_task", args);
-  assert.equal(first.task.status, "completed");
-  assert.equal(second.task.status, "completed");
+  assert.equal(first.task.status, "waiting_for_review");
+  assert.equal(second.task.status, "waiting_for_review");
 
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
-  assert.equal(context.goal.status, "completed");
+  assert.notEqual(context.goal.status, "completed");
 });
 
 test("complete_task with admin_override completes the task", async () => {
