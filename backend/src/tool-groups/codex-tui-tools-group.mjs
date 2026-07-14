@@ -36,6 +36,7 @@ import { isTerminalStatus } from "../task-status-taxonomy.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
+import { ensurePipelineRunsForTask } from "../pipeline-orchestration.mjs";
 
 
 export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false } = {}) {
@@ -111,6 +112,7 @@ export function createCodexTuiToolsGroup({
   collectCodexTuiCompletionFn = collectCodexTuiCompletion,
   updateTaskFn = updateTask,
   createExecutionStoreFn = createExecutionStore,
+  ensurePipelineRunsForTaskFn = ensurePipelineRunsForTask,
   workstreamId = null,
 } = {}) {
   const metadata = tuiToolMetadata();
@@ -176,6 +178,16 @@ export function createCodexTuiToolsGroup({
     const goal = await resolveGoalForTask(claimedTask, context);
     if (!goal?.id) {
       return { kind: "codex_tui_goal_missing", status: "blocked", task_id: task.id, reason: "Task has no resolvable goal_id" };
+    }
+
+    // task_pipeline_v2 must prepare bounded role views and advisory/formal
+    // Agent Runs on every execution entry path, including manual TUI starts.
+    if (claimedTask.pipeline_version === "task_pipeline_v2" || goal.task_context?.contract_digest) {
+      await ensurePipelineRunsForTaskFn(
+        store,
+        { task_id: claimedTask.id, goal_id: goal.id },
+        context,
+      );
     }
 
     // Phase 1: resolve plan (no git mutation)

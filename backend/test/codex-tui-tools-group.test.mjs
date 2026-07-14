@@ -244,10 +244,17 @@ test("codex_tui_start_goal acquires lock on worktree, starts a session, and dele
   const taskId = "task_wt_session";
 
   const calls = [];
+  const state = makeState(repo, taskId, "goal_wt_session");
+  state.tasks[0].pipeline_version = "task_pipeline_v2";
+  state.goals[0].task_context = { contract_digest: "sha256:test" };
   const tools = createCodexTuiToolsGroup({
     tool: fakeTool,
     schema: fakeSchema,
-    store: makeStore(makeState(repo, taskId, "goal_wt_session")),
+    store: makeStore(state),
+    ensurePipelineRunsForTaskFn: async (_store, args) => {
+      calls.push({ name: "pipeline", args });
+      return { created: true };
+    },
     config: { defaultWorkspaceRoot: repo, defaultRepoPath: repo, codexTuiEnabled: true },
     resolveTaskRepositoryPlanFn: async ({ task }) => {
       const { getTaskWorktreePath, sanitizeTaskBranchName } = await import("../src/task-worktree-manager.mjs");
@@ -310,10 +317,12 @@ test("codex_tui_start_goal acquires lock on worktree, starts a session, and dele
   assert.notEqual(started.cwd, repo, "cwd must be the worktree path, not canonical repo");
   assert.ok(started.cwd.includes(".gptwork/worktrees"), "cwd must be under .gptwork/worktrees");
   assert.equal(started.status, "running");
-  // Should have called materialize -> lock -> start
-  assert.equal(calls[0].name, "materialize");
-  assert.equal(calls[1].name, "lock");
-  assert.equal(calls[2].name, "start");
+  // Context pipeline preparation must happen before worktree/session startup.
+  assert.equal(calls[0].name, "pipeline");
+  assert.deepEqual(calls[0].args, { task_id: taskId, goal_id: "goal_wt_session" });
+  assert.equal(calls[1].name, "materialize");
+  assert.equal(calls[2].name, "lock");
+  assert.equal(calls[3].name, "start");
 
   assert.deepEqual(await tools.codex_tui_status.handler({ session_id: "session_1" }), { id: "session_1", status: "running" });
   assert.deepEqual(await tools.codex_tui_read.handler({ session_id: "session_1", max_chars: 5 }), { id: "session_1", task_id: taskId, cwd: "worktree_cwd", log: "hello", maxChars: 5 });
