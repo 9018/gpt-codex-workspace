@@ -155,12 +155,16 @@ function changedFilesFrom(task = {}, result = {}) {
     : Array.isArray(task.changed_files) ? task.changed_files : [];
 }
 
+
+function operationKindFrom(task = {}, result = {}) {
+  return result.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || "code_change";
+}
 function isNoopProfile(task = {}, result = {}) {
-  return task.mode === "noop" || task.noop === true || result.noop === true || result.kind === "noop";
+  return operationKindFrom(task, result) === "noop" || task.noop === true || result.noop === true || result.kind === "noop";
 }
 
 function isEvidenceGatedNoChangeProfile(task = {}, result = {}) {
-  return ["sync", "github_sync", "admin", "restart"].includes(task.mode) ||
+  return ["external_sync", "admin_command", "restart"].includes(operationKindFrom(task, result)) ||
     result.sync_only === true || result.admin === true || result.restart_state != null || result.restart_verified_at != null;
 }
 
@@ -170,8 +174,8 @@ function hasNoopEvidence(result = {}) {
 
 function hasProfileEvidence(task = {}, result = {}) {
   if (isNoopProfile(task, result)) return hasNoopEvidence(result);
-  if (task.mode === "admin") return result.verification?.passed === true && Boolean(result.admin_action || result.audit_id || result.admin_evidence || result.tests);
-  if (task.mode === "restart" || result.restart_state != null || result.restart_verified_at != null) {
+  if (operationKindFrom(task, result) === "admin_command") return result.verification?.passed === true && Boolean(result.admin_action || result.audit_id || result.admin_evidence || result.tests);
+  if (operationKindFrom(task, result) === "restart" || result.restart_state != null || result.restart_verified_at != null) {
     return result.verification?.passed === true && (result.restart_state === "verified" || Boolean(result.restart_verified_at) || result.post_restart_verified === true);
   }
   return result.verification?.passed === true;
@@ -206,7 +210,7 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
   }
   if (status === "completed" && result.verification?.passed !== true) {
     const changedFiles = changedFilesFrom(task, result);
-    if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
+    if (changedFiles.length > 0 || operationKindFrom(task, result) === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
       findings.push({ severity: "blocker", code: "verification_failed", message: "Completed result requires verification.passed === true", source: "task_acceptance" });
     }
   }
@@ -215,7 +219,7 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     const hasTestsEvidence = typeof result.tests === "string" && result.tests.trim().length > 0;
     if (!hasTestsEvidence) {
       const changedFiles = changedFilesFrom(task, result);
-      if (changedFiles.length > 0 || task.mode === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
+      if (changedFiles.length > 0 || operationKindFrom(task, result) === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
         findings.push({ severity: "blocker", code: "verification_missing", message: "Completed result must include verification object", source: "task_acceptance" });
       }
     }

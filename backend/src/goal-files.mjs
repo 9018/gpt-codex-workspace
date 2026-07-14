@@ -37,7 +37,17 @@ export function goalWorkspaceFiles(goal) {
     advance_result_json: `${dir}/advance.result.json`,
     claude_entry_md: `${dir}/claude.entry.md`,
     codex_acceptance_entry_md: `${dir}/codex.acceptance.entry.md`,
-    advance_entry_md: `${dir}/advance.entry.md`
+        advance_entry_md: `${dir}/advance.entry.md`,
+
+    // v2 task context fields
+    task_context_json: `${dir}/task.context.json`,
+    task_context_digest: `${dir}/task.context.digest`,
+    source_provenance_json: `${dir}/source.provenance.json`,
+    task_deltas_jsonl: `${dir}/task.deltas.jsonl`,
+    roles_dir: `${dir}/roles`,
+    advisory_dir: `${dir}/advisory`,
+    artifacts_dir: `${dir}/artifacts`,
+    outcome_json: `${dir}/outcome.json`
   };
 }
 
@@ -55,8 +65,13 @@ export function publicGoalWorkspaceFiles(goal, payload = {}) {
     result_md: files.result_md,
     result_json: files.result_json,
     acceptance_contract_json: files.acceptance_contract_json,
-    artifact_contract_json: files.artifact_contract_json
-  };
+    artifact_contract_json: files.artifact_contract_json,
+        task_context_json: files.task_context_json,
+        task_context_digest: files.task_context_digest,
+        roles_dir: files.roles_dir,
+        advisory_dir: files.advisory_dir,
+        artifacts_dir: files.artifacts_dir
+      };
   if (hasGoalBundles(payload)) visible.attachments_dir = files.attachments_dir;
   return visible;
 }
@@ -224,6 +239,16 @@ export function renderCodexEntryMarkdown(goal, conversation, memories, task, wor
     `- Deep transcript lookup only when needed: ${workspaceFiles.transcript_md}`,
     `- Do not read payload files unless debugging payload encoding or missing fields.`,
     `- Conversation messages available: ${messageCount}; memories available: ${memoryCount}.`,
+
+"",
+"## Task Context",
+"",
+`- Task Context: ${goal.task_context ? `digest=${goal.task_context.contract_digest}, revision=${goal.task_context.revision}` : "not compiled"}`,
+`- Raw conversation injected: ${goal.task_context?.raw_conversation_injected === true ? "true" : "false"}`,
+`- Workstream: ${goal.workstream_id ? `id=${goal.workstream_id}` : "none"}`,
+`- Task Context file: ${workspaceFiles.task_context_json}`,
+`- Source provenance: ${workspaceFiles.source_provenance_json}`,
+`- Deltas: ${workspaceFiles.task_deltas_jsonl}`,,
     "",
     "## Result Contract",
     "",

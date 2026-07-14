@@ -148,7 +148,7 @@ export function createExecutionService({
     const lockResult = await acquireRepoLockFn(workspaceRoot, worktreePath, {
       taskId,
       runId: null,
-      mode: task.mode || goal.mode || "builder",
+      mode: task.mode || goal.mode || "full",
     });
     if (!lockResult?.acquired) {
       return {

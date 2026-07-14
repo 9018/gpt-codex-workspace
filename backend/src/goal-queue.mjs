@@ -493,14 +493,15 @@ export async function startNextQueuedGoal(store, config, opts = {}) {
    try {
      const { createGoalTask } = await import("./goal-task-task-factory.mjs");
 
-      // Preserve the goal's own mode; fallback to "builder" if missing
+      // Normalize every queued task to the single full mode; retain legacy mode as metadata.
       const goalObj = Array.isArray(state.goals)
         ? state.goals.find((g) => g.id === candidate.goal_id)
         : null;
      const task = await createGoalTask(store, config, candidate.goal_id, {
        assignee: "codex",
        status: "assigned",
-        mode: goalObj?.mode || "builder",
+        mode: "full",
+        legacy_mode: goalObj?.mode && goalObj.mode !== "full" ? goalObj.mode : undefined,
      });
       if (candidate.repo_id) {
         task.repo_id = candidate.repo_id;

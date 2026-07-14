@@ -238,3 +238,97 @@ export function determineRetryStatus({ taskResult, attempt = 0, failureClass } =
     failureClass: fc,
   };
 }
+
+// ---------------------------------------------------------------------------
+// P1: Contract-inheriting retry iteration (full mode)
+// ---------------------------------------------------------------------------
+// Per the repair plan, retries must inherit the full contract from the parent
+// task, with NO semantic re-inference. The contract hash must match exactly.
+
+import { createHash } from "node:crypto";
+
+/**
+ * Compute a deterministic hash of an acceptance contract for inheritance check.
+ */
+export function hashContract(contract) {
+  if (!contract) return null;
+  return createHash("sha256").update(JSON.stringify(contract, Object.keys(contract).sort())).digest("hex").slice(0, 16);
+}
+
+/**
+ * Create a retry iteration that inherits the parent's full acceptance contract.
+ *
+ * @param {object} tx - Transaction handle with tasks.create, tasks.setState, queue
+ * @param {object} aggregate - TaskRuntimeAggregate for the failed task
+ * @param {object} failure - Failure classification { class, reason, ... }
+ * @returns {Promise<{ terminal: boolean, retry_task_id?: string }>}
+ *
+ * Key invariants:
+ * - The retry's acceptance_contract is a deep clone of the parent's, with ONLY
+ *   attempt, iteration, and failure_context updated.
+ * - The contract hash matches the parent's contract hash.
+ * - No semantic inference (inferOperationKind) is called.
+ * - No workflow apply proposal is created.
+ */
+export async function createRetryIterationAtomic(tx, aggregate, failure) {
+  const task = aggregate.task;
+  const policy = task.acceptance_contract?.retry_policy || { max_attempts: 3 };
+  const nextAttempt = (task.attempt || 0) + 1;
+
+  if (nextAttempt > (policy.max_attempts || 3)) {
+    // Budget exhausted — fail terminally
+    await tx.tasks.setState(task.id, "failed", {
+      failure_class: "retry_budget_exhausted",
+      previous_failure: failure,
+    });
+    await tx.locks.releaseForTask(task.id);
+    return { terminal: true };
+  }
+
+  await tx.tasks.setState(task.id, "repairing");
+
+  // Clone the acceptance contract — NO re-inference
+  const inheritedContract = structuredClone(task.acceptance_contract || {});
+
+  // Verify the clone hash matches parent
+  const parentHash = hashContract(task.acceptance_contract);
+  const cloneHash = hashContract(inheritedContract);
+  if (parentHash && parentHash !== cloneHash) {
+    throw new Error(
+      `Contract hash mismatch on retry: parent=${parentHash} clone=${cloneHash}. ` +
+      "Retry must inherit the exact contract without modification."
+    );
+  }
+
+  const retryTask = await tx.tasks.create({
+    id: `${task.root_task_id || task.id}_retry_${nextAttempt}`,
+    root_task_id: task.root_task_id || task.id,
+    parent_task_id: task.id,
+    attempt: nextAttempt,
+    acceptance_contract: inheritedContract,
+    failure_context: {
+      class: failure.class || failure.failure_class || "unknown",
+      reason: failure.reason || "",
+      at: new Date().toISOString(),
+    },
+    // Carry forward identity fields
+    goal_id: task.goal_id,
+    repo_id: task.repo_id,
+    workspace_id: task.workspace_id,
+    title: task.title,
+    mode: "full",
+  });
+
+  // Update queue: replace the current queue item's iteration
+  if (tx.queue && typeof tx.queue.replaceIteration === "function") {
+    await tx.queue.replaceIteration(task.id, retryTask.id);
+  }
+
+  // Schedule retry with backoff
+  const backoffDelay = policy.backoff_ms?.[nextAttempt - 1] || 0;
+  if (tx.scheduler && typeof tx.scheduler.schedule === "function") {
+    await tx.scheduler.schedule(retryTask.id, backoffDelay);
+  }
+
+  return { retry_task_id: retryTask.id };
+}

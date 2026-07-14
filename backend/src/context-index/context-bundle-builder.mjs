@@ -362,7 +362,7 @@ function buildGoalAnchorSection(goal, contract) {
   lines.push("### Goal Metadata");
   lines.push("");
   lines.push(`- Status: **${goal?.status || "unknown"}**`);
-  lines.push(`- Mode: ${goal?.mode || "builder"}`);
+  lines.push(`- Mode: ${goal?.mode || "full"}`);
   lines.push(`- Workspace: ${goal?.workspace_id || "unknown"}`);
   if (goal?.project_id) lines.push(`- Project: ${goal.project_id}`);
   if (goal?.repo_id) lines.push(`- Repo: ${goal.repo_id}`);
@@ -538,7 +538,7 @@ function buildConstraintsSection(goal) {
   const lines = [
     "## Constraints and Acceptance Hints",
     "",
-    `- Execution mode: **${goal?.mode || "builder"}**`,
+    `- Execution mode: **${goal?.mode || "full"}**`,
     `- Autonomy policy: ${goal?.autonomy_policy?.mode || "subagent_first"}`,
     `- GPT question budget: ${goal?.autonomy_policy?.gpt_question_budget ?? 0}`,
     "",

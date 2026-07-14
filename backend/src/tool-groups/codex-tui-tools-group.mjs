@@ -32,6 +32,34 @@ import {
 } from "../codex-tui-session-manager.mjs";
 import { collectCodexTuiCompletion } from "../codex-tui-completion-collector.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
+import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
+
+
+export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false } = {}) {
+  if (!store || !taskId) return null;
+  let updated = null;
+  await store.mutate(async (state) => {
+    const task = (state.tasks || []).find((item) => item.id === taskId);
+    if (!task) return;
+    task.metadata = { ...(task.metadata || {}) };
+    delete task.metadata.tui_session_owner;
+    delete task.metadata.manual_tui_session_starting;
+    task.status = hasEvidence ? "collecting" : "repairing";
+    task.updated_at = new Date().toISOString();
+    task.logs ||= [];
+    task.logs.push({ time: task.updated_at, message: `[tui] stopped: ${reason}; next=${task.status}` });
+    state.activities ||= [];
+    state.activities.push({ time: task.updated_at, type: "task.tui_stopped_reconciled", task_id: task.id, status: task.status, reason });
+    const queueItem = (state.goal_queue || []).find((entry) => entry.task_id === task.id);
+    if (queueItem) {
+      queueItem.status = hasEvidence ? "running" : "waiting";
+      queueItem.blocked_reason = hasEvidence ? null : `automatic repair after TUI stop: ${reason}`;
+      queueItem.updated_at = task.updated_at;
+    }
+    updated = task;
+  });
+  return updated;
+}
 
 function gitStatusShort(repoPath) {
   try {
@@ -218,7 +246,7 @@ export function createCodexTuiToolsGroup({
     const lockResult = await acquireRepoLockFn(workspaceRoot, worktreePath, {
       taskId: task.id,
       runId: null,
-      mode: task.mode || goal.mode || "builder",
+      mode: task.mode || goal.mode || "full",
     });
     if (!lockResult?.acquired) {
       return {
@@ -390,6 +418,9 @@ export function createCodexTuiToolsGroup({
         const stopped = await stopCodexTuiSessionFn(session_id, { reason: "manual_stop", candidateWorkspaceRoots: sessionWorkspaceRoots() });
         if (before?.cwd && before?.task_id) {
           try { await releaseRepoLockFn(workspaceRoot, before.cwd, before.task_id); } catch {}
+          const hasEvidence = Boolean(before?.result_json || before?.result?.result_json || before?.completion?.ready_for_review);
+          const task = await reconcileStoppedTuiTask({ store, taskId: before.task_id, reason: "manual_stop", hasEvidence });
+          return { ...stopped, task_state: task?.status || null, reconciled: Boolean(task) };
         }
         return stopped;
       },
@@ -411,7 +442,7 @@ codex_tui_collect: tool({
             await updateTask(store, snapshot.task_id, (item) => {
               // Only transition from running — do not regress already-transitioned tasks
               if (item.status === 'running' || item.status === 'assigned') {
-                item.status = 'waiting_for_review';
+                item.status = 'collecting';
               }
               // Write durable evidence to task result
               item.result = {

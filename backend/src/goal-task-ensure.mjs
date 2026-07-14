@@ -42,7 +42,7 @@ export async function ensureTaskGoal(store, config, taskId, context = defaultTok
     title: payload.title || task.title,
     project_id: payload.project_id || task.project_id,
     workspace_id: payload.workspace_id || task.workspace_id,
-    mode: payload.mode || task.mode || "builder",
+    mode: payload.mode || task.mode || "full",
     assign_to_codex: options.assign_to_codex ?? task.assignee === "codex",
     skip_created_notification: true,
     preview_text: encoded?.preview_text || payload.preview_text || "",

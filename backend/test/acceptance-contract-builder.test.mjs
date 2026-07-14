@@ -11,7 +11,7 @@ test("infers code_change contracts with commit and integration requirements", ()
 
   assert.equal(contract.intent.operation_kind, "code_change");
   assert.equal(contract.intent.mutation_scope, "repo");
-  assert.equal(contract.intent.execution_mode, "worktree");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.equal(contract.requirements.requires_commit, true);
   assert.equal(contract.requirements.requires_integration, true);
   assert.equal(contract.verification_plan.profile, "changed");
@@ -29,7 +29,7 @@ test("infers restart contracts without commit or integration requirements", () =
 
   assert.equal(contract.intent.operation_kind, "restart");
   assert.equal(contract.intent.mutation_scope, "runtime");
-  assert.equal(contract.intent.execution_mode, "admin");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.equal(contract.requirements.requires_commit, false);
   assert.equal(contract.requirements.requires_integration, false);
   assert.equal(contract.requirements.requires_restart, true);
@@ -58,7 +58,7 @@ test("infers admin_command contracts with pre/post/audit evidence", () => {
 
   assert.equal(contract.intent.operation_kind, "admin_command");
   assert.equal(contract.intent.mutation_scope, "runtime");
-  assert.equal(contract.intent.execution_mode, "admin");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.ok(contract.blocking_requirements.some((item) => item.id === "pre_state_snapshot"));
   assert.ok(contract.blocking_requirements.some((item) => item.id === "post_state_snapshot"));
   assert.ok(contract.blocking_requirements.some((item) => item.id === "audit_evidence"));
@@ -72,7 +72,7 @@ test("infers diagnostic contracts as readonly with report artifact and no commit
 
   assert.equal(contract.intent.operation_kind, "diagnostic");
   assert.equal(contract.intent.mutation_scope, "none");
-  assert.equal(contract.intent.execution_mode, "readonly");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.equal(contract.requirements.requires_commit, false);
   assert.equal(contract.requirements.requires_integration, false);
   assert.ok(contract.blocking_requirements.some((item) => item.id === "no_mutation_evidence"));
@@ -126,7 +126,7 @@ test("builder runtime-fix tasks mentioning cleanup/admin misclassification remai
 
   assert.equal(contract.intent.operation_kind, "code_change");
   assert.equal(contract.intent.mutation_scope, "repo");
-  assert.equal(contract.intent.execution_mode, "worktree");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.equal(contract.requirements.requires_commit, true);
   assert.equal(contract.requirements.requires_integration, true);
   assert.ok(!contract.verification_plan.required_reports.includes("dry_run"));
@@ -178,7 +178,7 @@ test("normalizes an explicit contract while preserving caller intent", () => {
     }
   });
 
-  assert.equal(contract.schema_version, 1);
+  assert.equal(contract.schema_version, 2);
   assert.equal(contract.intent.operation_kind, "restart");
   assert.equal(contract.requirements.requires_restart, true);
   assert.ok(contract.blocking_requirements.some((item) => item.id === "custom_health_probe"));
@@ -220,7 +220,7 @@ test("B1: top-level operation_kind in explicit contract beats corrupted intent c
   assert.equal(contract.intent.mutation_scope, "repo",
     "mutation_scope should be resolved correctly, not from corrupted intent external_system");
   // execution_mode should be from the correct profile, not corrupted intent's admin
-  assert.equal(contract.intent.execution_mode, "worktree",
+  assert.equal(contract.intent.execution_mode, "full",
     "execution_mode should match the code_change profile, not intent's admin");
 
   // Must NOT have data_migration blockers (backup, dry_run, apply, counts, rollback)
@@ -331,7 +331,7 @@ test("B4: explicit intent as string is not expanded by characters", () => {
     "code_change requires commit");
   assert.equal(contract.intent.mutation_scope, "repo",
     "mutation_scope should be from code_change profile");
-  assert.equal(contract.intent.execution_mode, "worktree",
+  assert.equal(contract.intent.execution_mode, "full",
     "execution_mode should be from code_change profile");
   assert.equal(contract.intent["0"], undefined,
     "no character-indexed key '0' from string expansion");
@@ -362,7 +362,7 @@ test("B5: top-level args.operation_kind overrides inference when acceptance_cont
     "code_change profile requires commit");
   assert.equal(contract.intent.mutation_scope, "repo",
     "code_change mutation_scope should be repo");
-  assert.equal(contract.intent.execution_mode, "worktree",
+  assert.equal(contract.intent.execution_mode, "full",
     "code_change execution_mode should be worktree");
 });
 
@@ -381,7 +381,7 @@ test("product-layer implementation aliases normalize into canonical builder cont
   });
 
   assert.equal(contract.intent.operation_kind, "code_change");
-  assert.equal(contract.intent.execution_mode, "worktree");
+  assert.equal(contract.intent.execution_mode, "full");
   assert.equal(contract.intent.mutation_scope, "repo");
   assert.equal(contract.requirements.requires_commit, true);
   assert.equal(contract.requirements.requires_integration, true);

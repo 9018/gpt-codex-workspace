@@ -41,6 +41,12 @@ const expectedStatuses = [
   'assigned',
   'queued',
   'running',
+  'starting',
+  'collecting',
+  'accepting',
+  'repairing',
+  'integrating',
+  'needs_decision',
   'waiting_for_lock',
   'waiting_for_review',
   'waiting_for_repair',
@@ -68,9 +74,14 @@ test('normalizeTaskStatus handles nullish, non-string, uppercase, and whitespace
 
 test('active execution statuses classify correctly', () => {
   assert.deepEqual([...ACTIVE_EXECUTION_STATUSES].sort(), [
+    'accepting',
     'assigned',
+    'collecting',
+    'integrating',
     'queued',
+    'repairing',
     'running',
+    'starting',
     'waiting_for_integration',
     'waiting_for_lock',
   ]);
@@ -80,7 +91,7 @@ test('active execution statuses classify correctly', () => {
 });
 
 test('review, repair, and wait statuses classify correctly', () => {
-  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'waiting_for_review',  'waiting_for_evidence_missing',  'waiting_for_human_required',  'waiting_for_human_review',  'waiting_for_integration_recovery',  'waiting_for_integration_uncertain',  'waiting_for_policy_uncertain',  'waiting_for_provider_unavailable',  'waiting_for_repair_budget_exhausted',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_missing_evidence_repair',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
+  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'needs_decision', 'waiting_for_review',  'waiting_for_evidence_missing',  'waiting_for_human_required',  'waiting_for_human_review',  'waiting_for_integration_recovery',  'waiting_for_integration_uncertain',  'waiting_for_policy_uncertain',  'waiting_for_provider_unavailable',  'waiting_for_repair_budget_exhausted',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_missing_evidence_repair',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
   assert.deepEqual([...REPAIR_STATUSES], ['waiting_for_repair']);
   assert.deepEqual([...NON_TERMINAL_WAIT_STATUSES].sort(), [
     'waiting_for_integration',

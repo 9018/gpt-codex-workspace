@@ -90,6 +90,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "get_chatgpt_request",
   "get_current_user",
  "get_goal_context",
+  "get_goal_execution_context",
   "get_goal_queue",
   "get_project",
   "get_repository_status",

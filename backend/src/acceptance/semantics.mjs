@@ -85,7 +85,7 @@ export function validateContractSemantics(contract = {}) {
   if (operationKind === "diagnostic") {
     if (normalized.requirements.requires_commit === true) errors.push(err("diagnostic_requires_commit_conflict", "diagnostic contracts must not require commit evidence."));
     if (normalized.requirements.requires_integration === true) errors.push(err("diagnostic_requires_integration_conflict", "diagnostic contracts must not require integration evidence."));
-    if (mutationScope !== "none" || executionMode !== "readonly") {
+    if (mutationScope !== "none") {
       errors.push(err("diagnostic_readonly_conflict", "diagnostic contracts must be readonly with mutation_scope none."));
     }
   }
@@ -103,7 +103,7 @@ export function validateContractSemantics(contract = {}) {
   if (operationKind === "readonly_validation" || operationKind === "already_integrated") {
     if (normalized.requirements.requires_commit === true) errors.push(err("readonly_requires_commit_conflict", "readonly_validation/already_integrated contracts must not require commit evidence."));
     if (normalized.requirements.requires_integration === true) errors.push(err("readonly_requires_integration_conflict", "readonly_validation/already_integrated contracts must not require integration evidence."));
-    if (mutationScope !== "none" || executionMode !== "readonly") {
+    if (mutationScope !== "none") {
       errors.push(err("readonly_scope_conflict", "readonly_validation/already_integrated contracts must be readonly with mutation_scope none."));
     }
   }

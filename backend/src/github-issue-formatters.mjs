@@ -5,7 +5,7 @@ export function taskToIssueBody(task) {
   body += "**Assignee**: " + (task.assignee || "unassigned") + "\n";
   body += "**Workspace**: " + task.workspace_id + "\n";
   body += "**Project**: " + task.project_id + "\n";
-  body += "**Mode**: " + (task.mode || "builder") + "\n\n";
+  body += "**Mode**: " + (task.mode || "full") + "\n\n";
   if (task.logs && task.logs.length > 0) {
     body += "### Logs\n\n";
     for (const log of task.logs.slice(-10)) {

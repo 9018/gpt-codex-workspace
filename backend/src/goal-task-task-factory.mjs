@@ -11,14 +11,19 @@ const ACTIVE_TASK_STATUSES = new Set([
   TASK_STATUSES.ASSIGNED,
   TASK_STATUSES.QUEUED,
   TASK_STATUSES.RUNNING,
+  TASK_STATUSES.STARTING,
+  TASK_STATUSES.COLLECTING,
+  TASK_STATUSES.ACCEPTING,
+  TASK_STATUSES.REPAIRING,
+  TASK_STATUSES.INTEGRATING,
   TASK_STATUSES.WAITING_FOR_LOCK,
   TASK_STATUSES.WAITING_FOR_REVIEW,
   TASK_STATUSES.WAITING_FOR_REPAIR,
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
 ]);
 
-export function defaultTaskExecutionFields(mode = "builder") {
-  const isOrdinaryCodeTask = mode === "builder";
+export function defaultTaskExecutionFields(mode = "full") {
+  const isOrdinaryCodeTask = mode === "full";
   return {
     execution_mode: isOrdinaryCodeTask ? "worktree" : "canonical",
     worktree: isOrdinaryCodeTask ? {
@@ -45,7 +50,8 @@ export function defaultTaskExecutionFields(mode = "builder") {
 
 export function buildGoalTask(goal, conversation, createdBy) {
   const now = goal.created_at;
-  const mode = goal.mode || "builder";
+  const legacyMode = goal.mode || null;
+  const mode = "full";
   const task = {
     id: `task_${randomUUID()}`,
     project_id: goal.project_id,
@@ -70,10 +76,11 @@ export function buildGoalTask(goal, conversation, createdBy) {
       "Before acting, call get_goal_context with this goal_id and append progress with append_goal_message."
     ].join("\n"),
     created_by: createdBy,
-    require_pipeline_gates: ["builder", "deploy", "admin"].includes(mode),
+    require_pipeline_gates: true,
     assignee: "codex",
     status: "assigned",
     mode,
+    legacy_mode: legacyMode && legacyMode !== "full" ? legacyMode : undefined,
     ...defaultTaskExecutionFields(mode),
     logs: [],
     artifacts: [],
@@ -99,29 +106,27 @@ export function buildGoalTask(goal, conversation, createdBy) {
   for (const key of WORKSTREAM_IDENTITY_FIELDS) {
     if (goal[key] !== undefined) task[key] = goal[key];
   }
+  // v2: propagate task context metadata
+  if (goal.task_context) {
+    task.task_context_digest = goal.task_context.contract_digest;
+    task.task_context_revision = goal.task_context.revision;
+    task.task_context_path = null; // set by workspace-files writer
+    task.raw_conversation_injected = goal.task_context.raw_conversation_injected === true;
+    task.require_pipeline_gates = true;
+  }
+  // Set pipeline version for new tasks
+  task.pipeline_version = "task_pipeline_v2";
+
   return task;
 }
 
 
-export function normalizeCreatedTaskMode(args) {
-  const requestedMode = String(args.mode || "").trim().toLowerCase();
-  if (requestedMode === "readonly" && isCodexSessionInventoryTaskKind({ title: args.title, description: args.description || "", assignee: "codex", status: "assigned", mode: "readonly" })) return "readonly";
-  return "builder";
+export function normalizeCreatedTaskMode() {
+  return "full";
 }
 
-export function normalizeAssignedTaskMode(task, requestedMode = "") {
-  const requested = String(requestedMode || "").trim().toLowerCase();
-  const mode = requested === "implementation" || requested === "code_change" ? "builder" : requested;
-  const allowedModes = new Set(["readonly", "builder", "deploy", "admin"]);
-  if (mode) {
-    if (!allowedModes.has(mode)) throw new Error(`unsupported task mode: ${mode}`);
-    if (mode === "readonly" && !isCodexSessionInventoryTaskKind({ ...task, assignee: "codex", mode: "readonly" })) return "builder";
-    return mode;
-  }
-  if (isCodexSessionInventoryTaskKind({ ...task, assignee: "codex" })) return "readonly";
-  const taskMode = String(task.mode || "").trim().toLowerCase();
-  if (taskMode === "implementation" || taskMode === "code_change") return "builder";
-  return taskMode && taskMode !== "readonly" ? taskMode : "builder";
+export function normalizeAssignedTaskMode() {
+  return "full";
 }
 
 /**
@@ -188,8 +193,10 @@ export async function createGoalTask(store, config, goalId, opts = {}) {
     // Apply overrides
     task.assignee = assignee;
     task.status = opts.status || 'assigned';
-    task.mode = opts.mode || task.mode || 'builder';
-    Object.assign(task, defaultTaskExecutionFields(task.mode));
+    const requestedLegacyMode = opts.mode && opts.mode !== 'full' ? opts.mode : null;
+    task.legacy_mode = task.legacy_mode || requestedLegacyMode || undefined;
+    task.mode = 'full';
+    Object.assign(task, defaultTaskExecutionFields('full'));
     task.updated_at = new Date().toISOString();
 
     state.tasks.push(task);

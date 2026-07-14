@@ -132,6 +132,10 @@ export function createCodexTuiSessionStore({ workspaceRoot }) {
       const createdAt = nowIso();
       const record = {
         id,
+        runtime_version: 2,
+        last_process_heartbeat_at: null,
+        last_output_at: null,
+        last_meaningful_progress_at: null,
         task_id: taskId,
         goal_id: goalId,
         cwd,

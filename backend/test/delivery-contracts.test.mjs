@@ -227,13 +227,13 @@ describe('taskStatusToQueueStatus', () => {
 });
 
 describe('inferAcceptanceProfile', () => {
-  it('should return deploy for deploy mode', () => {
-    assert.equal(inferAcceptanceProfile({ mode: 'deploy' }), ACCEPTANCE_PROFILES.DEPLOY);
+  it('should return deploy for deploy operation kind', () => {
+    assert.equal(inferAcceptanceProfile({ acceptance_contract: { intent: { operation_kind: 'deploy' } } }), ACCEPTANCE_PROFILES.DEPLOY);
   });
 
   it('should return noop for noop tasks', () => {
     assert.equal(inferAcceptanceProfile({ noop: true }), ACCEPTANCE_PROFILES.NOOP);
-    assert.equal(inferAcceptanceProfile({ mode: 'noop' }), ACCEPTANCE_PROFILES.NOOP);
+    assert.equal(inferAcceptanceProfile({ acceptance_contract: { intent: { operation_kind: 'noop' } } }), ACCEPTANCE_PROFILES.NOOP);
   });
 
   it('should return docs_only when all changed files are docs', () => {

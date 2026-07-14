@@ -1,4 +1,4 @@
-export const ACCEPTANCE_CONTRACT_SCHEMA_VERSION = 1;
+export const ACCEPTANCE_CONTRACT_SCHEMA_VERSION = 2;
 
 export const OPERATION_KINDS = Object.freeze([
   "code_change",
@@ -21,7 +21,7 @@ export const OPERATION_KINDS = Object.freeze([
 ]);
 
 export const MUTATION_SCOPES = Object.freeze(["repo", "runtime", "filesystem", "external_system", "none"]);
-export const EXECUTION_MODES = Object.freeze(["worktree", "canonical", "readonly", "admin", "deploy"]);
+export const EXECUTION_MODES = Object.freeze(["full"]);
 export const SEMANTIC_CONFIDENCES = Object.freeze(["high", "medium", "low"]);
 
 export const KNOWN_OPERATION_KINDS = new Set(OPERATION_KINDS);
@@ -121,3 +121,18 @@ export function normalizeContractCustomFields(contract) {
 
   return { warnings };
 }
+/**
+ * Default contract for full execution mode.
+ * Every contract is normalized to include these defaults,
+ * with explicit fields overriding them.
+ */
+export const FULL_CONTRACT_DEFAULTS = Object.freeze({
+  mode: "full",
+  requires_commit: true,
+  requires_integration: true,
+  required_checks: [],
+  mutation_scope: { include: ["backend/src/**", "backend/test/**", "docs/**"], exclude: [".gptwork/**", "node_modules/**"] },
+  retry_policy: { max_attempts: 3, no_progress_timeout_ms: 180000, wake_grace_ms: 30000, backoff_ms: [0, 5000, 20000] },
+  acceptance_policy: { auto_accept: true, fail_on_missing_evidence: true, recheck_after_integration: true },
+  source_precedence: { explicit_fields: [], inherited_fields: [], inferred_fields: [] }
+});

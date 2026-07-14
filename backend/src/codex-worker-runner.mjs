@@ -16,6 +16,31 @@ import { createGoal } from "./goal-task-goals.mjs";
 import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { sweepStaleTaskStates, applySweepActions } from "./stale-state-sweeper.mjs";
 import { ACTIVE_EXECUTION_STATUSES, TASK_STATUSES, isCompletedStatus } from "./task-status-taxonomy.mjs";
+import { reconcileAllActiveTaskRuntimes } from "./runtime/task-runtime-reconciler.mjs";
+import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
+import { sendCodexTuiSessionInput, stopCodexTuiSession } from "./codex-tui-session-manager.mjs";
+import { releaseLockForTask } from "./repo-lock.mjs";
+
+
+const activeBackgroundTaskRuns = new Map();
+
+export function getActiveBackgroundTaskIds() {
+  return [...activeBackgroundTaskRuns.keys()].sort();
+}
+
+export function launchTaskInBackground(taskId, run) {
+  if (activeBackgroundTaskRuns.has(taskId)) {
+    return { started: false, promise: activeBackgroundTaskRuns.get(taskId) };
+  }
+  let started;
+  try { started = run(); } catch (error) { started = Promise.reject(error); }
+  const promise = Promise.resolve(started);
+  activeBackgroundTaskRuns.set(taskId, promise);
+  promise.finally(() => {
+    if (activeBackgroundTaskRuns.get(taskId) === promise) activeBackgroundTaskRuns.delete(taskId);
+  }).catch(() => {});
+  return { started: true, promise };
+}
 
 const CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES = [
   ...ACTIVE_EXECUTION_STATUSES,
@@ -215,7 +240,7 @@ function buildFollowupPayload({ task = {}, goal = {}, descriptor = {} } = {}) {
     title: `Followup: ${task.title || task.id}`,
     project_id: task.project_id || goal?.project_id || "default",
     workspace_id: descriptor.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
-    mode: descriptor.mode || task.mode || goal?.mode || "builder",
+    mode: "full",
   };
 }
 
@@ -532,7 +557,7 @@ async function retryIntegrationForTask(store, config, task) {
         title: "Repair: " + (task.title || task.id) + " (integration attempt " + (intRepairGoal.repair_attempt || 1) + ")",
         project_id: task.project_id || "default",
         workspace_id: task.workspace_id || "hosted-default",
-        mode: intRepairGoal.mode || "builder",
+        mode: "full",
         assign_to_codex: true,
         skip_created_notification: false,
         ...intRepairGoal,
@@ -590,7 +615,7 @@ async function runSingleCodexTask(store, config, github, task, context, processG
     }
 
     // P0: Retry waiting_for_integration tasks that got stuck (lock held, etc.)
-    if (task.status === "waiting_for_integration") {
+    if (task.status === "waiting_for_integration" || task.status === "integrating") {
       const result = await retryIntegrationForTask(store, config, task);
       return normalizeWorkerResult(task, result, { transitioned: result.transitioned || false });
     }
@@ -610,7 +635,7 @@ async function runSingleCodexTask(store, config, github, task, context, processG
       }, { transitioned });
     }
 
-    if (task.mode === "builder" || task.mode === "deploy" || task.mode === "admin") {
+    if (task.mode === "full") {
       if (typeof processGeneralTask !== "function") {
         return markTaskWaitingForReview(store, task, "no general task processor is configured for this worker");
       }
@@ -618,19 +643,39 @@ async function runSingleCodexTask(store, config, github, task, context, processG
       return normalizeWorkerResult(task, result, { transitioned });
     }
 
-    return markTaskWaitingForReview(store, task, `unsupported worker mode '${task.mode || "unknown"}'`);
+    return markTaskFailed(store, task, new Error(`task mode must be full, got '${task.mode || "unknown"}'`), "invalid task mode");
   } catch (error) {
     return markTaskFailed(store, task, error);
   }
 }
 
-export async function runAssignedCodexTasks(store, config, github, { limit = 10, concurrency = 4 } = {}, context = defaultTokenContext("system"), { processGeneralTask } = {}) {
+export async function runAssignedCodexTasks(store, config, github, { limit = 10, concurrency = 4, non_blocking = false } = {}, context = defaultTokenContext("system"), { processGeneralTask } = {}) {
   requireScope(context, "task:update");
   requireScope(context, "workspace:read");
   const maxTasks = Math.max(1, Math.min(Number(limit) || 10, 50));
   const maxConcurrency = Math.max(1, Math.min(Number(concurrency) || 4, 16));
-  const state = await store.load();
+  let state = await store.load();
   await normalizeLegacyModes(store, state);
+  const workspaceRoot = config.defaultWorkspaceRoot || config.defaultWorkspaceRootPath || null;
+  let persistedSessions = [];
+  if (workspaceRoot) {
+    try { persistedSessions = await createCodexTuiSessionStore({ workspaceRoot }).listSessions(); } catch {}
+  }
+  const latestSessionByTask = new Map();
+  for (const session of persistedSessions) {
+    if (!session?.task_id || latestSessionByTask.has(session.task_id)) continue;
+    latestSessionByTask.set(session.task_id, session);
+  }
+  const runtimeReconciliation = await reconcileAllActiveTaskRuntimes({
+    store, config,
+    sessionResolver: async (taskId) => latestSessionByTask.get(taskId) || null,
+    sessionProvider: {
+      sendInput: (sessionId, text) => sendCodexTuiSessionInput(sessionId, text, { workspaceRoot }),
+      stop: (sessionId, options) => stopCodexTuiSession(sessionId, { ...options, workspaceRoot }),
+    },
+    releaseTaskLock: workspaceRoot ? (taskId) => releaseLockForTask(workspaceRoot, taskId) : null,
+  }).catch((error) => ([{ action: "error", error: error.message }]));
+  state = await store.load();
   const reviewRecovery = await recoverAcceptedVerifiedReviewTasks(store, maxTasks);
   const queueReconciliation = await reconcileRunningQueueItems(store);
 
@@ -671,9 +716,25 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     }
   }
 
-  const results = await mapConcurrent(candidates, maxConcurrency, (task) =>
-    runSingleCodexTask(store, config, github, task, context, processGeneralTask)
-  );
+  let results;
+  if (non_blocking) {
+    results = candidates.map((task) => {
+      const launched = launchTaskInBackground(task.id, () => runSingleCodexTask(store, config, github, task, context, processGeneralTask));
+      return {
+        task_id: task.id,
+        status: launched.started ? "starting" : (task.status || "running"),
+        started: launched.started,
+        skipped: !launched.started,
+        progressed: launched.started,
+        background: true,
+        reason: launched.started ? "background execution started" : "background execution already active",
+      };
+    });
+  } else {
+    results = await mapConcurrent(candidates, maxConcurrency, (task) =>
+      runSingleCodexTask(store, config, github, task, context, processGeneralTask)
+    );
+  }
 
   const completed = results.filter((item) => isCompletedStatus(item.status)).length;
   const failed = results.filter((item) => item.failed || item.status === TASK_STATUSES.FAILED).length;
@@ -702,6 +763,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     queue_autostart: queueAutostart,
     review_recovery: reviewRecovery,
     queue_reconciliation: queueReconciliation,
+    runtime_reconciliation: runtimeReconciliation,
     completed,
     failed,
     skipped,

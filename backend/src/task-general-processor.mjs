@@ -518,7 +518,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // for true concurrent execution on the same canonical repo.
   let repoLockPath = null;
   // Enter materializing_worktree state (only now do we create the worktree)
-  const taskMode = task.mode || goal?.mode || "builder";
+  const taskMode = task.mode || goal?.mode || "full";
   const enableWorktrees = config.enableTaskWorktrees !== false && taskMode === "builder";
   let resolvedRepo = resolvedRepoPlan;
   let executionCwd = resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || workspace.root;
@@ -859,7 +859,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, lockPath, {
         taskId: task.id,
         runId: null,
-        mode: task.mode || "builder"
+        mode: task.mode || "full"
       });
       if (!lockResult.acquired) {
         const lockMsg = "[worker] execution path locked by task " + lockResult.heldByTask + ", retry after completion. Skipping.";
@@ -885,7 +885,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   let promptFile = null;
   let runFilePath = null;
   let runId = null;
-  const mode = task.mode || "builder";
+  const mode = task.mode || "full";
   let summary = "";
   let parsedResult = null;
   let cr = null;
@@ -1397,7 +1397,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
             title: 'Repair: ' + task.title + ' (attempt ' + repairGoal.repair_attempt + ')',
             project_id: task.project_id || (goal ? goal.project_id : 'default'),
             workspace_id: repairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : 'hosted-default'),
-            mode: repairGoal.mode || 'builder',
+            mode: repairGoal.mode || 'full',
             assign_to_codex: true,
             skip_created_notification: false,
           }, repairGoal));
@@ -1494,7 +1494,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
                 title: 'Repair: ' + task.title + ' (attempt ' + intRepairGoal.repair_attempt + ', integration conflict)',
                 project_id: task.project_id || (goal ? goal.project_id : 'default'),
                 workspace_id: intRepairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : 'hosted-default'),
-                mode: intRepairGoal.mode || 'builder',
+                mode: intRepairGoal.mode || 'full',
                 assign_to_codex: true,
                 skip_created_notification: false,
               }, intRepairGoal));

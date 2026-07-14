@@ -576,7 +576,7 @@ test("goal-queue: createGoalTask function creates task and links correctly", asy
   assert.equal(task.conversation_id, convId);
   assert.equal(task.assignee, "codex");
   assert.equal(task.status, "assigned");
-  assert.equal(task.mode, "builder");
+  assert.equal(task.mode, "full");
 
   // Goal should have task_id linked
   await store.load();
@@ -1012,7 +1012,7 @@ test("goal-queue: three ordinary builder tasks can start without canonical repo 
   assert.equal(store.state.tasks.length, 3);
   assert.equal(new Set(store.state.tasks.map((task) => task.id)).size, 3);
   for (const task of store.state.tasks) {
-    assert.equal(task.mode, "builder");
+    assert.equal(task.mode, "full");
     assert.equal(task.execution_mode, "worktree");
     assert.equal(task.worktree.enabled, true);
     assert.equal(task.worktree.status, "pending");
@@ -1129,10 +1129,10 @@ test("goal-queue: dry_run does not write any state changes", async () => {
 });
 
 // ===========================================================================
-// P0: Issue 1 — Queue task mode preserves goal mode (regression test)
+// Full mode — queue tasks normalize legacy goal modes
 // ===========================================================================
 
-test("goal-queue: task mode preserves deploy goal mode (Issue 1)", async () => {
+test("goal-queue: task mode normalizes legacy deploy and missing modes to full", async () => {
   const dir = await mkdtemp(join(tmpdir(), "gq-issue1-deploy-"));
   const repo = join(dir, "repo");
   await initGitRepo(repo);
@@ -1148,16 +1148,17 @@ test("goal-queue: task mode preserves deploy goal mode (Issue 1)", async () => {
 
   assert.equal(result.started, true, "deploy mode goal should start");
   assert.ok(result.task, "task should be created");
-  assert.equal(result.task.mode, "deploy", "task mode should be 'deploy', matching goal mode");
+  assert.equal(result.task.mode, "full", "task mode should normalize legacy deploy to full");
+  assert.equal(result.task.legacy_mode, "deploy");
 
-  // Fallback: goal without a mode should get "builder"
+  // Goal without a mode also gets full
   addGoal(store, "goal_no_mode", "No Mode Goal", "open", {});
   addGoalToQueue(store, "queue_no_mode", "goal_no_mode", 2, "waiting");
   await store.save();
 
   const result2 = await startNextQueuedGoal(store, config, { dry_run: false });
   assert.equal(result2.started, true, "no-mode goal should start");
-  assert.equal(result2.task.mode, "builder", "task mode should fall back to 'builder'");
+  assert.equal(result2.task.mode, "full", "task mode should be full");
 });
 
 // ===========================================================================

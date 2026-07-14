@@ -44,7 +44,7 @@ export async function acquireRepoLock(workspaceRoot, repoPath, opts = {}) {
     child_pid: childPid || null,
     acquired_at: now,
     last_heartbeat_at: now,
-    mode: mode || "builder",
+    mode: mode || "full",
     restart_state: null,
     status: "held"
   };

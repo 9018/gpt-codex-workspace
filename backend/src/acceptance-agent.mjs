@@ -227,17 +227,14 @@ export async function runAcceptanceAgent({ task, goal, result, repoPath, profile
 // ---------------------------------------------------------------------------
 
 function inferProfileFromTask(task = {}, result = {}) {
-  // Check for explicit mode-based profiles
-  if (task.mode === 'sync') return ACCEPTANCE_PROFILES.SYNC_ONLY;
-  if (task.mode === 'github_sync') return ACCEPTANCE_PROFILES.GITHUB_SYNC_ONLY;
-  if (task.mode === 'verification') return ACCEPTANCE_PROFILES.VERIFICATION_ONLY;
-  if (task.mode === 'integration') return ACCEPTANCE_PROFILES.INTEGRATION_ONLY;
-  if (task.mode === 'network_retry') return ACCEPTANCE_PROFILES.NETWORK_RETRY;
-  if (task.mode === 'admin') return ACCEPTANCE_PROFILES.ADMIN;
-  if (task.mode === 'restart') return ACCEPTANCE_PROFILES.RESTART;
-  if (task.mode === 'code_change') return ACCEPTANCE_PROFILES.CODE_CHANGE;
-  if (task.mode === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
-  if (result.noop === true || task.noop === true || task.mode === 'noop') return ACCEPTANCE_PROFILES.NOOP;
+  const operationKind = result.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || "code_change";
+  if (operationKind === 'external_sync') return ACCEPTANCE_PROFILES.SYNC_ONLY;
+  if (operationKind === 'readonly_validation' || operationKind === 'diagnostic') return ACCEPTANCE_PROFILES.VERIFICATION_ONLY;
+  if (operationKind === 'integration') return ACCEPTANCE_PROFILES.INTEGRATION_ONLY;
+  if (operationKind === 'admin_command' || operationKind === 'queue_admin') return ACCEPTANCE_PROFILES.ADMIN;
+  if (operationKind === 'restart') return ACCEPTANCE_PROFILES.RESTART;
+  if (operationKind === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
+  if (operationKind === 'noop' || result.noop === true || task.noop === true) return ACCEPTANCE_PROFILES.NOOP;
 
   // Check for repair tasks
   if (task.parent_task_id || task.repair_of_task_id) {
@@ -248,7 +245,7 @@ function inferProfileFromTask(task = {}, result = {}) {
   }
 
   // Check for runtime change (deploy or runtime files)
-  if (task.mode === 'runtime_change' || task.mode === 'runtime') return ACCEPTANCE_PROFILES.RUNTIME_CHANGE;
+  if (operationKind === 'deploy' || operationKind === 'restart') return ACCEPTANCE_PROFILES.RUNTIME_CHANGE;
 
   const changed = Array.isArray(result.changed_files) ? result.changed_files :
     Array.isArray(task.changed_files) ? task.changed_files : [];
@@ -275,7 +272,7 @@ function inferProfileFromTask(task = {}, result = {}) {
     f.includes('/worker') || f.includes('/runtime') || f.includes('/server') ||
     f.includes('codex-worker') || f.includes('gptwork-server')
   );
-  if (runtimeFiles.length > 0 && (task.mode === 'deploy' || task.mode === 'runtime' || task.mode === 'runtime_change')) {
+  if (runtimeFiles.length > 0 && (operationKind === 'deploy' || operationKind === 'restart')) {
     return ACCEPTANCE_PROFILES.RUNTIME_CHANGE;
   }
 

@@ -140,7 +140,7 @@ export function createClaudeTuiToolsGroup({
     const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, cwd, {
       taskId: task.id,
       runId: null,
-      mode: task.mode || goal.mode || "builder",
+      mode: task.mode || goal.mode || "full",
     });
     if (!lockResult?.acquired) {
       return {

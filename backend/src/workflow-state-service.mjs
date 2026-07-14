@@ -364,7 +364,7 @@ function buildAcceptanceRepairTask({ task, acceptance, manualNote }) {
     assignee: "codex",
     project_id: task.project_id || "default",
     workspace_id: task.workspace_id || "hosted-default",
-    mode: task.mode || "builder",
+    mode: task.mode || "full",
     source_task_id: task.id,
     source_goal_id: task.goal_id || null,
     repair_proposal: repairProposal,

@@ -9,6 +9,10 @@ import { decodeBase64Json, waitForTaskExecution } from "./goal-task-utils.mjs";
 import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
 import { normalizeLegacyGoalWorkstream, WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
+import { validateTaskContextPacket } from "./context-contract/task-context-schema.mjs";
+import { taskContextContractDigest, taskContextInstanceDigest } from "./context-contract/task-context-canonicalizer.mjs";
+import { compileTaskContext, renderGoalPromptFromPacket, renderContextSummaryFromPacket } from "./context-contract/task-context-compiler.mjs";
+
 
 const REPAIR_METADATA_KEYS = [
   "root_task_id",
@@ -38,7 +42,7 @@ export async function createGoal(store, config, args, context = defaultTokenCont
   const goalId = `goal_${randomUUID()}`;
   const conversationId = `conv_${randomUUID()}`;
   const assignToCodex = args.assign_to_codex !== false;
-  const mode = normalizeAssignedTaskMode({ title: args.title || titleFromGoal(args), description: args.goal_prompt, mode: args.mode || "builder" });
+  const mode = normalizeAssignedTaskMode({ title: args.title || titleFromGoal(args), description: args.goal_prompt, mode: args.mode || "full" });
   const acceptanceContract = buildAcceptanceContract({ ...args, mode });
   const messages = normalizeGoalMessages(args.messages, now, context.user_id);
   const memories = normalizeGoalMemories(args.memories, goalId, conversationId, now, context.user_id);
@@ -77,11 +81,74 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     default_decision_rule: 'choose_smallest_reversible_goal_aligned_change'
   };
   goal.subagent_policy = payloadPolicies.subagent_policy || {
-    mode: 'optional',
-    roles: ['analyst', 'architect', 'implementer', 'tester', 'reviewer', 'escalation_judge'],
+    mode: 'task_isolated_parent_tui',
+    advisory_roles: ['explorer', 'architect', 'test_analyst'],
+    canonical_roles: ['context_curator', 'planner', 'builder', 'verifier', 'reviewer', 'finalizer'],
+    recovery_role: 'repairer',
+    integrator_scope: 'workstream',
     require_review_before_completion: false,
     require_test_or_verification: true
   };
+  // --- v2: Process or compile Task Context Packet ---
+  const taskContextPacket = args.task_context_packet || (() => {
+    if (!args.user_request && !args.goal_prompt) return null;
+    try {
+      const compiled = compileTaskContext({
+        objective: args.user_request,
+        goalPrompt: args.goal_prompt,
+        contextSummary: args.context_summary,
+        messages: args.messages,
+        acceptanceContract: args.acceptance_contract,
+        workstreamId: args.workstream_id,
+        constraints: args.constraints,
+        sourceProvenance: args.source_provenance,
+        rawConversationPolicy: args.raw_conversation_policy,
+      });
+      return compiled.packet;
+    } catch {
+      return null;
+    }
+  })();
+
+  if (taskContextPacket) {
+    // Fill identity fields
+    taskContextPacket.identity.goal_id = goalId;
+    taskContextPacket.identity.goal_id = goalId;
+    try {
+      validateTaskContextPacket(taskContextPacket);
+    } catch (err) {
+      console.warn("[goal] task context validation warning:", err.message);
+    }
+    const contractDigest = taskContextContractDigest(taskContextPacket);
+    goal.task_context = {
+      schema_version: taskContextPacket.schema_version,
+      revision: taskContextPacket.identity.context_revision,
+      contract_digest: contractDigest,
+      raw_conversation_injected: taskContextPacket.raw_conversation_policy?.injected === true,
+    };
+    // Override user_request/goal_prompt/context_summary with compiled packet values
+    if (taskContextPacket.objective) {
+      goal.user_request = taskContextPacket.objective;
+    }
+    // Preserve explicit goal_prompt when provided (e.g. via create_encoded_goal).
+    // The compiled packet version is used only as fallback when no explicit prompt exists.
+    if (!String(args.goal_prompt || "").trim()) {
+      const packetGoalPrompt = renderGoalPromptFromPacket(taskContextPacket);
+      if (packetGoalPrompt) {
+        goal.goal_prompt = packetGoalPrompt;
+      }
+    }
+    // Preserve explicit context_summary when provided
+    if (!String(args.context_summary || "").trim()) {
+      const packetSummary = renderContextSummaryFromPacket(taskContextPacket);
+      if (packetSummary) {
+        goal.context_summary = packetSummary;
+      }
+    }
+  } else {
+    goal.task_context = null;
+  }
+
 
   const conversation = {
     id: conversationId,
@@ -125,8 +192,13 @@ export async function createEncodedGoal(store, config, { preview_text, payload_b
   const payload = decodeBase64Json(payload_base64, "payload_base64");
   if (!payload.user_request || !payload.goal_prompt) throw new Error("encoded goal payload requires user_request and goal_prompt");
   const messages = Array.isArray(payload.messages) ? [...payload.messages] : [];
-  if (preview_text && !messages.some((message) => String(message.content || "") === String(preview_text))) {
-    messages.push({ role: "chatgpt", content: String(preview_text) });
+  // v2: Only append preview_text as message if explicitly requested
+  if (
+    payload.include_preview_as_message === true &&
+    preview_text &&
+    !messages.some((message) => String(message.content || "") === String(preview_text))
+  ) {
+    messages.push({ role: "chatgpt", content: String(preview_text), context_usage: "audit_only" });
   }
   const created = await createGoal(store, config, {
     ...payload,

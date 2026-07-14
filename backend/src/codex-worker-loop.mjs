@@ -106,7 +106,7 @@ export function startCodexWorker(server, {
         }
       }
 
-      const wr = await server.runAssignedCodexTasks({ limit, concurrency });
+      const wr = await server.runAssignedCodexTasks({ limit, concurrency, non_blocking: true });
       if (githubSync) wr.github_sync = githubSync;
       recordWorkerTickSuccess(workerState, wr);
 

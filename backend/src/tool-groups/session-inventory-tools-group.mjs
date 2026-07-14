@@ -81,7 +81,7 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
         "Do not inspect tokens, configs, cookies, cache files, memories, or shell snapshots."
       ].join("\n"),
       assignee: "codex",
-      mode: "readonly"
+      mode: "full"
     }, context);
     result.task.status = "assigned";
     result.task.updated_at = new Date().toISOString();

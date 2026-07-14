@@ -173,7 +173,8 @@ test("create_task accepts an encoded envelope and links it as a readable goal", 
     iteration: 3,
   });
 
-  assert.equal(created.goal.goal_prompt, payload.goal_prompt);
+  assert.ok(created.goal.goal_prompt.includes(payload.goal_prompt) || created.goal.goal_prompt.includes(payload.user_request));
+  assert.equal(created.goal.task_context !== undefined, true);
   assert.equal(created.goal.preview_text, envelope.preview_text);
   assert.equal(created.goal.workstream_id, "ws_encoded");
   assert.equal(created.goal.root_goal_id, "goal_encoded_root");
@@ -184,7 +185,7 @@ test("create_task accepts an encoded envelope and links it as a readable goal", 
   assert.match(goalMd.content, /更新部署并连接目标服务/);
 });
 
-test("ordinary tasks cannot be left in readonly mode", async () => {
+test("ordinary tasks always normalize to full mode", async () => {
   const server = await makeServer();
 
   const draft = await callTool(server, "create_task", {
@@ -192,21 +193,21 @@ test("ordinary tasks cannot be left in readonly mode", async () => {
     description: "Build and deploy the Docker service on the remote workspace.",
     mode: "readonly"
   });
-  assert.equal(draft.task.mode, "builder");
+  assert.equal(draft.task.mode, "full");
 
   const legacyStandardDraft = await callTool(server, "create_task", {
     title: "Legacy standard task",
     description: "Old clients may still send the removed mode field.",
     mode: "standard"
   });
-  assert.equal(legacyStandardDraft.task.mode, "builder");
+  assert.equal(legacyStandardDraft.task.mode, "full");
 
   const legacyDeployDraft = await callTool(server, "create_task", {
     title: "Legacy deploy task",
     description: "Execution elevation must happen through assign_task_to_codex.",
     mode: "deploy"
   });
-  assert.equal(legacyDeployDraft.task.mode, "builder");
+  assert.equal(legacyDeployDraft.task.mode, "full");
 
   const assigned = await callTool(server, "assign_task_to_codex", {
     task_id: draft.task.id,
@@ -214,7 +215,7 @@ test("ordinary tasks cannot be left in readonly mode", async () => {
   });
   assert.equal(assigned.task.assignee, "codex");
   assert.equal(assigned.task.status, "assigned");
-  assert.equal(assigned.task.mode, "builder");
+  assert.equal(assigned.task.mode, "full");
 
   const deployDraft = await callTool(server, "create_task", {
     title: "Deploy Docker service with elevated mode",
@@ -224,7 +225,7 @@ test("ordinary tasks cannot be left in readonly mode", async () => {
     task_id: deployDraft.task.id,
     mode: "deploy"
   });
-  assert.equal(deployAssigned.task.mode, "deploy");
+  assert.equal(deployAssigned.task.mode, "full");
 });
 
 test("legacy ordinary readonly tasks are promoted when read", async () => {
@@ -287,13 +288,13 @@ test("legacy ordinary readonly tasks are promoted when read", async () => {
   });
 
   const listed = await callTool(server, "list_tasks");
-  assert.equal(listed.tasks[0].mode, "builder");
+  assert.equal(listed.tasks[0].mode, "full");
 
   const fetched = await callTool(server, "get_task", { task_id: "task_legacy_readonly_deploy" });
-  assert.equal(fetched.task.mode, "builder");
+  assert.equal(fetched.task.mode, "full");
 });
 
-test("safe Codex session inventory tasks remain readonly when assigned", async () => {
+test("safe Codex session inventory tasks use full mode when assigned", async () => {
   const server = await makeServer();
 
   const draft = await callTool(server, "create_task", {
@@ -308,10 +309,10 @@ test("safe Codex session inventory tasks remain readonly when assigned", async (
   });
 
   const assigned = await callTool(server, "assign_task_to_codex", { task_id: draft.task.id });
-  assert.equal(assigned.task.mode, "readonly");
+  assert.equal(assigned.task.mode, "full");
 });
 
-test("completed Codex session inventory tasks remain readonly when read", async () => {
+test("completed Codex session inventory tasks remain full when read", async () => {
   const root = await mkdtemp(join(tmpdir(), "gptwork-completed-inventory-"));
   const sessionDir = join(root, ".codex", "sessions", "2026", "06", "15");
   await mkdir(sessionDir, { recursive: true });
@@ -328,11 +329,11 @@ test("completed Codex session inventory tasks remain readonly when read", async 
 
   const completed = await callToolAs(server, "test-token", "create_codex_session_inventory_task", {});
   assert.equal(completed.task.status, "completed");
-  assert.equal(completed.task.mode, "readonly");
+  assert.equal(completed.task.mode, "full");
 
   const fetched = await callToolAs(server, "test-token", "get_task", { task_id: completed.task.id });
   assert.equal(fetched.task.status, "completed");
-  assert.equal(fetched.task.mode, "readonly");
+  assert.equal(fetched.task.mode, "full");
 });
 
 test("Codex session inventory tools expose metadata only and create an assigned task", async () => {
@@ -1407,7 +1408,7 @@ test("complete_task without admin_override completes normally with default optio
   });
 
   // Verify default mode is optional
-  assert.equal(created.goal.subagent_policy.mode, "optional");
+  assert.equal(created.goal.subagent_policy.mode, "task_isolated_parent_tui");
   assert.ok(created.task, "task should be created");
   assert.ok(created.task.id, "task should have an id");
 

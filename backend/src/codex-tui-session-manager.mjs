@@ -2,6 +2,7 @@ import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
 import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
 import { join } from "node:path";
+import { detectMeaningfulOutput } from "./codex-tui-progress-utils.mjs";
 import { mkdir, rm, symlink } from "node:fs/promises";
 
 const activeSessions = new Map();
@@ -167,6 +168,16 @@ async function startCodexTuiGoalSessionImpl({
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
         store.appendSessionLog(sessionId, text).catch(() => {});
+        // Track heartbeat and meaningful progress
+        store.updateSession(sessionId, {
+          last_output_at: new Date().toISOString(),
+        }).catch(() => {});
+        const progress = detectMeaningfulOutput(text);
+        if (progress.meaningful) {
+          store.updateSession(sessionId, {
+            last_meaningful_progress_at: new Date().toISOString(),
+          }).catch(() => {});
+        }
       },
     });
   } catch (err) {

@@ -326,8 +326,9 @@ export const ACCEPTANCE_PROFILES = {
  * @returns {string} Profile name
  */
 export function inferAcceptanceProfile(task = {}) {
-  if (task.mode === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
-  if (task.noop === true || task.mode === 'noop') return ACCEPTANCE_PROFILES.NOOP;
+  const operationKind = task.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || "code_change";
+  if (operationKind === 'deploy') return ACCEPTANCE_PROFILES.DEPLOY;
+  if (task.noop === true || operationKind === 'noop') return ACCEPTANCE_PROFILES.NOOP;
 
   const changed = Array.isArray(task.changed_files) ? task.changed_files : [];
   const allDocs = changed.length > 0 && changed.every((f) =>

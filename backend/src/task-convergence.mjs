@@ -132,8 +132,12 @@ function looksLikeSyncOnlyTask(task = {}, taskResult = {}) {
   return hasRepoEvidence;
 }
 
+
+function operationKindFrom(task = {}, taskResult = {}) {
+  return taskResult.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || "code_change";
+}
 function hasRuntimeChanges(task, taskResult) {
-  if (task.mode === "deploy") return true;
+  if (operationKindFrom(task, taskResult) === "deploy") return true;
   const files = taskResult.changed_files || task.changed_files || [];
   if (!Array.isArray(files)) return false;
   return files.some(f =>
@@ -317,7 +321,7 @@ export function convergeTaskAfterRun({
 
   if (acceptancePassed && effectiveVerificationPassed && blockerFindings.length === 0) {
     // ---- Step 4a: Accepted + verified + no blockers → check runtime ----
-    const hasRuntimeChanges = needRuntimeRestart(runtimeState) || task.mode === "deploy" || task.mode === "runtime_change";
+    const hasRuntimeChanges = needRuntimeRestart(runtimeState) || ["deploy", "restart"].includes(operationKindFrom(task, taskResult));
     if (hasRuntimeChanges) {
       return {
         nextStatus: CONVERGENCE_STATUSES.RESTART_PENDING,

@@ -53,7 +53,7 @@ export function taskPayloadFromTask(task) {
     context_summary: "Created automatically from create_task compatibility flow.",
     project_id: task.project_id,
     workspace_id: task.workspace_id,
-    mode: task.mode || "builder",
+    mode: "full",
     messages: [
       { role: "user", content: task.description || task.title },
       { role: "chatgpt", content: `Created compatibility goal from task ${task.id}.` }
@@ -95,15 +95,17 @@ export function emitTaskProgress(context, task, phase, message) {
 export async function normalizeLegacyModes(store, state) {
   let changed = false;
   for (const task of state.tasks || []) {
-    if ((task.mode === "readonly" && !isCodexSessionInventoryTaskKind(task)) || task.mode === "standard") {
-      task.mode = "builder";
+    if (task.mode !== "full") {
+      task.legacy_mode = task.legacy_mode || task.mode || null;
+      task.mode = "full";
       task.updated_at = task.updated_at || new Date().toISOString();
       changed = true;
     }
   }
   for (const goal of state.goals || []) {
-    if (goal.mode === "readonly" || goal.mode === "standard") {
-      goal.mode = "builder";
+    if (goal.mode !== "full") {
+      goal.legacy_mode = goal.legacy_mode || goal.mode || null;
+      goal.mode = "full";
       goal.updated_at = goal.updated_at || new Date().toISOString();
       changed = true;
     }

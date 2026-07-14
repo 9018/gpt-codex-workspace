@@ -58,7 +58,7 @@ export async function buildCodexContext(options = {}) {
           id: task.id,
           title: task.title,
           status: task.status,
-          mode: task.mode || "builder",
+          mode: task.mode || "full",
           assignee: task.assignee,
           workspace_id: task.workspace_id,
         }

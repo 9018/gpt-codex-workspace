@@ -9,6 +9,12 @@ export const TASK_STATUSES = Object.freeze({
   ASSIGNED: 'assigned',
   QUEUED: 'queued',
   RUNNING: 'running',
+  STARTING: 'starting',
+  COLLECTING: 'collecting',
+  ACCEPTING: 'accepting',
+  REPAIRING: 'repairing',
+  INTEGRATING: 'integrating',
+  NEEDS_DECISION: 'needs_decision',
   WAITING_FOR_LOCK: 'waiting_for_lock',
   WAITING_FOR_REVIEW: 'waiting_for_review',
   // Typed review/recovery states
@@ -39,6 +45,11 @@ export const ACTIVE_EXECUTION_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.ASSIGNED,
   TASK_STATUSES.QUEUED,
   TASK_STATUSES.RUNNING,
+  TASK_STATUSES.STARTING,
+  TASK_STATUSES.COLLECTING,
+  TASK_STATUSES.ACCEPTING,
+  TASK_STATUSES.REPAIRING,
+  TASK_STATUSES.INTEGRATING,
   TASK_STATUSES.WAITING_FOR_LOCK,
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
 ]));
@@ -46,6 +57,7 @@ export const ACTIVE_EXECUTION_STATUSES = Object.freeze(new Set([
 /** Human review statuses: includes both legacy waiting_for_review and typed states. */
 export const HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.NEEDS_DECISION,
   ...Object.values(REVIEW_STATES),
 ]));
 

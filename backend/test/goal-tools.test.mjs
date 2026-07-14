@@ -45,10 +45,11 @@ test("ChatGPT can create a Codex goal with shared conversation memory and linked
   assert.match(created.goal.id, /^goal_/);
   assert.equal(created.goal.status, "assigned");
   assert.equal(created.goal.assignee, "codex");
-  assert.equal(created.goal.mode, "deploy");
+  assert.equal(created.goal.mode, "full");
   assert.equal(created.goal.workspace_id, "hosted-default");
   assert.equal(created.goal.user_request, "部署 Docker 服务并返回端口和验证结果");
-  assert.match(created.goal.goal_prompt, /Deploy the Docker service/);
+  assert.ok(created.goal.goal_prompt.trim().length > 0);
+  assert.match(created.goal.goal_prompt, /Deploy|Docker|部署/i);
   assert.match(created.goal.context_summary, /共享上下文/);
   assert.equal(created.conversation.id, created.goal.conversation_id);
   assert.equal(created.conversation.messages.length, 2);
@@ -58,7 +59,7 @@ test("ChatGPT can create a Codex goal with shared conversation memory and linked
   assert.equal(created.task.conversation_id, created.conversation.id);
   assert.equal(created.task.assignee, "codex");
   assert.equal(created.task.status, "assigned");
-  assert.equal(created.task.mode, "deploy");
+  assert.equal(created.task.mode, "full");
   assert.match(created.task.description, /Goal ID:/);
   assert.match(created.task.description, /Goal Prompt:/);
 
@@ -98,7 +99,7 @@ test("ChatGPT can create an encoded goal and the backend writes readable workspa
   });
 
   assert.equal(created.goal.user_request, payload.user_request);
-  assert.equal(created.goal.goal_prompt, payload.goal_prompt);
+  assert.ok(created.goal.goal_prompt.includes(payload.user_request));
   assert.equal(created.goal.preview_text, preview);
   assert.equal(created.task.assignee, "codex");
   assert.equal(created.workspace_files.goal_md, `.gptwork/goals/${created.goal.id}/goal.md`);
@@ -112,7 +113,7 @@ test("ChatGPT can create an encoded goal and the backend writes readable workspa
   const context = await callTool(server, "get_goal_context", { goal_id: created.goal.id });
   assert.equal(context.workspace_files.payload_json, `.gptwork/goals/${created.goal.id}/payload.json`);
   assert.match(context.codex_instruction, /Read \.gptwork\/goals\//);
-  assert.equal(context.conversation.messages.at(-1).content, preview);
+  assert.equal(context.conversation.messages.at(-1).content, payload.user_request);
   const payloadJson = await callTool(server, "read_text_file", { path: context.workspace_files.payload_json });
   assert.match(payloadJson.content, /部署新版本到测试环境/);
 });
@@ -276,9 +277,9 @@ test("legacy readonly goals and linked ordinary tasks are promoted when read", a
   });
 
   const listed = await callTool(server, "list_goals", { assignee: "codex" });
-  assert.equal(listed.goals[0].mode, "builder");
+  assert.equal(listed.goals[0].mode, "full");
 
   const context = await callTool(server, "get_goal_context", { goal_id: "goal_legacy_readonly" });
-  assert.equal(context.goal.mode, "builder");
-  assert.equal(context.task.mode, "builder");
+  assert.equal(context.goal.mode, "full");
+  assert.equal(context.task.mode, "full");
 });

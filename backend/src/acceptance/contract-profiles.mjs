@@ -37,7 +37,7 @@ function profile({ intent, requirements, verification_plan, blocking_requirement
 
 export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
   code_change: profile({
-    intent: { operation_kind: "code_change", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "code_change", mutation_scope: "repo", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["verification_report", "changed_files"] },
     blocking_requirements: [
@@ -48,7 +48,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   file_write: profile({
-    intent: { operation_kind: "file_write", mutation_scope: "filesystem", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "file_write", mutation_scope: "filesystem", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["file_path", "checksum", "diff", "commit"] },
     blocking_requirements: [
@@ -60,7 +60,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   docs_only: profile({
-    intent: { operation_kind: "docs_only", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "docs_only", mutation_scope: "repo", execution_mode: "full", semantic_confidence: "high" },
     // Docs-only tasks are repository mutations, but they do not require the
     // integration pipeline to prove product safety. Their closure evidence is
     // commit + changed docs + lightweight docs/syntax verification. Requiring
@@ -75,7 +75,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   config_change: profile({
-    intent: { operation_kind: "config_change", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "config_change", mutation_scope: "repo", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: true, requires_integration: true, requires_restart: true, requires_deployment_check: false },
     verification_plan: { profile: "config", fallback_profile: "fast", required_reports: ["config_parse", "reload_or_restart", "health_check"] },
     blocking_requirements: [
@@ -86,7 +86,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   restart: profile({
-    intent: { operation_kind: "restart", mutation_scope: "runtime", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "restart", mutation_scope: "runtime", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: true, requires_deployment_check: false },
     verification_plan: { profile: "runtime", fallback_profile: "diagnostic", required_reports: ["process_status", "health_check", "runtime_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -96,7 +96,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   deploy: profile({
-    intent: { operation_kind: "deploy", mutation_scope: "runtime", execution_mode: "deploy", semantic_confidence: "high" },
+    intent: { operation_kind: "deploy", mutation_scope: "runtime", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: true },
     verification_plan: { profile: "deploy", fallback_profile: "runtime", required_reports: ["build", "start", "port", "health_check", "runtime_version"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -108,7 +108,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   admin_command: profile({
-    intent: { operation_kind: "admin_command", mutation_scope: "runtime", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "admin_command", mutation_scope: "runtime", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "admin", fallback_profile: "diagnostic", required_reports: ["pre_state_snapshot", "command_result", "post_state_snapshot", "audit_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -119,7 +119,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   diagnostic: profile({
-    intent: { operation_kind: "diagnostic", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    intent: { operation_kind: "diagnostic", mutation_scope: "none", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "diagnostic", fallback_profile: "readonly", required_reports: ["diagnostic_report", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -128,7 +128,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   cleanup: profile({
-    intent: { operation_kind: "cleanup", mutation_scope: "filesystem", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "cleanup", mutation_scope: "filesystem", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "cleanup", fallback_profile: "admin", required_reports: ["dry_run", "apply", "before_after_counts", "audit_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -140,7 +140,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   external_sync: profile({
-    intent: { operation_kind: "external_sync", mutation_scope: "external_system", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "external_sync", mutation_scope: "external_system", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "external_sync", fallback_profile: "admin", required_reports: ["sync_before", "sync_after", "audit_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -150,7 +150,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   data_migration: profile({
-    intent: { operation_kind: "data_migration", mutation_scope: "external_system", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "data_migration", mutation_scope: "external_system", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "migration", fallback_profile: "requires_review", required_reports: ["backup", "dry_run", "apply", "counts", "rollback_plan"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -163,7 +163,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     review_policy: { requires_review_when: ["migration_risk_unresolved"] }
   }),
   noop: profile({
-    intent: { operation_kind: "noop", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    intent: { operation_kind: "noop", mutation_scope: "none", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "noop", fallback_profile: "diagnostic", required_reports: ["noop_reason", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -173,7 +173,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     state_assertions: [assertion("no_mutation", "No repository, runtime, filesystem, or external state mutation occurred.")]
   }),
   readonly_validation: profile({
-    intent: { operation_kind: "readonly_validation", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    intent: { operation_kind: "readonly_validation", mutation_scope: "none", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "diagnostic", fallback_profile: "readonly", required_reports: ["validation_report", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -182,7 +182,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   already_integrated: profile({
-    intent: { operation_kind: "already_integrated", mutation_scope: "none", execution_mode: "readonly", semantic_confidence: "high" },
+    intent: { operation_kind: "already_integrated", mutation_scope: "none", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "noop", fallback_profile: "diagnostic", required_reports: ["integration_evidence", "no_mutation_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [
@@ -192,7 +192,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     state_assertions: [assertion("no_mutation", "No repository, runtime, filesystem, or external state mutation occurred.")]
   }),
   integration: profile({
-    intent: { operation_kind: "integration", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "integration", mutation_scope: "repo", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: true, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["commit", "changed_files", "verification_report"] },
     blocking_requirements: [
@@ -202,7 +202,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   repair: profile({
-    intent: { operation_kind: "repair", mutation_scope: "repo", execution_mode: "worktree", semantic_confidence: "high" },
+    intent: { operation_kind: "repair", mutation_scope: "repo", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: true, requires_integration: true, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "changed", fallback_profile: "fast", required_reports: ["verification_report", "changed_files", "repair_evidence"] },
     blocking_requirements: [
@@ -214,7 +214,7 @@ export const ACCEPTANCE_CONTRACT_PROFILES = Object.freeze({
     ]
   }),
   queue_admin: profile({
-    intent: { operation_kind: "queue_admin", mutation_scope: "runtime", execution_mode: "admin", semantic_confidence: "high" },
+    intent: { operation_kind: "queue_admin", mutation_scope: "runtime", execution_mode: "full", semantic_confidence: "high" },
     requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
     verification_plan: { profile: "admin", fallback_profile: "diagnostic", required_reports: ["pre_state_snapshot", "queue_operation", "post_state_snapshot", "audit_evidence"], report_must_match_head: false, report_must_be_clean: false },
     blocking_requirements: [

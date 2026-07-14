@@ -182,7 +182,7 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
     repair_proposals: repairProposals || [],
     goal_prompt: repairPrompt,
     user_request: `Repair: ${task.title} (attempt ${attempt})`,
-    mode: task.mode || 'builder',
+    mode: task.mode || 'full',
     workspace_id: task.workspace_id || goal?.workspace_id,
     repo_id: task.repo_id || goal?.repo_id,
     // ---- P0-C7: Repair tracking fields ----
@@ -225,7 +225,7 @@ export async function scheduleRepairAttempt({ store, task = {}, goal = {}, failu
     title: `Repair: ${task.title || task.id} (attempt ${attempt})`,
     project_id: task.project_id || goal.project_id || 'default',
     workspace_id: repairGoal.workspace_id || task.workspace_id || goal.workspace_id || 'hosted-default',
-    mode: repairGoal.mode || task.mode || 'builder',
+    mode: repairGoal.mode || task.mode || 'full',
     assign_to_codex: true,
     skip_created_notification: false,
     root_task_id: repairGoal.root_task_id,

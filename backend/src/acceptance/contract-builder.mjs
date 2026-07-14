@@ -10,6 +10,7 @@ import {
   normalizeReviewPolicy
 } from "./contract-schema.mjs";
 import { validateContractSemantics } from "./semantics.mjs";
+import { FULL_CONTRACT_DEFAULTS } from "./contract-schema.mjs";
 
 
 const OPERATION_KIND_ALIASES = Object.freeze({
@@ -230,6 +231,7 @@ export function buildAcceptanceContract(args = {}) {
   // When explicit intent had character-indexed keys (serialization artifact),
   // restore mutation_scope and execution_mode from profile defaults to prevent
   // corrupted enrichment fields from leaking into the contract.
+  // Full-mode enforcement below overrides the restored value when applicable.
   if (intentCorrupted) {
     const profileDefaults = getDefaultAcceptanceContractProfile(operationKind);
     if (profileDefaults?.intent) {
@@ -237,6 +239,18 @@ export function buildAcceptanceContract(args = {}) {
       contract.intent.execution_mode = profileDefaults.intent.execution_mode || defaults.intent.execution_mode;
     }
   }
+
+  // P1: Full mode enforcement — all contracts operate in "full" mode.
+  // Legacy modes (readonly, diagnostic, implementation, deploy, admin) are removed.
+  contract.mode = "full";
+  contract.intent.execution_mode = "full";
+
+  // Apply full contract defaults for new v2 fields
+  if (contract.requires_commit === undefined) contract.requires_commit = FULL_CONTRACT_DEFAULTS.requires_commit;
+  if (contract.requires_integration === undefined) contract.requires_integration = FULL_CONTRACT_DEFAULTS.requires_integration;
+  if (!Array.isArray(contract.required_checks)) contract.required_checks = [];
+  if (!contract.retry_policy) contract.retry_policy = { ...FULL_CONTRACT_DEFAULTS.retry_policy };
+  if (!contract.acceptance_policy) contract.acceptance_policy = { ...FULL_CONTRACT_DEFAULTS.acceptance_policy };
 
   if (contract.intent.semantic_confidence === "low") {
     addReviewReason(contract, "semantic_ambiguity");

@@ -354,7 +354,7 @@ export async function finalizeCodexTaskRun({
                 title: "Repair: " + task.title + " (integration conflict)",
                 project_id: task.project_id || (goal ? goal.project_id : "default"),
                 workspace_id: intRepairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : "hosted-default"),
-                mode: intRepairGoal.mode || "builder",
+                mode: intRepairGoal.mode || "full",
                 assign_to_codex: true,
                 skip_created_notification: false,
               }, intRepairGoal));
@@ -596,7 +596,7 @@ export async function finalizeCodexTaskRun({
             title: `Repair: ${task.title || task.id} (acceptance blocker)`,
             project_id: task.project_id || goal?.project_id || "default",
             workspace_id: repairGoal.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
-            mode: repairGoal.mode || task.mode || "builder",
+            mode: repairGoal.mode || task.mode || "full",
             assign_to_codex: true,
             skip_created_notification: false,
             attempt: repairGoal.attempt,
