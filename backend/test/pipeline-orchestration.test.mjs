@@ -758,34 +758,3 @@ test("pipeline-orch: ensurePipelineRunsForTask prepares v2 advisory runs and con
     assert.equal(run.require_fresh_artifacts, true);
   }
 });
-
-test("pipeline-orch: ensurePipelineRunsForTask prepares v2 advisory runs and context-bound role views", async () => {
-  const { ensurePipelineRunsForTask } = await import("../src/pipeline-orchestration.mjs");
-  const { createTaskContextStore } = await import("../src/context-contract/task-context-store.mjs");
-  const store = await makeStore();
-  const taskId = "task_ensure_v2";
-  const goalId = "goal_ensure_v2";
-  const digest = "sha256:ensure-v2";
-  store.state.goals = [{ id: goalId, task_id: taskId, workstream_id: "ws_ensure", task_context: { contract_digest: digest, revision: 1 } }];
-  store.state.tasks = [{ id: taskId, goal_id: goalId, workstream_id: "ws_ensure", pipeline_version: "task_pipeline_v2", task_context_digest: digest, task_context_revision: 1, require_pipeline_gates: true }];
-  await store.save();
-  await createTaskContextStore({ workspaceRoot: store.defaultWorkspaceRoot }).writePacket(`.gptwork/goals/${goalId}`, {
-    schema_version: "gptwork.task_context.v1",
-    identity: { workstream_id: "ws_ensure", goal_id: goalId, task_id: taskId, context_revision: 1 },
-    objective: "Prepare the standard TUI pipeline", background: [], confirmed_findings: [],
-    scope: { include: [".gptwork/**"], exclude: ["backend/src/**"] }, required_changes: [],
-    acceptance_criteria: [{ id: "ac", description: "pipeline is context bound", blocking: true, verification_hint: null }],
-    constraints: ["Do not modify source files."], open_questions: [], carry_forward: [], source_provenance: [],
-    raw_conversation_policy: { stored: true, indexed: false, injected: false, targeted_lookup_allowed: true },
-  });
-
-  const result = await ensurePipelineRunsForTask(store, { task_id: taskId, goal_id: goalId });
-  assert.equal(result.created, 6);
-  assert.equal(result.advisory_runs.length, 3);
-  assert.ok(result.runs.every((run) => run.input_context_digest === digest));
-  assert.ok(result.runs.every((run) => run.role_view_path?.includes(`/goals/${goalId}/roles/`)));
-  assert.ok(result.runs.every((run) => run.role_view_digest?.startsWith("sha256:")));
-  assert.ok(result.runs.every((run) => run.require_fresh_artifacts === true));
-  const state = await store.load();
-  assert.deepEqual(state.advisory_runs.map((run) => run.role).sort(), ["architect", "explorer", "test_analyst"]);
-});
