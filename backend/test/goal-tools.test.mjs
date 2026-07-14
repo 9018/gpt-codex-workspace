@@ -50,7 +50,8 @@ test("ChatGPT can create a Codex goal with shared conversation memory and linked
   assert.equal(created.goal.user_request, "部署 Docker 服务并返回端口和验证结果");
   assert.ok(created.goal.goal_prompt.trim().length > 0);
   assert.match(created.goal.goal_prompt, /Deploy|Docker|部署/i);
-  assert.match(created.goal.context_summary, /共享上下文/);
+  assert.match(created.goal.context_summary, /Objective:/);
+  assert.doesNotMatch(created.goal.context_summary, /GPTChat 把自然语言需求整理/);
   assert.equal(created.conversation.id, created.goal.conversation_id);
   assert.equal(created.conversation.messages.length, 2);
   assert.equal(created.memories[0].goal_id, created.goal.id);
@@ -75,6 +76,87 @@ test("ChatGPT can create a Codex goal with shared conversation memory and linked
   assert.match(context.workspace_files.goal_md, /^\.gptwork\/goals\/goal_/);
   const goalMd = await callTool(server, "read_text_file", { path: context.workspace_files.goal_md });
   assert.match(goalMd.content, /## Goal Prompt/);
+});
+
+
+
+test("explicit task context packet is the execution authority", async () => {
+  const server = await makeServer();
+  const packet = {
+    schema_version: "gptwork.task_context.v1",
+    identity: {
+      workstream_id: "ws_authority",
+      goal_id: null,
+      task_id: null,
+      context_revision: 1
+    },
+    objective: "Implement the compiled objective only",
+    background: ["Compiled background"],
+    confirmed_findings: [],
+    scope: { include: ["backend/src/**"], exclude: ["frontend/**"] },
+    required_changes: ["Use the structured packet"],
+    acceptance_criteria: [
+      { id: "compiled_ac", description: "Compiled acceptance passes", blocking: true, verification_hint: null }
+    ],
+    constraints: ["Do not use raw process chatter"],
+    open_questions: [],
+    carry_forward: [],
+    source_provenance: [],
+    raw_conversation_policy: {
+      stored: true,
+      indexed: false,
+      injected: false,
+      targeted_lookup_allowed: true
+    }
+  };
+
+  const created = await callTool(server, "create_goal", {
+    user_request: "raw user request",
+    goal_prompt: "RAW PROCESS CHATTER SHOULD NOT EXECUTE",
+    context_summary: "RAW SUMMARY SHOULD NOT EXECUTE",
+    workstream_id: "ws_authority",
+    task_context_packet: packet,
+    assign_to_codex: true
+  });
+
+  assert.equal(created.goal.user_request, packet.objective);
+  assert.match(created.goal.goal_prompt, /Implement the compiled objective only/);
+  assert.doesNotMatch(created.goal.goal_prompt, /RAW PROCESS CHATTER/);
+  assert.match(created.goal.context_summary, /Background: 1 items/);
+  assert.doesNotMatch(created.goal.context_summary, /RAW SUMMARY/);
+  assert.equal(created.goal.task_context.contract_digest, created.task.task_context_digest);
+});
+
+test("invalid explicit task context packet blocks goal creation", async () => {
+  const server = await makeServer();
+
+  await assert.rejects(
+    callTool(server, "create_goal", {
+      user_request: "raw request",
+      goal_prompt: "raw prompt",
+      task_context_packet: {
+        schema_version: "gptwork.task_context.v1",
+        identity: { workstream_id: "ws_bad", goal_id: null, task_id: null, context_revision: 1 },
+        objective: "",
+        background: [],
+        confirmed_findings: [],
+        scope: { include: [], exclude: [] },
+        required_changes: [],
+        acceptance_criteria: [],
+        constraints: [],
+        open_questions: [],
+        carry_forward: [],
+        source_provenance: [],
+        raw_conversation_policy: {
+          stored: true,
+          indexed: false,
+          injected: false,
+          targeted_lookup_allowed: true
+        }
+      }
+    }),
+    /task_context_packet/
+  );
 });
 
 test("ChatGPT can create an encoded goal and the backend writes readable workspace context files", async () => {

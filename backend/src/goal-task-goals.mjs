@@ -90,8 +90,13 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     require_test_or_verification: true
   };
   // --- v2: Process or compile Task Context Packet ---
-  const taskContextPacket = args.task_context_packet || (() => {
-    if (!args.user_request && !args.goal_prompt) return null;
+  // Explicit packets are execution contracts: invalid input must fail closed.
+  // Legacy fields may still compile best-effort for backward compatibility.
+  let taskContextPacket = null;
+  if (args.task_context_packet !== undefined) {
+    taskContextPacket = structuredClone(args.task_context_packet);
+    validateTaskContextPacket(taskContextPacket);
+  } else if (args.user_request || args.goal_prompt) {
     try {
       const compiled = compileTaskContext({
         objective: args.user_request,
@@ -104,21 +109,15 @@ export async function createGoal(store, config, args, context = defaultTokenCont
         sourceProvenance: args.source_provenance,
         rawConversationPolicy: args.raw_conversation_policy,
       });
-      return compiled.packet;
-    } catch {
-      return null;
+      taskContextPacket = compiled.packet;
+    } catch (err) {
+      console.warn("[goal] legacy task context compilation warning:", err.message);
     }
-  })();
+  }
 
   if (taskContextPacket) {
-    // Fill identity fields
     taskContextPacket.identity.goal_id = goalId;
-    taskContextPacket.identity.goal_id = goalId;
-    try {
-      validateTaskContextPacket(taskContextPacket);
-    } catch (err) {
-      console.warn("[goal] task context validation warning:", err.message);
-    }
+    validateTaskContextPacket(taskContextPacket);
     const contractDigest = taskContextContractDigest(taskContextPacket);
     goal.task_context = {
       schema_version: taskContextPacket.schema_version,
@@ -126,25 +125,12 @@ export async function createGoal(store, config, args, context = defaultTokenCont
       contract_digest: contractDigest,
       raw_conversation_injected: taskContextPacket.raw_conversation_policy?.injected === true,
     };
-    // Override user_request/goal_prompt/context_summary with compiled packet values
-    if (taskContextPacket.objective) {
-      goal.user_request = taskContextPacket.objective;
-    }
-    // Preserve explicit goal_prompt when provided (e.g. via create_encoded_goal).
-    // The compiled packet version is used only as fallback when no explicit prompt exists.
-    if (!String(args.goal_prompt || "").trim()) {
-      const packetGoalPrompt = renderGoalPromptFromPacket(taskContextPacket);
-      if (packetGoalPrompt) {
-        goal.goal_prompt = packetGoalPrompt;
-      }
-    }
-    // Preserve explicit context_summary when provided
-    if (!String(args.context_summary || "").trim()) {
-      const packetSummary = renderContextSummaryFromPacket(taskContextPacket);
-      if (packetSummary) {
-        goal.context_summary = packetSummary;
-      }
-    }
+
+    // The structured packet is the execution authority. Raw input remains only
+    // in payload/provenance and cannot override the bounded Codex entry.
+    goal.user_request = taskContextPacket.objective;
+    goal.goal_prompt = renderGoalPromptFromPacket(taskContextPacket);
+    goal.context_summary = renderContextSummaryFromPacket(taskContextPacket);
   } else {
     goal.task_context = null;
   }
