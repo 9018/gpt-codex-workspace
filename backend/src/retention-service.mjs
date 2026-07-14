@@ -1556,6 +1556,72 @@ export async function retentionCleanup({
   }
 
 
+  // ── 16b. orphaned merged worktrees ────────────────────────────
+  // Historical task metadata may already have been compacted. In that case,
+  // only remove an orphan when its branch is fully contained by HEAD and the
+  // worktree has no local changes. Unknown, dirty, or unmerged resources stay.
+  {
+    const gitRoot = _findGitRoot(workspaceRoot);
+    const knownTaskIds = new Set(taskCleanupSnapshot.map((task) => task.id));
+    if (gitRoot) {
+      try {
+        const output = execFileSync("git", ["worktree", "list", "--porcelain"], {
+          cwd: gitRoot, encoding: "utf8", timeout: 10_000, stdio: ["ignore", "pipe", "ignore"],
+        }).trim();
+        const blocks = output.split("\n\n").filter(Boolean);
+        for (const block of blocks) {
+          const lines = block.split("\n");
+          const wtPath = lines.find((line) => line.startsWith("worktree "))?.slice(9).trim();
+          const branchRef = lines.find((line) => line.startsWith("branch "))?.slice(7).trim();
+          if (!wtPath || !branchRef || wtPath.replace(/\/+$/, "") === gitRoot.replace(/\/+$/, "")) continue;
+          const branch = branchRef.replace(/^refs\/heads\//, "");
+          const entityId = _parseTaskIdFromBranchRef(branchRef);
+          if (!entityId || knownTaskIds.has(entityId)) continue;
+
+          let merged = false;
+          try {
+            execFileSync("git", ["merge-base", "--is-ancestor", branch, "HEAD"], {
+              cwd: gitRoot, stdio: ["ignore", "ignore", "ignore"], timeout: 10_000,
+            });
+            merged = true;
+          } catch {}
+          if (!merged) {
+            _recordSkip("retained_worktrees", "orphan_branch_not_merged", `branch ${branch} path=${wtPath}`);
+            continue;
+          }
+
+          let clean = false;
+          try {
+            clean = execFileSync("git", ["-C", wtPath, "status", "--porcelain"], {
+              encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000,
+            }).trim() === "";
+          } catch {}
+          if (!clean) {
+            _recordSkip("retained_worktrees", "orphan_worktree_dirty", `branch ${branch} path=${wtPath}`);
+            continue;
+          }
+
+          _recordChange("retained_worktrees", "remove_orphaned_merged_worktree", `branch ${branch}`, wtPath);
+          if (!dryRun) {
+            try {
+              execFileSync("git", ["worktree", "remove", "--force", wtPath], {
+                cwd: gitRoot, stdio: ["ignore", "pipe", "ignore"], timeout: 60_000,
+              });
+              execFileSync("git", ["branch", "-D", branch], {
+                cwd: gitRoot, stdio: ["ignore", "pipe", "ignore"], timeout: 10_000,
+              });
+            } catch (err) {
+              _recordSkip("retained_worktrees", "orphan_cleanup_failed", `branch ${branch}: ${err.message}`);
+            }
+          }
+        }
+      } catch (err) {
+        _recordSkip("retained_worktrees", "orphan_scan_failed", err.message);
+      }
+    }
+  }
+
+
   // ── 17. git branches cleanup (task/goal branches) ──────────────
   {
     const gitRoot = _findGitRoot(workspaceRoot);

@@ -463,6 +463,40 @@ describe("retention-service", () => {
       }
     });
 
+    it("cleans orphaned merged clean worktrees but preserves orphaned unmerged worktrees", async () => {
+      const state = { tasks: [], goals: [], goal_queue: [], conversations: [], memories: [],
+        agent_runs: [], chatgpt_requests: [], activities: [], audit: [] };
+      const { store: st, dir } = await createStore(state);
+      execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "retention@test.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Retention Test"], { cwd: dir });
+      await writeFile(join(dir, "README.md"), "base\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "base"], { cwd: dir, stdio: "ignore" });
+      const root = join(dir, ".gptwork", "worktrees", "repo");
+      const mergedPath = join(root, "task_orphan_merged");
+      const unmergedPath = join(root, "task_orphan_unmerged");
+      await mkdir(root, { recursive: true });
+      execFileSync("git", ["worktree", "add", "-b", "gptwork/task/task_orphan_merged", mergedPath, "main"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["worktree", "add", "-b", "gptwork/task/task_orphan_unmerged", unmergedPath, "main"], { cwd: dir, stdio: "ignore" });
+      await writeFile(join(unmergedPath, "UNMERGED.md"), "keep\n", "utf8");
+      execFileSync("git", ["add", "UNMERGED.md"], { cwd: unmergedPath });
+      execFileSync("git", ["commit", "-m", "unmerged"], { cwd: unmergedPath, stdio: "ignore" });
+
+      try {
+        const result = await retentionCleanup({ config: {}, store: st, workspaceRoot: dir, limit: 50, dryRun: false });
+        assert.equal(existsSync(mergedPath), false, "merged clean orphan should be removed");
+        assert.equal(existsSync(unmergedPath), true, "unmerged orphan must be preserved");
+        const branches = execFileSync("git", ["branch", "--list", "gptwork/task/*"], { cwd: dir, encoding: "utf8" });
+        assert.equal(branches.includes("task_orphan_merged"), false);
+        assert.equal(branches.includes("task_orphan_unmerged"), true);
+        assert.ok(result.changes.some((change) => change.action === "remove_orphaned_merged_worktree"));
+        assert.ok(result.skipped.some((skip) => skip.reason === "orphan_branch_not_merged"));
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
     it("status classifies resolved terminal retained worktrees as historical, not active blockers", async () => {
       const state = {
         tasks: [
