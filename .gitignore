@@ -23,3 +23,7 @@ backend/.gptwork/reports/
 data/*.bak-*
 backend/tmp-deploy/
 backend/data/
+
+# Generated design/plan artifacts (not source code)
+gptwork-workstream-tui-multi-agent-design-v2/
+workmcp_full_mode_repair_plan/
