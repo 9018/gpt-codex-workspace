@@ -483,8 +483,12 @@ describe("retention-service", () => {
       execFileSync("git", ["add", "UNMERGED.md"], { cwd: unmergedPath });
       execFileSync("git", ["commit", "-m", "unmerged"], { cwd: unmergedPath, stdio: "ignore" });
 
+      const nonGitWorkspaceRoot = join(dir, "workspace-root");
+      await mkdir(nonGitWorkspaceRoot, { recursive: true });
       try {
-        const result = await retentionCleanup({ config: {}, store: st, workspaceRoot: dir, limit: 50, dryRun: false });
+        const result = await retentionCleanup({
+          config: { defaultRepoPath: dir }, store: st, workspaceRoot: nonGitWorkspaceRoot, limit: 50, dryRun: false,
+        });
         assert.equal(existsSync(mergedPath), false, "merged clean orphan should be removed");
         assert.equal(existsSync(unmergedPath), true, "unmerged orphan must be preserved");
         const branches = execFileSync("git", ["branch", "--list", "gptwork/task/*"], { cwd: dir, encoding: "utf8" });

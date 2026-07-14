@@ -101,3 +101,68 @@ test('strict acceptance recognizes canonical contract verification schema', () =
   assert.equal(assessment.ready, true);
   assert.deepEqual(assessment.missing, []);
 });
+
+test('complete_task routes status changes through the canonical transition service', async () => {
+  const task = {
+    id: 'task_transition_complete',
+    status: 'accepting',
+    result: { status: 'completed', summary: 'verified' },
+  };
+  const calls = [];
+  const transitionService = {
+    async transitionTask(command) {
+      calls.push(command);
+      task.status = command.payload.canonical_status;
+      task.result = { ...task.result, ...command.payload.task_result_patch };
+      return { task, applied: true, next_status: task.status };
+    },
+  };
+  const store = {
+    state: { tasks: [task], goals: [] },
+    async load() { return this.state; },
+    async findTaskById(id) { return this.state.tasks.find((item) => item.id === id); },
+  };
+  const tools = createTaskCompletionToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store,
+    github: { syncTask: async () => {} },
+    transitionService,
+  });
+
+  const result = await tools.complete_task.handler({ task_id: task.id, summary: 'done' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].event, 'canonical_decision_applied');
+  assert.equal(calls[0].payload.canonical_status, 'completed');
+  assert.equal(calls[0].payload.unified_decision.status, 'completed');
+  assert.equal(result.task.status, 'completed');
+});
+
+test('request_human_review routes through canonical transition service', async () => {
+  const task = { id: 'task_transition_review', status: 'accepting', result: {} };
+  const calls = [];
+  const transitionService = {
+    async transitionTask(command) {
+      calls.push(command);
+      task.status = command.payload.canonical_status;
+      task.result = { ...task.result, ...command.payload.task_result_patch };
+      return { task, applied: true, next_status: task.status };
+    },
+  };
+  const tools = createTaskCompletionToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store: { async load() { return { tasks: [task] }; } },
+    github: { syncTask: async () => {} },
+    transitionService,
+  });
+
+  const result = await tools.request_human_review.handler({ task_id: task.id, message: 'inspect evidence' });
+
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].event, 'canonical_decision_applied');
+  assert.equal(calls[0].payload.canonical_status, 'waiting_for_review');
+  assert.equal(calls[0].payload.task_result_patch.review_message, 'inspect evidence');
+  assert.equal(result.task.status, 'waiting_for_review');
+});

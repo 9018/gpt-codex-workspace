@@ -1,7 +1,9 @@
-import { updateGoalStatus, updateTask } from '../task-lifecycle.mjs';
+import { updateGoalStatus, updateTask, notifyTerminalTask } from '../task-lifecycle.mjs';
 import { autoStartNextOnTaskCompleted } from '../goal-queue.mjs';
 import { validateResultContract, DIAGNOSIS_CODES } from '../task-result-status.mjs';
 
+import { createTaskTransitionService } from '../task-state/task-transition-service.mjs';
+import { TASK_EVENTS } from '../task-state/task-transition-events.mjs';
 
 function evidencePassed(value) {
   if (!value || typeof value !== 'object') return false;
@@ -31,7 +33,8 @@ export function assessTaskCompletionReadiness(task = {}) {
  * Factory for task completion and review MCP tool registration.
  * Dependencies are passed in to avoid circular imports from gptwork-server.mjs.
  */
-export function createTaskCompletionToolsGroup({ tool, schema, store, github, eventLogger, hookBus }) {
+export function createTaskCompletionToolsGroup({ tool, schema, store, github, eventLogger, hookBus, transitionService: injectedTransitionService }) {
+  const transitionService = injectedTransitionService || createTaskTransitionService({ store });
   const common = { audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v2.html",
       resourceUri: "ui://widget/gptwork-card-v2.html" };
   return {
@@ -136,10 +139,38 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
           canCompleteLinkedGoal = true;
         }
 
-        const result = await updateTask(store, task_id, (task) => {
-          task.status = targetStatus;
-          task.result = resultFields;
+        const result = await transitionService.transitionTask({
+          task_id,
+          event: TASK_EVENTS.CANONICAL_DECISION_APPLIED,
+          payload: {
+            canonical_status: targetStatus,
+            unified_decision: {
+              status: targetStatus,
+              source: admin_override ? "operator_admin_override" : "operator_completion_tool",
+              requires_review: targetStatus === "waiting_for_review",
+            },
+            task_result_patch: resultFields,
+          },
+          reason: targetStatus === "completed"
+            ? "complete_task accepted canonical evidence"
+            : "complete_task blocked pending review",
+          source: "operator",
+          actor: { type: "operator", id: "complete_task" },
+          idempotency_key: `complete_task:${task_id}:${targetStatus}:${resultFields.completed_at || resultFields.completion_requested_at || Date.now()}`,
         });
+
+        // Preserve the terminal notification side effect that historically lived
+        // in updateTask while keeping the status mutation inside the kernel.
+        if (targetStatus === "completed") {
+          const canonicalTask = typeof store.findTaskById === "function"
+            ? await store.findTaskById(task_id)
+            : ((await store.load()).tasks || []).find((task) => task.id === task_id);
+          if (canonicalTask) {
+            await notifyTerminalTask(canonicalTask);
+            if (typeof store.save === "function") await store.save();
+            result.task = canonicalTask;
+          }
+        }
 
         if (targetStatus === "completed" && result.task?.goal_id && canCompleteLinkedGoal) {
           const state = await store.load();
@@ -155,6 +186,7 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         github.syncTask(result.task).catch(() => {});
         await eventLogger?.append("task.completed", { task_id, status: targetStatus, summary });
         await hookBus?.emit("onTaskCompleted", { task: result.task });
+
         return result;
       },
     }),
@@ -164,7 +196,23 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
       inputSchema: schema({ task_id: "string", message: "string" }, ["task_id"]),
       modes: ["standard", "codex", "full"],
       ...common,
-      handler: async ({ task_id, message = "" }) => updateTask(store, task_id, (task) => { task.status = "waiting_for_review"; task.review_message = message; }),
+      handler: async ({ task_id, message = "" }) => transitionService.transitionTask({
+        task_id,
+        event: TASK_EVENTS.CANONICAL_DECISION_APPLIED,
+        payload: {
+          canonical_status: "waiting_for_review",
+          unified_decision: {
+            status: "waiting_for_review",
+            source: "operator_review_request",
+            requires_review: true,
+          },
+          task_result_patch: { review_message: message },
+        },
+        reason: message || "human review requested",
+        source: "operator",
+        actor: { type: "operator", id: "request_human_review" },
+        idempotency_key: `request_human_review:${task_id}:${Date.now()}`,
+      }),
     }),
   };
 }

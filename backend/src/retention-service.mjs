@@ -703,7 +703,7 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
 
   // ── 18. git branches (task/goal branches) ────────────────────────────
   {
-    const gitRoot = _findGitRoot(workspaceRoot);
+    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
     let totalBranches = 0;
     let terminalBranches = 0;
     let orphanedBranches = 0;
@@ -751,7 +751,7 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
 
   // ── 19. git worktrees (active git worktree list) ─────────────────────
   {
-    const gitRoot = _findGitRoot(workspaceRoot);
+    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
     let totalWorktrees = 0;
     let activeWorktrees = 0;
     let terminalWorktrees = 0;
@@ -1514,7 +1514,7 @@ export async function retentionCleanup({
       if (decision.action === "remove") {
         _recordChange("retained_worktrees", "remove_resolved_terminal", `task ${task.id} (${task.status}) reason=${decision.reason}`, worktreePath);
         if (!dryRun) {
-          const gitRoot = _findGitRoot(workspaceRoot);
+          const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
           let removedThroughGit = false;
           if (gitRoot) {
             try {
@@ -1561,7 +1561,7 @@ export async function retentionCleanup({
   // only remove an orphan when its branch is fully contained by HEAD and the
   // worktree has no local changes. Unknown, dirty, or unmerged resources stay.
   {
-    const gitRoot = _findGitRoot(workspaceRoot);
+    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
     const knownTaskIds = new Set(taskCleanupSnapshot.map((task) => task.id));
     if (gitRoot) {
       try {
@@ -1624,7 +1624,7 @@ export async function retentionCleanup({
 
   // ── 17. git branches cleanup (task/goal branches) ──────────────
   {
-    const gitRoot = _findGitRoot(workspaceRoot);
+    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
     const knownTasks = taskCleanupSnapshot;
 
     if (gitRoot) {
