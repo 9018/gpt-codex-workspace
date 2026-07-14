@@ -766,3 +766,80 @@ test('P0-MA22: code_change operation_kind still sets integration_not_required=fa
   assert.equal(normalized.integration_not_required, false, 'code_change should keep integration_not_required=false');
   assert.equal(normalized.verification_only_result, false, 'verification_only_result should be false for code_change');
 });
+
+// =========================================================================
+// P0-CanaryB2: Docs-only profile dynamic upgrade with source code files
+// =========================================================================
+test('P0-CanaryB2: docs-only contract + code files => operation_kind_mismatch', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      changed_files: ['src/main.mjs', 'README.md'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+    contract: { intent: { operation_kind: 'docs_only' } },
+  });
+  assert.equal(normalized.changed_files.includes('src/main.mjs'), true);
+  assert.equal(normalized.changed_files.includes('README.md'), true);
+  const mismatch = normalized.blockers.filter(b => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatch.length, 1, 'docs-only contract with code files should produce operation_kind_mismatch blocker');
+  assert.equal(normalized.requires_review, true, 'mismatch should force review');
+});
+
+test('P0-CanaryB2: docs-only contract + doc files only => no blocker', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      changed_files: ['README.md', 'CHANGELOG.md', 'docs/guide.md'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+    contract: { intent: { operation_kind: 'docs_only' } },
+  });
+  const mismatch = normalized.blockers.filter(b => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatch.length, 0, 'docs-only contract with only doc files should not produce mismatch blocker');
+  assert.equal(normalized.operation_kind, 'docs_only');
+});
+
+test('P0-CanaryB2: docs-only contract + .tsx files => operation_kind_mismatch', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      changed_files: ['component.tsx', 'README.md'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+    contract: { intent: { operation_kind: 'docs_only' } },
+  });
+  const mismatch = normalized.blockers.filter(b => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatch.length, 1, '.tsx files should trigger mismatch from docs-only contract');
+});
+
+test('P0-CanaryB2: docs-only contract + .py files => operation_kind_mismatch', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      changed_files: ['app.py', 'docs/api.md'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+    contract: { intent: { operation_kind: 'docs_only' } },
+  });
+  const mismatch = normalized.blockers.filter(b => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatch.length, 1, '.py files should trigger mismatch from docs-only contract');
+});
+
+test('P0-CanaryB2: docs-only contract + .rs files => operation_kind_mismatch', () => {
+  const normalized = normalizeOperationEvidence({
+    result: {
+      status: 'completed',
+      changed_files: ['src/main.rs', 'Cargo.toml'],
+      commit: 'abc123',
+      verification: { passed: true },
+    },
+    contract: { intent: { operation_kind: 'docs_only' } },
+  });
+  const mismatch = normalized.blockers.filter(b => b.code === 'operation_kind_mismatch');
+  assert.equal(mismatch.length, 1, '.rs files should trigger mismatch from docs-only contract');
+});

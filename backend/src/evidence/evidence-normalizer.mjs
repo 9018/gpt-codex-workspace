@@ -242,8 +242,17 @@ function inferOperationKind({ result = {}, contract = {} } = {}) {
   if (result.queue_admin_evidence || result.queue_operation) return 'queue_admin';
   if (hasChangedFiles || hasValue(result.commit)) {
     const contractKind = String(contract?.intent?.operation_kind || "");
-    if (contractKind === "docs_only") return "docs_only";
-    return 'code_change';
+    if (contractKind === "docs_only") {
+      // P0-CanaryB2: When contract says docs_only but changed files contain
+      // real source code, upgrade to code_change so the
+      // operation_kind_mismatch blocker fires and forces proper verification.
+      const hasSourceCode = realChangedFiles.some(f =>
+        /\.(mjs|js|ts|tsx|jsx|py|rb|go|rs)$/i.test(f)
+      );
+      if (hasSourceCode) return "code_change";
+      return "docs_only";
+    }
+    return "code_change";
   }
 
   // 3. Least authoritative: contract intent (fallback when no evidence)
