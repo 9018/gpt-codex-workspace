@@ -36,6 +36,15 @@ function isReadonlyDiagnostic(task, goal, result) {
     && (!mutationScope || mutationScope === "none");
 }
 
+
+function diagnosticVerificationPassed(result) {
+  if (result?.verification?.passed === true) return true;
+  if (Number(result?.tests?.failed) === 0 && Number(result?.tests?.passed) > 0) return true;
+  const criteria = Array.isArray(result?.acceptance_criteria) ? result.acceptance_criteria : [];
+  const blocking = criteria.filter((criterion) => criterion?.blocking !== false);
+  return blocking.length > 0 && blocking.every((criterion) => ["pass", "passed", "completed"].includes(String(criterion?.status || "").toLowerCase()));
+}
+
 function artifactForRole(role, { goalId, digest, snapshot }) {
   const base = `.gptwork/goals/${goalId}`;
   const resultPath = `${base}/result.json`;
@@ -90,7 +99,7 @@ export async function reconcileTuiAgentRunsFromProgress({ store, workspaceRoot, 
   if (snapshot.result_json.task_id && snapshot.result_json.task_id !== snapshot.task_id) {
     return { reconciled: false, reason: "result_task_mismatch", formal_completed: 0, advisory_completed: 0 };
   }
-  if (snapshot.result_json.verification?.passed !== true || !["verified", "completed"].includes(String(snapshot.result_json.status))) {
+  if (!diagnosticVerificationPassed(snapshot.result_json) || !["verified", "completed"].includes(String(snapshot.result_json.status))) {
     return { reconciled: false, reason: "diagnostic_verification_not_passed", formal_completed: 0, advisory_completed: 0 };
   }
 

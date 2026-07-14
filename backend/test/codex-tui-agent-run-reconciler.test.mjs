@@ -49,6 +49,30 @@ test("diagnostic TUI progress reconciles matching queued formal and advisory run
   assert.ok(state.advisory_runs.every((run) => run.status === "completed"));
 });
 
+test("diagnostic reconciliation accepts passed tests and blocking acceptance criteria without verification.passed", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "tui-agent-reconcile-tests-")));
+  const store = new StateStore({ statePath: join(root, ".gptwork", "state.json"), defaultWorkspaceRoot: root });
+  const digest = "sha256:tests-pass";
+  await store.mutate((state) => {
+    state.tasks.push({ id: "task_tests", goal_id: "goal_tests", pipeline_version: "task_pipeline_v2", task_context_digest: digest, acceptance_contract: { intent: { operation_kind: "diagnostic", mutation_scope: "none" }, requirements: { requires_commit: false } } });
+    state.goals.push({ id: "goal_tests", task_id: "task_tests", task_context: { contract_digest: digest } });
+  });
+  const created = await createAgentRun(store, { task_id: "task_tests", goal_id: "goal_tests", role: "finalizer", status: "queued", input_context_digest: digest, require_fresh_artifacts: true });
+  const goalDir = join(root, ".gptwork", "goals", "goal_tests");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "progress.json"), JSON.stringify({ subagents: [{ role: "finalizer", agent_run_id: created.agent_run.id, status: "pending", input_context_digest: digest }] }));
+  await writeFile(join(goalDir, "result.json"), "{}");
+  await writeFile(join(goalDir, "result.md"), "# Done\n");
+  const result = await reconcileTuiAgentRunsFromProgress({ store, workspaceRoot: root, snapshot: {
+    task_id: "task_tests", goal_id: "goal_tests", task_context_digest: digest, result_json_valid: true, worktree_clean: true,
+    result_json_path: join(goalDir, "result.json"), result_md_path: join(goalDir, "result.md"),
+    result_json: { status: "verified", execution_mode: "readonly_diagnostic", tests: { passed: 4, failed: 0 }, acceptance_criteria: [{ id: "a", blocking: true, status: "pass" }], blockers: [] },
+  } });
+  assert.equal(result.reconciled, true);
+  const state = await store.load();
+  assert.equal(state.agent_runs.find((run) => run.id === created.agent_run.id).status, "completed");
+});
+
 test("reconciler refuses progress with a mismatched context digest", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "tui-agent-reconcile-mismatch-")));
   const store = new StateStore({ statePath: join(root, ".gptwork", "state.json"), defaultWorkspaceRoot: root });
