@@ -20,7 +20,7 @@ async function makeServer() {
 async function callTool(server, name, args = {}) {
   const handler = server.getToolForTests(name);
   assert.equal(typeof handler, "function");
-  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "project:read", "workspace:read", "workspace:write"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
+  return handler(args, { user_id: "test", scopes: ["task:create", "task:update", "task:read", "project:read", "workspace:read", "workspace:write"], project_ids: [String.fromCharCode(42)], workspace_ids: [String.fromCharCode(42)], emitProgress() {} });
 }
 
 test("ChatGPT can create a Codex goal with shared conversation memory and linked task", async () => {
@@ -125,6 +125,17 @@ test("explicit task context packet is the execution authority", async () => {
   assert.match(created.goal.context_summary, /Background: 1 items/);
   assert.doesNotMatch(created.goal.context_summary, /RAW SUMMARY/);
   assert.equal(created.goal.task_context.contract_digest, created.task.task_context_digest);
+  assert.equal(created.workspace_files.task_context_json, `.gptwork/goals/${created.goal.id}/task.context.json`);
+  const storedPacket = await callTool(server, "read_text_file", { path: created.workspace_files.task_context_json });
+  const parsedPacket = JSON.parse(storedPacket.content);
+  assert.equal(parsedPacket.identity.goal_id, created.goal.id);
+  assert.equal(parsedPacket.identity.task_id, created.task.id);
+  assert.equal(parsedPacket.objective, packet.objective);
+  const storedDigest = await callTool(server, "read_text_file", { path: `.gptwork/goals/${created.goal.id}/task.context.digest` });
+  assert.equal(storedDigest.content.trim(), created.task.task_context_digest);
+  const preview = await callTool(server, "preview_codex_context", { task_id: created.task.id });
+  assert.equal(preview.context_v2.task_context.present, true);
+  assert.equal(preview.context_v2.task_context.objective, packet.objective);
 });
 
 test("invalid explicit task context packet blocks goal creation", async () => {

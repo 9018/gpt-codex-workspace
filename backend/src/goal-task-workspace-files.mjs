@@ -2,6 +2,8 @@ import { randomUUID } from "node:crypto";
 import { defaultTokenContext } from "./auth-context.mjs";
 import { goalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, renderCodexEntryMarkdown, codexInstruction, safeBundleName } from "./goal-files.mjs";
 import { workspaceUploadBundleBase64, writeWorkspaceTextInternal } from "./workspace-service.mjs";
+import { taskContextContractDigest } from "./context-contract/task-context-canonicalizer.mjs";
+import { validateTaskContextPacket } from "./context-contract/task-context-schema.mjs";
 
 /**
  * Write initial workspace files for a goal/task.
@@ -26,6 +28,30 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
   if (goal.acceptance_contract) {
     files.push({ path: workspaceFiles.acceptance_contract_json, content: JSON.stringify(goal.acceptance_contract, null, 2) });
   }
+
+  if (extras.task_context_packet) {
+    const packet = structuredClone(extras.task_context_packet);
+    validateTaskContextPacket(packet);
+    const digest = taskContextContractDigest(packet);
+    if (goal.task_context?.contract_digest && goal.task_context.contract_digest !== digest) {
+      throw new Error("task_context_digest_mismatch: workspace packet differs from Goal binding");
+    }
+    if (task?.task_context_digest && task.task_context_digest !== digest) {
+      throw new Error("task_context_digest_mismatch: workspace packet differs from Task binding");
+    }
+    files.push(
+      { path: workspaceFiles.task_context_json, content: JSON.stringify(packet, null, 2) },
+      { path: workspaceFiles.task_context_digest, content: `${digest}
+` }
+    );
+    const provenance = Array.isArray(extras.source_provenance)
+      ? extras.source_provenance
+      : packet.source_provenance;
+    if (Array.isArray(provenance) && provenance.length > 0) {
+      files.push({ path: workspaceFiles.source_provenance_json, content: JSON.stringify(provenance, null, 2) });
+    }
+  }
+
 
   // Skip payload files during append-only operations (P0.2)
   if (!skipPayload) {

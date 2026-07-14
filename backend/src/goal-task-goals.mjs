@@ -162,11 +162,22 @@ export async function createGoal(store, config, args, context = defaultTokenCont
     }
   }
 
+  if (taskContextPacket && task) {
+    taskContextPacket.identity.task_id = task.id;
+    validateTaskContextPacket(taskContextPacket);
+    const finalizedDigest = taskContextContractDigest(taskContextPacket);
+    if (finalizedDigest !== goal.task_context?.contract_digest || finalizedDigest !== task.task_context_digest) {
+      throw new Error("task_context_digest_mismatch: finalized packet does not match Goal/Task binding");
+    }
+  }
+
   const workspace_files = await writeGoalWorkspaceFiles(store, config, goal, conversation, memories, task, {
     payload: args.payload || null,
     payload_base64: args.payload_base64 || "",
     bundles: args.bundles || [],
-    initialize_result: true
+    initialize_result: true,
+    task_context_packet: taskContextPacket,
+    source_provenance: taskContextPacket?.source_provenance || args.source_provenance || []
   }, context);
   await store.save();
   return { goal, conversation, memories, task, workspace_files };
