@@ -277,3 +277,35 @@ test("collect resolves canonical goal artifacts from workspace root when session
   assert.equal(snapshot.commit, commit);
   assert.equal(snapshot.ready_for_review, true);
 });
+
+test("collect allows clean diagnostic evidence without a commit when the acceptance contract says commit is not required", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "acceptance.contract.json"), JSON.stringify({
+    schema_version: 2,
+    intent: { operation_kind: "diagnostic", mutation_scope: "none" },
+    requirements: { requires_commit: false, requires_integration: false },
+    requires_commit: false,
+    requires_integration: false,
+  }));
+  await writeFile(join(goalDir, "result.md"), "# Diagnostic report\n\nNo repository mutation.\n");
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "verified",
+    execution_mode: "readonly_diagnostic",
+    summary: "Diagnostic evidence complete",
+    commit: null,
+    changed_files: [],
+    verification: { passed: true, reports: ["diagnostic_report", "no_mutation_evidence"] },
+    blockers: [],
+  }));
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+  assert.equal(snapshot.requires_commit, false);
+  assert.equal(snapshot.commit, null);
+  assert.equal(snapshot.worktree_clean, true);
+  assert.equal(snapshot.result_json_valid, true);
+  assert.equal(snapshot.ready_for_review, true);
+  assert.deepEqual(snapshot.findings, []);
+});

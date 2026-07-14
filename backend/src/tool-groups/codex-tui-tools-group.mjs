@@ -36,6 +36,7 @@ import { isTerminalStatus } from "../task-status-taxonomy.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
+import { reconcileTuiAgentRunsFromProgress } from "../codex-tui-agent-run-reconciler.mjs";
 import { ensurePipelineRunsForTask } from "../pipeline-orchestration.mjs";
 
 
@@ -113,6 +114,7 @@ export function createCodexTuiToolsGroup({
   updateTaskFn = updateTask,
   createExecutionStoreFn = createExecutionStore,
   ensurePipelineRunsForTaskFn = ensurePipelineRunsForTask,
+  reconcileTuiAgentRunsFn = reconcileTuiAgentRunsFromProgress,
   workstreamId = null,
 } = {}) {
   const metadata = tuiToolMetadata();
@@ -481,6 +483,13 @@ codex_tui_collect: tool({
       ...metadata,
       handler: async ({ session_id }) => {
         const snapshot = await collectCodexTuiCompletionFn({ sessionId: session_id, workspaceRoot });
+        if (snapshot.task_id && snapshot.goal_id) {
+          snapshot.agent_run_reconciliation = await reconcileTuiAgentRunsFn({
+            store,
+            workspaceRoot,
+            snapshot,
+          }).catch((error) => ({ reconciled: false, reason: error?.message || String(error), error: true }));
+        }
 
         // When the session evidence is complete and ready for review,
         // write the result back to the task and transition its status.
@@ -496,6 +505,7 @@ codex_tui_collect: tool({
               // Write durable evidence to task result
               item.result = {
                 ...(item.result || {}),
+                ...(snapshot.result_json || {}),
                 provider: 'codex_tui_goal',
                 session_id: snapshot.session_id,
                 commit: snapshot.commit,

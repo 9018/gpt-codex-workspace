@@ -183,6 +183,16 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const resultMdText = resultMdPresent ? await readFile(resultMdPath, "utf8") : "";
   const parsedResultJson = parseResultJson(resultJsonText);
   const resultEvidence = resultMarkdownEvidence(resultMdText);
+  const acceptanceContractPath = canonicalGoalDir ? join(canonicalGoalDir, "acceptance.contract.json") : null;
+  let acceptanceContract = null;
+  if (acceptanceContractPath && await fileExists(acceptanceContractPath)) {
+    try {
+      acceptanceContract = JSON.parse(await readFile(acceptanceContractPath, "utf8"));
+    } catch {}
+  }
+  const requiresCommit = acceptanceContract?.requirements?.requires_commit
+    ?? acceptanceContract?.requires_commit
+    ?? true;
 
   // Git status from the session cwd (task worktree)
   const statusLines = gitLines(cwd, ["status", "--short"]);
@@ -224,7 +234,11 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     result_md_present: resultMdPresent,
     result_md_path: resultMdPath,
     worktree_clean: worktreeClean,
-    ready_for_review: resultMdPresent && worktreeClean && Boolean(commit) && findings.length === 0,
+    requires_commit: requiresCommit === true,
+    ready_for_review: resultMdPresent
+      && worktreeClean
+      && (requiresCommit === false ? (resultJsonPresent && !parsedResultJson.error) : Boolean(commit))
+      && findings.length === 0,
     findings,
   };
 }
