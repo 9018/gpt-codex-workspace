@@ -1512,7 +1512,26 @@ export async function retentionCleanup({
       if (decision.action === "remove") {
         _recordChange("retained_worktrees", "remove_resolved_terminal", `task ${task.id} (${task.status}) reason=${decision.reason}`, worktreePath);
         if (!dryRun) {
-          await rm(worktreePath, { recursive: true, force: true });
+          const gitRoot = _findGitRoot(workspaceRoot);
+          let removedThroughGit = false;
+          if (gitRoot) {
+            try {
+              execFileSync("git", ["worktree", "remove", "--force", worktreePath], {
+                cwd: gitRoot, stdio: ["ignore", "pipe", "pipe"], timeout: 60_000,
+              });
+              removedThroughGit = true;
+            } catch {}
+          }
+          if (!removedThroughGit) {
+            await rm(worktreePath, { recursive: true, force: true });
+            if (gitRoot) {
+              try {
+                execFileSync("git", ["worktree", "prune"], {
+                  cwd: gitRoot, stdio: ["ignore", "pipe", "ignore"], timeout: 10_000,
+                });
+              } catch {}
+            }
+          }
           task.worktree_cleanup = {
             status: "removed",
             reason: decision.reason,
@@ -1567,11 +1586,16 @@ export async function retentionCleanup({
           }
         }
 
-        // Prune oldest-first when over limit
+        // Branches whose safely resolved worktrees were removed are no longer useful.
+        // Delete them immediately; use the rolling limit only for other terminal branches.
         branchTaskDates.sort((a, b) => a.date - b.date); // oldest first
+        const immediateBranches = new Set(branchTaskDates
+          .filter(({ task }) => task.worktree_cleanup?.status === "removed")
+          .map(({ branch }) => branch));
         let pruned = 0;
         for (const entry of branchTaskDates) {
-          if (candidateCount - pruned <= limit) break;
+          const immediate = immediateBranches.has(entry.branch);
+          if (!immediate && candidateCount - pruned <= limit) continue;
           _recordChange("git_branches", "prune_terminal", `branch ${entry.branch} (task ${entry.task.id} ${entry.task.status})`, null);
           if (!dryRun) {
             try {

@@ -411,6 +411,52 @@ describe("retention-service", () => {
       }
     });
 
+    it("removes resolved terminal worktrees through git and deletes their task branch immediately", async () => {
+      const state = {
+        tasks: [{
+          id: "task_git_cleanup",
+          status: "completed",
+          created_at: "2026-01-01T00:00:00Z",
+          updated_at: "2026-01-01T00:00:00Z",
+          result: {
+            commit_integrated: true,
+            integration: { status: "merged", merged: true },
+            verification: { passed: true },
+            worktree_lifecycle: { worktree_path: "__SET_LATER__", branch_name: "gptwork/task/task_git_cleanup" },
+          },
+        }],
+        goals: [], goal_queue: [], conversations: [], memories: [],
+        agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
+      };
+      const { store: st, dir } = await createStore(state);
+      const worktreePath = join(dir, ".gptwork", "worktrees", "repo", "task_git_cleanup");
+      state.tasks[0].result.worktree_lifecycle.worktree_path = worktreePath;
+      await st.save();
+
+      execFileSync("git", ["init", "-b", "main"], { cwd: dir, stdio: "ignore" });
+      execFileSync("git", ["config", "user.email", "retention@test.invalid"], { cwd: dir });
+      execFileSync("git", ["config", "user.name", "Retention Test"], { cwd: dir });
+      await writeFile(join(dir, "README.md"), "base\n", "utf8");
+      execFileSync("git", ["add", "README.md"], { cwd: dir });
+      execFileSync("git", ["commit", "-m", "base"], { cwd: dir, stdio: "ignore" });
+      await mkdir(join(dir, ".gptwork", "worktrees", "repo"), { recursive: true });
+      execFileSync("git", ["worktree", "add", "-b", "gptwork/task/task_git_cleanup", worktreePath, "main"], { cwd: dir, stdio: "ignore" });
+
+      try {
+        const result = await retentionCleanup({ config: {}, store: st, workspaceRoot: dir, limit: 50, dryRun: false });
+        const worktreeList = execFileSync("git", ["worktree", "list", "--porcelain"], { cwd: dir, encoding: "utf8" });
+        const branchList = execFileSync("git", ["branch", "--list", "gptwork/task/task_git_cleanup"], { cwd: dir, encoding: "utf8" }).trim();
+
+        assert.equal(existsSync(worktreePath), false);
+        assert.equal(worktreeList.includes(worktreePath), false, "git worktree registry must not retain removed path");
+        assert.equal(branchList, "", "resolved integrated task branch should be deleted without waiting for branch limit pressure");
+        assert.ok(result.changes.some((change) => change.family === "retained_worktrees" && change.action === "remove_resolved_terminal"));
+        assert.ok(result.changes.some((change) => change.family === "git_branches" && change.action === "prune_terminal"));
+      } finally {
+        await rm(dir, { recursive: true, force: true }).catch(() => {});
+      }
+    });
+
     it("status classifies resolved terminal retained worktrees as historical, not active blockers", async () => {
       const state = {
         tasks: [
