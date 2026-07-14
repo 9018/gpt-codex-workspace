@@ -234,3 +234,43 @@ export async function releaseLockForTask(workspaceRoot, taskId) {
 
   return { released: false };
 }
+
+/**
+ * Auto-release task/session ownership when a task reaches a terminal state.
+ * This ensures locks and ownership are cleaned up when tasks complete, fail,
+ * time out, or are cancelled.
+ *
+ * Idempotent: calling multiple times for the same task is safe.
+ *
+ * @param {string} workspaceRoot
+ * @param {object} task - Task with status and ownership fields
+ * @returns {Promise<{ released: boolean, ownership: string|null }>}
+ */
+export async function autoReleaseOwnershipOnTerminal(workspaceRoot, task) {
+  const terminalStates = new Set(["completed", "failed", "cancelled", "timed_out", "human_interrupted"]);
+  if (!task || !terminalStates.has(task.status)) {
+    return { released: false, ownership: task?.ownership || null };
+  }
+
+  let released = false;
+  let ownershipType = null;
+
+  // 1. Release repo lock if task holds one
+  if (workspaceRoot && task.id) {
+    const result = await releaseLockForTask(workspaceRoot, task.id);
+    if (result.released) {
+      released = true;
+      ownershipType = "repo_lock";
+    }
+  }
+
+  // 2. Clear task-level ownership metadata
+  if (task.ownership) {
+    task.ownership = undefined;
+    task.ownership_released_at = new Date().toISOString();
+    released = true;
+    ownershipType = "task_ownership";
+  }
+
+  return { released, ownership: ownershipType };
+}

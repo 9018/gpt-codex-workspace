@@ -40,7 +40,29 @@ export async function runCodexTuiEvidenceCycle({
     await sleepFn(pollMs);
   }
 
+
   const collected = await collectFn({ sessionId, workspaceRoot });
+
+  // Freshness re-check: stat + re-read result.json before concluding timeout
+  // If the file exists with a recent mtime and valid terminal content, treat as evidence-ready.
+  if (timedOut) {
+    try {
+      const { stat: statFile, readFile: reReadFile } = await import("node:fs/promises");
+      const reStat = await statFile(resultJsonPath).catch(() => null);
+      if (reStat) {
+        const ageMs = Date.now() - reStat.mtime.getTime();
+        if (ageMs < 10_000) {
+          const reRead = await reReadFile(resultJsonPath, "utf8").catch(() => null);
+          if (reRead) {
+            const parsed = JSON.parse(reRead);
+            if (parsed && (parsed.status === "completed" || parsed.status === "failed" || parsed.status === "timed_out") && (parsed.summary || parsed.tests || parsed.changed_files)) {
+              timedOut = false;
+            }
+          }
+        }
+      }
+    } catch { /* stat/read failed -- continue with timeout */ }
+  }
 
   if (timedOut) {
     return {

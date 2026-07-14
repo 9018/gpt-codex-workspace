@@ -6,6 +6,7 @@
  */
 
 import { access, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import { constants as fsConstants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
@@ -73,6 +74,45 @@ function parseResultJson(text) {
     return { value: JSON.parse(text), error: null };
   } catch (err) {
     return { value: null, error: err?.message || "invalid JSON" };
+  }
+}
+
+/**
+ * Terminalize a TUI session when durable result artifacts exist but session
+ * is still marked active/created. This is idempotent.
+ *
+ * @param {object} params
+ * @param {string} params.workspaceRoot
+ * @param {string} params.sessionId - TUI session ID
+ * @param {object} params.session - Current session record
+ * @returns {Promise<{ terminalized: boolean, session: object|null }>}
+ */
+export async function terminalizeTuiSession({ workspaceRoot, sessionId, session } = {}) {
+  if (!workspaceRoot || !sessionId) return { terminalized: false, session };
+  if (!session || session.status === "stopped" || session.status === "failed" || session.status === "completed") {
+    return { terminalized: false, session };
+  }
+  const goalId = session.goal_id;
+  if (!goalId) return { terminalized: false, session };
+  const resultJsonPath = join(workspaceRoot, ".gptwork", "goals", goalId, "result.json");
+  if (!existsSync(resultJsonPath)) return { terminalized: false, session };
+  try {
+    const raw = await readFile(resultJsonPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const isTerminal = parsed.status === "completed" || parsed.status === "failed" || parsed.status === "timed_out";
+    if (!isTerminal) return { terminalized: false, session };
+    const { createCodexTuiSessionStore } = await import("./codex-tui-session-store.mjs");
+    const store = createCodexTuiSessionStore({ workspaceRoot });
+    const updated = await store.updateSession(sessionId, {
+      status: parsed.status === "completed" ? "stopped" : "failed",
+      active: false,
+      terminalized_at: new Date().toISOString(),
+      terminalize_reason: "durable_result_found",
+      durable_result_status: parsed.status,
+    });
+    return { terminalized: true, session: updated };
+  } catch {
+    return { terminalized: false, session };
   }
 }
 

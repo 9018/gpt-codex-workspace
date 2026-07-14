@@ -577,3 +577,35 @@ export function failureClassIsQuarantined(failureClass) {
   if (!def) return false;
   return def.nextStatusHint === "quota_wait" || def.nextStatusHint === "retry_wait";
 }
+
+
+/**
+ * Check whether a failure class is retryable (transient/resource-related).
+ *
+ * These failures can be automatically retried instead of entering the repair
+ * pipeline. The repair loop must NOT attempt repair for retryable failures.
+ * When a failure is retryable, the system should create a retry (with backoff)
+ * instead of entering the repair pipeline.
+ *
+ * @param {string} failureClass
+ * @returns {boolean}
+ */
+export function failureClassIsRetryable(failureClass) {
+  return new Set([
+    "rate_limited",
+    "quota_exceeded",
+    "quota_exhausted",
+    "gateway_error",
+    "service_unavailable",
+    "transient_network_error",
+    "provider_interruption",
+    "execution_timeout",
+    "startup_timeout",
+    "result_missing",
+    "codex_timeout",
+    "provider_timeout",
+    "first_output_timeout",
+    "no_first_output_timeout",
+    "codex_transport_404",
+  ]).has(failureClass);
+}
