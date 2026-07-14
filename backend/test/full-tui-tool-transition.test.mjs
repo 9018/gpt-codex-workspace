@@ -17,4 +17,18 @@ describe('full TUI tool transitions', () => {
     const updated = await reconcileStoppedTuiTask({ store, taskId: 't', reason: 'completed', hasEvidence: true });
     assert.equal(updated.status, 'collecting');
   });
+  it('stopping a stale session never revives a terminal task or queue item', async () => {
+    const state = {
+      tasks: [{ id: 't', status: 'failed', metadata: { tui_session_owner: 'manual' } }],
+      goal_queue: [{ task_id: 't', status: 'failed', blocked_reason: 'terminal evidence invalid' }],
+      activities: [],
+    };
+    const store = { async mutate(fn) { return fn(state); } };
+    const updated = await reconcileStoppedTuiTask({ store, taskId: 't', reason: 'manual_stop', hasEvidence: true });
+    assert.equal(updated.status, 'failed');
+    assert.equal(updated.metadata.tui_session_owner, undefined);
+    assert.equal(state.goal_queue[0].status, 'failed');
+    assert.equal(state.goal_queue[0].blocked_reason, 'terminal evidence invalid');
+  });
+
 });

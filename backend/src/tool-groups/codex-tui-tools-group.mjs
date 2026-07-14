@@ -32,6 +32,7 @@ import {
   stopCodexTuiSession,
 } from "../codex-tui-session-manager.mjs";
 import { collectCodexTuiCompletion } from "../codex-tui-completion-collector.mjs";
+import { isTerminalStatus } from "../task-status-taxonomy.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
@@ -46,14 +47,15 @@ export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped
     task.metadata = { ...(task.metadata || {}) };
     delete task.metadata.tui_session_owner;
     delete task.metadata.manual_tui_session_starting;
-    task.status = hasEvidence ? "collecting" : "repairing";
+    const wasTerminal = isTerminalStatus(task.status);
+    if (!wasTerminal) task.status = hasEvidence ? "collecting" : "repairing";
     task.updated_at = new Date().toISOString();
     task.logs ||= [];
     task.logs.push({ time: task.updated_at, message: `[tui] stopped: ${reason}; next=${task.status}` });
     state.activities ||= [];
     state.activities.push({ time: task.updated_at, type: "task.tui_stopped_reconciled", task_id: task.id, status: task.status, reason });
     const queueItem = (state.goal_queue || []).find((entry) => entry.task_id === task.id);
-    if (queueItem) {
+    if (queueItem && !wasTerminal) {
       queueItem.status = hasEvidence ? "running" : "waiting";
       queueItem.blocked_reason = hasEvidence ? null : `automatic repair after TUI stop: ${reason}`;
       queueItem.updated_at = task.updated_at;
