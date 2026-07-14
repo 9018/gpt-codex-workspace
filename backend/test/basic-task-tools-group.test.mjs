@@ -58,9 +58,9 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
 
   // list_tasks: all optional
   assert.deepEqual(tools.list_tasks.inputSchema.required, []);
-  assert.equal(tools.list_tasks.inputSchema.properties.status, 'string');
-  assert.equal(tools.list_tasks.inputSchema.properties.assignee, 'string');
-  assert.equal(tools.list_tasks.inputSchema.properties.limit, 'integer');
+  assert.equal(tools.list_tasks.inputSchema.properties.status.type, "string");
+  assert.equal(tools.list_tasks.inputSchema.properties.assignee.type, "string");
+  assert.equal(tools.list_tasks.inputSchema.properties.limit.type, "integer");
 
   // get_task: required = ['task_id']
   assert.deepEqual(tools.get_task.inputSchema.required, ['task_id']);

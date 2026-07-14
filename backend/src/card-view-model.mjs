@@ -273,13 +273,30 @@ function buildRuntimeStatusCard(tool, data, meta) {
   return finalize(card);
 }
 
+/**
+ * Normalize a task (which may be a full task or a summary object) to have
+ * the task.result shape expected by resolution helpers.
+ * Summary tasks carry resolved_by/superseded_by at the top level.
+ */
+function normalizeTaskForResolution(task) {
+  if (task.result !== undefined && task.result !== null && typeof task.result === 'object') {
+    return task;
+  }
+  return Object.assign({}, task, {
+    result: {
+      resolved_by_task_id: task.resolved_by || null,
+      superseded_by_task_id: task.superseded_by || null,
+    },
+  });
+}
+
 function buildListTasksCard(tool, data, meta) {
   const tasks = Array.isArray(data.tasks) ? data.tasks : [];
   const card = baseCard(tool, data, { ...meta, title: "Task Queue" });
   const statusCounts = countBy(tasks, (task) => task.status || "unknown");
   const assigneeCounts = countBy(tasks, (task) => task.assignee || "unassigned");
-  const actionableReviewTasks = tasks.filter((task) => isHumanReviewStatus(task.status) && !isResolvedLegacyReviewTask(task));
-  const resolvedReviewTasks = tasks.filter((task) => isResolvedLegacyReviewTask(task));
+  const actionableReviewTasks = tasks.filter((task) => isHumanReviewStatus(task.status) && !isResolvedLegacyReviewTask(normalizeTaskForResolution(task)));
+  const resolvedReviewTasks = tasks.filter((task) => isResolvedLegacyReviewTask(normalizeTaskForResolution(task)));
   const hasRisk = tasks.some((task) => isFailedStatus(task.status) || isRepairStatus(task.status)) || actionableReviewTasks.length > 0;
 
   card.card_type = "queue";
@@ -293,16 +310,50 @@ function buildListTasksCard(tool, data, meta) {
     { key: "actionable_review", value: actionableReviewTasks.length },
     { key: "resolved_legacy_review", value: resolvedReviewTasks.length },
   ]);
+
+  // Show summary enrichment fields when available (from detail=summary responses)
+  if (tasks.length > 0 && tasks[0].result_summary !== undefined) {
+    addKeyValues(card.key_values, [
+      { key: "result_summaries", value: tasks.filter(t => t.result_summary).length },
+    ]);
+  }
+
+  // Show _counts if the tool passed them alongside tasks
+  if (data._counts) {
+    addKeyValues(card.key_values, [
+      { key: "returned", value: data._counts.returned },
+      { key: "truncated", value: data._counts.truncated || undefined },
+      { key: "actionable_review", value: data._counts.actionable_review },
+      { key: "resolved_legacy_review", value: data._counts.resolved_legacy_review },
+    ]);
+  }
+
   card.sections.push({
     title: "Recent tasks",
     type: "table",
-    rows: tasks.slice(0, 10).map((task) => ({
-      id: task.id,
-      title: truncate(task.title || "", 60),
-      status: task.status || "-",
-      assignee: task.assignee || "-",
-      mode: task.mode || "-",
-    })),
+    rows: tasks.slice(0, 10).map((task) => {
+      const row = {
+        id: task.id,
+        title: truncate(task.title || "", 60),
+        status: task.status || "-",
+        assignee: task.assignee || "-",
+        mode: task.mode || "-",
+      };
+      // Add summary enrichment fields when available
+      if (task.result_summary !== undefined && task.result_summary !== null) {
+        row.result_summary = truncate(String(task.result_summary), 80);
+      }
+      if (task.next_action) {
+        row.next_action = task.next_action;
+      }
+      if (task.changed_file_count > 0) {
+        row.changed = task.changed_file_count;
+      }
+      if (task.commit) {
+        row.commit = short(task.commit);
+      }
+      return row;
+    }),
   });
 
   // Waiting for review breakdown
@@ -328,7 +379,7 @@ function buildListTasksCard(tool, data, meta) {
         title: "Resolved legacy history",
         type: "table",
         rows: resolvedReviewTasks.slice(0, 10).map((task) => {
-          const resolution = legacyResolutionSummary(task);
+          const resolution = legacyResolutionSummary(normalizeTaskForResolution(task));
           return {
             id: task.id,
             title: truncate(task.title || "", 50),

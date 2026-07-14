@@ -145,16 +145,30 @@ export async function collectWorkflowDiagnostics({
   collectWorkerQueueCounts,
   task,
   workflowId,
+  mode = "deep",
 }) {
-  const { collectRuntimeGitInfoCached } = await import("./diagnostics-service.mjs");
-  const { getRepoLockSummary } = await import("./repo-lock.mjs");
-  const { workerStatusExtendedSnapshot } = await import("./codex-worker-state.mjs");
+  const isLightweight = mode === "lightweight";
 
   const repoDir = config?.defaultRepoPath || null;
-  const gitInfo = repoDir ? await collectRuntimeGitInfoCached(repoDir) : { repo_head: null, remote_head: null, running_commit: null, worktree_dirty: false, dirty_paths: [] };
-  const lockSummary = await getRepoLockSummary(config?.defaultWorkspaceRoot);
-  const queueCounts = await collectWorkerQueueCounts(store);
-  const workerSnapshot = workerStatusExtendedSnapshot(workerState);
+
+  // -- Lightweight path: skip all subprocess / IO operations --
+  let gitInfo = { repo_head: null, remote_head: null, running_commit: null, worktree_dirty: false, dirty_paths: [] };
+  let lockSummary = { active_repo_locks: 0, stale_repo_locks: 0, locks: [] };
+  let workerSnapshot = { enabled: workerState.enabled, running: workerState.running };
+  let queueCounts = {};
+
+  if (!isLightweight) {
+    const { collectRuntimeGitInfoCached } = await import("./diagnostics-service.mjs");
+    const { getRepoLockSummary } = await import("./repo-lock.mjs");
+    const { workerStatusExtendedSnapshot } = await import("./codex-worker-state.mjs");
+
+    gitInfo = repoDir ? await collectRuntimeGitInfoCached(repoDir) : gitInfo;
+    lockSummary = await getRepoLockSummary(config?.defaultWorkspaceRoot);
+    workerSnapshot = workerStatusExtendedSnapshot(workerState);
+  }
+
+  // Queue counts are lightweight (store read), always collect
+  queueCounts = await collectWorkerQueueCounts(store);
 
   return {
     workflow_id: workflowId || "default",

@@ -87,9 +87,11 @@ export function createWorkflowToolsGroup({
     workflow_status: tool({
       name: "workflow_status",
       description:
-        "Read-only snapshot of the current workflow state: latest task info, " +
-        "runtime git state, worktree health, repo locks, worker status, and queue " +
-        "summary. Use this before recording a result or advancing the workflow.",
+        "Read-only snapshot of the current workflow state. Default lightweight mode " +
+        "returns concise status (current phase, blockers, safe-to-advance) without " +
+        "running git subprocesses or scanning repo locks. Pass mode='deep' for full " +
+        "diagnostics including runtime git state, worktree health, repo locks, worker " +
+        "health, and auto-accept checks.",
       inputSchema: schema({
         workflow_id: {
           type: "string",
@@ -104,10 +106,22 @@ export function createWorkflowToolsGroup({
             "most recent Codex-assigned task.",
           examples: ["latest", "task_abc123"],
         },
+        mode: {
+          type: "string",
+          description:
+            'Diagnostic mode. "lightweight" (default) returns a concise status ' +
+            "without git subprocesses, lock directory scanning, or auto-accept. " +
+            '"deep" runs full diagnostics including repo/worktree/lock/worker health ' +
+            "and auto-accept checks.",
+          enum: ["lightweight", "deep"],
+          default: "lightweight",
+        },
       }),
       ...cardMeta,
-      handler: async ({ workflow_id, task_id }) => {
+      handler: async ({ workflow_id, task_id, mode }) => {
         const wfId = workflow_id || "default";
+        const resolvedMode = mode || "lightweight";
+        const isDeep = resolvedMode === "deep";
         const task = await resolveTask(store, task_id || "latest");
         const diagnostics = await collectWorkflowDiagnostics({
           store,
@@ -116,6 +130,7 @@ export function createWorkflowToolsGroup({
           collectWorkerQueueCounts,
           task,
           workflowId: wfId,
+          mode: resolvedMode,
         });
 
         // Load workflow state if it exists
@@ -129,8 +144,8 @@ export function createWorkflowToolsGroup({
           // Non-fatal: workflow state may not exist yet
         }
 
-        // Auto-accept check: if a waiting_for_review task qualifies, trigger auto-accept
-        if (task && isHumanReviewStatus(task.status)) {
+        // Auto-accept check: only in deep mode; lightweight is read-only
+        if (isDeep && task && isHumanReviewStatus(task.status)) {
           const autoAccepted = await autoAcceptTask({ store, config, task, diagnostics });
           if (autoAccepted.auto_accepted) {
             // Re-resolve task to get updated status
@@ -149,9 +164,79 @@ export function createWorkflowToolsGroup({
 
         const queueDisplay = workflowQueueDisplay(diagnostics.queue);
 
+        // Lightweight response: concise, no deep fields
+        if (!isDeep) {
+          return {
+            title: "Workflow Status (lightweight)",
+            summary: `Workflow: ${wfId}`,
+            mode: "lightweight",
+            workflow_id: wfId,
+            deep_diagnostics_available: true,
+            workflow_state: workflowState
+              ? {
+                  current_phase: workflowState.current_phase,
+                  last_task_id: workflowState.last_task_id,
+                  manual_results_count: (
+                    workflowState.manual_results || []
+                  ).length,
+                  created_task_ids: workflowState.created_task_ids || [],
+                }
+              : null,
+            latest_task: diagnostics.latest_task
+              ? {
+                  id: diagnostics.latest_task.id,
+                  title: diagnostics.latest_task.title,
+                  status: diagnostics.latest_task.status,
+                  assignee: diagnostics.latest_task.assignee,
+                  created_at: diagnostics.latest_task.created_at,
+                  updated_at: diagnostics.latest_task.updated_at,
+                }
+              : null,
+            worker: {
+              enabled: diagnostics.worker.enabled,
+              running: diagnostics.worker.running,
+            },
+            queue: queueDisplay,
+            status_checks: {
+              worker_idle: !diagnostics.worker.running,
+              safe_to_advance: !diagnostics.worker.running,
+            },
+            keyValues: [
+              { key: "Workflow ID", value: wfId },
+              {
+                key: "Latest Task",
+                value: task
+                  ? `${task.id} (${task.status})`
+                  : "none",
+              },
+              {
+                key: "Worker",
+                value: diagnostics.worker.running ? "running" : "idle",
+              },
+              {
+                key: "Current Blockers",
+                value: String(queueDisplay.current_blockers),
+              },
+              {
+                key: "Actionable Review",
+                value: String(queueDisplay.actionable_review),
+              },
+              {
+                key: "Repair Backlog",
+                value: String(queueDisplay[TASK_STATUSES.WAITING_FOR_REPAIR] || 0),
+              },
+              {
+                key: "Mode",
+                value: "lightweight (pass mode=deep for full diagnostics)",
+              },
+            ],
+          };
+        }
+
         return {
           title: "Workflow Status",
           summary: `Workflow: ${wfId}`,
+          mode: "deep",
           workflow_id: wfId,
           workflow_state: workflowState
             ? {
@@ -219,6 +304,10 @@ export function createWorkflowToolsGroup({
             {
               key: "Repair Backlog",
               value: String(queueDisplay[TASK_STATUSES.WAITING_FOR_REPAIR] || 0),
+            },
+            {
+              key: "Mode",
+              value: "deep",
             },
           ],
         };

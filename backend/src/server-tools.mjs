@@ -35,6 +35,7 @@ import { createGoalQueueToolsGroup } from "./tool-groups/goal-queue-tools-group.
 import { createCleanupToolsGroup } from "./tool-groups/cleanup-tools-group.mjs";
 import { createRecoveryToolsGroup } from "./tool-groups/recovery-tools-group.mjs";
 import { createRetentionToolsGroup } from "./tool-groups/retention-tools-group.mjs";
+import { createReviewToolsGroup } from "./tool-groups/review-tools-group.mjs";
 import { resolveRepoDir, collectRuntimeGitInfoCached } from "./diagnostics-service.mjs";
 import { createWorkflowToolsGroup } from "./tool-groups/workflow-tools-group.mjs";
 import { createCodexTuiToolsGroup } from "./tool-groups/codex-tui-tools-group.mjs";
@@ -52,6 +53,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "list_actionable_reviews",
     "product_status",
     "open_project_context",
     "create_encoded_goal",
@@ -63,6 +65,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "list_actionable_reviews",
     "product_status",
     "gptwork_doctor",
     "github_status",
@@ -152,6 +155,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "list_actionable_reviews",
     "product_status",
     "gptwork_doctor",
     "github_status",
@@ -193,6 +197,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "health_check",
     "runtime_status",
     "worker_status",
+    "list_actionable_reviews",
     "product_status",
     "open_project_context",
     "get_goal_context",
@@ -328,6 +333,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   ...createWorkflowToolsGroup({ tool, schema, store, config, workerState, collectWorkerQueueCounts }),
   ...createCleanupToolsGroup({ tool, schema, config }),
   ...createRetentionToolsGroup({ tool, schema, store, config }),
+  ...createReviewToolsGroup({ tool, schema, store, config }),
   ...createRecoveryToolsGroup({ tool, schema, store, config, envLoadResult, sources, registry, workerState, collectWorkerQueueCounts, repoDir, gitInfo: {}, PROCESS_STARTED_AT: processStartedAt }),
    read_events: tool({
       name: "read_events",

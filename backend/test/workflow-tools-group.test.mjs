@@ -774,7 +774,7 @@ test("workflow_status: waiting_for_review + valid → triggers auto-accept", asy
     return { tasks, goals, activities: [] };
   }, save: async () => { saveCalled = true; } };
   const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
-  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id, mode: "deep" });
   assert.ok(result.workflow_id);
   assert.ok(result.latest_task);
   assert.ok(saveCalled);
@@ -810,7 +810,7 @@ test("workflow_status: waiting_for_review + dirty worktree does not auto-accept"
     save: async () => { saveCalled = true; },
   };
   const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: repoRoot, defaultRepoPath: repoRoot }, workerState: fakeWorkerState, collectWorkerQueueCounts: fakeCollectWorkerQueueCounts });
-  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id, mode: "deep" });
 
   assert.equal(saveCalled, false);
   assert.equal(taskState.status, "waiting_for_review");
@@ -969,7 +969,7 @@ test("workflow_status exposes reviewer decision and actionable review count", as
   const resolvedReview = makeTask({ status: "waiting_for_review", result: { resolved_by_task_id: "task_fix" } });
   const store = { load: async () => ({ tasks: [taskState, resolvedReview], goals: [], activities: [] }), save: async () => {} };
   const tools = mod.createWorkflowToolsGroup({ tool: fakeTool, schema: fakeSchema, store, config: { defaultWorkspaceRoot: uniqueRoot() }, workerState: fakeWorkerState, collectWorkerQueueCounts });
-  const result = await tools.workflow_status.handler({ task_id: taskState.id });
+  const result = await tools.workflow_status.handler({ task_id: taskState.id, mode: "deep" });
 
   assert.equal(result.latest_task.reviewer_decision.status, "accepted");
   assert.equal(result.queue.actionable_review, 0);

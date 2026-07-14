@@ -1,8 +1,58 @@
 import { basename } from 'node:path';
-import { findTask, updateTask, normalizeLegacyModes } from '../task-lifecycle.mjs';
+import { findTask, updateTask } from '../task-lifecycle.mjs';
 import { getTaskAcceptanceBundle } from '../review/task-acceptance-bundle.mjs';
 import { getTaskReviewPacket } from '../review/review-packet-builder.mjs';
 import { normalizeLegacyTaskWorkstream } from '../workstream/workstream-model.mjs';
+import { isResolvedLegacyReviewTask, legacyResolutionSummary } from '../legacy-reconciliation.mjs';
+import { isHumanReviewStatus, isRepairStatus, isFailedTerminalStatus } from '../task-status-taxonomy.mjs';
+
+/**
+ * Build a task summary object suitable for ChatGPT reasoning.
+ * Keeps the payload bounded and does not include full result objects.
+ */
+function buildTaskSummary(task) {
+  const result = task.result || {};
+  const resolution = legacyResolutionSummary(task);
+  const changedFiles = Array.isArray(result.changed_files) ? result.changed_files : [];
+  const blockerCodes = [];
+  if (isFailedTerminalStatus(task.status)) blockerCodes.push('failed');
+  if (isRepairStatus(task.status)) blockerCodes.push('needs_repair');
+  if (task.status === 'blocked') blockerCodes.push('blocked');
+  if (task.status === 'waiting_for_lock') blockerCodes.push('waiting_for_lock');
+  if (task.status === 'waiting_for_integration') blockerCodes.push('integration');
+  if (isHumanReviewStatus(task.status)) blockerCodes.push('review');
+
+  // Derive recommended next action from status
+  let nextAction = '';
+  if (task.status === 'assigned' || task.status === 'queued') nextAction = 'monitor';
+  else if (task.status === 'running') nextAction = 'wait';
+  else if (isRepairStatus(task.status)) nextAction = 'review_repair';
+  else if (isHumanReviewStatus(task.status)) {
+    nextAction = isResolvedLegacyReviewTask(task) ? 'resolved_history' : 'review';
+  }
+  else if (task.status === 'waiting_for_integration') nextAction = 'check_integration';
+  else if (task.status === 'waiting_for_lock') nextAction = 'check_lock';
+  else if (task.status === 'completed') nextAction = 'complete';
+  else if (isFailedTerminalStatus(task.status)) nextAction = 'diagnose';
+
+  return {
+    id: task.id,
+    title: task.title || '',
+    status: task.status || 'unknown',
+    assignee: task.assignee || null,
+    goal_id: task.goal_id || null,
+    mode: task.mode || null,
+    created_at: task.created_at || null,
+    updated_at: task.updated_at || null,
+    result_summary: result.summary || null,
+    blocker_codes: blockerCodes.length > 0 ? blockerCodes : null,
+    next_action: nextAction || null,
+    commit: result.commit || null,
+    changed_file_count: changedFiles.length,
+    resolved_by: resolution.resolved_by_task_id || null,
+    superseded_by: resolution.superseded_by_task_id || null,
+  };
+}
 
 /**
  * Factory for basic task MCP tool registration.
@@ -45,27 +95,72 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
     }),
     list_tasks: tool({
       name: "list_tasks",
-      description: "List project tasks, optionally filtered. Check what Codex is working on and what tasks are waiting or completed.",
-      inputSchema: schema({ status: "string", assignee: "string", limit: "integer" }),
+      description: "List project tasks, optionally filtered. Default response is compact task summaries suitable for ChatGPT reasoning. Use detail=full for complete task objects. Use detail=review for review-focused fields. Does not perform workflow advancement or lock acquisition.",
+      inputSchema: schema({
+        status: { type: "string", description: "Filter by task status." },
+        assignee: { type: "string", description: "Filter by task assignee." },
+        limit: { type: "integer", description: "Maximum number of tasks to return. Default: 50." },
+        detail: { type: "string", description: "Output detail level. 'summary' (default) returns compact bounded summaries. 'review' returns focused review data. 'full' returns complete task objects." }
+      }),
       ...common,
-      handler: async ({ status, assignee, limit = 50 }) => {
+      handler: async ({ status, assignee, limit = 50, detail = 'summary' }) => {
         const state = await store.load();
-        await normalizeLegacyModes(store, state);
         let tasks = state.tasks;
         if (status) tasks = tasks.filter((task) => task.status === status);
         if (assignee) tasks = tasks.filter((task) => task.assignee === assignee);
         const goalsById = new Map((state.goals || []).map((goal) => [goal.id, goal]));
+        const selectedTasks = tasks.slice(-limit).reverse();
+        const totalReturned = selectedTasks.length;
+        const truncated = tasks.length > limit;
+
+        // Counts for actionable review and resolved legacy review tasks
+        const actionableReviews = selectedTasks.filter(
+          (task) => isHumanReviewStatus(task.status) && !isResolvedLegacyReviewTask(task)
+        ).length;
+        const resolvedLegacyReviews = selectedTasks.filter(
+          (task) => isResolvedLegacyReviewTask(task)
+        ).length;
+
+        if (detail === 'full') {
+          return {
+            tasks: selectedTasks.map((task) => normalizeLegacyTaskWorkstream(task, goalsById.get(task.goal_id))),
+            _counts: {
+              returned: totalReturned,
+              truncated,
+              actionable_review: actionableReviews,
+              resolved_legacy_review: resolvedLegacyReviews,
+            },
+          };
+        }
+
+        if (detail === 'review') {
+          const result = await Promise.all(selectedTasks.map(async (task) => {
+            const summary = buildTaskSummary(task);
+            const packet = await getTaskReviewPacket({ store, config, task_id: task.id }).catch(() => null);
+            return {
+              ...summary,
+              review_packet: packet?.review_packet || null,
+            };
+          }));
+          return { tasks: result, _counts: { returned: totalReturned, truncated, actionable_review: actionableReviews, resolved_legacy_review: resolvedLegacyReviews } };
+        }
+
+        // Default: summary
+        const summaries = selectedTasks.map(buildTaskSummary);
         return {
-          tasks: tasks
-            .slice(-limit)
-            .reverse()
-            .map((task) => normalizeLegacyTaskWorkstream(task, goalsById.get(task.goal_id))),
+          tasks: summaries,
+          _counts: {
+            returned: totalReturned,
+            truncated,
+            actionable_review: actionableReviews,
+            resolved_legacy_review: resolvedLegacyReviews,
+          },
         };
       },
     }),
     get_task: tool({
       name: "get_task",
-      description: "Return a task.",
+      description: "Return a full task record with all details. For compact summaries, use list_tasks with the default detail=summary.",
       inputSchema: schema({ task_id: "string" }, ["task_id"]),
       ...common,
       handler: async ({ task_id }) => {
