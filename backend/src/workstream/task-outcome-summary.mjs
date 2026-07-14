@@ -1,4 +1,6 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { createWorkstreamContextStore } from "./workstream-context-store.mjs";
 
 function digest(value) {
@@ -13,6 +15,23 @@ function blockerFindings(result = {}) {
     ...(Array.isArray(result.findings) ? result.findings : []),
     ...(Array.isArray(result.verification?.findings) ? result.verification.findings : []),
   ].filter((finding) => finding?.severity === "blocker" && finding?.resolved !== true);
+}
+
+function contractRequiresIntegration(task = {}, goal = {}) {
+  const contract = task.acceptance_contract || goal.acceptance_contract || {};
+  return contract.requirements?.requires_integration
+    ?? contract.requires_integration
+    ?? null;
+}
+
+async function writeOutcomeFile(workspaceRoot, outcome) {
+  const dir = join(workspaceRoot, ".gptwork", "goals", outcome.goal_id);
+  await mkdir(dir, { recursive: true });
+  const target = join(dir, "outcome.json");
+  const tmp = `${target}.${randomUUID()}.tmp`;
+  await writeFile(tmp, JSON.stringify(outcome, null, 2) + "\n", "utf8");
+  await rename(tmp, target);
+  return `.gptwork/goals/${outcome.goal_id}/outcome.json`;
 }
 
 export function integrationSatisfied(result = {}) {
@@ -37,7 +56,11 @@ export function buildTaskOutcomeSummary({ task = {}, goal = {}, result = {} } = 
   if (result.verification?.passed !== true && result.unified_decision?.status !== "completed") {
     return { eligible: false, reason: "verification_not_passed" };
   }
-  if (!integrationSatisfied(result)) return { eligible: false, reason: "integration_not_satisfied" };
+  const contractIntegrationRequired = contractRequiresIntegration(task, goal);
+  const integrationNotRequired = contractIntegrationRequired === false || result.integration_not_required === true;
+  if (!integrationSatisfied({ ...result, integration_not_required: integrationNotRequired })) {
+    return { eligible: false, reason: "integration_not_satisfied" };
+  }
 
   const outcome = {
     schema_version: "gptwork.task_outcome.v1",
@@ -48,7 +71,8 @@ export function buildTaskOutcomeSummary({ task = {}, goal = {}, result = {} } = 
     context_digest: task.task_context_digest || goal.task_context?.contract_digest,
     commit: result.commit || result.local_head || null,
     integrated: result.integration?.merged === true || result.auto_integration_completion?.completed === true,
-    integration_not_required: ["skipped", "already_integrated", "not_required"].includes(String(result.integration?.status || "")) || result.integration_not_required === true,
+    integration_not_required: integrationNotRequired
+      || ["skipped", "already_integrated", "not_required"].includes(String(result.integration?.status || "")),
     canonical_head: result.auto_integration_completion?.canonical_head_after || result.repo_head || result.local_head || result.commit || null,
     delivered_capabilities: Array.isArray(result.delivered_capabilities) ? result.delivered_capabilities : [],
     durable_decisions: Array.isArray(result.durable_decisions) ? result.durable_decisions : [],
@@ -125,6 +149,7 @@ export async function updateWorkstreamContextFromCompletedTask({ store, workspac
   const applied = applyOutcomeToSnapshot(current, built.outcome);
   if (!applied.changed) return { applied: false, reason: applied.reason, outcome: built.outcome, snapshot: applied.snapshot };
   const written = await contextStore.writeSnapshot(built.outcome.workstream_id, applied.snapshot, { expectedRevision: Number(current?.revision || 0) });
+  const outcomePath = await writeOutcomeFile(workspaceRoot, built.outcome);
   if (store?.mutate) {
     await store.mutate((state) => {
       const ws = (state.workstreams || []).find((item) => item.id === built.outcome.workstream_id);
@@ -147,5 +172,5 @@ export async function updateWorkstreamContextFromCompletedTask({ store, workspac
       });
     });
   }
-  return { applied: true, outcome: built.outcome, snapshot: written };
+  return { applied: true, outcome: built.outcome, outcome_path: outcomePath, snapshot: written };
 }
