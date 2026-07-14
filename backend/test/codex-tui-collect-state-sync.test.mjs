@@ -383,4 +383,7 @@ test("A6: diagnostic collect advances collecting task and normalizes equivalent 
   assert.equal(task.status, "waiting_for_review");
   assert.equal(task.result.verification.passed, true);
   assert.deepEqual(task.result.verification.reports, ["a", "b", "c", "d"]);
+  assert.equal(task.result.repo_mutated, false);
+  assert.equal(task.result.diagnostic_evidence.repo_mutated, false);
+  assert.match(task.result.diagnostic_evidence.report_path, /result\.json$/);
 });

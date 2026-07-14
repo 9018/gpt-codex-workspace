@@ -522,6 +522,26 @@ codex_tui_collect: tool({
                     || [],
                 },
                 worktree_clean: snapshot.worktree_clean,
+                repo_mutated: snapshot.requires_commit === false
+                  && snapshot.worktree_clean === true
+                  && (snapshot.changed_files || []).length === 0
+                    ? false
+                    : (snapshot.result_json?.repo_mutated ?? item.result?.repo_mutated ?? null),
+                diagnostic_evidence: snapshot.requires_commit === false
+                  ? {
+                      ...(item.result?.diagnostic_evidence || {}),
+                      ...(snapshot.result_json?.diagnostic_evidence || {}),
+                      summary: snapshot.result_json?.diagnostic_evidence?.summary
+                        || snapshot.result_json?.summary
+                        || item.result?.diagnostic_evidence?.summary
+                        || null,
+                      report_path: snapshot.result_json_path || null,
+                      repo_mutated: snapshot.worktree_clean === true
+                        && (snapshot.changed_files || []).length === 0
+                          ? false
+                          : (snapshot.result_json?.diagnostic_evidence?.repo_mutated ?? null),
+                    }
+                  : (snapshot.result_json?.diagnostic_evidence || item.result?.diagnostic_evidence || null),
                 result_md_present: snapshot.result_md_present,
                 result_json_present: snapshot.result_json_present,
               };
