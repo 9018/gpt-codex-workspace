@@ -37,7 +37,7 @@ function isReadonlyDiagnostic(task, goal, result) {
 }
 
 
-function diagnosticVerificationPassed(result) {
+export function diagnosticVerificationPassed(result) {
   if (result?.verification?.passed === true) return true;
   if (Number(result?.tests?.failed) === 0 && Number(result?.tests?.passed) > 0) return true;
   const criteria = Array.isArray(result?.acceptance_criteria) ? result.acceptance_criteria : [];

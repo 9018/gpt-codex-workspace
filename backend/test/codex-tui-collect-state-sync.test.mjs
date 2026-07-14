@@ -345,3 +345,42 @@ test("A5: TUI collect transitions task from assigned to waiting_for_review when 
     "task transitions from assigned to waiting_for_review after complete TUI collect");
   assert.equal(updatedTask.result.provider, "codex_tui_goal", "provider written");
 });
+
+
+test("A6: diagnostic collect advances collecting task and normalizes equivalent verification evidence", async () => {
+  const repo = await makeGitRepo();
+  const { store, goalDir } = await setupCompleteEvidence({ repo, taskId: "task_diag_collecting", goalId: "goal_diag_collecting", sessionId: "session_diag_collecting" });
+  store._state.tasks[0].status = "collecting";
+  store._state.tasks[0].acceptance_contract = {
+    intent: { operation_kind: "diagnostic", mutation_scope: "none" },
+    requirements: { requires_commit: false, requires_integration: false },
+    requires_commit: false,
+    requires_integration: false,
+  };
+  store._state.goals[0].acceptance_contract = store._state.tasks[0].acceptance_contract;
+  await writeFile(join(goalDir, "acceptance.contract.json"), JSON.stringify(store._state.tasks[0].acceptance_contract));
+  await writeFile(join(goalDir, "result.md"), "# Diagnostic complete\n");
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "verified",
+    execution_mode: "readonly_diagnostic",
+    summary: "Diagnostic checks passed",
+    tests: { passed: 4, failed: 0, details: ["a", "b", "c", "d"] },
+    acceptance_criteria: [{ id: "a", blocking: true, status: "pass" }],
+    verification: { digest_consistency: "ok" },
+    changed_files: [],
+    blockers: [],
+  }));
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store,
+    config: { defaultWorkspaceRoot: repo, defaultRepoPath: repo, codexTuiEnabled: true },
+    reconcileTuiAgentRunsFn: async () => ({ reconciled: true, formal_completed: 6, advisory_completed: 3 }),
+  });
+  const snapshot = await tools.codex_tui_collect.handler({ session_id: "session_diag_collecting" });
+  assert.equal(snapshot.ready_for_review, true);
+  const task = await store.findTaskById("task_diag_collecting");
+  assert.equal(task.status, "waiting_for_review");
+  assert.equal(task.result.verification.passed, true);
+  assert.deepEqual(task.result.verification.reports, ["a", "b", "c", "d"]);
+});

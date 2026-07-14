@@ -36,7 +36,7 @@ import { isTerminalStatus } from "../task-status-taxonomy.mjs";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
-import { reconcileTuiAgentRunsFromProgress } from "../codex-tui-agent-run-reconciler.mjs";
+import { diagnosticVerificationPassed, reconcileTuiAgentRunsFromProgress } from "../codex-tui-agent-run-reconciler.mjs";
 import { ensurePipelineRunsForTask } from "../pipeline-orchestration.mjs";
 
 
@@ -499,7 +499,7 @@ codex_tui_collect: tool({
           try {
             await updateTask(store, snapshot.task_id, (item) => {
               // Only transition from running — do not regress already-transitioned tasks
-              if (item.status === 'running' || item.status === 'assigned') {
+              if (['running', 'assigned', 'collecting'].includes(item.status)) {
                 item.status = 'waiting_for_review';
               }
               // Write durable evidence to task result
@@ -511,9 +511,15 @@ codex_tui_collect: tool({
                 commit: snapshot.commit,
                 tests: snapshot.tests,
                 changed_files: snapshot.changed_files || [],
-                verification: snapshot.result_json?.verification || {
-                  passed: true,
-                  commands: snapshot.tests ? [{ cmd: snapshot.tests }] : [],
+                verification: {
+                  ...(snapshot.result_json?.verification || {}),
+                  passed: diagnosticVerificationPassed(snapshot.result_json),
+                  commands: Array.isArray(snapshot.result_json?.verification?.commands)
+                    ? snapshot.result_json.verification.commands
+                    : [],
+                  reports: snapshot.result_json?.verification?.reports
+                    || snapshot.result_json?.tests?.details
+                    || [],
                 },
                 worktree_clean: snapshot.worktree_clean,
                 result_md_present: snapshot.result_md_present,
