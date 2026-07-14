@@ -116,6 +116,12 @@ export async function ensurePipelineRunsForTask(store, { task_id, goal_id, roles
   const state = await store.load();
   const task = (state.tasks || []).find((item) => item.id === task_id) || {};
   const pipelineRoles = validateAgentRoles(roles || getEffectivePipelineRoles(task));
+  const prepared = task.pipeline_version === "task_pipeline_v2"
+    ? await prepareTaskAgentContext(store, { task_id, goal_id })
+    : null;
+  const inputContextDigest = prepared?.task_context_digest || task.task_context_digest || null;
+  const roleViewPaths = prepared?.role_views || {};
+  const workstreamContextRevision = prepared?.workstream_context_revision || null;
 
   // Check existing runs for this task
   const existing = await listAgentRuns(store, { task_id, limit: 100 });
@@ -129,8 +135,29 @@ export async function ensurePipelineRunsForTask(store, { task_id, goal_id, roles
 
   for (const role of pipelineRoles) {
     if (existingRoles.has(role)) {
-      // Reuse existing run
-      const match = existing.agent_runs.find(r => normalizeContractRole(r.role) === role);
+      // Reuse existing run. For v2 tasks, reconcile legacy/unbound records so
+      // idempotent entry paths converge on the same bounded context contract.
+      let match = existing.agent_runs.find(r => normalizeContractRole(r.role) === role);
+      if (match && task.pipeline_version === "task_pipeline_v2") {
+        const view = roleViewPaths[role] || null;
+        await store.mutate((mutable) => {
+          const stored = (mutable.agent_runs || []).find((item) => item.id === match.id);
+          if (!stored) return;
+          stored.input_context_digest = inputContextDigest;
+          stored.workstream_context_revision = workstreamContextRevision;
+          stored.require_fresh_artifacts = true;
+          stored.role_view_path = view?.path || stored.role_view_path || null;
+          stored.role_view_digest = view?.digest || stored.role_view_digest || null;
+          if (view && !(stored.input_artifacts || []).some((item) => item.kind === "role_view")) {
+            stored.input_artifacts = [
+              { kind: "role_view", path: view.path, digest: view.digest },
+              ...(Array.isArray(stored.input_artifacts) ? stored.input_artifacts : []),
+            ];
+          }
+          stored.updated_at = new Date().toISOString();
+          match = { ...stored };
+        });
+      }
       if (match) runs.push(match);
       skipped++;
     } else {
@@ -138,15 +165,27 @@ export async function ensurePipelineRunsForTask(store, { task_id, goal_id, roles
       const result = await createAgentRun(store, {
         goal_id: goal_id || "",
         task_id,
+        workstream_id: task.workstream_id || null,
         role,
         status: "queued",
+        input_context_digest: inputContextDigest,
+        workstream_context_revision: workstreamContextRevision,
+        role_view_paths: roleViewPaths,
+        require_fresh_artifacts: task.pipeline_version === "task_pipeline_v2",
       }, context);
       runs.push(result.agent_run);
       created++;
     }
   }
 
-  return { runs, created, skipped };
+  return {
+    runs,
+    created,
+    skipped,
+    advisory_runs: prepared?.advisory_runs || [],
+    role_views: prepared?.role_views || {},
+    task_context_digest: inputContextDigest,
+  };
 }
 
 // ---------------------------------------------------------------------------

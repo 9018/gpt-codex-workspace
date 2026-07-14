@@ -713,3 +713,79 @@ test("P0-04: review packet includes pipeline_gate info when blocked", async () =
   assert.ok(reviewTaskResult.pipeline_gate_reasons.length > 0,
     "should have at least one gate reason");
 });
+
+
+test("pipeline-orch: ensurePipelineRunsForTask prepares v2 advisory runs and context-bound role views", async () => {
+  const { ensurePipelineRunsForTask } = await import("../src/pipeline-orchestration.mjs");
+  const { listAgentRuns } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+  const state = await store.load();
+  const task = { id: "t_v2", goal_id: "g_v2", pipeline_version: "task_pipeline_v2" };
+  const goal = { id: "g_v2", task_id: "t_v2" };
+  state.tasks.push(task);
+  state.goals.push(goal);
+  await store.save();
+  task.pipeline_version = "task_pipeline_v2";
+  task.task_context_digest = "sha256:v2-context";
+  task.workstream_id = "ws_v2";
+  goal.task_context = { contract_digest: "sha256:v2-context", revision: 1 };
+  goal.workstream_id = "ws_v2";
+
+  const goalDir = `.gptwork/goals/${goal.id}`;
+  const { createTaskContextStore } = await import("../src/context-contract/task-context-store.mjs");
+  const contextStore = createTaskContextStore({ workspaceRoot: store.defaultWorkspaceRoot });
+  await contextStore.writePacket(goalDir, {
+    schema_version: "gptwork.task_context.v1",
+    identity: { workstream_id: "ws_v2", goal_id: goal.id, task_id: task.id, context_revision: 1 },
+    objective: "Verify manual TUI context preparation",
+    background: [], confirmed_findings: [],
+    scope: { include: [], exclude: [] }, required_changes: [],
+    acceptance_criteria: [{ id: "ctx", description: "context bound", blocking: true, verification_hint: "test" }],
+    constraints: [], open_questions: [], carry_forward: [], source_provenance: [],
+    raw_conversation_policy: { stored: true, indexed: false, injected: false, targeted_lookup_allowed: true },
+  });
+
+  const result = await ensurePipelineRunsForTask(store, { task_id: task.id, goal_id: goal.id });
+  assert.equal(result.advisory_runs.length, 3);
+  assert.ok(Object.keys(result.role_views).length >= 9);
+
+  const existing = await listAgentRuns(store, { task_id: task.id, limit: 100 });
+  assert.equal(existing.agent_runs.length, 6);
+  for (const run of existing.agent_runs) {
+    assert.equal(run.input_context_digest, "sha256:v2-context");
+    assert.ok(run.role_view_path, `${run.role} should have role view path`);
+    assert.ok(run.role_view_digest, `${run.role} should have role view digest`);
+    assert.equal(run.require_fresh_artifacts, true);
+  }
+});
+
+test("pipeline-orch: ensurePipelineRunsForTask prepares v2 advisory runs and context-bound role views", async () => {
+  const { ensurePipelineRunsForTask } = await import("../src/pipeline-orchestration.mjs");
+  const { createTaskContextStore } = await import("../src/context-contract/task-context-store.mjs");
+  const store = await makeStore();
+  const taskId = "task_ensure_v2";
+  const goalId = "goal_ensure_v2";
+  const digest = "sha256:ensure-v2";
+  store.state.goals = [{ id: goalId, task_id: taskId, workstream_id: "ws_ensure", task_context: { contract_digest: digest, revision: 1 } }];
+  store.state.tasks = [{ id: taskId, goal_id: goalId, workstream_id: "ws_ensure", pipeline_version: "task_pipeline_v2", task_context_digest: digest, task_context_revision: 1, require_pipeline_gates: true }];
+  await store.save();
+  await createTaskContextStore({ workspaceRoot: store.defaultWorkspaceRoot }).writePacket(`.gptwork/goals/${goalId}`, {
+    schema_version: "gptwork.task_context.v1",
+    identity: { workstream_id: "ws_ensure", goal_id: goalId, task_id: taskId, context_revision: 1 },
+    objective: "Prepare the standard TUI pipeline", background: [], confirmed_findings: [],
+    scope: { include: [".gptwork/**"], exclude: ["backend/src/**"] }, required_changes: [],
+    acceptance_criteria: [{ id: "ac", description: "pipeline is context bound", blocking: true, verification_hint: null }],
+    constraints: ["Do not modify source files."], open_questions: [], carry_forward: [], source_provenance: [],
+    raw_conversation_policy: { stored: true, indexed: false, injected: false, targeted_lookup_allowed: true },
+  });
+
+  const result = await ensurePipelineRunsForTask(store, { task_id: taskId, goal_id: goalId });
+  assert.equal(result.created, 6);
+  assert.equal(result.advisory_runs.length, 3);
+  assert.ok(result.runs.every((run) => run.input_context_digest === digest));
+  assert.ok(result.runs.every((run) => run.role_view_path?.includes(`/goals/${goalId}/roles/`)));
+  assert.ok(result.runs.every((run) => run.role_view_digest?.startsWith("sha256:")));
+  assert.ok(result.runs.every((run) => run.require_fresh_artifacts === true));
+  const state = await store.load();
+  assert.deepEqual(state.advisory_runs.map((run) => run.role).sort(), ["architect", "explorer", "test_analyst"]);
+});
