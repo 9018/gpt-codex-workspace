@@ -273,7 +273,11 @@ export function evaluateAgentGates(agentRuns = []) {
 
   for (const role of gateRoles) {
     const runs = agentRuns.filter((r) => normalizeContractRole(r.role) === role);
-    const completedRun = runs.find((r) => r.status === "completed");
+    const completedRuns = runs.filter((r) => r.status === "completed");
+    // Multiple legacy/subagent aliases can map to the same contract role.
+    // Prefer a completed run that actually satisfies the artifact contract;
+    // falling back to the first completed run preserves useful diagnostics.
+    const completedRun = completedRuns.find((r) => validateAgentArtifactContract(r).valid) || completedRuns[0];
     const skippedRun = runs.find((r) => r.status === "skipped");
     const artifactValidation = completedRun ? validateAgentArtifactContract(completedRun) : null;
     const roleEvidenceValidation = completedRun ? missingAgentRunEvidence(completedRun) : [];

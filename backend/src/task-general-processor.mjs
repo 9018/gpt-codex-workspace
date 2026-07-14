@@ -519,7 +519,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // for true concurrent execution on the same canonical repo.
   let repoLockPath = null;
   // Enter materializing_worktree state (only now do we create the worktree)
-  const taskMode = task.mode || goal?.mode || "full";
+  const taskMode = task.legacy_mode || task.mode || goal?.mode || "full";
   const enableWorktrees = config.enableTaskWorktrees !== false && taskMode === "builder";
   let resolvedRepo = resolvedRepoPlan;
   let executionCwd = resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || workspace.root;

@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { appendFile } from "node:fs/promises";
 import { defaultTokenContext, requireProjectAccess, requireScope, requireWorkspaceAccess } from "./auth-context.mjs";
 import { goalWorkspaceFiles, renderTranscriptMarkdown, renderTranscriptMessageAppend, codexInstruction } from "./goal-files.mjs";
-import { ensureGoalState, findGoalInState, normalizeLegacyModes } from "./task-lifecycle.mjs";
+import { ensureGoalState, findGoalInState } from "./task-lifecycle.mjs";
 import { normalizeGoalMessage, normalizeGoalMemory } from "./goal-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
@@ -12,7 +12,6 @@ export async function getGoalContext(store, config, { goal_id, task_id } = {}, c
   requireScope(context, "project:read");
   const state = await store.load();
   ensureGoalState(state);
-  await normalizeLegacyModes(store, state);
 
   // Use indexed lookups when available
   let goal = null;
@@ -42,8 +41,10 @@ export async function getGoalContext(store, config, { goal_id, task_id } = {}, c
         : state.tasks.find((item) => item.id === goal.task_id)) || null
     : null;
 
-  const goalView = normalizeLegacyGoalWorkstream(goal);
-  const taskView = task ? normalizeLegacyTaskWorkstream(task, goalView) : null;
+  const normalizedGoal = goal.mode === "full" ? goal : { ...goal, legacy_mode: goal.legacy_mode || goal.mode || null, mode: "full" };
+  const goalView = normalizeLegacyGoalWorkstream(normalizedGoal);
+  const normalizedTask = task && task.mode !== "full" ? { ...task, legacy_mode: task.legacy_mode || task.mode || null, mode: "full" } : task;
+  const taskView = normalizedTask ? normalizeLegacyTaskWorkstream(normalizedTask, goalView) : null;
   return {
     goal: goalView,
     conversation,

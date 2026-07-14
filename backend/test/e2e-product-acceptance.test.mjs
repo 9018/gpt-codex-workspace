@@ -295,7 +295,7 @@ test("Area 3b: create_encoded_goal decodes and writes goal files", async () => {
   if (sc.workspace_files?.goal_md) {
     const goalMd = wf(root, sc.workspace_files.goal_md);
     const content = await readFile(goalMd, "utf8");
-    assert.match(content, /E2E Test/, "goal.md contains goal_prompt");
+    assert.match(content, /E2E test/i, "goal.md contains goal_prompt");
     assert.match(content, /Test encoded goal flow/, "goal.md contains user_request");
   } else if (sc.internal_files?.goal_md) {
     const goalMd = wf(root, sc.internal_files.goal_md);

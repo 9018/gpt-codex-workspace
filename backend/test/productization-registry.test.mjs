@@ -100,6 +100,7 @@ test("minimal tool mode exposes only its explicit safe subset", async () => {
     "create_encoded_goal",
     "get_task",
     "health_check",
+    "list_actionable_reviews",
     "list_tasks",
     "open_project_context",
     "runtime_status",

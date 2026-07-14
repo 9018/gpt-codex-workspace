@@ -66,15 +66,35 @@ export async function writeIdempotentAgentRun(store, args = {}, context = {}) {
     const existingRun = existing.agent_runs?.[0];
 
     if (existingRun) {
-      if (existingRun.status === "completed" || existingRun.status === "skipped") {
-        // Already completed — skip to avoid duplicates
+      if (existingRun.status === "skipped") {
+        return { skipped: true, reason: "already_skipped", existing_run_id: existingRun.id, role: canonicalRole };
+      }
+      // A pipeline run may already be marked completed before role-specific
+      // writeback supplies its contract artifact. Merge evidence even for a
+      // completed run; otherwise gate evaluation remains permanently blocked.
+      const existingArtifacts = list(existingRun.output_artifacts);
+      const enrichedArtifacts = list(output_artifacts).map((candidate) => {
+        if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) return candidate;
+        if (existingRun.require_fresh_artifacts !== true) return candidate;
+        const metadata = { ...(candidate.metadata || {}) };
+        if (existingRun.input_context_digest) metadata.context_digest ||= existingRun.input_context_digest;
+        if (existingRun.expected_head) metadata.git ||= { output_head: existingRun.expected_head };
+        if (existingRun.expected_input_artifact_digests && Object.keys(existingRun.expected_input_artifact_digests).length > 0) {
+          metadata.input_artifact_digests ||= existingRun.expected_input_artifact_digests;
+        }
+        return { ...candidate, metadata };
+      });
+      const additions = enrichedArtifacts.filter((candidate) => {
+        const candidateKind = candidate && typeof candidate === "object" ? candidate.kind : candidate;
+        return !existingArtifacts.some((artifact) => {
+          const artifactKind = artifact && typeof artifact === "object" ? artifact.kind : artifact;
+          return artifactKind === candidateKind;
+        });
+      });
+      if (existingRun.status === "completed" && additions.length === 0) {
         return { skipped: true, reason: "already_completed", existing_run_id: existingRun.id, role: canonicalRole };
       }
-      // Not yet completed — complete it with new data
-      const mergedArtifacts = [
-        ...list(existingRun.output_artifacts),
-        ...list(output_artifacts),
-      ];
+      const mergedArtifacts = [...existingArtifacts, ...additions];
       const result = await completeAgentRun(store, {
         agent_run_id: existingRun.id,
         status,

@@ -35,7 +35,7 @@ export function isTaskTerminal(task) {
 export function isCodexSessionInventoryTask(task) {
   return task?.assignee === "codex"
     && normalizeTaskStatus(task?.status) === TASK_STATUSES.ASSIGNED
-    && task?.mode === "full"
+    && ((task?.mode === "full" && task?.legacy_mode === "readonly") || task?.mode === "readonly")
     && isCodexSessionInventoryTaskKind(task);
 }
 

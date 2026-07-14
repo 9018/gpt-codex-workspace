@@ -637,7 +637,7 @@ async function runSingleCodexTask(store, config, github, task, context, processG
 
     if (task.mode === "full") {
       if (typeof processGeneralTask !== "function") {
-        return markTaskWaitingForReview(store, task, "no general task processor is configured for this worker");
+        return markTaskWaitingForReview(store, task, "unsupported worker mode: no general task processor is configured for this worker");
       }
       const result = await processGeneralTask(store, config, task, context, github);
       return normalizeWorkerResult(task, result, { transitioned });

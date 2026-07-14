@@ -118,7 +118,7 @@ test("taskPayloadFromTask produces payload with task fields", () => {
   assert.match(payload.goal_prompt, /My description/);
   assert.equal(payload.project_id, "default");
   assert.equal(payload.workspace_id, "hosted-default");
-  assert.equal(payload.mode, "builder");
+  assert.equal(payload.mode, "full");
   assert.equal(payload.messages.length, 2);
   assert.equal(payload.memories.length, 0);
 });
@@ -162,7 +162,8 @@ test("normalizeLegacyModes normalizes readonly task modes", async () => {
   const state = { tasks: [task], goals: [] };
   const store = makeStore(state);
   await normalizeLegacyModes(store, state);
-  assert.equal(task.mode, "builder");
+  assert.equal(task.mode, "full");
+  assert.equal(task.legacy_mode, "readonly");
 });
 
 test("normalizeLegacyModes does not change inventory task mode", async () => {
@@ -174,7 +175,8 @@ test("normalizeLegacyModes does not change inventory task mode", async () => {
   const state = { tasks: [task], goals: [] };
   const store = makeStore(state);
   await normalizeLegacyModes(store, state);
-  assert.equal(task.mode, "readonly");
+  assert.equal(task.mode, "full");
+  assert.equal(task.legacy_mode, "readonly");
 });
 
 test("normalizeLegacyModes normalizes readonly goal modes", async () => {
@@ -182,7 +184,8 @@ test("normalizeLegacyModes normalizes readonly goal modes", async () => {
   const state = { goals: [goal], tasks: [] };
   const store = makeStore(state);
   await normalizeLegacyModes(store, state);
-  assert.equal(goal.mode, "builder");
+  assert.equal(goal.mode, "full");
+  assert.equal(goal.legacy_mode, "readonly");
 });
 
 // ---------------------------------------------------------------------------
@@ -312,7 +315,10 @@ test("findTask uses indexed lookup when available", async () => {
   };
 
   const found = await findTask(store, task.id);
-  assert.equal(found, task);
+  assert.equal(found.id, task.id);
+  assert.equal(found.mode, "full");
+  assert.equal(found.legacy_mode, "builder");
+  assert.equal(task.mode, "builder");
   assert.equal(lookupCount, 1);
 });
 
@@ -367,7 +373,8 @@ test("normalizeLegacyModes normalizes standard task mode to builder", async () =
   const state = { tasks: [task], goals: [] };
   const store = makeStore(state);
   await normalizeLegacyModes(store, state);
-  assert.equal(task.mode, "builder");
+  assert.equal(task.mode, "full");
+  assert.equal(task.legacy_mode, "standard");
 });
 
 test("normalizeLegacyModes normalizes standard goal mode to builder", async () => {
@@ -375,5 +382,6 @@ test("normalizeLegacyModes normalizes standard goal mode to builder", async () =
   const state = { goals: [goal], tasks: [] };
   const store = makeStore(state);
   await normalizeLegacyModes(store, state);
-  assert.equal(goal.mode, "builder");
+  assert.equal(goal.mode, "full");
+  assert.equal(goal.legacy_mode, "standard");
 });

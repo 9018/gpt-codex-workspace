@@ -31,6 +31,7 @@ test('goal tool group exposes stable public tool names and schemas', () => {
     'create_encoded_goal',
     'list_goals',
     'get_goal_context',
+    'get_goal_execution_context',
     'append_goal_message',
   ]);
 

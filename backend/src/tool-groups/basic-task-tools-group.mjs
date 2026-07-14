@@ -41,6 +41,13 @@ function buildTaskSummary(task) {
     status: task.status || 'unknown',
     assignee: task.assignee || null,
     goal_id: task.goal_id || null,
+    workstream_id: task.workstream_id ?? null,
+    root_goal_id: task.root_goal_id || task.goal_id || null,
+    parent_goal_id: task.parent_goal_id ?? null,
+    phase: task.phase ?? null,
+    iteration: Number.isInteger(task.iteration) ? task.iteration : 0,
+    shard_key: task.shard_key ?? null,
+    workflow_id: task.workflow_id ?? null,
     mode: task.mode || null,
     created_at: task.created_at || null,
     updated_at: task.updated_at || null,
@@ -105,7 +112,9 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       ...common,
       handler: async ({ status, assignee, limit = 50, detail = 'summary' }) => {
         const state = await store.load();
-        let tasks = state.tasks;
+        let tasks = state.tasks.map((task) => task.mode === "full"
+          ? task
+          : { ...task, legacy_mode: task.legacy_mode || task.mode || null, mode: "full" });
         if (status) tasks = tasks.filter((task) => task.status === status);
         if (assignee) tasks = tasks.filter((task) => task.assignee === assignee);
         const goalsById = new Map((state.goals || []).map((goal) => [goal.id, goal]));
@@ -145,8 +154,10 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
           return { tasks: result, _counts: { returned: totalReturned, truncated, actionable_review: actionableReviews, resolved_legacy_review: resolvedLegacyReviews } };
         }
 
-        // Default: summary
-        const summaries = selectedTasks.map(buildTaskSummary);
+        // Default: summary. Derive legacy workstream fields without mutating state.
+        const summaries = selectedTasks.map((task) => buildTaskSummary(
+          normalizeLegacyTaskWorkstream(task, goalsById.get(task.goal_id))
+        ));
         return {
           tasks: summaries,
           _counts: {

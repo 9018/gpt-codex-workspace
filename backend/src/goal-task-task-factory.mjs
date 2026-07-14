@@ -23,7 +23,7 @@ const ACTIVE_TASK_STATUSES = new Set([
 ]);
 
 export function defaultTaskExecutionFields(mode = "full") {
-  const isOrdinaryCodeTask = mode === "full";
+  const isOrdinaryCodeTask = mode === "full" || mode === "builder";
   return {
     execution_mode: isOrdinaryCodeTask ? "worktree" : "canonical",
     worktree: isOrdinaryCodeTask ? {
@@ -82,7 +82,7 @@ export function buildGoalTask(goal, conversation, createdBy) {
     mode,
     legacy_mode: legacyMode && legacyMode !== "full" ? legacyMode : undefined,
     acceptance_contract: goal.acceptance_contract ? structuredClone(goal.acceptance_contract) : null,
-    ...defaultTaskExecutionFields(mode),
+    ...defaultTaskExecutionFields(legacyMode || mode),
     logs: [],
     artifacts: [],
     result: null,

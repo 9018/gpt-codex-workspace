@@ -119,12 +119,13 @@ export async function normalizeLegacyModes(store, state) {
 
 export async function findTask(store, task_id) {
   const state = await store.load();
-  await normalizeLegacyModes(store, state);
   const task = typeof store.findTaskById === "function"
     ? await store.findTaskById(task_id)
     : state.tasks.find((item) => item.id === task_id);
   if (!task) throw new Error(`task not found: ${task_id}`);
-  return task;
+  return task.mode === "full"
+    ? task
+    : { ...task, legacy_mode: task.legacy_mode || task.mode || null, mode: "full" };
 }
 
 // ---------------------------------------------------------------------------

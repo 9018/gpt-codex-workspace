@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { defaultTokenContext, canAccessProject, canAccessWorkspace, requireProjectAccess, requireScope, requireWorkspaceAccess } from "./auth-context.mjs";
 import { publicGoalWorkspaceFiles, internalGoalWorkspaceFiles } from "./goal-files.mjs";
-import { ensureGoalState, normalizeLegacyModes } from "./task-lifecycle.mjs";
+import { ensureGoalState } from "./task-lifecycle.mjs";
 import { titleFromGoal, normalizeGoalMessages, normalizeGoalMemories } from "./goal-lifecycle.mjs";
 import { buildGoalTask, normalizeAssignedTaskMode } from "./goal-task-task-factory.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
@@ -218,11 +218,10 @@ export async function listGoals(store, { status, assignee, workspace_id, limit =
   requireScope(context, "project:read");
   const state = await store.load();
   ensureGoalState(state);
-  await normalizeLegacyModes(store, state);
   let goals = state.goals.filter((goal) => canAccessProject(context, goal.project_id) && canAccessWorkspace(context, goal.workspace_id));
   if (status) goals = goals.filter((goal) => goal.status === status);
   if (assignee) goals = goals.filter((goal) => goal.assignee === assignee);
   if (workspace_id) goals = goals.filter((goal) => goal.workspace_id === workspace_id);
   const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return { goals: goals.slice(-maxItems).reverse().map(normalizeLegacyGoalWorkstream) };
+  return { goals: goals.slice(-maxItems).reverse().map((goal) => normalizeLegacyGoalWorkstream(goal.mode === "full" ? goal : { ...goal, legacy_mode: goal.legacy_mode || goal.mode || null, mode: "full" })) };
 }

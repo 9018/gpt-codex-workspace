@@ -157,7 +157,9 @@ function changedFilesFrom(task = {}, result = {}) {
 
 
 function operationKindFrom(task = {}, result = {}) {
-  return result.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || "code_change";
+  const legacyKind = task.legacy_mode || task.mode;
+  const normalizedLegacyKind = legacyKind === "admin" ? "admin_command" : legacyKind;
+  return result.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || (normalizedLegacyKind && normalizedLegacyKind !== "full" ? normalizedLegacyKind : "code_change");
 }
 function isNoopProfile(task = {}, result = {}) {
   return operationKindFrom(task, result) === "noop" || task.noop === true || result.noop === true || result.kind === "noop";
@@ -208,6 +210,11 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
   if (status === "completed" && !result.summary) {
     findings.push({ severity: "blocker", code: "summary_missing", message: "Completed result must include summary", source: "task_acceptance" });
   }
+  const explicitLegacyKind = task.legacy_mode || (task.mode !== "full" ? task.mode : null);
+  const explicitOperationKind = result.operation_kind || task.acceptance_contract?.intent?.operation_kind || task.acceptance_contract?.operation_kind || (explicitLegacyKind === "admin" ? "admin_command" : explicitLegacyKind);
+  if (status === "completed" && explicitOperationKind === "code_change" && changedFilesFrom(task, result).length === 0) {
+    findings.push({ severity: "blocker", code: "changed_files_missing", message: "Completed code-change result must include changed_files evidence", source: "task_acceptance" });
+  }
   if (status === "completed" && result.verification?.passed !== true) {
     const changedFiles = changedFilesFrom(task, result);
     if (changedFiles.length > 0 || operationKindFrom(task, result) === "deploy" || isEvidenceGatedNoChangeProfile(task, result)) {
@@ -251,7 +258,11 @@ export async function verifyTaskCompletion({ task = {}, goal = {}, repoPath, res
     evidence,
   }).catch((err) => ({ passed: false, findings: [{ severity: "major", code: "acceptance_agent_error", message: err?.message || String(err), source: "task_acceptance" }], evidence })) : { passed: false, findings: [], evidence: null };
 
-  findings.push(...(acceptance.findings || []).filter((finding) => finding.severity === "blocker" || finding.severity === "major"));
+  const profileEvidenceSatisfied = isEvidenceGatedNoChangeProfile(task, result) && hasProfileEvidence(task, result);
+  findings.push(...(acceptance.findings || []).filter((finding) =>
+    (finding.severity === "blocker" || finding.severity === "major") &&
+    !(profileEvidenceSatisfied && finding.code === "worktree_clean_unknown")
+  ));
 
   if (status === "completed" && isNoopProfile(task, result) && !hasNoopEvidence(result)) {
     findings.push({ severity: "blocker", code: "noop_evidence_missing", message: "Completed noop tasks require noop=true, kind=noop, or noop_reason evidence", source: "task_acceptance" });

@@ -16,7 +16,7 @@ test('readonly_validation is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('readonly_validation');
   assert.equal(profile.intent.operation_kind, 'readonly_validation');
   assert.equal(profile.intent.mutation_scope, 'none');
-  assert.equal(profile.intent.execution_mode, 'readonly');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, false);
   assert.equal(profile.requirements.requires_integration, false);
 });
@@ -25,7 +25,7 @@ test('already_integrated is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('already_integrated');
   assert.equal(profile.intent.operation_kind, 'already_integrated');
   assert.equal(profile.intent.mutation_scope, 'none');
-  assert.equal(profile.intent.execution_mode, 'readonly');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, false);
   assert.equal(profile.requirements.requires_integration, false);
 });
@@ -34,7 +34,7 @@ test('integration is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('integration');
   assert.equal(profile.intent.operation_kind, 'integration');
   assert.equal(profile.intent.mutation_scope, 'repo');
-  assert.equal(profile.intent.execution_mode, 'worktree');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, true);
   assert.equal(profile.requirements.requires_integration, false);
 });
@@ -43,7 +43,7 @@ test('repair is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('repair');
   assert.equal(profile.intent.operation_kind, 'repair');
   assert.equal(profile.intent.mutation_scope, 'repo');
-  assert.equal(profile.intent.execution_mode, 'worktree');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, true);
   assert.equal(profile.requirements.requires_integration, true);
 });
@@ -52,7 +52,7 @@ test('queue_admin is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('queue_admin');
   assert.equal(profile.intent.operation_kind, 'queue_admin');
   assert.equal(profile.intent.mutation_scope, 'runtime');
-  assert.equal(profile.intent.execution_mode, 'admin');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, false);
   assert.equal(profile.requirements.requires_integration, false);
 });
@@ -410,7 +410,7 @@ test('P0-AFC10: docs_only is a known operation kind', () => {
   const profile = getDefaultAcceptanceContractProfile('docs_only');
   assert.equal(profile.intent.operation_kind, 'docs_only');
   assert.equal(profile.intent.mutation_scope, 'repo');
-  assert.equal(profile.intent.execution_mode, 'worktree');
+  assert.equal(profile.intent.execution_mode, 'full');
   assert.equal(profile.requirements.requires_commit, true);
   assert.equal(profile.requirements.requires_integration, false);
 });
