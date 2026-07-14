@@ -222,6 +222,8 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     session_id: session.id,
     goal_id: goalId,
     task_id: taskId,
+    task_context_digest: session.task_context_digest || null,
+    task_context_revision: session.task_context_revision || null,
     cwd,
     changed_files: changedFiles,
     tests,

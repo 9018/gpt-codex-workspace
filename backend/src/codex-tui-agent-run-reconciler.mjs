@@ -81,27 +81,36 @@ export async function reconcileTuiAgentRunsFromProgress({ store, workspaceRoot, 
 
   const digest = task.task_context_digest || goal.task_context?.contract_digest || null;
   if (!digest) return { reconciled: false, reason: "context_digest_missing", formal_completed: 0, advisory_completed: 0 };
+  if (snapshot.task_context_digest !== digest) {
+    return { reconciled: false, reason: "session_context_digest_mismatch", formal_completed: 0, advisory_completed: 0 };
+  }
+  if (snapshot.result_json.goal_id && snapshot.result_json.goal_id !== snapshot.goal_id) {
+    return { reconciled: false, reason: "result_goal_mismatch", formal_completed: 0, advisory_completed: 0 };
+  }
+  if (snapshot.result_json.task_id && snapshot.result_json.task_id !== snapshot.task_id) {
+    return { reconciled: false, reason: "result_task_mismatch", formal_completed: 0, advisory_completed: 0 };
+  }
+  if (snapshot.result_json.verification?.passed !== true || !["verified", "completed"].includes(String(snapshot.result_json.status))) {
+    return { reconciled: false, reason: "diagnostic_verification_not_passed", formal_completed: 0, advisory_completed: 0 };
+  }
+
   const progress = await readJson(join(workspaceRoot, ".gptwork", "goals", snapshot.goal_id, "progress.json"));
   const entries = Array.isArray(progress?.subagents) ? progress.subagents : [];
-  const completedById = new Map(entries
-    .filter((entry) => entry?.status === "completed" && entry?.agent_run_id && entry?.input_context_digest === digest)
+  const progressById = new Map(entries
+    .filter((entry) => entry?.agent_run_id && entry?.input_context_digest === digest)
     .map((entry) => [entry.agent_run_id, entry]));
-  if (completedById.size === 0) {
-    return { reconciled: false, reason: "no_matching_completed_progress", formal_completed: 0, advisory_completed: 0 };
-  }
 
   let formalCompleted = 0;
   const formalRuns = (state.agent_runs || []).filter((run) => run.task_id === snapshot.task_id && FORMAL_ROLES.has(run.role));
   for (const run of formalRuns) {
-    const entry = completedById.get(run.id);
-    if (!entry || run.input_context_digest !== digest) continue;
-    if (run.status === "completed") continue;
+    const entry = progressById.get(run.id);
+    if (run.input_context_digest !== digest) continue;
     const artifact = artifactForRole(run.role, { goalId: snapshot.goal_id, digest, snapshot });
     if (!artifact) continue;
     await completeAgentRun(store, {
       agent_run_id: run.id,
       status: "completed",
-      summary: entry.summary || `${run.role} completed from verified diagnostic TUI progress`,
+      summary: entry?.summary || `${run.role} completed from verified diagnostic TUI result`,
       output_artifacts: [artifact],
     });
     formalCompleted += 1;
@@ -110,11 +119,11 @@ export async function reconcileTuiAgentRunsFromProgress({ store, workspaceRoot, 
   let advisoryCompleted = 0;
   await store.mutate((mutable) => {
     for (const run of mutable.advisory_runs || []) {
-      if (run.task_id !== snapshot.task_id || !completedById.has(run.id) || run.input_context_digest !== digest) continue;
-      if (run.status !== "completed") advisoryCompleted += 1;
-      const entry = completedById.get(run.id);
+      if (run.task_id !== snapshot.task_id || run.input_context_digest !== digest) continue;
+      advisoryCompleted += 1;
+      const entry = progressById.get(run.id);
       run.status = "completed";
-      run.summary = entry.summary || `${run.role} completed from verified diagnostic TUI progress`;
+      run.summary = entry?.summary || `${run.role} completed from verified diagnostic TUI result`;
       run.output_artifact = {
         kind: "diagnostic_analysis",
         path: snapshot.result_json_path || `.gptwork/goals/${snapshot.goal_id}/result.json`,
@@ -134,7 +143,7 @@ export async function reconcileTuiAgentRunsFromProgress({ store, workspaceRoot, 
 
   return {
     reconciled: formalCompleted > 0 || advisoryCompleted > 0,
-    reason: formalCompleted > 0 || advisoryCompleted > 0 ? "completed_from_verified_diagnostic_progress" : "no_matching_queued_runs",
+    reason: formalCompleted > 0 || advisoryCompleted > 0 ? "completed_from_verified_diagnostic_result" : "no_context_bound_runs",
     formal_completed: formalCompleted,
     advisory_completed: advisoryCompleted,
     context_digest: digest,

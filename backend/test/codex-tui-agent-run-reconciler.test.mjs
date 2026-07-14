@@ -37,7 +37,7 @@ test("diagnostic TUI progress reconciles matching queued formal and advisory run
   await writeFile(join(goalDir, "result.md"), "# Diagnostic complete\n");
   await writeFile(join(goalDir, "context.bundle.md"), "# Context\n");
 
-  const result = await reconcileTuiAgentRunsFromProgress({ store, workspaceRoot: root, snapshot: { task_id: taskId, goal_id: goalId, result_json_valid: true, result_json: { status: "verified", execution_mode: "readonly_diagnostic", summary: "all checks pass", verification: { passed: true }, blockers: [] }, result_json_path: join(goalDir, "result.json"), result_md_path: join(goalDir, "result.md"), worktree_clean: true, commit: null } });
+  const result = await reconcileTuiAgentRunsFromProgress({ store, workspaceRoot: root, snapshot: { task_id: taskId, goal_id: goalId, result_json_valid: true, result_json: { status: "verified", execution_mode: "readonly_diagnostic", summary: "all checks pass", verification: { passed: true }, blockers: [] }, result_json_path: join(goalDir, "result.json"), result_md_path: join(goalDir, "result.md"), worktree_clean: true, commit: null, task_context_digest: digest } });
   assert.equal(result.reconciled, true);
   assert.equal(result.formal_completed, 6);
   assert.equal(result.advisory_completed, 3);
@@ -59,7 +59,7 @@ test("reconciler refuses progress with a mismatched context digest", async () =>
   const goalDir = join(root, ".gptwork", "goals", "goal_x");
   await mkdir(goalDir, { recursive: true });
   await writeFile(join(goalDir, "progress.json"), JSON.stringify({ status: "completed", subagents: [{ role: "builder", agent_run_id: "missing", status: "completed", input_context_digest: "sha256:wrong" }] }));
-  const result = await reconcileTuiAgentRunsFromProgress({ store, workspaceRoot: root, snapshot: { task_id: "task_x", goal_id: "goal_x", result_json_valid: true, result_json: { status: "verified", execution_mode: "readonly_diagnostic" }, worktree_clean: true } });
+  const result = await reconcileTuiAgentRunsFromProgress({ store, workspaceRoot: root, snapshot: { task_id: "task_x", goal_id: "goal_x", result_json_valid: true, result_json: { status: "verified", execution_mode: "readonly_diagnostic", verification: { passed: true } }, worktree_clean: true, task_context_digest: "sha256:wrong" } });
   assert.equal(result.reconciled, false);
-  assert.equal(result.reason, "no_matching_completed_progress");
+  assert.equal(result.reason, "session_context_digest_mismatch");
 });
