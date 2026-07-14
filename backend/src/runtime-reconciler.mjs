@@ -152,7 +152,7 @@ export function createReconciler({ store, config, github, notifyTerminalTaskIfNe
         }
 
 
-        await reconcileRuntimeRepoLocks({ config, logPath });
+        await reconcileRuntimeRepoLocks({ state, config, logPath });
         const restartVerifications = await reconcileRestartMarkers({ state, store, config, github, notifyTerminalTaskIfNeeded, logPath });
         await store.save();
         return { ok: true, reconciled: reconciled.length, details: reconciled, restart_verifications: restartVerifications };
