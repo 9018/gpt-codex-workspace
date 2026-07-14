@@ -46,6 +46,7 @@ test("diagnostic TUI progress reconciles matching queued formal and advisory run
   assert.ok(formalState.every((run) => run.status === "completed"));
   assert.ok(formalState.every((run) => run.output_artifacts.length > 0));
   assert.ok(formalState.every((run) => run.output_artifacts[0].metadata?.context_digest === digest));
+  assert.equal(formalState.find((run) => run.role === "verifier").output_artifacts[0].passed, true);
   assert.ok(state.advisory_runs.every((run) => run.status === "completed"));
 });
 

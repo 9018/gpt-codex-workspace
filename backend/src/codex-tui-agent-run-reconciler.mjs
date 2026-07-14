@@ -63,7 +63,7 @@ function artifactForRole(role, { goalId, digest, snapshot }) {
     case "context_curator": return { ...common, kind: "context_bundle", path: `${base}/context.bundle.md` };
     case "planner": return { ...common, kind: "plan", path: resultPath };
     case "builder": return { ...common, kind: "change_summary", path: resultPath, changed_count: 0, commit: null };
-    case "verifier": return { ...common, kind: "verification", path: resultPath, passed: snapshot.result_json?.verification?.passed === true };
+    case "verifier": return { ...common, kind: "verification", path: resultPath, passed: diagnosticVerificationPassed(snapshot.result_json) };
     case "reviewer": return { ...common, kind: "reviewer_decision", path: resultPath, passed: true, status: "accepted" };
     case "finalizer": return { ...common, kind: "result", path: resultPath, status: snapshot.result_json?.status || "verified" };
     default: return null;
