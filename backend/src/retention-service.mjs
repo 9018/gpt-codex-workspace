@@ -951,6 +951,8 @@ export async function retentionCleanup({
 
   const startTime = Date.now();
   const state = await store.load();
+  // Preserve task metadata for resource cleanup before rolling retention removes old terminal records.
+  const taskCleanupSnapshot = [...(state.tasks || [])];
   const beforeState = { tasks: state.tasks?.length || 0, goals: state.goals?.length || 0 };
 
   const changes = [];
@@ -1501,7 +1503,7 @@ export async function retentionCleanup({
 
   // ── 16. retained task worktrees ───────────────────────────────
   {
-    const tasks = state.tasks || [];
+    const tasks = taskCleanupSnapshot;
     let removed = 0;
     let candidates = 0;
     for (const task of tasks) {
@@ -1557,7 +1559,7 @@ export async function retentionCleanup({
   // ── 17. git branches cleanup (task/goal branches) ──────────────
   {
     const gitRoot = _findGitRoot(workspaceRoot);
-    const knownTasks = state.tasks || [];
+    const knownTasks = taskCleanupSnapshot;
 
     if (gitRoot) {
       try {

@@ -10,6 +10,7 @@
  */
 
 import { isCodexSessionInventoryTaskKind } from "./task-status.mjs";
+import { isTerminalStatus } from "./task-status-taxonomy.mjs";
 import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 
 // ---------------------------------------------------------------------------
@@ -164,13 +165,44 @@ async function _emitLifecycleEventSafe(emitter, event, task, prevStatus, nextSta
   }
 }
 
-export async function updateTask(store, task_id, updater) {
+export let legacyDirectWriteCount = 0;
+
+export async function updateTask(store, task_id, updater, options = {}) {
+  // Route through canonical transition service if transition_command is provided
+  if (options.transition_command) {
+    if (typeof options.transition_service?.transitionTask !== 'function') {
+      throw new Error('updateTask: transition_service required when transition_command is provided');
+    }
+    return options.transition_service.transitionTask(options.transition_command);
+  }
   const state = await store.load();
   const task = typeof store.findTaskById === "function"
     ? await store.findTaskById(task_id)
     : state.tasks.find((item) => item.id === task_id);
   if (!task) throw new Error(`task not found: ${task_id}`);
   const prevStatus = task.status;
+
+  // Legacy direct write tracking and terminal regression guard
+  if (isTerminalStatus(prevStatus)) {
+    const proxy = Object.assign({}, task);
+    const proxyUpdater = (t) => updater(t);
+    try { proxyUpdater(proxy); } catch {}
+    if (proxy.status && proxy.status !== prevStatus && !isTerminalStatus(proxy.status)) {
+      throw new Error(
+        `[state-boundary] Cannot regress terminal task ${task_id} from ${prevStatus} to ${proxy.status}. Use transitionTask with reconciliation_correction instead.`
+      );
+    }
+  }
+
+  // Track legacy direct writes
+  task.metadata = task.metadata || {};
+  task.metadata.legacy_direct_status_write_count = (task.metadata.legacy_direct_status_write_count || 0) + 1;
+  legacyDirectWriteCount++;
+
+  if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
+    console.warn('[state-boundary] legacy direct task status mutation in task-lifecycle.updateTask: ' +
+      task_id + ' ' + prevStatus + ' → ' + (proxy?.status || task.status));
+  }
   updater(task);
   task.updated_at = new Date().toISOString();
   state.activities ||= [];

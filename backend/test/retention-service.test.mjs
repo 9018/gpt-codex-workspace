@@ -412,6 +412,12 @@ describe("retention-service", () => {
     });
 
     it("removes resolved terminal worktrees through git and deletes their task branch immediately", async () => {
+      const newerTerminalTasks = Array.from({ length: 51 }, (_, index) => ({
+        id: `task_newer_${index}`,
+        status: "completed",
+        created_at: `2026-02-${String((index % 27) + 1).padStart(2, "0")}T00:00:00Z`,
+        updated_at: `2026-02-${String((index % 27) + 1).padStart(2, "0")}T00:00:00Z`,
+      }));
       const state = {
         tasks: [{
           id: "task_git_cleanup",
@@ -424,7 +430,7 @@ describe("retention-service", () => {
             verification: { passed: true },
             worktree_lifecycle: { worktree_path: "__SET_LATER__", branch_name: "gptwork/task/task_git_cleanup" },
           },
-        }],
+        }, ...newerTerminalTasks],
         goals: [], goal_queue: [], conversations: [], memories: [],
         agent_runs: [], chatgpt_requests: [], activities: [], audit: [],
       };

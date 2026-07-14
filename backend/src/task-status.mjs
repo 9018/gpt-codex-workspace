@@ -9,7 +9,7 @@
 
 import { TASK_STATUSES, normalizeTaskStatus } from "./task-status-taxonomy.mjs";
 
-const TASK_STATUS_TERMINAL_FOR_SESSION_INVENTORY = new Set([
+const TASK_STATUS_STOPPABLE_FOR_SESSION_INVENTORY = new Set([
   TASK_STATUSES.COMPLETED,
   TASK_STATUSES.FAILED,
   TASK_STATUSES.WAITING_FOR_REVIEW,
@@ -17,13 +17,13 @@ const TASK_STATUS_TERMINAL_FOR_SESSION_INVENTORY = new Set([
 ]);
 
 /**
- * Check whether a task has reached a terminal status.
+ * Check whether a task has reached a stopped status (session may be collected and forwarded to finalizer).
  *
  * @param {object|null|undefined} task
  * @returns {boolean}
  */
 export function isTaskTerminal(task) {
-  return TASK_STATUS_TERMINAL_FOR_SESSION_INVENTORY.has(normalizeTaskStatus(task?.status));
+  return TASK_STATUS_STOPPABLE_FOR_SESSION_INVENTORY.has(normalizeTaskStatus(task?.status));
 }
 
 /**

@@ -1,0 +1,40 @@
+{
+  "artifact": "GPTWork Codex Exec/TUI State Boundary Repair Plans",
+  "files": [
+    {
+      "name": "00-README.md",
+      "bytes": 2608,
+      "sha256": "62fac950c2b5e83160b7ce04855af31289d7797eb424f1eca9fdd5096b24f3c9"
+    },
+    {
+      "name": "01-canonical-task-transition-kernel.md",
+      "bytes": 15253,
+      "sha256": "06aad2686accc98b166fd51551aa9b09c44ecf85ab554eea2c6eca11368ba19c"
+    },
+    {
+      "name": "02-unified-execution-contract-and-runtime-boundary.md",
+      "bytes": 12275,
+      "sha256": "dd0fd01f89f8b6214ec15efad19cd388c19a9848c518be0342e1afb11a0f6c03"
+    },
+    {
+      "name": "03-tui-runtime-adapter-and-evidence-writeback.md",
+      "bytes": 13419,
+      "sha256": "27fbadf672fbfcf40953983d7c95ddeabba40230001e12a1d2852f80efc45d7c"
+    },
+    {
+      "name": "04-codex-exec-runtime-and-mcp-tools.md",
+      "bytes": 10196,
+      "sha256": "d0a2c65c7c0344878e83618f691b70a816b0325eb2b0fcfe1bd364ace0864772"
+    },
+    {
+      "name": "05-workflow-queue-auto-advance-convergence.md",
+      "bytes": 11453,
+      "sha256": "9bf5c666a3d80d9587c94a6229342457142ee679de19c847bb057d332078626a"
+    },
+    {
+      "name": "06-reconciliation-migration-observability-release.md",
+      "bytes": 12794,
+      "sha256": "a35c82a3eb9e22daf53fd8da33c691bc66af794f535a25a920b089b06222060a"
+    }
+  ]
+}

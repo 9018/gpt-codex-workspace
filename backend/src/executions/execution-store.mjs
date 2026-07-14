@@ -13,7 +13,7 @@
 
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
+import { randomUUID, createHash } from "node:crypto";
 
 export const EXECUTIONS_DIR = ".gptwork/executions";
 
@@ -112,6 +112,7 @@ export function createExecutionStore({ workspaceRoot } = {}) {
       const createdAt = nowIso();
       const record = {
         id,
+        schema_version: 1,
         workstream_id: workstreamId,
         goal_id: goalId,
         task_id: taskId,
@@ -121,6 +122,13 @@ export function createExecutionStore({ workspaceRoot } = {}) {
         head_commit: headCommit,
         session_id: sessionId,
         codex_thread_id: codexThreadId,
+        provider: null,
+        interaction_mode: null,
+        provider_run_id: null,
+        request: null,
+        runtime_details: null,
+        evidence_ref: null,
+        transition_history: [],
         status: "created",
         created_at: createdAt,
         updated_at: createdAt,
