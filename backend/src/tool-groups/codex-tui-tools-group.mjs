@@ -477,7 +477,7 @@ codex_tui_collect: tool({
             await updateTask(store, snapshot.task_id, (item) => {
               // Only transition from running — do not regress already-transitioned tasks
               if (item.status === 'running' || item.status === 'assigned') {
-                item.status = 'collecting';
+                item.status = 'waiting_for_review';
               }
               // Write durable evidence to task result
               item.result = {
