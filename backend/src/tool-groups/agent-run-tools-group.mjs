@@ -57,7 +57,8 @@ export function createAgentRunToolsGroup({ tool, schema, store, config, eventLog
         agent: { type: "string", description: "Agent name to run the pipeline.", default: "codex" },
         roles: { type: "array", description: "Roles in execution order, e.g. [\"planner\",\"builder\",\"verifier\",\"reviewer\",\"finalizer\"]. Legacy labels are accepted for compatibility.", items: { type: "string", enum: ACCEPTED_AGENT_ROLES }, examples: [["context_curator", "planner", "builder", "verifier", "reviewer", "finalizer", "integrator"], ["planner", "implementer", "tester", "reviewer", "finalizer"]] },
         review_gate_after: { type: "string", description: "Role after which a review gate is required.", enum: ACCEPTED_AGENT_ROLES },
-        execution_order: { type: "array", description: "Custom execution order override.", items: { type: "string" } }
+        execution_order: { type: "array", description: "Custom execution order override.", items: { type: "string" } },
+        pipeline_version: { type: "string", description: "Pipeline contract version. Use task_pipeline_v3 for typed artifact handoffs.", enum: ["task_pipeline_v2", "task_pipeline_v3"] }
       }),
       ...common,
       handler: (args) => runAgentPipeline(store, args, ctx),

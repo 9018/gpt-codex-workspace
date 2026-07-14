@@ -51,6 +51,7 @@ export async function createAgentRun(store, args = {}, context = {}) {
       status: normalizeStatus(args.status),
       workstream_id: args.workstream_id || null,
       execution_id: args.execution_id || null,
+      pipeline_version: args.pipeline_version || null,
       session_id: args.session_id || null,
       phase: args.phase || null,
       round: Number(args.round || 0),
@@ -151,6 +152,7 @@ export async function runAgentPipeline(store, args = {}, context = {}) {
     review_gate_after: reviewGateAfter,
     execution_order: executionOrder,
     status: "created",
+    pipeline_version: args.pipeline_version || null,
     created_at: now(),
   };
   const created = [];

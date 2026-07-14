@@ -43,6 +43,9 @@ import { createProductStatusToolsGroup } from "./tool-groups/product-status-tool
 import { createGoalMergeToolsGroup } from "./tool-groups/goal-merge-tools-group.mjs";
 import { createWorkstreamToolsGroup } from "./tool-groups/workstream-tools-group.mjs";
 import { createWorkstreamOrchestrationToolsGroup } from "./orchestration/workstream-orchestration-tools-group.mjs";
+import { createEphemeralExecutionToolsGroup } from "./tool-groups/ephemeral-execution-tools-group.mjs";
+import { createPlanningToolsGroup } from "./tool-groups/planning-tools-group.mjs";
+import { createArtifactHandoffToolsGroup } from "./tool-groups/artifact-handoff-tools-group.mjs";
 import { readGoalWorkspace } from "./goal-workspace-status.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
@@ -288,6 +291,13 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     return { goal, workspace };
   };
 
+  let allTools = null;
+  const invokeRegisteredTool = async (name, args, context = {}) => {
+    const descriptor = allTools?.[name];
+    if (!descriptor || typeof descriptor.handler !== "function") throw new Error(`ephemeral_tool_not_found:${name}`);
+    return descriptor.handler(args || {}, context);
+  };
+
   const tools = {
     ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
     ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
@@ -295,6 +305,9 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),
     ...createWorkstreamToolsGroup({ tool, schema, store }),
     ...createWorkstreamOrchestrationToolsGroup({ tool, schema, store }),
+    ...createPlanningToolsGroup({ tool, schema, store, config }),
+    ...createArtifactHandoffToolsGroup({ tool, schema, store, config }),
+    ...createEphemeralExecutionToolsGroup({ tool, schema, store, config, eventLogger, invokeTool: invokeRegisteredTool }),
     ...createGoalQueueToolsGroup({ tool, schema, store, config, goalQueue }),
     ...createProjectContextToolsGroup({ tool, schema, config, store, workerState, registry }),
     ...createAgentRunToolsGroup({ tool, schema, store, config, eventLogger, hookBus }),
@@ -349,6 +362,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
       },
     }),
   };
+  allTools = tools;
   return tools;
 }
 

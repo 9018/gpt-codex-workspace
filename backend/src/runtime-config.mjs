@@ -247,6 +247,13 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     maxReadBytes: _getNum("GPTWORK_MAX_READ_BYTES", 200000),
     maxShellOutputBytes: _getNum("GPTWORK_MAX_SHELL_OUTPUT_BYTES", 200000),
 
+    // Ephemeral execution / Planner IR / Artifact handoff
+    ephemeralBatchEnabled: _getBool("GPTWORK_EPHEMERAL_BATCH_ENABLED", false),
+    ephemeralBatchConcurrency: _getNum("GPTWORK_EPHEMERAL_BATCH_CONCURRENCY", 8),
+    ephemeralBatchMaxCalls: _getNum("GPTWORK_EPHEMERAL_BATCH_MAX_CALLS", 32),
+    planIrEnabled: _getBool("GPTWORK_PLAN_IR_ENABLED", false),
+    artifactHandoffV3Enabled: _getBool("GPTWORK_ARTIFACT_HANDOFF_V3_ENABLED", false),
+
     // Other
     codexHome: _get("GPTWORK_CODEX_HOME", resolve(workspaceRoot || PROJECT_ROOT, ".codex")),
     python: _get("GPTWORK_PYTHON", process.platform === "win32" ? "python" : "python3"),

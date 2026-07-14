@@ -24,6 +24,20 @@ export const LEGACY_AGENT_ROLE_ALIASES = Object.freeze({
   "escalation-judgment": "reviewer",
 });
 
+export const V3_ARTIFACT_SCHEMA = Object.freeze({
+  version: "gptwork.agent_artifact.v3",
+  required_by_role: Object.freeze({
+    context_curator: Object.freeze(["context_manifest"]),
+    planner: Object.freeze(["plan_ir"]),
+    builder: Object.freeze(["change_manifest"]),
+    verifier: Object.freeze(["verification_report"]),
+    repairer: Object.freeze(["repair_report"]),
+    reviewer: Object.freeze(["review_decision"]),
+    finalizer: Object.freeze(["final_result"]),
+    integrator: Object.freeze(["integration_report"]),
+  }),
+});
+
 export const ARTIFACT_SCHEMA = Object.freeze({
   version: "gptwork.agent_artifact.v1",
   roles: AGENT_ROLE_ENUM,
@@ -52,6 +66,7 @@ export const ARTIFACT_SCHEMA = Object.freeze({
 });
 
 const ROLE_SET = new Set(AGENT_ROLE_ENUM);
+const V3_KIND_SET = new Set(Object.values(V3_ARTIFACT_SCHEMA.required_by_role).flat());
 
 export function isCanonicalAgentRole(role) {
   return ROLE_SET.has(role);
@@ -141,7 +156,7 @@ function artifactKindForValue(value) {
   if (!value) return null;
   if (typeof value === "object") {
     const kind = value.kind || value.type || value.artifact_kind;
-    if (kind && ARTIFACT_SCHEMA.kinds[kind]) return kind;
+    if (kind && (ARTIFACT_SCHEMA.kinds[kind] || V3_KIND_SET.has(kind))) return kind;
     if (value.path) return artifactKindForValue(value.path);
     if (value.decision || value.passed !== undefined || value.status) return "reviewer_decision";
     return null;
@@ -167,7 +182,8 @@ export function hasArtifactKind(artifacts = [], kind) {
 
 export function validateAgentArtifactContract(agentRun = {}) {
   const role = normalizeContractRole(agentRun.role);
-  const required = Array.from(ARTIFACT_SCHEMA.required_by_role[role] || []);
+  const requiredSchema = agentRun.pipeline_version === "task_pipeline_v3" ? V3_ARTIFACT_SCHEMA : ARTIFACT_SCHEMA;
+  const required = Array.from(requiredSchema.required_by_role[role] || []);
   const outputArtifacts = Array.isArray(agentRun.output_artifacts) ? agentRun.output_artifacts : [];
   const inputArtifacts = Array.isArray(agentRun.input_artifacts) ? agentRun.input_artifacts : [];
   const artifacts = [...inputArtifacts, ...outputArtifacts];

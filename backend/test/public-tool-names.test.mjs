@@ -34,6 +34,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "append_agent_event",
   "append_goal_message",
   "append_task_log",
+  "apply_plan_ir",
   "assign_task_to_codex",
   "attach_task_artifact",
   "browser_click",
@@ -54,6 +55,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "cleanup_goals",
   "cleanup_tmp",
   "clear_repo_lock",
+  "classify_execution_intent",
   "codex_tui_collect",
   "codex_tui_preview_task_delta",
   "codex_tui_progress",
@@ -65,6 +67,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "codex_tui_stop",
   "codex_tui_subagents",
  "complete_agent_run",
+  "compile_plan_ir",
   "complete_task",
   "context_prepare",
   "context_status",
@@ -143,11 +146,13 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "move_path",
   "notification_status",
   "open_project_context",
+  "prepare_agent_handoff",
   "preview_codex_context",
   "project_context_status",
   "read_events",
   "read_handoff",
   "read_text_file",
+  "register_agent_artifact",
   "register_repository",
   "repo_lock_status",
   "request_human_review",
@@ -156,6 +161,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "retention_cleanup",
   "retention_status",
   "run_agent_pipeline",
+  "run_ephemeral_tool_batch",
   "run_assigned_codex_tasks",
   "runtime_status",
   "schedule_service_restart",
@@ -177,6 +183,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
  "update_task_status",
  "update_workspace",
   "update_workstream",
+  "validate_plan_ir",
   "upload_base64_file",
   "upload_bundle_base64",
   "upload_from_url",
@@ -186,7 +193,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "workflow_record_result",
   "workflow_status",
   "write_text_file",
-];
+].sort();
 
 test("tools/list returns expected public tool names (no placeholder tools)", async () => {
   const server = await makeServer();
