@@ -141,12 +141,13 @@ test("checkGitRepo returns pass or fail", () => {
   assert.ok(["pass", "fail"].includes(r.status));
 });
 
-test("checkGptworkDir returns pass for existing .gptwork", () => {
-  const dir = GPTWORK_DIR;
-  if (existsSync(dir)) {
-    const r = checkGptworkDir(dir);
-    assert.equal(r.status, "pass");
-  }
+test("checkGptworkDir returns pass for a complete .gptwork directory", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-dir-check-"));
+  const dir = join(root, ".gptwork");
+  await mkdir(join(dir, "goals"), { recursive: true });
+  const r = checkGptworkDir(dir);
+  assert.equal(r.status, "pass");
+  await rm(root, { recursive: true, force: true });
 });
 
 test("checkGptworkDir returns fail for missing directory", () => {
@@ -237,9 +238,13 @@ test("checkRepoRegistry returns pass when valid", async () => {
   assert.equal(r.status, "pass");
 });
 
-test("checkNpmDeps returns pass when node_modules exists", () => {
-  const r = checkNpmDeps(BACKEND_ROOT);
+test("checkNpmDeps returns pass when package.json and node_modules exist", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-npm-present-"));
+  await writeFile(join(root, "package.json"), "{}", "utf8");
+  await mkdir(join(root, "node_modules"), { recursive: true });
+  const r = checkNpmDeps(root);
   assert.equal(r.status, "pass");
+  await rm(root, { recursive: true, force: true });
 });
 
 test("checkNpmDeps returns fail when missing", async () => {
