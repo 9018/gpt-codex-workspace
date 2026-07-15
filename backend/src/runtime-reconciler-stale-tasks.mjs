@@ -5,13 +5,33 @@ import { getLatestRun, getRunFilePath, fireHeartbeat } from "./codex-run-metadat
 import { releaseLockForTask } from "./repo-lock.mjs";
 import { parseResultJson, buildTaskResult } from "./codex-result-parser.mjs";
 import { updateGoalStatus } from "./task-lifecycle.mjs";
+import { createTaskTransitionService } from "./task-state/task-transition-service.mjs";
+import { TASK_EVENTS } from "./task-state/task-transition-events.mjs";
 
-export async function reconcileRunningTasks({ state, store, config, notifyTerminalTaskIfNeeded, logPath }) {
+export async function reconcileRunningTasks({ state, store, config, notifyTerminalTaskIfNeeded, logPath, transitionService: injectedTransitionService }) {
+  const transitionService = injectedTransitionService || createTaskTransitionService({ store });
   const now = Date.now();
   const _lp = logPath;
   const stallThreshold = (config.codexStallThreshold || 600) * 1000;
 
   const reconciled = [];
+  const reconcileStatus = async (task, canonicalStatus, resultPatch, reason) => {
+    const transition = await transitionService.transitionTask({
+      task_id: task.id,
+      event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+      expected_statuses: [task.status],
+      payload: {
+        canonical_status: canonicalStatus,
+        task_result_patch: resultPatch,
+        audit: { reconciler: "startup_stale_tasks", reason },
+      },
+      reason,
+      source: "reconciler",
+      actor: { type: "system", id: "startup_stale_tasks" },
+      idempotency_key: `startup_stale:${task.id}:${canonicalStatus}:${reason}`,
+    });
+    return transition.task || task;
+  };
   for (const task of (state.tasks || [])) {
     if (task.status !== "running") continue;
     try {
@@ -55,10 +75,12 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
               : parsedResult.status === "failed" ? "failed"
               : "waiting_for_review";
             const prevRecoveryStatus = task.status;
-            task.status = recoveredStatus;
-            task.result = { ...(task.result || {}), ...taskResult };
-            task.result.reconciled_at = new Date().toISOString();
-            task.result.recovered_from_result_json = true;
+            const reconciledTask = await reconcileStatus(task, recoveredStatus, {
+              ...taskResult,
+              reconciled_at: new Date().toISOString(),
+              recovered_from_result_json: true,
+            }, "recovered durable result.json");
+            Object.assign(task, reconciledTask);
             task.logs = task.logs || [];
             task.logs.push({ time: new Date().toISOString(), message: "[worker] recovered completed result from existing result.json before codex_stalled" });
             try { await updateGoalStatus(store, goalId, recoveredStatus, new Date().toISOString()); } catch {}
@@ -80,11 +102,12 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
           }
         } catch (parseErr) {
           const prevParseStatus = task.status;
-          task.status = "waiting_for_review";
-          task.result = task.result || {};
-          task.result.kind = "result_json_parse_failed";
-          task.result.reconciliation_message = "result.json found at " + resultJsonPath + " but parse failed: " + parseErr.message;
-          task.result.reconciled_at = new Date().toISOString();
+          const reconciledTask = await reconcileStatus(task, "waiting_for_review", {
+            kind: "result_json_parse_failed",
+            reconciliation_message: "result.json found at " + resultJsonPath + " but parse failed: " + parseErr.message,
+            reconciled_at: new Date().toISOString(),
+          }, "result.json parse failed");
+          Object.assign(task, reconciledTask);
           task.logs = task.logs || [];
           task.logs.push({ time: new Date().toISOString(), message: "[worker] result.json parse failed for reconciliation: " + parseErr.message });
           try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}
@@ -97,12 +120,14 @@ export async function reconcileRunningTasks({ state, store, config, notifyTermin
       if (!recovered) {
         const prevStatus = task.status;
         const canRetryRepair = releasedLock && releasedLock.stale_reason && task.parent_task_id && task.repair_attempt && Number(task.repair_attempt) < Number(task.max_attempts || task.repair_attempt + 1);
-        task.status = canRetryRepair ? "assigned" : "waiting_for_review";
-        task.result = task.result || {};
-        task.result.kind = canRetryRepair ? "repair_requeued" : (releasedLock ? "stale_running_released_lock" : "codex_stalled");
-        task.result.reconciliation_message = message;
-        if (releasedLock) task.result.released_lock = releasedLock;
-        task.result.reconciled_at = new Date().toISOString();
+        const targetStatus = canRetryRepair ? "assigned" : "waiting_for_review";
+        const reconciledTask = await reconcileStatus(task, targetStatus, {
+          kind: canRetryRepair ? "repair_requeued" : (releasedLock ? "stale_running_released_lock" : "codex_stalled"),
+          reconciliation_message: message,
+          ...(releasedLock ? { released_lock: releasedLock } : {}),
+          reconciled_at: new Date().toISOString(),
+        }, message);
+        Object.assign(task, reconciledTask);
         task.logs = task.logs || [];
         task.logs.push({ time: new Date().toISOString(), message });
         try { await releaseLockForTask(config.defaultWorkspaceRoot, task.id); } catch {}

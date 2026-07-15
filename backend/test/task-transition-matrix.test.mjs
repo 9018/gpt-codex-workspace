@@ -168,3 +168,15 @@ test("isTerminalStatus from model exports works", () => {
   assert.ok(_isTerminalStatus("completed"));
   assert.equal(_isTerminalStatus("running"), false);
 });
+
+
+test("reconciliation correction may repair active task to canonical terminal status", () => {
+  const result = resolveTaskTransition({
+    currentStatus: "running",
+    event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+    payload: { canonical_status: "completed", audit: { reason: "durable result recovered" } },
+  });
+  assert.equal(result.allowed, true);
+  assert.equal(result.nextStatus, "completed");
+  assert.equal(result.terminal, true);
+});
