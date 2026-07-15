@@ -301,7 +301,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   };
 
   const tools = {
-    ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }),
+    ...createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts, config }),
     ...createSelfTestToolsGroup({ tool, schema, config, bark, github, store, sources }),
     ...createProjectWorkspaceToolsGroup({ tool, schema, config, store, createWorkspace, updateWorkspace, deleteWorkspace, testWorkspaceConnection }),
     ...createGoalToolsGroup({ tool, schema, config, store, eventLogger, hookBus, createGoal, createEncodedGoal, listGoals, getGoalContext, appendGoalMessage }),

@@ -3,6 +3,7 @@ import { join } from "node:path";
 import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, reconcilePendingRestartMarkers, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
+import { resolveEffectiveWorkerState } from "../worker-runtime-status.mjs";
 import { scanPendingRestartMarkersSync, scanPendingRestartMarkers, getPendingRestartsDir } from "../safe-restart.mjs";
 import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 import { collectCodexTuiRuntimeDiagnostics } from "../codex-tui-runtime-diagnostics.mjs";
@@ -196,7 +197,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
             direct_git_reader_available: true,
           },
           repo_locks: await getCachedRepoLockSummary(),
-          worker: workerStatusExtendedSnapshot(workerState),
+          worker: workerStatusExtendedSnapshot(resolveEffectiveWorkerState(workerState, config.defaultWorkspaceRoot)),
           queue: await collectWorkerQueueCounts(store),
           warnings,
         };

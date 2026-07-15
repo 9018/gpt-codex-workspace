@@ -207,3 +207,19 @@ test("setCreatedTaskNotifier can be set and cleared", async () => {
   notifyCreatedTask({ id: "t2" });
   assert.equal(callCount, 1, "should not increment after clearing");
 });
+
+test('recoverMissedNotifications suppresses historical terminal tasks and caps startup replay', async () => {
+  let sends = 0;
+  const bark = { isEnabled: () => true, getStatus: () => ({ source: 'test', group: 'gptwork', key_set: true }), send: async () => { sends++; return { ok: true, bark_id: 'ok' }; } };
+  const svc = createNotificationService(bark);
+  const now = Date.parse('2026-07-15T09:00:00Z');
+  const tasks = [
+    { id: 'old', title: 'old', status: 'failed', updated_at: '2026-07-14T00:00:00Z', mode: 'builder' },
+    { id: 'new1', title: 'new1', status: 'failed', updated_at: '2026-07-15T08:59:00Z', mode: 'builder' },
+    { id: 'new2', title: 'new2', status: 'completed', updated_at: '2026-07-15T08:59:30Z', mode: 'builder' },
+  ];
+  const result = await svc.recoverMissedNotifications(tasks, { nowMs: now, maxAgeMs: 600000, maxReplay: 1 });
+  assert.equal(sends, 1);
+  assert.equal(result.replayed.length, 1);
+  assert.ok(result.suppressed_count >= 2);
+});

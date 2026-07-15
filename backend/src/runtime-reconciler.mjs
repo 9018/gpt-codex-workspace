@@ -27,13 +27,16 @@ export function createReconciler({ store, config, github, notifyTerminalTaskIfNe
         // last_attempt, last_success, last_task_id, and last_task_event.
         if (typeof recoverMissedNotifications === "function") {
           try {
-            const recoveryResult = await recoverMissedNotifications(state.tasks || []);
+            const recoveryResult = await recoverMissedNotifications(state.tasks || [], { maxAgeMs: Number(process.env.GPTWORK_NOTIFICATION_RECOVERY_MAX_AGE_MS || 600000), maxReplay: Number(process.env.GPTWORK_NOTIFICATION_RECOVERY_MAX_REPLAY || 10) });
             if (recoveryResult.replayed.length > 0) {
               if (logPath) {
                 for (const r of recoveryResult.replayed) {
                   appendFileSync(logPath, `[gptwork-worker] notification recovery: ${r}\n`);
                 }
               }
+            }
+            if (recoveryResult.suppressed_count > 0 && logPath) {
+              appendFileSync(logPath, `[gptwork-worker] notification recovery suppressed ${recoveryResult.suppressed_count} historical/excess event(s)\n`);
             }
             if (recoveryResult.errors.length > 0) {
               if (logPath) {

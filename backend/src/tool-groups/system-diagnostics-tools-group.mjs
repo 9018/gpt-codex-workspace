@@ -13,8 +13,9 @@
  *   collectWorkerQueueCounts - function to collect queue counts
  */
 import { workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
+import { resolveEffectiveWorkerState } from "../worker-runtime-status.mjs";
 
-export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts }) {
+export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, workerState, collectWorkerQueueCounts, config = {} }) {
   return {
     health_check: tool({
       name: "health_check",
@@ -72,7 +73,7 @@ export function createSystemDiagnosticsToolsGroup({ tool, schema, store, bark, w
       resourceUri: "ui://widget/gptwork-card-v2.html",
       handler: async () => {
         const queue = await collectWorkerQueueCounts(store);
-        return { ...workerStatusExtendedSnapshot(workerState), queue, queues: queue };
+        return { ...workerStatusExtendedSnapshot(resolveEffectiveWorkerState(workerState, config.defaultWorkspaceRoot)), queue, queues: queue };
       },
     }),
   };

@@ -339,16 +339,32 @@ export function createNotificationService(barkNotifier) {
    */
   async function recoverMissedNotifications(tasks, opts = {}) {
     const targetEvents = opts.targetEvents || [
-      "task_created", "task_started", "task_running",
       "task_completed", "task_failed", "task_timeout",
       "task_cancelled", "task_blocked", "task_waiting_for_review",
     ];
     const replayed = [];
     const errors = [];
+    const suppressed = [];
     const dryRun = opts.dryRun === true;
+    const nowMs = Number.isFinite(opts.nowMs) ? opts.nowMs : Date.now();
+    const maxAgeMs = Number.isFinite(opts.maxAgeMs) ? opts.maxAgeMs : Number(process.env.GPTWORK_NOTIFICATION_RECOVERY_MAX_AGE_MS || 600000);
+    const maxReplay = Number.isFinite(opts.maxReplay) ? opts.maxReplay : Number(process.env.GPTWORK_NOTIFICATION_RECOVERY_MAX_REPLAY || 10);
 
     for (const task of (tasks || [])) {
+      const taskTs = Date.parse(task.updated_at || task.completed_at || task.failed_at || task.created_at || 0) || 0;
+      if (taskTs && nowMs - taskTs > maxAgeMs) {
+        suppressed.push(`${task.id}:historical`);
+        continue;
+      }
+      if (replayed.length >= maxReplay) {
+        suppressed.push(`${task.id}:batch_limit`);
+        continue;
+      }
       for (const event of targetEvents) {
+        if (replayed.length >= maxReplay) {
+          suppressed.push(`${task.id}:${event}:batch_limit`);
+          continue;
+        }
         // Skip events that don't match the task's current lifecycle position
         if (event === "task_created" && !["queued", "assigned", "running", "completed", "failed"].includes(task.status)) continue;
         if (event === "task_started" && task.status !== "running") continue;
@@ -382,7 +398,7 @@ export function createNotificationService(barkNotifier) {
         }
       }
     }
-    return { replayed, errors };
+    return { replayed, errors, suppressed, suppressed_count: suppressed.length };
   }
 
   // ---------------------------------------------------------------------------

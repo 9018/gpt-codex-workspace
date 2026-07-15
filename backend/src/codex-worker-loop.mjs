@@ -10,6 +10,7 @@ import {
   markWorkerTickFinished,
   markWorkerNextTickScheduled,
 } from "./codex-worker-state.mjs";
+import { persistWorkerRuntimeStatus } from "./worker-runtime-status.mjs";
 
 export function getWorkerProgressCount(result = {}) {
   const tasks = Array.isArray(result.tasks) ? result.tasks : [];
@@ -61,11 +62,13 @@ export function startCodexWorker(server, {
 
   // Initialize module-level worker state tracking
   markWorkerStarted(workerState, { intervalMs, limit, concurrency });
+  persistWorkerRuntimeStatus(workerState, { workspaceRoot: process.env.GPTWORK_WORKSPACE_ROOT });
 
   async function tick() {
     if (stopped || running) return;
     running = true;
     markWorkerTickStarted(workerState);
+    persistWorkerRuntimeStatus(workerState, { workspaceRoot: process.env.GPTWORK_WORKSPACE_ROOT });
     try {
       // Throttled idle maintenance: goal / tmp pressure check (log-only)
       if (typeof server.getDefaultWorkspaceRoot === "function") {
@@ -130,6 +133,7 @@ export function startCodexWorker(server, {
       { const _lp = process.env.GPTWORK_LOG_PATH; if (_lp) appendFileSync(_lp, `[gptwork-worker] ${error.message}\n`); }
     } finally {
       markWorkerTickFinished(workerState);
+      persistWorkerRuntimeStatus(workerState, { workspaceRoot: process.env.GPTWORK_WORKSPACE_ROOT });
       running = false;
       if (!stopped) {
         // Apply exponential backoff when the worker is idle or repeatedly stuck.
@@ -139,6 +143,7 @@ export function startCodexWorker(server, {
           effectiveInterval = Math.min(intervalMs * factor, backoffMaxMs);
         }
         markWorkerNextTickScheduled(workerState, { intervalMs: effectiveInterval });
+        persistWorkerRuntimeStatus(workerState, { workspaceRoot: process.env.GPTWORK_WORKSPACE_ROOT });
         timer = setTimeout(tick, effectiveInterval);
       }
     }
