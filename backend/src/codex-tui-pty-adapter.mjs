@@ -34,17 +34,55 @@ function buildCommand(cmd, promptArgs = []) {
   return [cmd, ...promptArgs].map(shellQuote).join(" ");
 }
 
-function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], command = "codex" } = {}) {
+function createTerminalNotifier(onExit) {
+  let notified = false;
+  return (event) => {
+    if (notified) return;
+    notified = true;
+    onExit?.(event);
+  };
+}
+
+function createScriptFallbackSession({ cwd, env, onData, onExit, spawnImpl, args = [], command = "codex" } = {}) {
   // Launch codex bare via script(1). The prompt is NOT passed as argv;
   // it is submitted via stdin after the TUI is ready.
   const proc = spawnImpl("script", ["-q", "-f", "-c", buildCommand(command, args), "/dev/null"], {
     cwd,
     env,
     stdio: ["pipe", "pipe", "pipe"],
+    detached: true,
   });
 
   proc.stdout?.on?.("data", (chunk) => onData?.(String(chunk)));
   proc.stderr?.on?.("data", (chunk) => onData?.(String(chunk)));
+  const cleanupProcessGroup = (signal = "SIGTERM") => {
+    if (!proc.pid || process.platform === "win32") return;
+    try { process.kill(-proc.pid, signal); } catch { /* group may already be gone */ }
+  };
+  const notifyExit = createTerminalNotifier((event) => {
+    cleanupProcessGroup();
+    onExit?.(event);
+  });
+  const onError = (error) => notifyExit({
+    exit_code: null,
+    signal: null,
+    source: "script-error",
+    error: error?.message || String(error),
+    error_code: error?.code || null,
+  });
+  const onProcessExit = (exitCode, signal) => notifyExit({
+    exit_code: exitCode ?? null,
+    signal: signal ?? null,
+    source: "script-exit",
+  });
+  const onClose = (exitCode, signal) => notifyExit({
+    exit_code: exitCode ?? null,
+    signal: signal ?? null,
+    source: "script-close",
+  });
+  proc.on?.("error", onError);
+  proc.on?.("exit", onProcessExit);
+  proc.on?.("close", onClose);
 
   let stopped = false;
   return {
@@ -57,6 +95,7 @@ function createScriptFallbackSession({ cwd, env, onData, spawnImpl, args = [], c
       if (stopped) return;
       stopped = true;
       try { proc.stdin?.end?.(); } catch { /* non-fatal */ }
+      cleanupProcessGroup(signal);
       try { proc.kill?.(signal); } catch { /* non-fatal */ }
     },
   };
@@ -177,7 +216,7 @@ function createAdapter({
   }
 
   return {
-    async spawn({ cwd, onData, args = [], command: spawnCommand } = {}) {
+    async spawn({ cwd, onData, onExit, args = [], command: spawnCommand } = {}) {
       const env = {
         ...process.env,
         TERM: "xterm-256color",
@@ -187,7 +226,7 @@ function createAdapter({
       const resolvedPty = await resolvePty();
       if (!resolvedPty?.spawn) {
         if (pty !== undefined || !allowScriptFallback) throw makeUnavailableError();
-        return createScriptFallbackSession({ cwd, env, onData, spawnImpl, args, command: cmd });
+        return createScriptFallbackSession({ cwd, env, onData, onExit, spawnImpl, args, command: cmd });
       }
 
       const proc = resolvedPty.spawn(cmd, args, {
@@ -199,7 +238,13 @@ function createAdapter({
       });
 
       let stopped = false;
-      const disposable = proc.onData ? proc.onData((chunk) => onData?.(chunk)) : null;
+      const dataDisposable = proc.onData ? proc.onData((chunk) => onData?.(chunk)) : null;
+      const notifyExit = createTerminalNotifier(onExit);
+      const exitDisposable = proc.onExit ? proc.onExit(({ exitCode, signal } = {}) => notifyExit({
+        exit_code: exitCode ?? null,
+        signal: signal ?? null,
+        source: "node-pty-exit",
+      })) : null;
 
       return {
         pid: proc.pid ?? null,
@@ -210,7 +255,8 @@ function createAdapter({
         stop(signal = "SIGTERM") {
           if (stopped) return;
           stopped = true;
-          try { disposable?.dispose?.(); } catch { /* non-fatal */ }
+          try { dataDisposable?.dispose?.(); } catch { /* non-fatal */ }
+          try { exitDisposable?.dispose?.(); } catch { /* non-fatal */ }
           try { proc.kill?.(signal); } catch { /* non-fatal */ }
         },
       };

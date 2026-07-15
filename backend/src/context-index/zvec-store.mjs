@@ -110,7 +110,7 @@ function escapeZvecString(value) {
 
 function buildZvecFilter(filters = {}) {
   const clauses = [];
-  for (const key of ["goal_id", "workspace_id", "source_type", "project_id", "repo_id"]) {
+  for (const key of ["goal_id", "workspace_id", "source_type", "project_id", "repo_id", "workstream_id", "root_goal_id"]) {
     if (filters[key] !== undefined && filters[key] !== null && filters[key] !== "") {
       clauses.push(`${key} = "${escapeZvecString(filters[key])}"`);
     }
@@ -484,6 +484,8 @@ export function createLocalStore(options = {}) {
             if (filters.workspace_id && chunk.metadata?.workspace_id !== filters.workspace_id) continue;
             if (filters.project_id && chunk.metadata?.project_id !== filters.project_id) continue;
             if (filters.repo_id && chunk.metadata?.repo_id !== filters.repo_id) continue;
+            if (filters.workstream_id && chunk.metadata?.workstream_id !== filters.workstream_id) continue;
+            if (filters.root_goal_id && chunk.metadata?.root_goal_id !== filters.root_goal_id) continue;
 
             const vec = entry.vectors[i];
             if (!vec || vec.length !== queryVector.length) continue;

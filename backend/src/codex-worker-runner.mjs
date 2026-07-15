@@ -20,6 +20,9 @@ import { reconcileAllActiveTaskRuntimes } from "./runtime/task-runtime-reconcile
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { sendCodexTuiSessionInput, stopCodexTuiSession } from "./codex-tui-session-manager.mjs";
 import { releaseLockForTask } from "./repo-lock.mjs";
+import { existsSync, realpathSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 
 
 const activeBackgroundTaskRuns = new Map();
@@ -89,7 +92,13 @@ async function markTaskFailed(store, task, error, reason = "worker task failed")
 
 async function markTaskWaitingForReview(store, task, reason) {
   try {
-    await transitionTaskForWorker(store, task, "waiting_for_review", `[worker] ${reason}`);
+    await transitionTaskForWorker(
+      store,
+      task,
+      "waiting_for_review",
+      `[worker] ${reason}`,
+      { result: { review_reason: reason, requires_review: true } },
+    );
   } catch (error) {
     return markTaskFailed(store, task, error, "failed to park unsupported task");
   }
@@ -447,9 +456,28 @@ async function retryIntegrationForTask(store, config, task) {
     return markTaskWaitingForReview(store, task, "integration retry: no repo resolution in task result");
   }
 
-  const gitPath = repoResolution.task_worktree_path || repoResolution.canonical_repo_path;
-  if (!gitPath) {
-    return markTaskWaitingForReview(store, task, "integration retry: no git path available");
+  const gitPath = repoResolution.task_worktree_path || null;
+  const canonicalRepoPath = repoResolution.canonical_repo_path || null;
+  const lifecycle = repoResolution.worktree_lifecycle || task.result?.worktree_lifecycle || null;
+  if (!gitPath || !canonicalRepoPath || lifecycle?.mode !== "git_worktree" || lifecycle?.ok !== true || !existsSync(gitPath) || !existsSync(canonicalRepoPath)) {
+    return markTaskWaitingForReview(store, task, "integration retry: verified task worktree is missing; canonical repository fallback is forbidden");
+  }
+  try {
+    const gitOutput = (cwd, args) => execFileSync("git", args, { cwd, encoding: "utf8", timeout: 10_000 }).trim();
+    const gitPathReal = (cwd, args) => realpathSync(resolve(cwd, gitOutput(cwd, args)));
+    const worktreeTop = realpathSync(gitOutput(gitPath, ["rev-parse", "--show-toplevel"]));
+    const canonicalTop = realpathSync(gitOutput(canonicalRepoPath, ["rev-parse", "--show-toplevel"]));
+    const worktreeGitDir = gitPathReal(gitPath, ["rev-parse", "--git-dir"]);
+    const worktreeCommonDir = gitPathReal(gitPath, ["rev-parse", "--git-common-dir"]);
+    const canonicalCommonDir = gitPathReal(canonicalRepoPath, ["rev-parse", "--git-common-dir"]);
+    if (worktreeTop === canonicalTop) {
+      return markTaskWaitingForReview(store, task, "integration retry: task worktree verification resolved to canonical repository; integration blocked");
+    }
+    if (worktreeGitDir === worktreeCommonDir || worktreeCommonDir !== canonicalCommonDir) {
+      return markTaskWaitingForReview(store, task, "integration retry: task path is not a linked worktree of the canonical repository; common git dir proof failed");
+    }
+  } catch (err) {
+    return markTaskWaitingForReview(store, task, `integration retry: task worktree git verification failed: ${errorMessage(err)}`);
   }
 
   const branchName = (repoResolution.worktree_lifecycle?.branch_name)

@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readlink } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -25,14 +25,17 @@ function makeFakeAdapter() {
   const writes = [];
   const stops = [];
   let onData = null;
+  let onExit = null;
   return {
     spawns,
     writes,
     stops,
     emitData(text) { onData?.(text); },
+    emitExit(event) { onExit?.(event); },
     async spawn(options) {
       spawns.push(options);
       onData = options.onData;
+      onExit = options.onExit;
       // Emit a ready signal so waitForTuiOutput can detect TUI readiness
       setTimeout(() => onData?.("TUI ready \x1b[1m$\x1b[0m "), 10);
       return {
@@ -42,6 +45,10 @@ function makeFakeAdapter() {
       };
     },
   };
+}
+
+async function readResult(workspaceRoot, goalId) {
+  return JSON.parse(await readFile(join(workspaceRoot, ".gptwork", "goals", goalId, "result.json"), "utf8"));
 }
 
 test("start passes the goal as the interactive Codex initial prompt", async () => {
@@ -158,12 +165,16 @@ test("manager sends input, reads status, and stops sessions safely", async () =>
   assert.equal(status.pid, 99);
 
   const stopped = await stopCodexTuiSession(session.id, { reason: "test complete" });
-  assert.equal(stopped.status, "stopped");
-  assert.equal(stopped.stop_reason, "test complete");
+  assert.equal(stopped.status, "failed");
+  assert.equal(stopped.terminal_event_count, 1);
+  assert.equal(stopped.terminal_event.source, "explicit-stop");
   assert.deepEqual(fakeAdapter.stops, [undefined]);
+  const result = await readResult(cwd, "goal_2");
+  assert.equal(result.status, "failed");
+  assert.equal(result.terminal_event.source, "explicit-stop");
 
   const stoppedStatus = await getCodexTuiSessionStatus(session.id);
-  assert.equal(stoppedStatus.status, "stopped");
+  assert.equal(stoppedStatus.status, "failed");
 });
 
 // recovery test appended by ChatGPT
@@ -211,6 +222,7 @@ test("spawn failure marks the durable session failed instead of leaving created"
       throw err;
     },
   };
+  let released = 0;
 
   await assert.rejects(
     () => startCodexTuiGoalSession({
@@ -219,6 +231,7 @@ test("spawn failure marks the durable session failed instead of leaving created"
       cwd,
       workspaceRoot,
       ptyAdapter: failingAdapter,
+      releaseLockFn: async () => { released += 1; },
     }),
     /no PTY/
   );
@@ -228,6 +241,114 @@ test("spawn failure marks the durable session failed instead of leaving created"
   assert.equal(record.status, "failed");
   assert.equal(record.error_code, "codex_tui_unavailable");
   assert.match(record.error, /no PTY/);
+  assert.equal(record.terminal_event_count, 1);
+  assert.equal(released, 1);
+  const result = await readResult(workspaceRoot, "goal_spawn_fail");
+  assert.equal(result.status, "failed");
+  assert.match(result.summary, /no PTY/);
+  assert.deepEqual(result.changed_files, []);
+  assert.equal(result.verification.passed, false);
+});
+
+test("spontaneous PTY exit writes one terminal result and releases the task lock", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-exit-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-exit-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  let released = 0;
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_exit", title: "Exit" },
+    goal: { id: "goal_exit" },
+    cwd,
+    workspaceRoot,
+    repoLockId: "lock_exit",
+    ptyAdapter: fakeAdapter,
+    releaseLockFn: async () => { released += 1; },
+  });
+
+  fakeAdapter.emitExit({ exit_code: 9, signal: "SIGTERM", source: "test-exit" });
+  fakeAdapter.emitExit({ exit_code: 9, signal: "SIGTERM", source: "duplicate-exit" });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const record = await readCodexTuiSession(session.id, { workspaceRoot, maxChars: 0 });
+  assert.equal(record.status, "failed");
+  assert.equal(record.terminal_event_count, 1);
+  assert.equal(record.terminal_event.exit_code, 9);
+  assert.equal(released, 1);
+  const result = await readResult(workspaceRoot, "goal_exit");
+  assert.equal(result.status, "failed");
+  assert.equal(result.terminal_event.exit_code, 9);
+  assert.equal(result.commit, "none");
+  assert.equal(result.remote_head, "none");
+});
+
+test("PTY exit during spawn cannot leave a terminal session active", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-sync-exit-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-sync-exit-cwd-")));
+  let released = 0;
+  const adapter = {
+    async spawn(options) {
+      options.onData?.("TUI ready before immediate exit");
+      options.onExit?.({ exit_code: 17, signal: null, source: "sync-spawn-exit" });
+      return { pid: 1717, write() {}, stop() {} };
+    },
+  };
+
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_sync_exit", title: "Sync exit" },
+    goal: { id: "goal_sync_exit" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: adapter,
+    releaseLockFn: async () => { released += 1; },
+  });
+
+  assert.equal(session.status, "failed");
+  assert.equal(session.terminal_event_count, 1);
+  assert.equal(released, 1);
+  await assert.rejects(
+    () => sendCodexTuiSessionInput(session.id, "must not be accepted\n", { workspaceRoot }),
+    /not active/i,
+  );
+});
+
+test("explicit stop and later PTY exit share one terminal event and preserve durable completion", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-stop-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-stop-cwd-")));
+  const goalDir = join(workspaceRoot, ".gptwork", "goals", "goal_stop");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "durable completion",
+    changed_files: [],
+    tests: "focused test passed",
+    commit: "none",
+    remote_head: "none",
+    warnings: [],
+    followups: [],
+    verification: { passed: true, commands: [{ cmd: "focused test", exit_code: 0, passed: true }] },
+  }, null, 2));
+  const fakeAdapter = makeFakeAdapter();
+  let released = 0;
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_stop", title: "Stop" },
+    goal: { id: "goal_stop" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: fakeAdapter,
+    releaseLockFn: async () => { released += 1; },
+  });
+
+  await stopCodexTuiSession(session.id, { reason: "manual_stop", workspaceRoot });
+  fakeAdapter.emitExit({ exit_code: 0, signal: null, source: "late-exit" });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+
+  const record = await readCodexTuiSession(session.id, { workspaceRoot, maxChars: 0 });
+  assert.equal(record.status, "completed");
+  assert.equal(record.terminal_event_count, 1);
+  assert.equal(released, 1);
+  const result = await readResult(workspaceRoot, "goal_stop");
+  assert.equal(result.status, "completed");
+  assert.equal(result.summary, "durable completion");
 });
 
 
@@ -263,4 +384,41 @@ test("concurrent starts for the same session are idempotent and conflicting cwd 
   assert.equal(spawnCount, 1);
   assert.equal(a.id, b.id);
   await stopCodexTuiSession(a.id, { workspaceRoot });
+});
+
+test("isolated worktree cleanup terminates matching cwd processes and escalates survivors", async () => {
+  const { cleanupIsolatedWorktreeProcesses } = await import("../src/codex-tui-session-manager.mjs");
+  const target = "/tmp/.gptwork/worktrees/repo/task_1";
+  let phase = 0;
+  const kills = [];
+  const cwdByPid = new Map([[101, target], [102, target], [103, "/tmp/other"], [999, target]]);
+  const result = await cleanupIsolatedWorktreeProcesses({
+    cwd: target,
+    currentPid: 999,
+    readdirFn: async () => ["101", "102", "103", "999", "self"],
+    readlinkFn: async (path) => {
+      const pid = Number(path.split("/").at(-2));
+      if (phase >= 1 && pid === 101) return "/exited";
+      if (phase >= 2 && pid === 102) return "/exited";
+      return cwdByPid.get(pid) || "/unknown";
+    },
+    killFn: (pid, signal) => { kills.push([pid, signal]); if (signal === "SIGTERM") phase = 1; else phase = 2; },
+    sleepFn: async () => {},
+    graceMs: 1,
+  });
+  assert.deepEqual(result.terminated, [101, 102]);
+  assert.deepEqual(result.killed, [102]);
+  assert.deepEqual(result.surviving, []);
+  assert.deepEqual(kills, [[101, "SIGTERM"], [102, "SIGTERM"], [102, "SIGKILL"]]);
+});
+
+test("process cleanup refuses non-isolated cwd", async () => {
+  const { cleanupIsolatedWorktreeProcesses } = await import("../src/codex-tui-session-manager.mjs");
+  const kills = [];
+  const result = await cleanupIsolatedWorktreeProcesses({
+    cwd: "/home/a9017/mcp/workspace/gpt-codex-workspace",
+    killFn: (...args) => kills.push(args),
+  });
+  assert.equal(result.attempted, false);
+  assert.deepEqual(kills, []);
 });

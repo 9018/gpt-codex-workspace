@@ -50,11 +50,16 @@ function baseDeps(root, overrides = {}) {
     ensureTaskGoalFn: async (store, config, taskId) => ({ task: store.state.tasks.find((task) => task.id === taskId), goal: store.state.goals[0] }),
     selectWorkspaceFn: async () => ({ id: "hosted-default", type: "hosted", root }),
     resolveTaskRepositoryPlanFn: async () => ({ repo_id: "default", canonical_repo_path: root, task_worktree_path: join(root, ".gptwork", "worktrees", "task_1") }),
-    materializeTaskWorktreeFn: async () => ({
-      task_worktree_path: join(root, ".gptwork", "worktrees", "task_1"),
-      lock_repo_path: join(root, ".gptwork", "worktrees", "task_1"),
-      worktree_lifecycle: { ok: true, mode: "git_worktree", worktree_path: join(root, ".gptwork", "worktrees", "task_1") },
-    }),
+    materializeTaskWorktreeFn: async () => {
+      const worktreePath = join(root, ".gptwork", "worktrees", "task_1");
+      await mkdir(worktreePath, { recursive: true });
+      return {
+        task_worktree_path: worktreePath,
+        lock_repo_path: worktreePath,
+        worktree_lifecycle: { ok: true, mode: "git_worktree", worktree_path: worktreePath },
+      };
+    },
+    verifyTaskWorktreeFn: async () => ({ valid: true, source: "test-fixture" }),
     acquireRepoLockFn: async () => ({ acquired: true, lock: { safe_repo_id: "default", status: "held" } }),
     appendGoalMessageFn: async () => {},
     prepareCodexTaskRunFn: async () => ({ promptFile: null, runFilePath: null, runId: "run_1" }),
@@ -120,7 +125,7 @@ test("codex_tui_goal metadata routes to session manager and does not invoke code
   assert.equal(execCalled, false);
   assert.equal(tuiArgs.task.id, "task_1");
   assert.equal(tuiArgs.goal.id, "goal_1");
-  assert.equal(tuiArgs.cwd, root);
+  assert.equal(tuiArgs.cwd, join(root, ".gptwork", "worktrees", "task_1"));
   assert.equal(result.kind, "codex_tui_awaiting_evidence");
   assert.equal(result.session_id, "session_1");
   assert.equal(store.state.tasks[0].result.provider, "codex_tui_goal");
@@ -389,6 +394,7 @@ test("TUI evidence timeout stops the live session and enters automatic retry_wai
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
   let stopped = null;
   let released = 0;
+  let sessionReleaseLock = null;
 
   const result = await processGeneralTaskWithDeps(
     store,
@@ -403,13 +409,16 @@ test("TUI evidence timeout stops the live session and enters automatic retry_wai
     {},
     {},
     baseDeps(root, {
-      startCodexTuiGoalSessionFn: async (args) => ({
-        id: "session_timeout",
-        task_id: args.task.id,
-        goal_id: args.goal.id,
-        cwd: args.cwd,
-        status: "running",
-      }),
+      startCodexTuiGoalSessionFn: async (args) => {
+        sessionReleaseLock = args.releaseLockFn;
+        return {
+          id: "session_timeout",
+          task_id: args.task.id,
+          goal_id: args.goal.id,
+          cwd: args.cwd,
+          status: "running",
+        };
+      },
       runCodexTuiEvidenceCycleFn: async () => ({
         evidence_ready: false,
         status: "timed_out",
@@ -418,6 +427,7 @@ test("TUI evidence timeout stops the live session and enters automatic retry_wai
       }),
       stopCodexTuiSessionFn: async (sessionId, options) => {
         stopped = { sessionId, options };
+        await sessionReleaseLock?.();
         return { id: sessionId, status: "stopped" };
       },
       releaseLockForTaskFn: async () => { released += 1; },

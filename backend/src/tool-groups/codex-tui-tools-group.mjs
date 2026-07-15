@@ -383,6 +383,48 @@ export function createCodexTuiToolsGroup({
         taskContextRevision: task.task_context_revision || goal.task_context?.revision || null,
         workstreamContextDigest: task.workstream_context_digest || null,
         workstreamContextRevision: task.workstream_context_revision || null,
+        onTerminalized: async (terminalSession) => {
+          const snapshot = await collectCodexTuiCompletionFn({
+            sessionId: terminalSession.id,
+            workspaceRoot: workspaceRoot || canonicalRepoPath,
+          });
+          const resultStatus = snapshot?.result_json?.status;
+          const canonicalStatus = resultStatus === "completed" ? "waiting_for_review"
+            : (resultStatus === "timed_out" ? "timed_out" : "failed");
+          await transitionService.transitionTask({
+            task_id: task.id,
+            event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+            payload: {
+              canonical_status: canonicalStatus,
+              task_result_patch: {
+                ...(snapshot?.result_json || {}),
+                provider: "codex_tui_goal",
+                session_id: terminalSession.id,
+                result_json_present: snapshot?.result_json_present === true,
+                result_json_valid: snapshot?.result_json_valid === true,
+                worktree_clean: snapshot?.worktree_clean ?? null,
+              },
+              audit: { operation: "tui_terminal_auto_collect", session_id: terminalSession.id },
+            },
+            reason: `TUI terminal event auto-collected: ${resultStatus || terminalSession.status}`,
+            source: "codex_tui",
+            actor: { type: "system", id: "codex_tui_terminal_callback" },
+            idempotency_key: `tui_terminal_collect:${task.id}:${terminalSession.id}:${resultStatus || terminalSession.status}`,
+          });
+          await execStore.updateExecution(execution.id, {
+            status: canonicalStatus === "waiting_for_review" ? "completed" : canonicalStatus,
+            evidence_ref: snapshot?.result_json_path || null,
+          }).catch(() => {});
+          await mutableStore.mutate((state) => {
+            const item = (state.tasks || []).find((candidate) => candidate.id === task.id);
+            if (!item) return;
+            item.metadata = { ...(item.metadata || {}), tui_session_id: terminalSession.id };
+            delete item.metadata.tui_session_owner;
+            delete item.metadata.manual_tui_session_starting;
+            item.logs ||= [];
+            item.logs.push({ time: new Date().toISOString(), message: `[tui] terminal auto-collect: ${canonicalStatus}` });
+          }).catch(() => {});
+        },
       });
     } catch (err) {
       await execStore.updateExecution(execution.id, {

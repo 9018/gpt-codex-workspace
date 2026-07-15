@@ -404,6 +404,13 @@ test('runAssignedCodexTasks recovers accepted verified review tasks without reru
 test('runAssignedCodexTasks terminalizes repeated branch_pushed integration retry as stable external wait', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'worker-integration-stable-wait-'));
   try {
+    const canonicalRepoPath = join(tmpDir, 'canonical');
+    const taskWorktreePath = join(tmpDir, 'task-worktree');
+    initGitRepo(canonicalRepoPath);
+    execFileSync('git', ['worktree', 'add', '-b', 'gptwork/task/task_branch_retry', taskWorktreePath, 'HEAD'], {
+      cwd: canonicalRepoPath,
+      stdio: 'ignore',
+    });
     const store = makeStore(tmpDir);
     await store.load();
     addGoal(store.state, { id: 'goal_branch_retry', title: 'Branch retry goal' });
@@ -418,8 +425,8 @@ test('runAssignedCodexTasks terminalizes repeated branch_pushed integration retr
         commit: 'abc123',
         repo_resolution: {
           repo_id: 'github.com/acme/repo',
-          canonical_repo_path: tmpDir,
-          task_worktree_path: tmpDir,
+          canonical_repo_path: canonicalRepoPath,
+          task_worktree_path: taskWorktreePath,
           worktree_lifecycle: { mode: 'git_worktree', ok: true, branch_name: 'gptwork/task/task_branch_retry' },
         },
         reviewer_decision: { status: 'accepted', passed: true },
@@ -468,6 +475,90 @@ test('runAssignedCodexTasks terminalizes repeated branch_pushed integration retr
     assert.equal(taskAfterSecond.status, 'waiting_for_integration');
     assert.equal(taskAfterSecond.result.integration_retry_state.repeat_count, 2);
     assert.equal(taskAfterSecond.logs.length, logsAfterFirst, 'stable branch_pushed wait must not append retry logs every tick');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('integration retry fails closed when task worktree evidence is absent instead of using canonical repo', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-integration-no-worktree-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addGoal(store.state, { id: 'goal_no_worktree', title: 'No worktree' });
+    addTask(store.state, {
+      id: 'task_no_worktree',
+      goal_id: 'goal_no_worktree',
+      status: 'waiting_for_integration',
+      result: {
+        summary: 'Accepted change without worktree proof',
+        changed_files: ['src/app.mjs'],
+        commit: 'abc123',
+        repo_resolution: {
+          repo_id: 'github.com/acme/repo',
+          canonical_repo_path: tmpDir,
+          task_worktree_path: null,
+          worktree_lifecycle: { mode: 'metadata_only', ok: false },
+        },
+      },
+    });
+    await store.save();
+    let integrationCalled = false;
+
+    await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      runIntegrationQueueFn: async () => { integrationCalled = true; return { ok: true, status: 'completed' }; },
+    }, {}, { limit: 10, concurrency: 1 });
+
+    await store.load();
+    const task = store.state.tasks.find((item) => item.id === 'task_no_worktree');
+    assert.equal(integrationCalled, false);
+    assert.equal(task.status, 'waiting_for_review');
+    assert.match(task.result.review_reason || '', /task worktree/i);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('integration retry rejects an unrelated git repository posing as a task worktree', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-integration-unrelated-repo-'));
+  try {
+    const canonicalRepoPath = join(tmpDir, 'canonical');
+    const unrelatedRepoPath = join(tmpDir, 'unrelated');
+    initGitRepo(canonicalRepoPath);
+    initGitRepo(unrelatedRepoPath);
+    const store = makeStore(tmpDir);
+    await store.load();
+    addGoal(store.state, { id: 'goal_unrelated_repo', title: 'Unrelated repo' });
+    addTask(store.state, {
+      id: 'task_unrelated_repo',
+      goal_id: 'goal_unrelated_repo',
+      status: 'waiting_for_integration',
+      result: {
+        summary: 'Accepted change with forged worktree proof',
+        changed_files: ['src/app.mjs'],
+        commit: 'abc123',
+        repo_resolution: {
+          repo_id: 'github.com/acme/repo',
+          canonical_repo_path: canonicalRepoPath,
+          task_worktree_path: unrelatedRepoPath,
+          worktree_lifecycle: { mode: 'git_worktree', ok: true },
+        },
+      },
+    });
+    await store.save();
+    let integrationCalled = false;
+
+    await runAssignedCodexTasks(store, {
+      defaultWorkspaceRoot: tmpDir,
+      runIntegrationQueueFn: async () => { integrationCalled = true; return { ok: true, status: 'completed' }; },
+    }, {}, { limit: 10, concurrency: 1 });
+
+    await store.load();
+    const task = store.state.tasks.find((item) => item.id === 'task_unrelated_repo');
+    assert.equal(integrationCalled, false);
+    assert.equal(task.status, 'waiting_for_review');
+    assert.match(task.result.review_reason || '', /linked worktree|common git dir/i);
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

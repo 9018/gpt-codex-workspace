@@ -90,3 +90,95 @@ describe("context retrieval evaluator", () => {
     assert.equal(metrics.stale_runtime_context_rate, 0.5);
   });
 });
+
+it("local store applies workstream and root-goal filters", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { createLocalStore } = await import("../src/context-index/zvec-store.mjs");
+  const root = mkdtempSync(join(tmpdir(), "retrieval-scope-"));
+  try {
+    const store = createLocalStore({ workspaceRoot: root, dimension: 2 });
+    await store.addChunks([
+      { id: "same", text: "same lineage", tokens: 2, metadata: { goal_id: "goal_a", workstream_id: "ws_a", root_goal_id: "goal_root_a", source_type: "result" } },
+      { id: "other", text: "other lineage", tokens: 2, metadata: { goal_id: "goal_b", workstream_id: "ws_b", root_goal_id: "goal_root_b", source_type: "result" } },
+    ], [[1, 0], [1, 0]]);
+    const results = await store.search([1, 0], 10, { workstream_id: "ws_a", root_goal_id: "goal_root_a" });
+    assert.deepStrictEqual(results.map((item) => item.id), ["same"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("bundle retrieval diagnostics expose policy context and deterministic evaluation", async () => {
+  const { mkdtempSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { maybeBuildContextBundle } = await import("../src/context-index/context-index-hooks.mjs");
+  const root = mkdtempSync(join(tmpdir(), "retrieval-hook-"));
+  try {
+    const store = { async load() { return { goals: [], tasks: [] }; } };
+    const goal = {
+      id: "goal_current",
+      root_goal_id: "goal_root",
+      workstream_id: "ws_current",
+      workspace_id: "hosted-default",
+      project_id: "default",
+      title: "Diagnose task_current waiting_for_lock",
+      user_request: "Why is task_current waiting_for_lock?",
+    };
+    const task = {
+      id: "task_current",
+      root_goal_id: "goal_root",
+      workstream_id: "ws_current",
+    };
+    const result = await maybeBuildContextBundle(store, {
+      defaultWorkspaceRoot: root,
+      contextVectorStore: "local",
+      contextEmbeddingConfig: { provider: "fallback" },
+    }, goal, null, task);
+    assert.strictEqual(result.ok, true);
+    assert.strictEqual(result.retrievalJson.policy.intent, "runtime_diagnosis");
+    assert.strictEqual(result.retrievalJson.policy.current_task_id, "task_current");
+    assert.strictEqual(result.retrievalJson.policy.root_goal_id, "goal_root");
+    assert.strictEqual(result.retrievalJson.policy.workstream_id, "ws_current");
+    assert.ok(result.retrievalJson.evaluation);
+    assert.strictEqual(typeof result.retrievalJson.evaluation.wrong_task_context_rate, "number");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+it("retrieval recall counts unique expected entities and never exceeds one", async () => {
+  const { evaluateRetrieval } = await import("../src/context-index/retrieval-evaluator.mjs");
+  const results = [
+    { id: "a", metadata: { task_id: "task_same" } },
+    { id: "b", metadata: { task_id: "task_same" } },
+    { id: "c", metadata: { task_id: "task_same" } },
+  ];
+  const metrics = evaluateRetrieval(results, { expected_ids: ["task_same"], k: 3 });
+  assert.strictEqual(metrics.recall_at_k, 1);
+  assert.strictEqual(metrics.exact_entity_hit_rate, 1);
+});
+
+it("time decay is applied before final top-k selection", async () => {
+  const { retrieveContext } = await import("../src/context-index/retriever.mjs");
+  const now = Date.now();
+  const store = {
+    name: "test-store",
+    async search() {
+      return [
+        { id: "stale", text: "old result", score: 1, metadata: { source_type: "result", created_at: new Date(now - 10 * 86400000).toISOString() } },
+        { id: "fresh", text: "fresh result", score: 0.9, metadata: { source_type: "result", created_at: new Date(now).toISOString() } },
+      ];
+    },
+  };
+  const embedder = { name: "test", dimension: 2, semantic: true, async embed() { return [[1, 0]]; } };
+  const results = await retrieveContext({
+    queryText: "history result",
+    topK: 1,
+    options: { storePrefer: store, embeddingConfig: { customProvider: embedder } },
+    filters: { time_decay: 1 },
+  });
+  assert.strictEqual(results[0].id, "fresh");
+});

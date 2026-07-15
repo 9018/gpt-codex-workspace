@@ -3,13 +3,62 @@ import { createCodexTuiPtyAdapter } from "./codex-tui-pty-adapter.mjs";
 import { buildCodexTuiGoalObjective } from "./codex-tui-goal-prompt.mjs";
 import { join } from "node:path";
 import { detectMeaningfulOutput } from "./codex-tui-progress-utils.mjs";
-import { mkdir, rm, symlink } from "node:fs/promises";
+import { mkdir, readFile, readdir, readlink, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { validateTaskDelta, renderDeltaInstruction } from "./codex-tui-task-delta.mjs";
 import { createTaskContextStore } from "./context-contract/task-context-store.mjs";
+import { releaseLockForTask } from "./repo-lock.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
 const pendingSessionStarts = new Map();
+const pendingTerminalizations = new Map();
+const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "timed_out"]);
+
+export async function cleanupIsolatedWorktreeProcesses({
+  cwd,
+  currentPid = process.pid,
+  procRoot = "/proc",
+  readdirFn = readdir,
+  readlinkFn = readlink,
+  killFn = process.kill.bind(process),
+  sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  graceMs = 500,
+} = {}) {
+  const target = String(cwd || "").trim();
+  const guarded = process.platform === "linux" && target.includes("/.gptwork/worktrees/");
+  if (!guarded) {
+    return { attempted: false, target_cwd: target || null, terminated: [], killed: [], surviving: [] };
+  }
+
+  const matchingPids = async () => {
+    const entries = await readdirFn(procRoot, { withFileTypes: true }).catch(() => []);
+    const matches = [];
+    for (const entry of entries) {
+      const name = typeof entry === "string" ? entry : entry.name;
+      if (!/^\d+$/.test(name)) continue;
+      const pid = Number(name);
+      if (!Number.isInteger(pid) || pid <= 1 || pid === Number(currentPid)) continue;
+      const processCwd = await readlinkFn(join(procRoot, name, "cwd")).catch(() => null);
+      if (processCwd === target) matches.push(pid);
+    }
+    return matches;
+  };
+
+  const terminated = await matchingPids();
+  for (const pid of terminated) {
+    try { killFn(pid, "SIGTERM"); } catch { /* process may have exited */ }
+  }
+  if (terminated.length > 0 && graceMs > 0) await sleepFn(graceMs);
+  const survivorsAfterTerm = await matchingPids();
+  const killed = [];
+  for (const pid of survivorsAfterTerm) {
+    try { killFn(pid, "SIGKILL"); killed.push(pid); } catch { /* process may have exited */ }
+  }
+  if (killed.length > 0) await sleepFn(50);
+  const surviving = await matchingPids();
+  return { attempted: true, target_cwd: target, terminated, killed, surviving };
+}
 
 function uniqueStrings(values = []) {
   return [...new Set(values.map((value) => String(value || "").trim()).filter(Boolean))];
@@ -34,6 +83,131 @@ function sessionIdFor(task, goal) {
   const taskId = String(task?.id || "task").replace(/[^A-Za-z0-9_-]/g, "_");
   const goalId = String(goal?.id || "goal").replace(/[^A-Za-z0-9_-]/g, "_");
   return `${goalId}_${taskId}`;
+}
+
+function normalizeTerminalEvent(event = {}) {
+  return {
+    source: String(event.source || "pty-exit"),
+    exit_code: Number.isInteger(event.exit_code) ? event.exit_code : null,
+    signal: event.signal ?? null,
+    error: event.error ? String(event.error) : null,
+    error_code: event.error_code ? String(event.error_code) : null,
+  };
+}
+
+function isContractValidTerminalResult(result) {
+  return Boolean(
+    result
+    && typeof result === "object"
+    && TERMINAL_RESULT_STATUSES.has(result.status)
+    && typeof result.summary === "string"
+    && Array.isArray(result.changed_files)
+    && Object.hasOwn(result, "tests")
+    && Object.hasOwn(result, "commit")
+    && Object.hasOwn(result, "remote_head")
+    && Array.isArray(result.warnings)
+    && Array.isArray(result.followups)
+    && result.verification
+    && typeof result.verification === "object"
+    && Array.isArray(result.verification.commands)
+    && typeof result.verification.passed === "boolean"
+  );
+}
+
+async function readTerminalResult(resultPath) {
+  try {
+    const parsed = JSON.parse(await readFile(resultPath, "utf8"));
+    return isContractValidTerminalResult(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeJsonAtomic(path, value) {
+  await mkdir(join(path, ".."), { recursive: true });
+  const tmpPath = `${path}.${randomUUID()}.tmp`;
+  await writeFile(tmpPath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await rename(tmpPath, path);
+}
+
+function failClosedResult(event) {
+  const timedOut = event.source === "evidence_timeout" || event.source === "timeout";
+  const detail = event.error
+    || (event.exit_code !== null ? `PTY exited with code ${event.exit_code}` : null)
+    || (event.signal ? `PTY exited from signal ${event.signal}` : null)
+    || `PTY terminal event: ${event.source}`;
+  return {
+    status: timedOut ? "timed_out" : "failed",
+    summary: `Codex TUI terminated without contract-valid result evidence: ${detail}`,
+    changed_files: [],
+    tests: "none",
+    commit: "none",
+    remote_head: "none",
+    warnings: [],
+    followups: [],
+    verification: { commands: [], passed: false },
+    terminal_event: event,
+  };
+}
+
+async function terminalizeCodexTuiSession({ sessionId, store, event, releaseLockFn = null, onTerminalized = null }) {
+  const pending = pendingTerminalizations.get(sessionId);
+  if (pending) return pending;
+
+  const promise = (async () => {
+    const current = await store.readSession(sessionId, { maxChars: 0 });
+    if (Number(current.terminal_event_count || 0) >= 1) return current;
+
+    const terminalEvent = normalizeTerminalEvent(event);
+    const workspaceRoot = current.metadata?.session_store_root || current.metadata?.workspace_root;
+    const resultPath = join(workspaceRoot, ".gptwork", "goals", current.goal_id, "result.json");
+    let result = await readTerminalResult(resultPath);
+    if (!result) {
+      result = failClosedResult(terminalEvent);
+      await writeJsonAtomic(resultPath, result);
+    }
+
+    const processCleanup = await cleanupIsolatedWorktreeProcesses({ cwd: current.cwd });
+    result = { ...result, process_cleanup: processCleanup };
+    await writeJsonAtomic(resultPath, result);
+
+    const terminalizedAt = new Date().toISOString();
+    const status = result.status;
+    const patch = {
+      status,
+      active: false,
+      terminal_event: terminalEvent,
+      terminal_event_count: 1,
+      terminalized_at: terminalizedAt,
+      result_json_path: resultPath,
+      result_status: status,
+      process_cleanup: processCleanup,
+      ...(status === "completed" ? { completed_at: terminalizedAt } : {}),
+      ...(status === "timed_out" ? { timed_out_at: terminalizedAt } : {}),
+      ...(status === "failed" ? {
+        failed_at: terminalizedAt,
+        error: terminalEvent.error || result.summary,
+        error_code: terminalEvent.error_code,
+      } : {}),
+    };
+
+    activeSessions.delete(sessionId);
+    const updated = await store.updateSession(sessionId, patch);
+    const release = typeof releaseLockFn === "function"
+      ? releaseLockFn
+      : (workspaceRoot && current.task_id ? () => releaseLockForTask(workspaceRoot, current.task_id) : null);
+    if (release) {
+      try { await release(); } catch { /* terminal evidence must survive lock-release diagnostics */ }
+    }
+    if (typeof onTerminalized === "function") {
+      try { await onTerminalized(updated); } catch { /* durable terminal state must survive callback diagnostics */ }
+    }
+    return updated;
+  })().finally(() => {
+    if (pendingTerminalizations.get(sessionId) === promise) pendingTerminalizations.delete(sessionId);
+  });
+  pendingTerminalizations.set(sessionId, promise);
+  return promise;
 }
 
 function activeManagerForSession(sessionId) {
@@ -112,6 +286,8 @@ async function startCodexTuiGoalSessionImpl({
   command = "codex",
   evidenceWaitMs = null,
   requireSuperpowers = true,
+  releaseLockFn = null,
+  onTerminalized = null,
 } = {}) {
   if (!cwd) throw new Error("cwd is required");
   if (!goal?.id) throw new Error("goal.id is required");
@@ -182,6 +358,7 @@ async function startCodexTuiGoalSessionImpl({
     goalDir: portableGoalDir,
   });
   let ptySession;
+  let earlyTerminalization = null;
   let bootstrapOutput = "";
   try {
     ptySession = await adapter.spawn({
@@ -203,18 +380,33 @@ async function startCodexTuiGoalSessionImpl({
           }).catch(() => {});
         }
       },
+      onExit: (event) => {
+        earlyTerminalization = terminalizeCodexTuiSession({ sessionId, store, event, releaseLockFn, onTerminalized });
+        earlyTerminalization.catch(() => {});
+      },
     });
   } catch (err) {
-    await store.updateSession(sessionId, {
-      status: "failed",
-      error: err?.message || String(err),
-      error_code: err?.code || null,
-      failed_at: new Date().toISOString(),
+    await terminalizeCodexTuiSession({
+      sessionId,
+      store,
+      releaseLockFn,
+      onTerminalized,
+      event: {
+        source: "spawn-error",
+        exit_code: null,
+        signal: null,
+        error: err?.message || String(err),
+        error_code: err?.code || null,
+      },
     }).catch(() => {});
     throw err;
   }
 
-  activeSessions.set(sessionId, { store, ptySession });
+  if (earlyTerminalization) {
+    try { ptySession.stop(); } catch { /* process already reached a terminal path */ }
+    return earlyTerminalization;
+  }
+  activeSessions.set(sessionId, { store, ptySession, releaseLockFn, onTerminalized });
 
   // Codex versions differ in how an argv prompt is handled: some submit it
   // immediately, while others only place it in the composer. Wait for the first
@@ -222,6 +414,8 @@ async function startCodexTuiGoalSessionImpl({
   // already show an active run. This avoids both a permanently idle composer and
   // duplicate input on versions that auto-submit.
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
+  const afterBootstrapWait = await store.readSession(sessionId, { maxChars: 0 });
+  if (Number(afterBootstrapWait.terminal_event_count || 0) >= 1) return afterBootstrapWait;
   const alreadyRunning = /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt)/iu.test(bootstrapOutput);
   let bootstrapMethod = "argv_prompt_auto_submitted";
   if (!alreadyRunning) {
@@ -306,21 +500,26 @@ export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
 export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots = [], releaseLockFn = null } = {}) {
   const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
   const active = activeSessions.get(sessionId);
+  const terminalized = await terminalizeCodexTuiSession({
+    sessionId,
+    store,
+    releaseLockFn: releaseLockFn || active?.releaseLockFn || null,
+    onTerminalized: active?.onTerminalized || null,
+    event: {
+      source: reason === "evidence_timeout" ? "evidence_timeout" : "explicit-stop",
+      exit_code: null,
+      signal: "SIGTERM",
+      error: reason,
+      error_code: null,
+    },
+  });
   if (active?.ptySession) {
     active.ptySession.stop();
     activeSessions.delete(sessionId);
   } else {
     await normalizeRecoveredSessionRecord(store, sessionId);
   }
-  // Release repo lock if a release function was provided
-  if (typeof releaseLockFn === "function") {
-    try { await releaseLockFn(); } catch { /* non-fatal */ }
-  }
-  return store.updateSession(sessionId, {
-    status: "stopped",
-    stop_reason: reason,
-    stopped_at: new Date().toISOString(),
-  });
+  return terminalized;
 }
 
 export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
@@ -348,4 +547,5 @@ export function resetCodexTuiSessionManagerForTests() {
   activeSessions.clear();
   sessionStores.clear();
   pendingSessionStarts.clear();
+  pendingTerminalizations.clear();
 }

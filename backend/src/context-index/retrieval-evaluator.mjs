@@ -1,6 +1,10 @@
+function itemIds(item) {
+  return [item.id, item.metadata?.task_id, item.metadata?.goal_id, item.metadata?.workstream_id, item.metadata?.source_path]
+    .filter(Boolean);
+}
+
 function relevant(item, expectedIds) {
-  const ids = [item.id, item.metadata?.task_id, item.metadata?.goal_id, item.metadata?.source_path].filter(Boolean);
-  return ids.some((id) => expectedIds.includes(id));
+  return itemIds(item).some((id) => expectedIds.includes(id));
 }
 
 export function evaluateRetrieval(results = [], expectation = {}) {
@@ -11,7 +15,13 @@ export function evaluateRetrieval(results = [], expectation = {}) {
   const k = Number(expectation.k || results.length || 1);
   const top = results.slice(0, k);
   const firstRelevant = top.findIndex((item) => relevant(item, expectedIds));
-  const relevantCount = top.filter((item) => relevant(item, expectedIds)).length;
+  const hitExpectedIds = new Set();
+  for (const item of top) {
+    for (const id of itemIds(item)) {
+      if (expectedIds.includes(id)) hitExpectedIds.add(id);
+    }
+  }
+  const relevantCount = hitExpectedIds.size;
   const wrongTaskCount = currentTaskId
     ? top.filter((item) => item.metadata?.task_id && item.metadata.task_id !== currentTaskId && !relevant(item, expectedIds)).length
     : 0;

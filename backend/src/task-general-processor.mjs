@@ -1,5 +1,6 @@
-import { rm, stat } from "node:fs/promises";
+import { realpath, rm, stat } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
+import { resolve } from "node:path";
 import { selectWorkspace } from "./auth-context.mjs";
 import { goalWorkspaceFiles } from "./goal-files.mjs";
 import { acquireRepoLock, releaseLockForTask } from "./repo-lock.mjs";
@@ -317,6 +318,43 @@ async function isDirectory(path) {
   }
 }
 
+async function verifyRealTaskWorktree({ resolvedRepo, plan }) {
+  const worktreePath = resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path;
+  const canonicalRepoPath = resolvedRepo?.canonical_repo_path || plan?.canonical_repo_path;
+  const lifecycle = resolvedRepo?.worktree_lifecycle;
+  if (lifecycle?.ok !== true || lifecycle?.mode !== "git_worktree") {
+    return { valid: false, error: lifecycle?.error || "task worktree lifecycle is not verified git_worktree" };
+  }
+  if (!(await isDirectory(worktreePath))) {
+    return { valid: false, error: `expected task worktree is unavailable: ${worktreePath || "missing task_worktree_path"}` };
+  }
+  if (!canonicalRepoPath) {
+    return { valid: false, error: "canonical repository path is unavailable for worktree verification" };
+  }
+
+  try {
+    const worktreeTop = await realpath(gitOutput(worktreePath, ["rev-parse", "--show-toplevel"]));
+    const canonicalTop = await realpath(gitOutput(canonicalRepoPath, ["rev-parse", "--show-toplevel"]));
+    const worktreeGitDir = await realpath(resolve(worktreeTop, gitOutput(worktreePath, ["rev-parse", "--git-dir"])));
+    const worktreeCommonDir = await realpath(resolve(worktreeTop, gitOutput(worktreePath, ["rev-parse", "--git-common-dir"])));
+    const canonicalCommonDir = await realpath(resolve(canonicalTop, gitOutput(canonicalRepoPath, ["rev-parse", "--git-common-dir"])));
+    if (worktreeTop === canonicalTop) {
+      return { valid: false, error: "task worktree resolves to the canonical repository" };
+    }
+    if (worktreeGitDir === worktreeCommonDir || worktreeCommonDir !== canonicalCommonDir) {
+      return { valid: false, error: "task path is not a linked worktree of the canonical repository" };
+    }
+    return {
+      valid: true,
+      worktree_top: worktreeTop,
+      canonical_top: canonicalTop,
+      common_git_dir: worktreeCommonDir,
+    };
+  } catch (err) {
+    return { valid: false, error: `task worktree git verification failed: ${err?.message || String(err)}` };
+  }
+}
+
 async function buildDeliveryResultRecoveryEvidence({ config, taskResult, resolvedRepo, cr, runCommandFn }) {
   if (!resolvedRepo?.canonical_repo_path || !resolvedRepo?.task_worktree_path) return null;
   const exitCode = cr?.returncode ?? null;
@@ -411,6 +449,7 @@ export async function processGeneralTask(store, config, task, context, github) {
 export async function processGeneralTaskWithDeps(store, config, task, context, github, deps = {}) {
   const resolveTaskRepositoryPlanFn = deps.resolveTaskRepositoryPlanFn || _resolveTaskRepositoryPlan;
   const materializeTaskWorktreeFn = deps.materializeTaskWorktreeFn || _materializeTaskWorktree;
+  const verifyTaskWorktreeFn = deps.verifyTaskWorktreeFn || verifyRealTaskWorktree;
   const acquireRepoLockFn = deps.acquireRepoLockFn || acquireRepoLock;
   const releaseLockForTaskFn = deps.releaseLockForTaskFn || releaseLockForTask;
   const prepareCodexTaskRunFn = deps.prepareCodexTaskRunFn || prepareCodexTaskRun;
@@ -519,11 +558,75 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // for true concurrent execution on the same canonical repo.
   let repoLockPath = null;
   // Enter materializing_worktree state (only now do we create the worktree)
-  const taskMode = task.legacy_mode || task.mode || goal?.mode || "full";
-  const enableWorktrees = config.enableTaskWorktrees !== false && taskMode === "builder";
+  const enableWorktrees = config.enableTaskWorktrees !== false;
   let resolvedRepo = resolvedRepoPlan;
-  let executionCwd = resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || workspace.root;
+  // Determine if the task should use canonical (in-place) execution instead of a worktree.
+  // canonical execution is used for deploy/admin tasks or when worktrees are disabled.
+  const usesCanonicalExecution = !enableWorktrees || task.execution_mode === 'canonical' || task.mode === 'deploy' || task.mode === 'admin';
+  let executionCwd = usesCanonicalExecution ? (resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath) : null;
+  let worktreeMaterialized = usesCanonicalExecution; // canonical execution doesn't need worktree materialization
   let tuiEvidenceReady = null;
+
+  async function materializeExecutionWorktree() {
+    if (worktreeMaterialized) return { ok: true };
+    if (!enableWorktrees) {
+      // Worktrees disabled — default to canonical repo execution.
+      // Repo-lock serialization handles concurrent access to the canonical repo.
+      executionCwd = resolvedRepo.canonical_repo_path || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath;
+      worktreeMaterialized = true;
+      return { ok: true, canonical: true };
+    }
+
+    // Deploy/admin tasks use canonical execution — no worktree needed.
+    if (usesCanonicalExecution) {
+      worktreeMaterialized = true;
+      return { ok: true, canonical: true };
+    }
+
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "materializing_worktree";
+      item.logs.push({ time: new Date().toISOString(), message: "[worker] materializing worktree" });
+    });
+
+    const materialized = await materializeTaskWorktreeFn(resolvedRepoPlan, { config });
+    resolvedRepo = { ...resolvedRepoPlan, ...materialized };
+    if (resolvedRepo.worktree_lifecycle?.ok !== true || resolvedRepo.worktree_lifecycle?.mode !== "git_worktree") {
+      return {
+        ok: false,
+        reason: resolvedRepo.worktree_lifecycle?.error || "task worktree lifecycle is not verified git_worktree",
+      };
+    }
+    const verification = await verifyTaskWorktreeFn({ resolvedRepo, plan: resolvedRepoPlan, task, goal, config });
+    resolvedRepo.worktree_verification = verification;
+    if (!verification?.valid) {
+      const lifecycleError = resolvedRepo.worktree_lifecycle?.error;
+      const reason = lifecycleError || verification?.error || "unknown worktree verification error";
+      return { ok: false, reason };
+    }
+
+    executionCwd = resolvedRepo.task_worktree_path || resolvedRepo.worktree_lifecycle?.worktree_path;
+    resolvedRepo.task_worktree_path = executionCwd;
+    worktreeMaterialized = true;
+    return { ok: true };
+  }
+
+  async function failWorktree(reason) {
+    const failMsg = `[worker] failed to materialize verified task worktree: ${reason}`;
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "failed";
+      item.result = {
+        kind: "worktree_error",
+        summary: failMsg,
+        completed_at: new Date().toISOString(),
+        task_worktree_path: resolvedRepo.task_worktree_path || null,
+        canonical_repo_path: resolvedRepo.canonical_repo_path || null,
+        worktree_lifecycle: resolvedRepo.worktree_lifecycle || null,
+        worktree_verification: resolvedRepo.worktree_verification || null,
+      };
+      item.logs.push({ time: new Date().toISOString(), message: failMsg });
+    });
+    return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
+  }
 
   if (taskUsesCodexTuiGoal(task)) {
     if (!isCodexTuiEnabled(config)) {
@@ -656,9 +759,11 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       };
     }
 
+    const tuiWorktree = await materializeExecutionWorktree();
+    if (!tuiWorktree.ok) return failWorktree(tuiWorktree.reason);
 
     // Acquire repo lock before starting TUI session
-    const tuiLockPath = executionCwd || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath;
+    const tuiLockPath = resolvedRepo.lock_repo_path || executionCwd;
     let tuiLockAcquired = false;
     if (tuiLockPath) {
       const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, tuiLockPath, {
@@ -678,6 +783,10 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       cwd: executionCwd,
       workspaceRoot: config.defaultWorkspaceRoot || executionCwd,
       repoLockId: tuiLockAcquired ? repoLockPath : null,
+      worktreePath: executionCwd,
+      branch: resolvedRepo.worktree_lifecycle?.branch_name || resolvedRepo.task_branch || null,
+      baseCommit: resolvedRepo.worktree_lifecycle?.base_sha || resolvedRepo.base_sha || null,
+      releaseLockFn: () => releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id),
     });
 
     const sessionStartedResult = {
@@ -733,17 +842,12 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
     if (!collected?.evidence_ready) {
       const evidenceTimedOut = collected?.status === "timed_out";
-      if (evidenceTimedOut) {
-        try {
-          await stopCodexTuiSessionFn(session.id, {
-            reason: "evidence_timeout",
-            workspaceRoot: config.defaultWorkspaceRoot,
-          });
-        } catch { /* state transition must still proceed */ }
-      }
-      if (tuiLockAcquired && tuiLockPath) {
-        try { await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id); } catch { /* non-fatal */ }
-      }
+      try {
+        await stopCodexTuiSessionFn(session.id, {
+          reason: evidenceTimedOut ? "evidence_timeout" : "evidence_collection_failed",
+          workspaceRoot: config.defaultWorkspaceRoot,
+        });
+      } catch { /* state transition must still proceed */ }
       const terminalStatus = evidenceTimedOut ? "retry_wait" : "failed";
       await updateTaskFn(store, task.id, (item) => {
         item.status = terminalStatus;
@@ -801,44 +905,9 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }, context);
   }
 
-  if (!tuiEvidenceReady && enableWorktrees) {
-    await updateTaskFn(store, task.id, (item) => {
-      item.status = "materializing_worktree";
-      item.logs.push({ time: new Date().toISOString(), message: "[worker] materializing worktree" });
-    });
-
-    const materialized = await materializeTaskWorktreeFn(resolvedRepoPlan, { config });
-    resolvedRepo = { ...resolvedRepoPlan, ...materialized };
-    executionCwd = resolvedRepo.worktree_lifecycle?.ok === true
-      ? resolvedRepo.task_worktree_path
-      : workspace.root;
-
-    if (resolvedRepo.worktree_lifecycle?.ok === false) {
-      const failMsg = `[worker] failed to materialize task worktree: ${resolvedRepo.worktree_lifecycle.error || "unknown worktree error"}`;
-      await updateTaskFn(store, task.id, (item) => {
-        item.status = "failed";
-        item.result = { kind: "worktree_error", summary: failMsg, completed_at: new Date().toISOString() };
-        item.logs.push({ time: new Date().toISOString(), message: failMsg });
-      });
-      return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
-    }
-
-    if (resolvedRepo.worktree_lifecycle?.ok === true && !(await isDirectory(resolvedRepo.task_worktree_path))) {
-      const failMsg = `[worker] expected task worktree is unavailable: ${resolvedRepo.task_worktree_path || "missing task_worktree_path"}`;
-      await updateTaskFn(store, task.id, (item) => {
-        item.status = "failed";
-        item.result = {
-          kind: "worktree_error",
-          summary: failMsg,
-          completed_at: new Date().toISOString(),
-          task_worktree_path: resolvedRepo.task_worktree_path || null,
-          canonical_repo_path: resolvedRepo.canonical_repo_path || null,
-          worktree_lifecycle: resolvedRepo.worktree_lifecycle || null,
-        };
-        item.logs.push({ time: new Date().toISOString(), message: failMsg });
-      });
-      return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
-    }
+  if (!tuiEvidenceReady && !worktreeMaterialized) {
+    const workerWorktree = await materializeExecutionWorktree();
+    if (!workerWorktree.ok) return failWorktree(workerWorktree.reason);
   }
 
   // Compute contract paths once for the full prepare -> execute -> finalize chain
@@ -853,9 +922,9 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   // so concurrent tasks on different worktrees are NOT serialized by this lock.
   // In legacy mode (no worktrees), lock on canonical repo path.
   if (!tuiEvidenceReady) {
-    const lockPath = enableWorktrees
-      ? (resolvedRepo.lock_repo_path || resolvedRepo.task_worktree_path)
-      : (resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath);
+    const lockPath = usesCanonicalExecution
+      ? (resolvedRepo.canonical_repo_path || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || resolvedRepo.task_worktree_path)
+      : (resolvedRepo.lock_repo_path || resolvedRepo.task_worktree_path);
     if (lockPath) {
       const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, lockPath, {
         taskId: task.id,

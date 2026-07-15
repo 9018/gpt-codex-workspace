@@ -22,6 +22,7 @@ import { join } from "node:path";
 import { indexGoalContext, retrieveContext } from "./retriever.mjs";
 import { buildContextBundle } from "./context-bundle-builder.mjs";
 import { buildContextManifest } from "./context-curator.mjs";
+import { evaluateRetrieval } from "./retrieval-evaluator.mjs";
 
 const DEFAULT_CROSS_GOAL_TOP_K = 4;
 const DEFAULT_PER_GOAL_TOP_K = 4;
@@ -174,6 +175,7 @@ function mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved) {
     keyword_query: primary?.keyword_query || crossGoal?.keyword_query || perGoal?.keyword_query || "",
     query_terms: primary?.query_terms || crossGoal?.query_terms || perGoal?.query_terms || [],
     store_capabilities: primary?.store_capabilities || crossGoal?.store_capabilities || perGoal?.store_capabilities || null,
+    policy: primary?.policy || perGoal?.policy || crossGoal?.policy || null,
   };
 }
 
@@ -337,6 +339,25 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
   const diagnostics = mergedRetrievalDiagnostics(crossGoalRetrieved, perGoalRetrieved);
   const selectedChunks = Array.isArray(budget.selectedChunks) ? budget.selectedChunks : [];
   const selectionMetadata = budget.selectionMetadata || null;
+  const policy = diagnostics.policy || null;
+  const expectedIds = policy ? [
+    ...(policy.entities?.task_ids || []),
+    ...(policy.entities?.goal_ids || []),
+    ...(policy.entities?.workstream_ids || []),
+    ...(policy.entities?.commits || []),
+    ...(policy.entities?.paths || []),
+  ] : [];
+  const evaluation = evaluateRetrieval(selectedChunks, {
+    expected_ids: expectedIds,
+    expected_source_types: policy?.intent === "runtime_diagnosis" ? ["task", "runtime", "result"]
+      : policy?.intent === "acceptance" ? ["evidence", "test", "result"]
+      : policy?.intent === "implementation" ? ["code", "file"]
+      : [],
+    current_task_id: policy?.current_task_id || null,
+    root_goal_id: policy?.root_goal_id || null,
+    requires_fresh_state: policy?.requires_fresh_state === true,
+    k: selectedChunks.length || 1,
+  });
 
   // Build candidate-level tracking with intent, mutation_scope, semantic_capability
   const crossGoalCandidates = crossGoalRetrieved.map((r) => {
@@ -362,6 +383,9 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     return {
       id: r.id,
       score: r.score ?? null,
+      base_score: r.base_score ?? null,
+      score_breakdown: r.score_breakdown || null,
+      selection_reasons: r.selection_reasons || [],
       source_goal_id: r.metadata?.goal_id || null,
       source_type: r.metadata?.source_type || "unknown",
       tokens: r.tokens,
@@ -380,6 +404,9 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     return {
       id: r.id,
       score: r.score ?? null,
+      base_score: r.base_score ?? null,
+      score_breakdown: r.score_breakdown || null,
+      selection_reasons: r.selection_reasons || [],
       source_goal_id: r.metadata?.goal_id || null,
       source_type: r.metadata?.source_type || "unknown",
       tokens: r.tokens,
@@ -415,6 +442,8 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
     query_terms: diagnostics.query_terms,
     store_capabilities: diagnostics.store_capabilities,
     embedding_provider: embeddingProvider,
+    policy,
+    evaluation,
     cross_goal_retrieval: {
       enabled: crossGoalEnabled,
       disabled_reason: crossGoalEnabled ? null : "non_semantic_embedding",
@@ -434,6 +463,9 @@ function buildRetrievalJson(goalId, crossGoalRetrieved, perGoalRetrieved, storeN
         id: r.id,
         source_goal_id: r.metadata?.goal_id || null,
         score: r.score ?? null,
+        base_score: r.base_score ?? null,
+        score_breakdown: r.score_breakdown || null,
+        selection_reasons: r.selection_reasons || [],
         source_type: r.metadata?.source_type || "unknown",
         tokens: r.tokens,
         text_preview: r.text?.substring(0, 200),
@@ -541,6 +573,7 @@ export async function maybeBuildContextBundle(
       priorResults,
       config,
       workspaceRoot,
+      embeddingConfig: config?.contextEmbeddingConfig || { provider: "fallback" },
     });
 
     if (indexResult.stored === 0) {
@@ -605,7 +638,11 @@ export async function maybeBuildContextBundle(
         contextVectorStore: config?.contextVectorStore,
         maxGoalsScanned,
         retrievalMode: "hybrid",
-        embeddingConfig: { provider: "fallback" },
+        embeddingConfig: config?.contextEmbeddingConfig || { provider: "fallback" },
+        taskId: task?.id || goal.task_id,
+        goalId: goal.id,
+        rootGoalId: task?.root_goal_id || goal.root_goal_id || goal.id,
+        workstreamId: task?.workstream_id || goal.workstream_id,
       },
       filters: retrievalScope,
     }) : [];
@@ -626,7 +663,11 @@ export async function maybeBuildContextBundle(
         contextVectorStore: config?.contextVectorStore,
         maxGoalsScanned,
         retrievalMode: "hybrid",
-        embeddingConfig: { provider: "fallback" },
+        embeddingConfig: config?.contextEmbeddingConfig || { provider: "fallback" },
+        taskId: task?.id || goal.task_id,
+        goalId: goal.id,
+        rootGoalId: task?.root_goal_id || goal.root_goal_id || goal.id,
+        workstreamId: task?.workstream_id || goal.workstream_id,
       },
       filters: { ...retrievalScope, goal_id: goal.id },
     });

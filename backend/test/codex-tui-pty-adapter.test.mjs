@@ -8,12 +8,15 @@ function makeFakePty() {
   const writes = [];
   const killed = [];
   let dataHandler = null;
+  let exitHandler = null;
   const process = {
     pid: 42,
     write(text) { writes.push(text); },
     kill(signal) { killed.push(signal); },
     onData(handler) { dataHandler = handler; return { dispose() {} }; },
+    onExit(handler) { exitHandler = handler; return { dispose() {} }; },
     emitData(text) { dataHandler?.(text); },
+    emitExit(event) { exitHandler?.(event); },
   };
   return {
     calls,
@@ -96,6 +99,18 @@ test("pty adapter stops process safely", async () => {
   assert.deepEqual(fakePty.killed, ["SIGTERM"]);
 });
 
+test("node-pty adapter forwards one normalized terminal event", async () => {
+  const fakePty = makeFakePty();
+  const exits = [];
+  const adapter = createCodexTuiPtyAdapter({ pty: fakePty });
+  await adapter.spawn({ cwd: "/repo", onExit: (event) => exits.push(event) });
+
+  fakePty.process.emitExit({ exitCode: 7, signal: 15 });
+  fakePty.process.emitExit({ exitCode: 7, signal: 15 });
+
+  assert.deepEqual(exits, [{ exit_code: 7, signal: 15, source: "node-pty-exit" }]);
+});
+
 test("pty adapter falls back to script when node-pty import fails", async () => {
   const fakeChild = makeFakeChildProcess();
   const output = [];
@@ -121,6 +136,26 @@ test("pty adapter falls back to script when node-pty import fails", async () => 
   assert.deepEqual(fakeChild.stdinWrites, ["/status\n", "[end]"]);
   assert.deepEqual(output, ["ok"]);
   assert.deepEqual(fakeChild.killed, ["SIGTERM"]);
+});
+
+test("script fallback converges error, exit, and close into one terminal event", async () => {
+  const fakeChild = makeFakeChildProcess();
+  const exits = [];
+  const adapter = createCodexTuiPtyAdapter({
+    loadPty: async () => { throw createCodexTuiUnavailableError(); },
+    allowScriptFallback: true,
+    spawnImpl: fakeChild.spawnImpl,
+  });
+  await adapter.spawn({ cwd: "/repo", onExit: (event) => exits.push(event) });
+
+  fakeChild.child.emit("error", Object.assign(new Error("spawn broke"), { code: "EIO" }));
+  fakeChild.child.emit("exit", 1, "SIGTERM");
+  fakeChild.child.emit("close", 1, "SIGTERM");
+
+  assert.equal(exits.length, 1);
+  assert.equal(exits[0].source, "script-error");
+  assert.equal(exits[0].error_code, "EIO");
+  assert.match(exits[0].error, /spawn broke/);
 });
 
 test("pty adapter reports codex_tui_unavailable when PTY support and fallback are missing", async () => {

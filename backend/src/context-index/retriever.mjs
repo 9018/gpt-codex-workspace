@@ -245,32 +245,33 @@ export async function retrieveContext(params) {
     queryText,
   });
   const storeDiagnostics = rawResults.retrievalDiagnostics || null;
-  let results = rerankRetrievalCandidates(rawResults, policyPlan, topK);
+  let timeDecayedCandidateCount = 0;
+  if (timeDecayDays > 0 && rawResults.length > 0) {
+    const now = Date.now();
+    const decayMs = timeDecayDays * 24 * 60 * 60 * 1000;
+    for (const result of rawResults) {
+      const createdAt = result.metadata?.created_at ? new Date(result.metadata.created_at).getTime() : 0;
+      if (createdAt > 0 && (now - createdAt) > decayMs) {
+        const periodsElapsed = Math.floor((now - createdAt) / decayMs);
+        result.score = result.score * Math.pow(0.5, periodsElapsed);
+        result.time_decayed = true;
+        result.time_decay_periods = periodsElapsed;
+        timeDecayedCandidateCount += 1;
+      }
+    }
+  }
+
+  const results = rerankRetrievalCandidates(rawResults, policyPlan, topK);
   Object.defineProperty(results, "retrievalDiagnostics", {
     value: {
       ...(storeDiagnostics || {}),
       ...(results.policyDiagnostics || {}),
       policy: policyPlan,
+      time_decay_days: timeDecayDays,
+      time_decayed_candidate_count: timeDecayedCandidateCount,
     },
     enumerable: false,
   });
-
-  if (timeDecayDays > 0 && results.length > 0) {
-    const now = Date.now();
-    const decayMs = timeDecayDays * 24 * 60 * 60 * 1000;
-    for (const r of results) {
-      const createdAt = r.metadata?.created_at ? new Date(r.metadata.created_at).getTime() : 0;
-      if (createdAt > 0 && (now - createdAt) > decayMs) {
-        // Apply a decay penalty: score *= 0.5 for each decay period elapsed
-        const periodsElapsed = Math.floor((now - createdAt) / decayMs);
-        r.score = r.score * Math.pow(0.5, periodsElapsed);
-        r.time_decayed = true;
-        r.time_decay_periods = periodsElapsed;
-      }
-    }
-    // Re-sort after time decay reweighting
-    results.sort((a, b) => b.score - a.score);
-  }
 
   Object.defineProperty(results, "embeddingProvider", {
     value: embeddingProviderDiagnostics(embedder),

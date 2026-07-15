@@ -288,6 +288,7 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       // PR0: Mock acceptance/repair/integration to avoid interference with existing test
       runAcceptanceAgentFn: async () => ({
@@ -382,6 +383,45 @@ test("processGeneralTaskWithDeps fails clearly when materialized builder worktre
   }
 });
 
+test("processGeneralTaskWithDeps requires a task worktree for normalized full repair execution", async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), "gptwork-full-repair-worktree-"));
+  try {
+    const { store, task } = createTaskStore(tmpDir, "task_full_repair", "goal_full_repair", {
+      mode: "full",
+      legacy_mode: null,
+      parent_task_id: "task_parent",
+      repair_of_task_id: "task_parent",
+    });
+    await store.load();
+    const plan = makeRepoPlan("task_full_repair", tmpDir, "github.com/acme/repo");
+    rmSync(plan.task_worktree_path, { recursive: true, force: true });
+    let executeAttempted = false;
+
+    const result = await processGeneralTaskWithDeps(store, {
+      defaultWorkspaceRoot: tmpDir,
+      defaultRepoPath: plan.canonical_repo_path,
+      enableTaskWorktrees: true,
+    }, task, ctx, {}, {
+      resolveTaskRepositoryPlanFn: async () => plan,
+      materializeTaskWorktreeFn: async () => ({
+        lock_repo_path: plan.task_worktree_path,
+        worktree_lifecycle: { mode: "git_worktree", ok: false, worktree_path: plan.task_worktree_path, error: "repair worktree unavailable" },
+      }),
+      executeAgentBackendRunFn: async () => { executeAttempted = true; return {}; },
+      appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
+      selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
+    });
+
+    assert.equal(result.status, "failed");
+    assert.equal(result.kind, "worktree_error");
+    assert.equal(executeAttempted, false);
+    assert.match(result.reason, /repair worktree unavailable/);
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 // ===========================================================================
 // PR0 Integration Tests: acceptance agent + repair loop + integration queue
 // ===========================================================================
@@ -413,6 +453,7 @@ test("processGeneralTaskWithDeps: acceptance passed + no changes -> completed", 
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       // Use real acceptance agent functions
       runAcceptanceAgentFn: async (opts) => ({
@@ -465,6 +506,7 @@ test("processGeneralTaskWithDeps: acceptance followups stay next_tasks without b
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async () => ({
         passed: true,
@@ -520,6 +562,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -576,6 +619,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -631,6 +675,7 @@ test("processGeneralTaskWithDeps: acceptance failed + repair possible -> waiting
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: false,
@@ -700,6 +745,7 @@ test("processGeneralTaskWithDeps: acceptance failed + no repair -> waiting_for_r
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: false,
@@ -789,6 +835,7 @@ test("processGeneralTaskWithDeps: delivery recovery completes commit_missing dir
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
     });
 
@@ -850,6 +897,7 @@ test("processGeneralTaskWithDeps: already_integrated delivery recovery deduplica
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
     });
 
@@ -889,6 +937,7 @@ test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", a
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -946,6 +995,7 @@ test("processGeneralTaskWithDeps: prompt preparation waiting_for_review action p
       prepareCodexTaskRunFn: async () => { throw Object.assign(new Error("unknown prep failure"), { code: "EUNKNOWN" }); },
       determineHealingActionFn: () => ({ action: "waiting_for_review", next_status: "waiting_for_review", reason: "not recoverable", retry_budget: 0 }),
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
     });
 
@@ -979,6 +1029,7 @@ test("processGeneralTaskWithDeps: prompt preparation retry action requeues withi
       prepareCodexTaskRunFn: async () => { throw Object.assign(new Error("no space left"), { code: "ENOSPC" }); },
       determineHealingActionFn: () => ({ action: "cleanup_and_retry", next_status: "queued", reason: "cleanup temp files", retry_budget: 1 }),
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
     });
 
@@ -1016,6 +1067,7 @@ test("processGeneralTaskWithDeps: execution retry action requeues within retry b
       executeCodexTaskRunFn: async () => { throw Object.assign(new Error("worker crash"), { code: "EWORKER" }); },
       determineHealingActionFn: () => ({ action: "recover_and_retry", next_status: "queued", reason: "restart worker", retry_budget: 1 }),
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
     });
 
@@ -1060,6 +1112,7 @@ test("processGeneralTaskWithDeps: integration push_failed creates repair when al
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async () => ({
         passed: true,
@@ -1120,6 +1173,7 @@ test("processGeneralTaskWithDeps: integration branch_pushed does NOT mark task c
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -1179,6 +1233,7 @@ test("processGeneralTaskWithDeps: branch_pushed auto completion can ff-only clos
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async () => ({
         passed: true,
@@ -1253,6 +1308,7 @@ test("processGeneralTaskWithDeps: branch_pushed without passed acceptance does n
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async () => ({
         passed: false,
@@ -1311,6 +1367,7 @@ test("processGeneralTaskWithDeps: integration pr_opened does NOT mark task compl
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -1365,6 +1422,7 @@ test("processGeneralTaskWithDeps: integration skipped is still terminal (complet
         return { task_id: task.id, status: taskStatus, kind: taskResult.kind };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async (opts) => ({
         passed: true,
@@ -1484,6 +1542,8 @@ const ctx = {
   scopes: ["task:create", "task:update", "workspace:read", "project:read", "workspace:write"],
 };
 
+const verifiedTestWorktree = async () => ({ valid: true, source: "test-fixture" });
+
 console.log("task-general-processor PR0 integration tests loaded");
 
 /**
@@ -1552,6 +1612,7 @@ test("processGeneralTaskWithDeps routes execution through selected agent backend
         return { task_id: task.id, status: taskStatus, backend: taskResult.execution_backend };
       },
       appendGoalMessageFn: async () => {},
+      verifyTaskWorktreeFn: verifiedTestWorktree,
       selectWorkspaceFn: async () => ({ type: "hosted", root: tmpDir, id: "hosted-default" }),
       runAcceptanceAgentFn: async () => ({
         passed: true,
