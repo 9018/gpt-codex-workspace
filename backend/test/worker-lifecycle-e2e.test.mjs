@@ -77,9 +77,9 @@ describe('Worker lifecycle E2E', () => {
     assert.ok(state.last_tick_duration_ms !== null);
   });
 
-  it('computeWorkerHealth reports enabled_but_not_running after tick', () => {
+  it('computeWorkerHealth reports idle after tick', () => {
     const health = workerStateModule.computeWorkerHealth(state);
-    assert.equal(health.phase, 'enabled_but_not_running');
+    assert.equal(health.phase, 'idle');
     assert.ok(health.last_tick_age_ms !== null);
   });
 

@@ -96,7 +96,7 @@ export function workerStatusSnapshot(workerState) {
 
 /**
  * Compute worker health phase from worker state.
- * Phases: disabled / enabled_but_not_running / running / overdue / stalled
+ * Phases: disabled / enabled_but_not_running / idle / running / overdue / stalled
  * Includes diagnostic timestamps and human-readable reason.
  *
  * @param {object} workerState
@@ -126,7 +126,7 @@ export function computeWorkerHealth(workerState) {
     return { phase: 'running', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: currentTickDurationMs, next_tick_overdue_ms: nextTickOverdueMs, reason };
   }
 
-  if (lastTickFinishedAt === null && !workerState.started_at) {
+  if (lastTickFinishedAt === null) {
     return { phase: 'enabled_but_not_running', last_tick_age_ms: null, current_tick_duration_ms: null, next_tick_overdue_ms: null, reason: 'worker enabled but never started' };
   }
 
@@ -138,7 +138,7 @@ export function computeWorkerHealth(workerState) {
     return { phase: 'overdue', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: `next tick overdue by ${Math.round(nextTickOverdueMs / 1000)}s` };
   }
 
-  return { phase: 'enabled_but_not_running', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: 'worker enabled but not running' };
+  return { phase: 'idle', last_tick_age_ms: lastTickAgeMs, current_tick_duration_ms: null, next_tick_overdue_ms: nextTickOverdueMs, reason: 'waiting for next tick' };
 }
 
 /**

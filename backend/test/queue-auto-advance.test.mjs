@@ -354,8 +354,8 @@ test("queue-reconciler: computeWorkerHealth distinguishes all required states", 
     current_interval_ms: 10000,
     next_tick_due_at: new Date(Date.now() + 5000).toISOString(),
   });
-  assert.equal(betweenTicks.phase, "enabled_but_not_running");
-  assert.equal(betweenTicks.reason, "worker enabled but not running");
+  assert.equal(betweenTicks.phase, "idle");
+  assert.equal(betweenTicks.reason, "waiting for next tick");
 
   // Running
   const running = computeWorkerHealth({

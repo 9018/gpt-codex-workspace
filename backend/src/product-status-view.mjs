@@ -457,7 +457,7 @@ function buildSummaryLine({ gitInfo, queueMetrics, workerHealth, retention }) {
   const parts = [];
 
   const worktreeStatus = gitInfo.worktree_dirty ? "dirty" : "clean";
-  const workerStatus = workerHealth.enabled ? (workerHealth.running ? "running" : "enabled_but_not_running") : "disabled";
+  const workerStatus = workerHealth.enabled ? (workerHealth.health?.phase || (workerHealth.running ? "running" : "enabled_but_not_running")) : "disabled";
   const blockers = queueMetrics.current_blockers;
 
   parts.push(`commit ${gitInfo.running_commit ? gitInfo.running_commit.slice(0, 8) : "?"}`);
@@ -501,7 +501,7 @@ export function productStatusCard(data) {
   // ── Worker Health ──
   lines.push('');
   lines.push(' Worker:');
-  lines.push(formatKeyValue('status', data.worker.enabled ? (data.worker.running ? 'running' : 'enabled_but_not_running') : 'disabled'));
+  lines.push(formatKeyValue('status', data.worker.enabled ? (data.worker.health_phase || (data.worker.running ? 'running' : 'enabled_but_not_running')) : 'disabled'));
   lines.push(formatKeyValue('health phase', data.worker.health_phase));
   if (data.worker.last_tick_age_s != null) lines.push(formatKeyValue('last tick', `${data.worker.last_tick_age_s}s ago`));
   if (data.worker.last_error) lines.push(formatKeyValue('last error', data.worker.last_error.slice(0, 80)));

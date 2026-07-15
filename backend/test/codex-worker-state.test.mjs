@@ -111,7 +111,7 @@ test('computeWorkerHealth: enabled_but_not_running when never started', () => {
   assert.equal(health.reason, 'worker enabled but never started');
 });
 
-test('computeWorkerHealth: enabled_but_not_running when between ticks', () => {
+test('computeWorkerHealth: idle when between ticks', () => {
   const state = createWorkerState();
   const now = new Date();
   const tickStarted = new Date(now.getTime() - 3000);
@@ -128,8 +128,8 @@ test('computeWorkerHealth: enabled_but_not_running when between ticks', () => {
   markWorkerNextTickScheduled(state, { intervalMs: 5000, now: tickFinished });
 
   const health = computeWorkerHealth(state);
-  assert.equal(health.phase, 'enabled_but_not_running');
-  assert.equal(health.reason, 'worker enabled but not running');
+  assert.equal(health.phase, 'idle');
+  assert.equal(health.reason, 'waiting for next tick');
   assert.ok(health.last_tick_age_ms !== null);
   // next_tick_due should be in the future (500ms ago + 5000ms = 4500ms from now)
   assert.ok(health.next_tick_overdue_ms === null || health.next_tick_overdue_ms === 0);
