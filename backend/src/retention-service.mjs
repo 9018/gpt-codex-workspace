@@ -228,18 +228,19 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
     const tasks = state.tasks || [];
     const terminal = tasks.filter((t) => _isTerminalTaskStatus(t.status));
     const active = tasks.filter((t) => _isActiveTaskStatus(t.status));
-    const other = tasks.filter((t) =>
-      !_isTerminalTaskStatus(t.status) && !_isActiveTaskStatus(t.status)
-    );
+    const compactedTerminal = terminal.filter((t) => t.retention_compacted === true);
+    const fullTerminal = terminal.filter((t) => t.retention_compacted !== true);
     const terminalCount = terminal.length;
-    const over = terminalCount > limit ? terminalCount - limit : 0;
+    const over = fullTerminal.length > limit ? fullTerminal.length - limit : 0;
     families.push(_makeFamilyStatus("tasks", {
       total: tasks.length,
       active: active.length,
       terminal: terminalCount,
       oldest: _oldestTs(tasks, "updated_at"),
       newest: _newestTs(tasks, "updated_at"),
-      proposedAction: over > 0 ? `remove ${over} oldest terminal tasks (keep ${limit})` : `within limit (${terminalCount}/${limit})`,
+      proposedAction: over > 0
+        ? `compact ${over} oldest full terminal tasks (keep ${limit} full; ${compactedTerminal.length} already compacted)`
+        : `within limit (${fullTerminal.length}/${limit} full terminal; ${compactedTerminal.length} compacted)`,
       safe: true,
     }));
   }

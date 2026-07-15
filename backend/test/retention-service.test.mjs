@@ -202,7 +202,7 @@ describe("retention-service", () => {
         const tasksFamily = report.families.find((f) => f.name === "tasks");
         assert.equal(tasksFamily.current_count, 60);
         assert.equal(tasksFamily.terminal_count, 60);
-        assert.ok(tasksFamily.proposed_action.includes("remove"));
+        assert.ok(tasksFamily.proposed_action.includes("compact"));
         assert.ok(tasksFamily.proposed_action.includes("10"), "should say remove 10");
       } finally {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
@@ -341,6 +341,11 @@ describe("retention-service", () => {
         assert.equal(compacted.length, 30);
         assert.ok(compacted.every((task) => task.auto_advance === false));
         assert.ok(compacted.every((task) => task.status === "completed"));
+
+        const status = await retentionStatus({ config: {}, store: st, workspaceRoot: dir });
+        const taskFamily = status.families.find((family) => family.name === "tasks");
+        assert.equal(taskFamily.proposed_action, "within limit (10/50 full terminal; 30 compacted)");
+        assert.equal(status.summary.families_over_limit, 0);
       } finally {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       }
