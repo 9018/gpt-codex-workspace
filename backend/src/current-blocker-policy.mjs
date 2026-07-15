@@ -318,3 +318,93 @@ export function isCommitAncestorOfHead(commit, repoPath) {
   }
   return false;
 }
+
+/**
+ * classifyBlockersSummary — Aggregate all tasks into a structured blocker report
+ * suitable for release gate BLOCKER → NO-GO decisions.
+ *
+ * @param {Array} tasks — Array of task records from state store.
+ * @returns {object} { hasBlockers, blockerCount, blockers, nonBlockers, verdict }
+ *
+ * Each blocker entry: { task_id, status, label, isBlocker }
+ * verdict: 'GO' when no blockers exist, 'NO-GO' when at least one blocker exists.
+ */
+export function classifyBlockersSummary(tasks) {
+  const taskList = Array.isArray(tasks) ? tasks : [];
+  const blockers = [];
+  const nonBlockers = [];
+
+  for (const task of taskList) {
+    if (!task || typeof task !== 'object') continue;
+    const taskId = task.id || task.task_id || 'unknown';
+    try {
+      const decision = classifyCurrentBlockerTask(task);
+      const entry = {
+        task_id: taskId,
+        status: task.status || 'unknown',
+        label: decision.label || 'unknown',
+        isBlocker: decision.blocks_current_work === true,
+      };
+      if (entry.isBlocker) {
+        blockers.push(entry);
+      } else {
+        nonBlockers.push(entry);
+      }
+    } catch {
+      nonBlockers.push({
+        task_id: taskId,
+        status: task.status || 'unknown',
+        label: 'classification_error',
+        isBlocker: false,
+      });
+    }
+  }
+
+  const hasBlockers = blockers.length > 0;
+  return {
+    hasBlockers,
+    blockerCount: blockers.length,
+    totalTasks: taskList.length,
+    blockers,
+    nonBlockers,
+    verdict: hasBlockers ? 'NO-GO' : 'GO',
+  };
+}
+
+/**
+ * translateBlockerVerdictToGateExit — Map blocker summary to process exit code.
+ * Returns 1 for NO-GO, 0 for GO.
+ *
+ * @param {object} blockerSummary — Result from classifyBlockersSummary
+ * @returns {number} process.exitCode: 1 for NO-GO, 0 for GO
+ */
+export function translateBlockerVerdictToGateExit(blockerSummary) {
+  if (!blockerSummary || typeof blockerSummary !== 'object') return 1;
+  return blockerSummary.verdict === 'GO' ? 0 : 1;
+}
+
+/**
+ * formatBlockerSummary — Human-readable blocker report for console output.
+ *
+ * @param {object} blockerSummary — Result from classifyBlockersSummary
+ * @returns {string} Formatted report text
+ */
+export function formatBlockerSummary(blockerSummary) {
+  if (!blockerSummary || blockerSummary.totalTasks === 0) {
+    return 'No tasks to evaluate. Verdict: GO';
+  }
+  const lines = [
+    '--- Blocker Summary ---',
+    `Total tasks: ${blockerSummary.totalTasks}`,
+    `Blockers: ${blockerSummary.blockerCount}`,
+    `Non-blockers: ${blockerSummary.nonBlockers.length}`,
+    `Verdict: ${blockerSummary.verdict}`,
+  ];
+  if (blockerSummary.blockers.length > 0) {
+    lines.push('Blocking tasks:');
+    for (const b of blockerSummary.blockers) {
+      lines.push(`  [BLOCKER] ${b.task_id} status=${b.status} label=${b.label}`);
+    }
+  }
+  return lines.join('\n');
+}
