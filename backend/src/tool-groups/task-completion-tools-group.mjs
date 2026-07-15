@@ -26,7 +26,24 @@ export function assessTaskCompletionReadiness(task = {}) {
   if (!result || result.status !== 'completed') missing.push('result');
   if (!evidencePassed(verification)) missing.push('verification');
   if (!evidencePassed(contractVerification)) missing.push('contract_verification');
-  return { ready: missing.length === 0, strict: true, missing };
+
+  const canonical = task.canonical_outcome || result?.unified_decision || result?.finalizer_decision?.unified_decision || null;
+  if (canonical && (
+    canonical.safe_to_auto_advance === false ||
+    canonical.requires_repair === true ||
+    canonical.requires_review === true ||
+    ['waiting_for_repair', 'waiting_for_review', 'waiting_for_integration', 'failed', 'blocked'].includes(canonical.status)
+  )) missing.push('canonical_outcome');
+
+  const pipelineGate = task.pipeline_gate || result?.pipeline_gate || null;
+  if (pipelineGate?.blocked === true) missing.push('pipeline_gate');
+  const reviewer = task.reviewer_decision || result?.reviewer_decision || null;
+  const reviewerRequired = task.require_pipeline_gates === true ||
+    (Array.isArray(pipelineGate?.reasons) && pipelineGate.reasons.some((reason) => /reviewer/i.test(String(reason))));
+  if (reviewerRequired && !(reviewer?.passed === true || reviewer?.status === 'accepted' || reviewer?.decision?.passed === true || reviewer?.decision?.status === 'accepted')) {
+    missing.push('reviewer_decision');
+  }
+  return { ready: missing.length === 0, strict: true, missing: [...new Set(missing)] };
 }
 
 /**

@@ -166,3 +166,33 @@ test('request_human_review routes through canonical transition service', async (
   assert.equal(calls[0].payload.task_result_patch.review_message, 'inspect evidence');
   assert.equal(result.task.status, 'waiting_for_review');
 });
+
+test('strict completion rejects passed evidence when canonical outcome still requires repair', () => {
+  const assessment = assessTaskCompletionReadiness({
+    acceptance_contract: { acceptance_policy: { fail_on_missing_evidence: true } },
+    result: {
+      status: 'completed',
+      verification: { passed: true },
+      contract_verification: { passed: true },
+      unified_decision: { status: 'waiting_for_repair', safe_to_auto_advance: false, requires_repair: true },
+    },
+  });
+  assert.equal(assessment.ready, false);
+  assert.ok(assessment.missing.includes('canonical_outcome'));
+});
+
+test('strict completion rejects missing or failed reviewer decision when pipeline requires reviewer', () => {
+  const assessment = assessTaskCompletionReadiness({
+    require_pipeline_gates: true,
+    acceptance_contract: { acceptance_policy: { fail_on_missing_evidence: true } },
+    result: {
+      status: 'completed',
+      verification: { passed: true },
+      contract_verification: { passed: true },
+      pipeline_gate: { blocked: true, reasons: ['reviewer: missing required artifacts (reviewer_decision)'] },
+    },
+  });
+  assert.equal(assessment.ready, false);
+  assert.ok(assessment.missing.includes('pipeline_gate'));
+  assert.ok(assessment.missing.includes('reviewer_decision'));
+});
