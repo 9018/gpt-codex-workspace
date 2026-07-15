@@ -203,9 +203,11 @@ test("retentionCleanup apply only removes terminal eligible items, preserves act
   assert.equal(runningTask.status, "running");
 
   // At least one terminal item may be removed if over limit
-  const completedCount = stateAfter.tasks.filter(t => t.status === "completed").length;
-  // With limit=1, at most 1 terminal task should remain
-  assert.ok(completedCount <= 1, "At most 1 terminal task should remain after apply with limit=1");
+  const fullCompletedCount = stateAfter.tasks.filter(t => t.status === "completed" && t.retention_compacted !== true).length;
+  const compactedCount = stateAfter.tasks.filter(t => t.status === "completed" && t.retention_compacted === true).length;
+  // With limit=1, at most 1 full terminal task remains; older history is retained as safe tombstones.
+  assert.ok(fullCompletedCount <= 1, "At most 1 full terminal task should remain after apply with limit=1");
+  assert.ok(compactedCount >= 1, "Older terminal tasks should be compacted into historical tombstones");
 
   // Audit log should have been written
   const auditResult = await getRecentRetentionCleanups({ workspaceRoot: dir });
@@ -246,7 +248,9 @@ test("retentionCleanup audit has before/after counts", async () => {
   assert.ok(typeof result.before.tasks === "number", "before.tasks should be a number");
   assert.ok(typeof result.after.tasks === "number", "after.tasks should be a number");
   assert.equal(result.before.tasks, 3, "Before should have 3 tasks");
-  assert.ok(result.after.tasks <= 2, "After should have at most 2 tasks (removed terminal ones)");
+  assert.equal(result.after.tasks, 3, "Compaction preserves task identity while reducing historical payload");
+  const compacted = (await store.load()).tasks.filter((task) => task.retention_compacted === true);
+  assert.ok(compacted.length >= 1, "At least one old terminal task should be compacted");
 });
 
 test("product_status view includes retention_recent_cleanups field shape", async () => {
