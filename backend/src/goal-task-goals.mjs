@@ -10,6 +10,7 @@ import { notifyCreatedTask } from "./goal-task-notifier.mjs";
 import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
 import { normalizeLegacyGoalWorkstream, WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
 import { validateTaskContextPacket } from "./context-contract/task-context-schema.mjs";
+import { buildThreadView } from "./thread/thread-view.mjs";
 import { taskContextContractDigest, taskContextInstanceDigest } from "./context-contract/task-context-canonicalizer.mjs";
 import { compileTaskContext, renderGoalPromptFromPacket, renderContextSummaryFromPacket } from "./context-contract/task-context-compiler.mjs";
 
@@ -71,6 +72,9 @@ export async function createGoal(store, config, args, context = defaultTokenCont
   for (const key of WORKSTREAM_IDENTITY_FIELDS) {
     if (args[key] !== undefined) goal[key] = args[key];
   }
+  const parentGoal = args.parent_goal_id ? state.goals.find((item) => item.id === args.parent_goal_id) : null;
+  goal.parent_goal_id = args.parent_goal_id ?? null;
+  goal.root_goal_id = args.root_goal_id || parentGoal?.root_goal_id || parentGoal?.id || goalId;
 
   // P0.1: Inject default autonomy/subagent policies if not provided in payload
   const payloadPolicies = args.payload || {};
@@ -223,5 +227,5 @@ export async function listGoals(store, { status, assignee, workspace_id, limit =
   if (assignee) goals = goals.filter((goal) => goal.assignee === assignee);
   if (workspace_id) goals = goals.filter((goal) => goal.workspace_id === workspace_id);
   const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
-  return { goals: goals.slice(-maxItems).reverse().map((goal) => normalizeLegacyGoalWorkstream(goal.mode === "full" ? goal : { ...goal, legacy_mode: goal.legacy_mode || goal.mode || null, mode: "full" })) };
+  return { goals: goals.slice(-maxItems).reverse().map((goal) => ({ ...normalizeLegacyGoalWorkstream(goal.mode === "full" ? goal : { ...goal, legacy_mode: goal.legacy_mode || goal.mode || null, mode: "full" }), ...buildThreadView(state, goal) })) };
 }

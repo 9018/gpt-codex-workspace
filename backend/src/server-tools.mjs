@@ -47,6 +47,8 @@ import { createEphemeralExecutionToolsGroup } from "./tool-groups/ephemeral-exec
 import { createPlanningToolsGroup } from "./tool-groups/planning-tools-group.mjs";
 import { createArtifactHandoffToolsGroup } from "./tool-groups/artifact-handoff-tools-group.mjs";
 import { readGoalWorkspace } from "./goal-workspace-status.mjs";
+import { createToolCatalog } from "./tool-discovery/tool-catalog.mjs";
+import { createToolDiscoveryToolsGroup } from "./tool-groups/tool-discovery-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -363,9 +365,23 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     }),
   };
   allTools = tools;
+  const catalog = createToolCatalog(tools);
+  Object.assign(tools, createToolDiscoveryToolsGroup({ tool, schema, catalog }));
+  allTools = tools;
   return tools;
 }
 
-export function createDiscoverableTools(tools, mode) {
+const DELAYED_DISCOVERY_BOOTSTRAP = new Set([
+  "health_check", "runtime_status", "open_project_context",
+  "tool_search", "tool_describe",
+]);
+
+export function createCallableTools(tools, mode) {
   return filterToolsForMode(tools, mode);
+}
+
+export function createDiscoverableTools(tools, mode, { delayed = process.env.GPTWORK_DELAYED_TOOL_DISCOVERY === "true" } = {}) {
+  const callable = createCallableTools(tools, mode);
+  if (!delayed) return callable;
+  return Object.fromEntries(Object.entries(callable).filter(([name]) => DELAYED_DISCOVERY_BOOTSTRAP.has(name)));
 }

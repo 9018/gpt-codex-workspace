@@ -19,7 +19,7 @@ import { startCodexWorker as _startCodexWorker, runAssignedCodexTasks as _runAss
 import { createReconciler } from "./runtime-reconciler.mjs";
 import { summarizeToolResult } from "./tool-result-summary.mjs";
 import { listenHttp } from "./server-http-listener.mjs";
-import { createDiscoverableTools, createTools } from "./server-tools.mjs";
+import { createCallableTools, createDiscoverableTools, createTools } from "./server-tools.mjs";
 import { createEventLogger } from "./event-log-service.mjs";
 import { createHookBus } from "./hook-service.mjs";
 let notifyTerminalTaskIfNeeded = null;
@@ -107,6 +107,7 @@ export async function createGptWorkServer(options = {}) {
     githubRepo: rcc.githubRepo,
     githubToken: rcc.githubToken,
     toolMode: options.toolMode || rcc.toolMode,
+    delayedToolDiscovery: options.delayedToolDiscovery ?? process.env.GPTWORK_DELAYED_TOOL_DISCOVERY === 'true',
     renderMode: options.renderMode || rcc.renderMode,
     // Recovery / break-glass plane
     recoveryPlaneEnabled: rcc.recoveryPlaneEnabled,
@@ -215,7 +216,17 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
         if (message.method === "notifications/initialized") return null;
         if (message.method === "tools/list") {
           assertAuthorized(headers, config);
-          return jsonResult(message.id, { tools: toolList(createDiscoverableTools(tools, config.toolMode), config.renderMode) });
+          const visible = createDiscoverableTools(tools, config.toolMode);
+          // Delayed discovery mode (GPTWORK_DELAYED_TOOL_DISCOVERY=true):
+          // Only list bootstrap tools.  The rest are discoverable via tool_search/tool_describe.
+          if (config.delayedToolDiscovery) {
+            const bootstrap = new Set(["health_check", "runtime_status", "open_project_context", "tool_search", "tool_describe"]);
+            const filtered = Object.fromEntries(
+              Object.entries(visible).filter(([name]) => bootstrap.has(name))
+            );
+            return jsonResult(message.id, { tools: toolList(filtered, config.renderMode) });
+          }
+          return jsonResult(message.id, { tools: toolList(visible, config.renderMode) });
         }
         if (message.method === "resources/list") {
           assertAuthorized(headers, config);
@@ -232,8 +243,8 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
           const context = { ...assertAuthorized(headers, config), emitProgress };
           const name = message.params?.name;
           const args = message.params?.arguments || {};
-          const visibleTools = createDiscoverableTools(tools, config.toolMode);
-          const toolDescriptor = visibleTools[name];
+          const callableTools = createCallableTools(tools, config.toolMode);
+          const toolDescriptor = callableTools[name];
           const handler = toolDescriptor?.handler;
           if (!handler) return jsonError(message.id, -32601, `Unknown tool: ${name}`);
           const rawStructuredContent = await handler(args, context);

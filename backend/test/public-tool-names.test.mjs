@@ -178,6 +178,8 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "sync_to_github",
   "test_bark_notification",
  "test_workspace_connection",
+  "tool_search",
+  "tool_describe",
   "tmp_status",
   "update_goal_queue_item",
  "update_task_status",
