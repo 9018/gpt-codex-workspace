@@ -19,12 +19,27 @@ async function git(cwd, args) {
   return stdout.trim();
 }
 
-async function hasMergeConflict({ repoPath, target, branch }) {
+async function inspectMergeConflict({ repoPath, target, branch }) {
   try {
     await git(repoPath, ['merge-tree', '--write-tree', target, branch]);
-    return false;
-  } catch {
-    return true;
+    return { conflict: false, files: [] };
+  } catch (error) {
+    let output = String(error?.stdout || '');
+    if (!output) {
+      try {
+        output = await git(repoPath, ['merge-tree', target, branch]);
+      } catch (detailError) {
+        output = String(detailError?.stdout || '');
+      }
+    }
+    const files = [...new Set(output.split('\n')
+      .map((line) => line.match(/^\d{6} +[0-9a-f]+ +[123]\t(.+)$/)?.[1])
+      .filter(Boolean))].sort();
+    return {
+      conflict: true,
+      files,
+      error: error?.stderr?.trim?.() || error?.message || 'merge conflict',
+    };
   }
 }
 
@@ -64,7 +79,8 @@ export async function previewMergeGate({ goalId, workspace, config }) {
     await writeJson(join(goalDir, 'merge.decision.json'), result);
     return result;
   }
-  const mergeConflict = await hasMergeConflict({ repoPath, target: workspace.merge_target, branch: workspace.candidate_branch });
+  const mergeInspection = await inspectMergeConflict({ repoPath, target: workspace.merge_target, branch: workspace.candidate_branch });
+  const mergeConflict = mergeInspection.conflict;
 
   const checks = {
     acceptance_passed: acceptance.verdict === 'passed' && acceptance.merge_recommendation === 'merge',
@@ -90,6 +106,25 @@ export async function previewMergeGate({ goalId, workspace, config }) {
     candidate_head: evidence.candidate_head,
     merge_target: workspace.merge_target,
     checks,
+    ...(mergeConflict ? {
+      conflict_evidence: {
+        kind: 'git_merge_conflict',
+        target_branch: workspace.merge_target,
+        candidate_branch: workspace.candidate_branch,
+        target_head: await git(repoPath, ['rev-parse', workspace.merge_target]),
+        candidate_head: evidence.candidate_head,
+        files: mergeInspection.files,
+        diagnostic: mergeInspection.error || null,
+      },
+      repair_proposal: {
+        kind: 'merge_conflict_repair',
+        action: 'create_repair_task',
+        goal_id: goalId,
+        target_branch: workspace.merge_target,
+        candidate_branch: workspace.candidate_branch,
+        conflict_files: mergeInspection.files,
+      },
+    } : {}),
     created_at: new Date().toISOString()
   };
 
