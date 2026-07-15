@@ -6,6 +6,8 @@ import { buildTaskRuntimeAggregate, HEALTH, RECOMMENDED_ACTION } from './task-ru
 import { acceptFullTask as defaultAcceptTask } from '../full-execution/full-machine-acceptance.mjs';
 import { createRetryIterationAtomic as defaultCreateRetry } from '../task-retry.mjs';
 
+import { createTaskTransitionService } from "../task-state/task-transition-service.mjs";
+import { TASK_EVENTS } from "../task-state/task-transition-events.mjs";
 function result(changed, aggregate, action, details = {}) {
   return { changed, aggregate, action, ...details };
 }
@@ -14,15 +16,28 @@ function findTask(state, taskId) {
   return (state.tasks || []).find((task) => task.id === taskId) || null;
 }
 
-function transition(state, task, status, message, resultPatch = null) {
-  const previous = task.status;
-  task.status = status;
-  task.updated_at = new Date().toISOString();
+async function transition(state, task, status, message, resultPatch = null) {
+  const localStore = { async mutate(fn) { return fn(state); } };
+  const transitionService = createTaskTransitionService({ store: localStore });
+  const transitionResult = await transitionService.transitionTask({
+    task_id: task.id,
+    event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+    expected_statuses: [task.status],
+    payload: {
+      canonical_status: status,
+      task_result_patch: resultPatch || {},
+      audit: { reconciler: 'runtime_task_reconciler', message },
+    },
+    reason: message,
+    source: 'reconciler',
+    actor: { type: 'system', id: 'runtime_task_reconciler' },
+    idempotency_key: `runtime_reconciler:${task.id}:${task.status}:${status}:${message}`,
+  });
+  const updated = transitionResult.task || task;
+  Object.assign(task, updated);
   task.logs ||= [];
-  task.logs.push({ time: task.updated_at, message });
-  if (resultPatch) task.result = { ...(task.result || {}), ...resultPatch };
-  state.activities ||= [];
-  state.activities.push({ time: task.updated_at, type: 'task.runtime_transition', task_id: task.id, from: previous, status });
+  task.logs.push({ time: task.updated_at || new Date().toISOString(), message });
+  return task;
 }
 
 function lightweightTx(state) {
@@ -32,7 +47,7 @@ function lightweightTx(state) {
       async setState(id, status, patch = null) {
         const task = findTask(state, id);
         if (!task) throw new Error(`task not found: ${id}`);
-        transition(state, task, status, `[runtime] ${status}`, patch);
+        await transition(state, task, status, `[runtime] ${status}`, patch);
         return task;
       },
       async create(payload) {
@@ -110,7 +125,7 @@ export async function reconcileTaskRuntime(options = {}) {
       await tx.locks.releaseForTask(taskId);
       if (typeof releaseTaskLock === 'function') { try { await releaseTaskLock(taskId); } catch {} }
       if (aggregate.evidence.result_json) {
-        transition(state, task, 'collecting', `[runtime] evidence available after stop (${trigger})`);
+        await transition(state, task, 'collecting', `[runtime] evidence available after stop (${trigger})`);
         output = result(true, aggregate, action, { reason: 'stopped; evidence ready' }); return;
       }
       task.metadata = { ...(task.metadata || {}) };
@@ -118,13 +133,13 @@ export async function reconcileTaskRuntime(options = {}) {
       delete task.metadata.manual_tui_session_starting;
       delete task.metadata.worker_tui_session_starting;
       delete task.metadata.tui_session_id;
-      transition(state, task, 'repairing', `[runtime] stopped for automatic retry (${trigger})`);
+      await transition(state, task, 'waiting_for_repair', `[runtime] stopped for automatic retry (${trigger})`);
       const retryFn = retryTask || (async ({ tx: innerTx, aggregate: innerAggregate, failure }) => defaultCreateRetry(innerTx, innerAggregate, failure));
       const retryResult = await retryFn({ tx, aggregate, failure: { class: 'no_meaningful_progress', reason: trigger } });
       output = result(true, aggregate, action, { reason: 'stopped and retry created', ...retryResult }); return;
     }
     if (action === RECOMMENDED_ACTION.COLLECT) {
-      transition(state, task, 'collecting', `[runtime] evidence collected (${trigger})`);
+      await transition(state, task, 'collecting', `[runtime] evidence collected (${trigger})`);
       output = result(true, aggregate, action); return;
     }
     if (action === RECOMMENDED_ACTION.ACCEPT) {
@@ -132,37 +147,37 @@ export async function reconcileTaskRuntime(options = {}) {
       task.result = { ...(task.result || {}), acceptance_verdict: acceptance.verdict, acceptance_findings: acceptance.findings || [] };
       if (acceptance.verdict === 'pass') {
         if (acceptance.eligible_for_integration) {
-          transition(state, task, 'integrating', '[runtime] machine acceptance passed; integration required');
+          await transition(state, task, 'integrating', '[runtime] machine acceptance passed; integration required');
           if (typeof integrateTask === 'function') {
             const integration = await integrateTask({ task, aggregate, acceptance, state });
             task.result = { ...(task.result || {}), integration };
-            transition(state, task, integration?.ok === false ? 'repairing' : 'completed', integration?.ok === false ? '[runtime] integration repair required' : '[runtime] integrated and completed');
+            await transition(state, task, integration?.ok === false ? 'waiting_for_repair' : 'completed', integration?.ok === false ? '[runtime] integration repair required' : '[runtime] integrated and completed');
           }
         } else {
-          transition(state, task, 'completed', '[runtime] machine acceptance passed');
+          await transition(state, task, 'completed', '[runtime] machine acceptance passed');
         }
       } else if (acceptance.verdict === 'repairable') {
-        transition(state, task, 'repairing', '[runtime] machine acceptance requested repair');
+        await transition(state, task, 'waiting_for_repair', '[runtime] machine acceptance requested repair');
         const retryFn = retryTask || (async ({ tx: innerTx, aggregate: innerAggregate, failure }) => defaultCreateRetry(innerTx, innerAggregate, failure));
         await retryFn({ tx, aggregate: { ...aggregate, task }, failure: { class: 'acceptance_failed', findings: acceptance.findings } });
       } else {
-        transition(state, task, acceptance.verdict === 'needs_decision' ? 'needs_decision' : 'failed', `[runtime] acceptance ${acceptance.verdict}`);
+        await transition(state, task, acceptance.verdict === 'waiting_for_review' ? 'waiting_for_review' : 'failed', `[runtime] acceptance ${acceptance.verdict}`);
       }
       output = result(true, aggregate, action, { acceptance }); return;
     }
     if (action === RECOMMENDED_ACTION.INTEGRATE) {
       if (typeof integrateTask !== 'function') {
-        transition(state, task, 'needs_decision', '[runtime] integration handler unavailable');
+        await transition(state, task, 'waiting_for_review', '[runtime] integration handler unavailable');
         output = result(true, aggregate, action, { reason: 'integration handler unavailable' }); return;
       }
       const integration = await integrateTask({ task, aggregate, state });
       task.result = { ...(task.result || {}), integration };
-      transition(state, task, integration?.ok === false ? 'repairing' : 'completed', integration?.ok === false ? '[runtime] integration failed' : '[runtime] integration completed');
+      await transition(state, task, integration?.ok === false ? 'waiting_for_repair' : 'completed', integration?.ok === false ? '[runtime] integration failed' : '[runtime] integration completed');
       output = result(true, aggregate, action, { integration }); return;
     }
-    if (action === RECOMMENDED_ACTION.COMPLETE) { transition(state, task, 'completed', '[runtime] completed'); await tx.locks.releaseForTask(taskId); if (typeof releaseTaskLock === 'function') { try { await releaseTaskLock(taskId); } catch {} } output = result(true, aggregate, action); return; }
-    if (action === RECOMMENDED_ACTION.FAIL) { transition(state, task, 'failed', '[runtime] terminal failure'); await tx.locks.releaseForTask(taskId); if (typeof releaseTaskLock === 'function') { try { await releaseTaskLock(taskId); } catch {} } output = result(true, aggregate, action); return; }
-    if (action === RECOMMENDED_ACTION.ASK) { transition(state, task, 'needs_decision', '[runtime] decision required'); output = result(true, aggregate, action); return; }
+    if (action === RECOMMENDED_ACTION.COMPLETE) { await transition(state, task, 'completed', '[runtime] completed'); await tx.locks.releaseForTask(taskId); if (typeof releaseTaskLock === 'function') { try { await releaseTaskLock(taskId); } catch {} } output = result(true, aggregate, action); return; }
+    if (action === RECOMMENDED_ACTION.FAIL) { await transition(state, task, 'failed', '[runtime] terminal failure'); await tx.locks.releaseForTask(taskId); if (typeof releaseTaskLock === 'function') { try { await releaseTaskLock(taskId); } catch {} } output = result(true, aggregate, action); return; }
+    if (action === RECOMMENDED_ACTION.ASK) { await transition(state, task, 'waiting_for_review', '[runtime] decision required'); output = result(true, aggregate, action); return; }
     output = result(false, aggregate, action, { reason: `unknown action: ${action}` });
   });
   return output;
@@ -170,7 +185,7 @@ export async function reconcileTaskRuntime(options = {}) {
 
 export async function reconcileAllActiveTaskRuntimes({ store, config = {}, sessionProvider = null, sessionResolver = null, lockResolver = null, worktreeResolver = null, evidenceResolver = null, ...handlers } = {}) {
   const state = await store.load();
-  const active = new Set(['running', 'starting', 'collecting', 'accepting', 'repairing']);
+  const active = new Set(['running', 'starting', 'collecting', 'accepting', 'waiting_for_repair']);
   const ids = (state.tasks || []).filter((task) => active.has(task.status)).map((task) => task.id);
   const results = [];
   for (const taskId of ids) {

@@ -51,6 +51,9 @@ describe('full runtime wiring', () => {
     assert.equal(result.action, 'accept');
     assert.equal(store.state.tasks[0].status, 'completed');
     assert.equal(store.state.tasks[0].result.acceptance_verdict, 'pass');
+    assert.equal(store.state.task_transition_events.length, 1);
+    assert.equal(store.state.task_transition_events[0].event, 'reconciliation_correction');
+    assert.equal(store.state.task_transition_events[0].next_status, 'completed');
   });
 
   it('reconciler creates retry on stop_retry', async () => {
@@ -70,7 +73,7 @@ describe('full runtime wiring', () => {
       retryTask: async () => { retried = true; return { retry_task_id: 'task_retry_2' }; },
     });
     assert.equal(retried, true);
-    assert.equal(store.state.tasks[0].status, 'repairing');
+    assert.equal(store.state.tasks[0].status, 'waiting_for_repair');
   });
 });
 
