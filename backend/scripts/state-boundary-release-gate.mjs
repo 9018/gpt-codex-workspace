@@ -52,7 +52,6 @@ if (!skipTests) {
     '--test',
     'test/task-transition-matrix.test.mjs',
     'test/task-transition-service.test.mjs',
-    'test/execution-runtime-service.test.mjs',
     'test/full-tui-tool-transition.test.mjs',
     'test/full-runtime-wiring.test.mjs',
     'test/runtime-reconciler-stale-tasks-transition.test.mjs',

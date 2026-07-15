@@ -110,6 +110,19 @@ function dirtyPaths(statusLines) {
   return statusLines.map((line) => line.slice(3).trim().split(" -> ").at(-1)).filter(Boolean).sort();
 }
 
+function createMutableStoreAdapter(store) {
+  if (typeof store?.mutate === "function") return store;
+  return {
+    ...store,
+    async mutate(fn) {
+      const state = await store.load();
+      const result = await fn(state);
+      if (typeof store.save === "function") await store.save();
+      return result;
+    },
+  };
+}
+
 function tuiToolMetadata() {
   return {
     modes: ["standard", "operator", "codex", "full"],
@@ -145,7 +158,8 @@ export function createCodexTuiToolsGroup({
   workstreamId = null,
 } = {}) {
   const metadata = tuiToolMetadata();
-  const transitionService = injectedTransitionService || createTaskTransitionService({ store });
+  const mutableStore = createMutableStoreAdapter(store);
+  const transitionService = injectedTransitionService || createTaskTransitionService({ store: mutableStore });
   const workspaceRoot = config?.defaultWorkspaceRoot || config?.defaultWorkspaceRootPath;
   const progressStore = createCodexTuiSessionStore({ workspaceRoot });
   const progressReadFn = progressStore;
@@ -200,7 +214,7 @@ export function createCodexTuiToolsGroup({
       actor: { type: "operator", id: "codex_tui_start_goal" },
       idempotency_key: `tui_claim:${task.id}:${task.status}`,
     });
-    await store.mutate((state) => {
+    await mutableStore.mutate((state) => {
       const item = (state.tasks || []).find((candidate) => candidate.id === task.id);
       if (!item) return;
       item.metadata = { ...(item.metadata || {}), codex_execution_provider: "codex_tui_goal", tui_session_owner: "manual", manual_tui_session_starting: true };
@@ -391,7 +405,7 @@ export function createCodexTuiToolsGroup({
         actor: { type: "system", id: "codex_tui_start_goal" },
         idempotency_key: `tui_start_failed:${claimedTask.id}:${execution.id}`,
       }).catch(() => {});
-      await store.mutate((state) => {
+      await mutableStore.mutate((state) => {
         const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
         if (item) item.metadata = { ...(item.metadata || {}), manual_tui_session_starting: false };
       }).catch(() => {});
@@ -417,7 +431,7 @@ export function createCodexTuiToolsGroup({
       }).catch(() => {});
     }
 
-    await store.mutate((state) => {
+    await mutableStore.mutate((state) => {
       const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
       if (!item) return;
       item.metadata = { ...(item.metadata || {}), codex_execution_provider: "codex_tui_goal", tui_session_owner: "manual", manual_tui_session_starting: false, tui_session_id: session.id };
@@ -448,7 +462,7 @@ export function createCodexTuiToolsGroup({
           actor: { type: "system", id: "codex_tui_start_goal" },
           idempotency_key: `tui_claim_rollback:${claimedTask.id}:${previousStatus}`,
         }).catch(() => {});
-        await store.mutate((state) => {
+        await mutableStore.mutate((state) => {
           const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
           if (!item) return;
           item.metadata = { ...(item.metadata || {}) };
@@ -607,7 +621,7 @@ codex_tui_collect: tool({
                 actor: { type: 'system', id: 'codex_tui_collect' },
                 idempotency_key: `tui_collect:${snapshot.task_id}:${snapshot.session_id}:${snapshot.commit || 'no_commit'}`,
               });
-              await store.mutate((nextState) => {
+              await mutableStore.mutate((nextState) => {
                 const item = (nextState.tasks || []).find((candidate) => candidate.id === snapshot.task_id);
                 if (!item) return;
                 item.metadata = { ...(item.metadata || {}), tui_session_id: snapshot.session_id };

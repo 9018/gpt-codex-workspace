@@ -52,13 +52,16 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         // Only escalate to review for actual contract violations or when no result exists
         let linkedGoalId = null;
         let canCompleteLinkedGoal = false;
+        await store.load();
+        const existingTask = typeof store.findTaskById === "function"
+          ? await store.findTaskById(task_id)
+          : (store.state?.tasks || []).find(t => t.id === task_id);
+        if (existingTask?.status === "completed") {
+          return { task: existingTask, idempotent_replay: true };
+        }
 
         if (!admin_override) {
           try {
-            await store.load();
-            const existingTask = typeof store.findTaskById === "function"
-              ? await store.findTaskById(task_id)
-              : (store.state?.tasks || []).find(t => t.id === task_id);
             const readiness = assessTaskCompletionReadiness(existingTask || {});
             if (readiness.ready && readiness.strict) {
               resultFields = {
