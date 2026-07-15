@@ -136,3 +136,45 @@ describe("gptwork-tmp", () => {
     assert.ok(existsSync(path));
   });
 });
+
+it("scanSystemTmp reports owned directories and inode estimates", async () => {
+  const { mkdir, writeFile, rm } = await import("node:fs/promises");
+  const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(join(tmpdir(), "gptwork-system-scan-root-")));
+  try {
+    const owned = join(root, "gptwork-test-run-owned");
+    const unknown = join(root, "unrelated-cache");
+    await mkdir(join(owned, "nested"), { recursive: true });
+    await writeFile(join(owned, "nested", "a.txt"), "a");
+    await mkdir(unknown, { recursive: true });
+    const mod = await import("../src/gptwork-tmp.mjs");
+    const scan = await mod.scanSystemTmp({ tmpRoot: root });
+    assert.equal(scan.directory_count, 1);
+    assert.equal(scan.file_count, 0);
+    assert.ok(scan.estimated_inodes >= 3);
+    assert.equal(scan.entries[0].kind, "directory");
+    assert.equal(scan.entries[0].name, "gptwork-test-run-owned");
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+it("cleanupSystemTmp removes aged owned directories but preserves recent and unknown entries", async () => {
+  const { mkdir, rm, utimes } = await import("node:fs/promises");
+  const root = await import("node:fs/promises").then(({ mkdtemp }) => mkdtemp(join(tmpdir(), "gptwork-system-clean-root-")));
+  try {
+    const aged = join(root, "gptwork-test-run-aged");
+    const recent = join(root, "gptwork-test-run-recent");
+    const unknown = join(root, "unrelated-cache");
+    await mkdir(aged); await mkdir(recent); await mkdir(unknown);
+    const old = new Date(Date.now() - 3 * 60 * 60 * 1000);
+    await utimes(aged, old, old);
+    const mod = await import("../src/gptwork-tmp.mjs");
+    const result = await mod.cleanupSystemTmp({ tmpRoot: root, dryRun: false, maxAgeMs: 2 * 60 * 60 * 1000 });
+    assert.equal(result.deleted, 1);
+    assert.equal(existsSync(aged), false);
+    assert.equal(existsSync(recent), true);
+    assert.equal(existsSync(unknown), true);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

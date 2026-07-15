@@ -1,40 +1,47 @@
 #!/usr/bin/env node
-/**
- * Run the backend test suite with a clean environment.
- *
- * Clears all GPTWORK_* environment variables before spawning node --test,
- * preventing inherited production/development values from affecting tests.
- *
- * Usage:
- *   node test/helpers/run-clean.mjs
- *
- * (Called from npm run test:clean)
- */
-
 import { spawn } from "node:child_process";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import path from "node:path";
 
-// Clear all GPTWORK_* vars from the current process environment
 for (const key of Object.keys(process.env)) {
-  if (key.startsWith("GPTWORK_")) {
-    delete process.env[key];
-  }
+  if (key.startsWith("GPTWORK_") || key === "NODE_TEST_CONTEXT") delete process.env[key];
 }
 
-const dirname = path.dirname(fileURLToPath(import.meta.url));
-const backendRoot = path.resolve(dirname, "..", "..");
+const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+const testArgs = process.argv.slice(2);
+const nodeArgs = testArgs.length > 0 ? ["--test", ...testArgs] : ["--test", "test/**/*.test.mjs"];
+const runTmpRoot = await mkdtemp(join(tmpdir(), "gptwork-test-run-"));
+let child = null;
+let cleaned = false;
 
-const testProcess = spawn(
-  "node",
-  ["--test", "test/**/*.test.mjs"],
-  {
+async function cleanup() {
+  if (cleaned) return;
+  cleaned = true;
+  await rm(runTmpRoot, { recursive: true, force: true, maxRetries: 3 }).catch(() => {});
+}
+
+for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+  process.on(signal, () => {
+    child?.kill(signal);
+  });
+}
+
+try {
+  child = spawn(process.execPath, nodeArgs, {
     stdio: "inherit",
     cwd: backendRoot,
-    env: process.env,
-  }
-);
-
-testProcess.on("exit", (code) => {
-  process.exit(code ?? 1);
-});
+    env: { ...process.env, TMPDIR: runTmpRoot, TEMP: runTmpRoot, TMP: runTmpRoot },
+  });
+  const code = await new Promise((resolveExit, reject) => {
+    child.once("error", reject);
+    child.once("exit", (exitCode, signal) => resolveExit(signal ? 1 : (exitCode ?? 1)));
+  });
+  await cleanup();
+  process.exit(code);
+} catch (error) {
+  await cleanup();
+  console.error(error);
+  process.exit(1);
+}

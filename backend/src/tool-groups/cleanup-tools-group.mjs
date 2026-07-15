@@ -86,6 +86,9 @@ export function createCleanupToolsGroup({ tool, schema, config }) {
           },
           system_tmp: {
             total_files: systemTmp.file_count,
+            total_directories: systemTmp.directory_count || 0,
+            total_entries: systemTmp.entry_count || systemTmp.file_count,
+            estimated_inodes: systemTmp.estimated_inodes || 0,
             total_bytes: systemTmp.total_bytes,
             total_bytes_h: systemTmp.total_bytes_h,
             oldest_file: systemTmp.oldest,
@@ -186,7 +189,9 @@ export function createCleanupToolsGroup({ tool, schema, config }) {
             skipped_files: managedResult.skipped,
           },
           system_tmp: {
+            deleted_entries: systemResult.deleted || 0,
             deleted_files: systemResult.deleted || 0,
+            deleted_inodes: systemResult.deleted_inodes || 0,
             deleted_bytes: systemResult.deleted_bytes || 0,
             deleted_bytes_h: systemResult.deleted_bytes_h || "0 B",
             skipped_files: systemResult.skipped || 0,

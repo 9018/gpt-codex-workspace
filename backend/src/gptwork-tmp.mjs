@@ -370,86 +370,118 @@ function _humanSize(bytes) {
 }
 
 // ---------------------------------------------------------------------------
-// System /tmp scanning (files under /tmp with GPTWork prefixes)
+// System /tmp scanning (GPTWork-owned files and test-run directories)
 // ---------------------------------------------------------------------------
 
-/**
- * Scan /tmp for GPTWork-owned temp files using readdir (never shell globs).
- * This covers legacy files like /tmp/.gptwork-task-* and /tmp/gptwork-*.
- *
- * @returns {Promise<{
- *   file_count: number,
- *   total_bytes: number,
- *   total_bytes_h: string,
- *   oldest: object|null,
- *   newest: object|null,
- *   files: Array<object>
- * }>}
- */
-export async function scanSystemTmp() {
-  const dir = "/tmp";
-  const prefixes = [".gptwork-task-", "gptwork-"];
+const SYSTEM_TMP_FILE_PREFIXES = Object.freeze([".gptwork-task-"]);
+const SYSTEM_TMP_DIRECTORY_PREFIXES = Object.freeze([
+  "gptwork-",
+  "agent-run-",
+  "watch-test-",
+  "graph-state-",
+  "old-state-data-",
+  "mock-codex-",
+  "worker-queue-cache-",
+  "ws-cap-test-",
+  "ws-dag-test-",
+  "ws-join-test-",
+  "pipeline-orch-test-",
+  "retention-git-test-",
+  "delivery-recovery-",
+  "p0-ma11-r2-test-",
+  "p0-ma11-r3-test-",
+  "patrol-test-",
+  "sweeper-test-",
+]);
+
+export function isOwnedSystemTmpEntry(name, kind = "directory") {
+  const prefixes = kind === "file" ? SYSTEM_TMP_FILE_PREFIXES : SYSTEM_TMP_DIRECTORY_PREFIXES;
+  return prefixes.some((prefix) => String(name || "").startsWith(prefix));
+}
+
+async function _estimateEntryInodes(path, kind, maxEntries = 20_000) {
+  if (kind !== "directory") return 1;
+  let count = 1;
+  const pending = [path];
+  while (pending.length > 0 && count < maxEntries) {
+    const current = pending.pop();
+    let entries = [];
+    try { entries = await readdir(current, { withFileTypes: true }); } catch { continue; }
+    for (const entry of entries) {
+      count += 1;
+      if (entry.isDirectory() && count < maxEntries) pending.push(join(current, entry.name));
+      if (count >= maxEntries) break;
+    }
+  }
+  return count;
+}
+
+/** Scan a temp root for explicitly GPTWork-owned files and directories. */
+export async function scanSystemTmp({ tmpRoot = "/tmp", maxDetail = 100 } = {}) {
   const matched = [];
   let totalBytes = 0;
+  let estimatedInodes = 0;
+  let fileCount = 0;
+  let directoryCount = 0;
 
   let entries;
   try {
-    entries = await readdir(dir, { withFileTypes: true });
+    entries = await readdir(tmpRoot, { withFileTypes: true });
   } catch {
-    return { file_count: 0, total_bytes: 0, total_bytes_h: "0 B", oldest: null, newest: null, files: [] };
+    return { file_count: 0, directory_count: 0, entry_count: 0, estimated_inodes: 0, total_bytes: 0, total_bytes_h: "0 B", oldest: null, newest: null, files: [], entries: [] };
   }
 
   for (const entry of entries) {
-    if (!entry.isFile()) continue;
-    if (!prefixes.some((p) => entry.name.startsWith(p))) continue;
-
-    const fullPath = join(dir, entry.name);
+    const kind = entry.isDirectory() ? "directory" : entry.isFile() ? "file" : "other";
+    if (kind === "other" || !isOwnedSystemTmpEntry(entry.name, kind)) continue;
+    const fullPath = join(tmpRoot, entry.name);
     try {
       const s = await stat(fullPath);
+      const inodeCount = await _estimateEntryInodes(fullPath, kind);
       matched.push({
         name: entry.name,
         path: fullPath,
+        kind,
         size: s.size,
         size_h: _humanSize(s.size),
+        inode_count: inodeCount,
         mtimeMs: s.mtimeMs,
         mtimeIso: new Date(s.mtimeMs).toISOString(),
       });
       totalBytes += s.size;
+      estimatedInodes += inodeCount;
+      if (kind === "directory") directoryCount += 1;
+      else fileCount += 1;
     } catch {
       // best effort
     }
   }
 
   matched.sort((a, b) => b.mtimeMs - a.mtimeMs);
-
+  const detailed = matched.slice(0, maxDetail);
   return {
-    file_count: matched.length,
+    file_count: fileCount,
+    directory_count: directoryCount,
+    entry_count: matched.length,
+    estimated_inodes: estimatedInodes,
     total_bytes: totalBytes,
     total_bytes_h: _humanSize(totalBytes),
-    oldest: matched.length > 0
-      ? { name: matched[matched.length - 1].name, mtime: matched[matched.length - 1].mtimeIso }
-      : null,
-    newest: matched.length > 0
-      ? { name: matched[0].name, mtime: matched[0].mtimeIso }
-      : null,
-    files: matched.slice(0, 100), // Limit detailed listing
+    oldest: matched.length > 0 ? { name: matched.at(-1).name, kind: matched.at(-1).kind, mtime: matched.at(-1).mtimeIso } : null,
+    newest: matched.length > 0 ? { name: matched[0].name, kind: matched[0].kind, mtime: matched[0].mtimeIso } : null,
+    files: detailed.filter((entry) => entry.kind === "file"),
+    entries: detailed,
+    all_entries: matched,
   };
 }
 
-/**
- * Basic inode/pressure diagnostic: runs `df -i` and parses output.
- * Returns null if unavailable (permission, platform, etc.).
- *
- * @returns {Promise<object|null>}
- */
-export async function getInodePressure() {
+/** Basic inode/pressure diagnostic for a temp root. */
+export async function getInodePressure(tmpRoot = "/tmp") {
   try {
-    const { execSync } = await import("node:child_process");
-    const output = execSync("df -i /tmp 2>/dev/null || true", { encoding: "utf8", timeout: 3000 });
+    const { execFileSync } = await import("node:child_process");
+    const output = execFileSync("df", ["-i", tmpRoot], { encoding: "utf8", timeout: 3000 });
     const lines = output.trim().split("\n");
     if (lines.length < 2) return null;
-    // Parse: Filesystem     Inodes IUsed IFree IUse% Mounted on
-    const parts = lines[1].split(/\s+/);
+    const parts = lines.at(-1).split(/\s+/);
     if (parts.length >= 5) {
       return {
         mount: parts[0] || "",
@@ -460,112 +492,67 @@ export async function getInodePressure() {
       };
     }
   } catch {
-    // Platform may not support df -i, or not available
+    // Platform may not support df -i.
   }
   return null;
 }
 
-/**
- * Clean up GPTWork-owned /tmp files with age/count/byte budgets.
- * Uses readdir-based batches, never shell globs.
- *
- * @param {object} opts
- * @param {boolean} [opts.dryRun=true]
- * @param {number} [opts.maxAgeMs=86400000]
- * @param {number} [opts.maxBytes=1073741824]
- * @param {number} [opts.maxCount=5000]
- * @param {string[]} [opts.protectPrefixes] - File prefixes to preserve
- * @returns {Promise<object>}
- */
+/** Clean up aged or over-budget GPTWork-owned entries from a temp root. */
 export async function cleanupSystemTmp({
+  tmpRoot = "/tmp",
   dryRun = true,
   maxAgeMs,
   maxBytes,
   maxCount,
+  maxInodes = 50_000,
   protectPrefixes = [],
 }) {
   const effectiveMaxAge = maxAgeMs != null ? maxAgeMs : 24 * 60 * 60 * 1000;
   const effectiveMaxBytes = maxBytes != null ? maxBytes : 1 * 1024 * 1024 * 1024;
   const effectiveMaxCount = maxCount != null ? maxCount : 5000;
+  const scan = await scanSystemTmp({ tmpRoot, maxDetail: Number.MAX_SAFE_INTEGER });
+  const allEntries = scan.all_entries || scan.entries || [];
 
-  const scan = await scanSystemTmp();
-
-  if (scan.file_count === 0) {
-    return {
-      dry_run: dryRun,
-      deleted: 0,
-      deleted_bytes: 0,
-      deleted_bytes_h: "0 B",
-      skipped: 0,
-      message: "No GPTWork /tmp files to clean up.",
-    };
+  if (allEntries.length === 0) {
+    return { dry_run: dryRun, deleted: 0, deleted_bytes: 0, deleted_bytes_h: "0 B", deleted_inodes: 0, skipped: 0, message: "No GPTWork /tmp entries to clean up." };
   }
 
   const now = Date.now();
-  let candidates = scan.files.filter((f) => {
-    for (const p of protectPrefixes) {
-      if (f.name.startsWith(p)) return false;
-    }
-    return true;
-  });
+  const candidates = allEntries
+    .filter((entry) => !protectPrefixes.some((prefix) => entry.name.startsWith(prefix)))
+    .sort((a, b) => a.mtimeMs - b.mtimeMs);
+  const deleteSet = new Set(candidates.filter((entry) => now - entry.mtimeMs >= effectiveMaxAge).map((entry) => entry.name));
 
-  // Sort oldest first for FIFO eviction
-  candidates.sort((a, b) => a.mtimeMs - b.mtimeMs);
-
-  const deleteSet = new Set();
-
-  // Phase 1: age-expired files
-  for (const f of candidates) {
-    if (now - f.mtimeMs >= effectiveMaxAge) {
-      deleteSet.add(f.name);
-    }
+  let remainingBytes = candidates.filter((entry) => !deleteSet.has(entry.name)).reduce((sum, entry) => sum + entry.size, 0);
+  let remainingCount = candidates.filter((entry) => !deleteSet.has(entry.name)).length;
+  let remainingInodes = candidates.filter((entry) => !deleteSet.has(entry.name)).reduce((sum, entry) => sum + entry.inode_count, 0);
+  for (const entry of candidates) {
+    if (deleteSet.has(entry.name)) continue;
+    if (remainingBytes <= effectiveMaxBytes && remainingCount <= effectiveMaxCount && remainingInodes <= maxInodes) break;
+    deleteSet.add(entry.name);
+    remainingBytes -= entry.size;
+    remainingCount -= 1;
+    remainingInodes -= entry.inode_count;
   }
 
-  // Phase 2: byte budget — evict oldest until under budget
-  let remainingBytes = candidates
-    .filter((f) => !deleteSet.has(f.name))
-    .reduce((s, f) => s + f.size, 0);
-  if (remainingBytes > effectiveMaxBytes) {
-    for (const f of candidates) {
-      if (deleteSet.has(f.name)) continue;
-      if (remainingBytes <= effectiveMaxBytes) break;
-      deleteSet.add(f.name);
-      remainingBytes -= f.size;
-    }
-  }
-
-  // Phase 3: count budget — evict oldest until under budget
-  let remainingCount = candidates.filter((f) => !deleteSet.has(f.name)).length;
-  if (remainingCount > effectiveMaxCount) {
-    for (const f of candidates) {
-      if (deleteSet.has(f.name)) continue;
-      if (remainingCount <= effectiveMaxCount) break;
-      deleteSet.add(f.name);
-      remainingCount--;
-    }
-  }
-
-  const filesToDelete = scan.files.filter((f) => deleteSet.has(f.name));
-  const deletedBytes = filesToDelete.reduce((sum, f) => sum + f.size, 0);
-
+  const entriesToDelete = candidates.filter((entry) => deleteSet.has(entry.name));
+  const deletedBytes = entriesToDelete.reduce((sum, entry) => sum + entry.size, 0);
+  const deletedInodes = entriesToDelete.reduce((sum, entry) => sum + entry.inode_count, 0);
   if (!dryRun) {
-    for (const f of filesToDelete) {
-      try {
-        await rm(f.path, { force: true });
-      } catch {
-        // best effort
-      }
+    for (const entry of entriesToDelete) {
+      try { await rm(entry.path, { recursive: entry.kind === "directory", force: true, maxRetries: 3 }); } catch { /* best effort */ }
     }
   }
 
   return {
     dry_run: dryRun,
-    deleted: filesToDelete.length,
+    deleted: entriesToDelete.length,
     deleted_bytes: deletedBytes,
     deleted_bytes_h: _humanSize(deletedBytes),
-    skipped: scan.file_count - filesToDelete.length,
+    deleted_inodes: deletedInodes,
+    skipped: allEntries.length - entriesToDelete.length,
     message: dryRun
-      ? `[dry-run] Would delete ${filesToDelete.length} GPTWork /tmp file(s) (${_humanSize(deletedBytes)}), skipping ${scan.file_count - filesToDelete.length}.`
-      : `Deleted ${filesToDelete.length} GPTWork /tmp file(s) (${_humanSize(deletedBytes)}), ${scan.file_count - filesToDelete.length} preserved.`,
+      ? `[dry-run] Would delete ${entriesToDelete.length} GPTWork /tmp entr${entriesToDelete.length === 1 ? "y" : "ies"} (${deletedInodes} inode(s)).`
+      : `Deleted ${entriesToDelete.length} GPTWork /tmp entr${entriesToDelete.length === 1 ? "y" : "ies"} (${deletedInodes} inode(s)).`,
   };
 }
