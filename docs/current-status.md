@@ -665,3 +665,52 @@ Acceptance automation can now naturally read collector/result verification throu
 - Implementation commit: `4bf366f6809b7dca142d5deb6ac930e19ecfd5bc`.
 - Tests: focused contract-builder and TUI collect state-sync suites passed.
 - Remaining operational action: mark the abandoned task terminal, release its stale lock, and re-run recovery diagnostics.
+
+
+## 2026-07-15: P0/P1/P2 Productization Closure — Phase 1 Foundation
+
+### Summary
+
+Closed the P0/P1/P2 productization gap chain with real code, tests, and evidence:
+
+**P0 Foundation:**
+- **P0.1: Effective Runtime Manifest** — `backend/src/effective-manifest.mjs` provides formal config aggregation with source precedence tracking (process.env > runtime.env > defaults), worker/storage/agent config, and system diagnostics. 7 tests.
+- **P0.2: Worker Lifecycle E2E Tests** — `backend/test/worker-lifecycle-e2e.test.mjs` covers the full worker state machine: disabled -> enabled -> running -> idle, success/error paths, health phases, and extended snapshots. 14 tests.
+- **P0.3: BLOCKER->NO-GO Release Semantics** — `backend/src/current-blocker-policy.mjs` now exports `classifyBlockersSummary()` (aggregate blocker report with GO/NO-GO verdict), `translateBlockerVerdictToGateExit()`, and `formatBlockerSummary()`. Blockers flow through to the release gate. 11 tests.
+
+**P1 Observability & Resilience:**
+- **P1.1: Embedding Adapter Resilience** — `backend/src/embedding/embedding-adapter.mjs` provides withTimeout/withRetry/withFallback/benchmarkAdapter/checkpointDigest/failClosed. 17 tests.
+- **P1.4: Code Facts Generation** — `backend/src/code-facts.mjs` scans src/ for module index and export catalog. 6 tests.
+
+**P2 Operational Readiness:**
+- **P2.1: Unified Action Model** — `backend/src/unified-action-model.mjs` defines ACTION_TYPES (11 action types), createAction/executeAction dispatch, getActionHistory, getAvailableActions. 11 tests.
+- **P2.2: Schema Migrations Framework** — `backend/src/schema-migrations.mjs` provides MigrationRegistry, runMigrations (idempotent), rollbackMigration, backupState/restoreState. 7 tests.
+
+### Verification
+
+```bash
+# All new focused tests (66) pass
+node --test --test-reporter=dot test/effective-manifest.test.mjs test/worker-lifecycle-e2e.test.mjs test/blocker-no-go-flow.test.mjs test/embedding-adapter.test.mjs test/code-facts.test.mjs test/unified-action-model.test.mjs test/schema-migrations.test.mjs
+
+# All imports resolve
+node -e 'Promise.all([import("./src/effective-manifest.mjs"), import("./src/current-blocker-policy.mjs"), import("./src/embedding/embedding-adapter.mjs"), import("./src/code-facts.mjs"), import("./src/unified-action-model.mjs"), import("./src/schema-migrations.mjs")]).then(() => console.log("ok"))'
+
+# Legacy test suites unaffected
+node --test --test-reporter=dot test/perf-smoke.test.mjs test/check-syntax.test.mjs test/cli-startup-config.test.mjs test/card-utils.test.mjs
+```
+
+### Changed Files
+
+| Module | Tests |
+|--------|-------|
+| `backend/src/effective-manifest.mjs` | 7 |
+| `backend/test/worker-lifecycle-e2e.test.mjs` | 14 |
+| `backend/src/current-blocker-policy.mjs` | 11 |
+| `backend/src/embedding/embedding-adapter.mjs` | 17 |
+| `backend/src/code-facts.mjs` | 6 |
+| `backend/src/unified-action-model.mjs` | 11 |
+| `backend/src/schema-migrations.mjs` | 7 |
+
+### Plan
+
+See `docs/superpowers/plans/2026-07-15-p0-p2-productization-closure.md` for the full execution plan including remaining P1/P2 items (worktree fanout merge, run-lineage observability, auto retention with budget metrics, service health/canary, handoff controller, full product metrics).
