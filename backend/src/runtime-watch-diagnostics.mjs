@@ -27,6 +27,8 @@ import {
   isCompletedStatus,
   isFailedTerminalStatus,
 } from "./task-status-taxonomy.mjs";
+import { createTaskTransitionService } from "./task-state/task-transition-service.mjs";
+import { TASK_EVENTS } from "./task-state/task-transition-events.mjs";
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -631,36 +633,47 @@ export async function applyRecoveryActions(store, workspaceRoot, recoveryActions
           }
 
           if (!dryRun) {
-            await store.mutate(state => {
-              const task = (state.tasks || []).find(t => t && t.id === taskId);
-              if (!task) {
-                errors.push({ action: "mark_task_terminal", target: action.target, error: `task ${taskId} not found in state` });
-                return state;
-              }
+            const state = await store.load();
+            const task = (state.tasks || []).find(t => t && t.id === taskId);
+            if (!task) {
+              errors.push({ action: "mark_task_terminal", target: action.target, error: `task ${taskId} not found in state` });
+              continue;
+            }
 
-              // Determine terminal status from the recovery description
-              let terminalStatus = "waiting_for_review";
-              if (action.description?.includes("completed") || action.description?.includes("terminal")) {
-                // Find the recommended_status from the finding
-                const finding = (action.target?.domain === "task") ? null : null;
-                // Default safe terminal: if result.json says completed, use that
-                terminalStatus = task.result?.status === "completed" ? "completed"
-                  : task.result?.status === "failed" ? "failed"
-                  : "waiting_for_review";
-              }
+            let terminalStatus = "waiting_for_review";
+            if (action.description?.includes("completed") || action.description?.includes("terminal")) {
+              terminalStatus = task.result?.status === "completed" ? "completed"
+                : task.result?.status === "failed" ? "failed"
+                : "waiting_for_review";
+            }
 
-              const prevStatus = task.status;
-              task.status = terminalStatus;
-              task.updated_at = new Date().toISOString();
-              task.result = task.result || {};
-              task.result.terminal_at = task.updated_at;
-              task.result.watch_reconciled = true;
-              task.logs = task.logs || [];
-              task.logs.push({
-                time: task.updated_at,
-                message: `[runtime-watch] recovery: status ${prevStatus} → ${terminalStatus} — ${action.description}`,
-              });
-              return state;
+            const prevStatus = task.status;
+            const now = new Date().toISOString();
+            const transitionService = createTaskTransitionService({ store });
+            await transitionService.transitionTask({
+              task_id: taskId,
+              event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+              expected_statuses: [prevStatus],
+              payload: {
+                canonical_status: terminalStatus,
+                task_result_patch: { terminal_at: now, watch_reconciled: true },
+                audit: { reconciler: "runtime_watch", description: action.description },
+              },
+              reason: action.description || "runtime watch terminal reconciliation",
+              source: "reconciler",
+              actor: { type: "system", id: "runtime_watch" },
+              idempotency_key: `runtime_watch:${taskId}:${prevStatus}:${terminalStatus}:${action.description || "reconcile"}`,
+            });
+            await store.mutate(nextState => {
+              const updatedTask = (nextState.tasks || []).find(t => t && t.id === taskId);
+              if (updatedTask) {
+                updatedTask.logs ||= [];
+                updatedTask.logs.push({
+                  time: updatedTask.updated_at || now,
+                  message: `[runtime-watch] recovery: status ${prevStatus} → ${terminalStatus} — ${action.description}`,
+                });
+              }
+              return nextState;
             });
           }
 

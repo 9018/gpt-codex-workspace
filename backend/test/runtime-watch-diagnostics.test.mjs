@@ -417,6 +417,9 @@ test("applyRecoveryActions: mark_task_terminal mutates state", async () => {
   assert.ok(["completed", "failed", "waiting_for_review"].includes(task.status));
   assert.ok(task.logs.length > 0);
   assert.ok(task.updated_at);
+  assert.equal(state.task_transition_events.length, 1);
+  assert.equal(state.task_transition_events[0].event, "reconciliation_correction");
+  assert.equal(state.task_transition_events[0].task_id, "t-terminal");
 });
 
 test("applyRecoveryActions: unblock_queue_item mutates queue state", async () => {
