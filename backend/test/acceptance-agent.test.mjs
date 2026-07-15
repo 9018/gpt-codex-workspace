@@ -827,3 +827,28 @@ test("getCommitChangedFiles: returns files for existing commit", async () => {
     "Should pass for known commit with matched files");
   assert.equal(result.passed, true);
 });
+
+test("buildEvidence: resultCommit scopes changed files even when HEAD advanced", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "be-result-commit-"));
+  const repo = join(dir, "repo");
+  await mkdir(repo, { recursive: true });
+  execFileSync("git", ["init"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@test.com"], { cwd: repo });
+  execFileSync("git", ["config", "user.name", "Test"], { cwd: repo });
+  await writeFile(join(repo, "base.txt"), "base", "utf8");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "base"], { cwd: repo, stdio: "ignore" });
+  await writeFile(join(repo, "task.txt"), "task", "utf8");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "task"], { cwd: repo, stdio: "ignore" });
+  const resultCommit = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  await writeFile(join(repo, "later.txt"), "later", "utf8");
+  execFileSync("git", ["add", "."], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "later"], { cwd: repo, stdio: "ignore" });
+
+  const mod = await import("../src/acceptance-agent.mjs");
+  const evidence = await mod.buildEvidence({ repoPath: repo, resultCommit });
+  assert.deepEqual(evidence.git_changed_files, ["task.txt"]);
+  assert.equal(evidence.commit_exists, true);
+  rmSync(dir, { recursive: true, force: true });
+});

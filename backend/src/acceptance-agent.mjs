@@ -47,7 +47,7 @@ export function isManagedGitStatusLine(line) {
  * @param {string} [options.baseSha] - Base SHA for task-specific diff; uses `<baseSha>..HEAD` for commit evidence
  * @returns {Promise<object>} Evidence object
  */
-export async function buildEvidence({ repoPath, worktreePath, verificationLogPath, resultJsonPath, baseSha } = {}) {
+export async function buildEvidence({ repoPath, worktreePath, verificationLogPath, resultJsonPath, baseSha, resultCommit } = {}) {
   const gitPath = worktreePath || repoPath;
   const evidence = {
     git_status: null,
@@ -86,11 +86,15 @@ export async function buildEvidence({ repoPath, worktreePath, verificationLogPat
     // Determine diff range for task-scoped evidence
     // Use baseSha..HEAD when available; fall back to HEAD~1..HEAD for
     // backward compatibility when no baseSha is provided.
-    const diffRange = baseSha ? `${baseSha}..HEAD` : 'HEAD~1..HEAD';
+    const diffRange = baseSha
+      ? `${baseSha}..${resultCommit || 'HEAD'}`
+      : resultCommit
+        ? `${resultCommit}^..${resultCommit}`
+        : 'HEAD~1..HEAD';
 
     // Check for task-specific commits using diff range
     // This prevents unrelated repo history from falsely satisfying commit_or_patch_evidence
-    if (baseSha) {
+    if (baseSha || resultCommit) {
       try {
         const stdout = execFileSync('git', ['rev-list', '--count', diffRange], {
           cwd: gitPath, encoding: 'utf8', timeout: 10000, maxBuffer: 1024 * 1024,
@@ -179,6 +183,7 @@ export async function runAcceptanceAgent({ task, goal, result, repoPath, profile
    verificationLogPath: result?.verification_log_path,
    resultJsonPath: result?.result_json_path,
     baseSha: task?.worktree_lifecycle?.base_sha || result?.base_sha,
+    resultCommit: result?.commit || task?.result?.commit,
  });
 
   // Determine profile

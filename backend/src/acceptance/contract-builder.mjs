@@ -115,10 +115,13 @@ function selectOperationKind({ matches = [], text = "", normalizedMode = "" } = 
   // negative reference to cleanup/admin outrank a clear code-change intent.
   if (
     normalizedMode === "builder" &&
-    unique.includes("cleanup") &&
     (unique.includes("code_change") || unique.includes("repair")) &&
     BUILDER_CODE_INTENT_PATTERN.test(text)
   ) {
+    // Builder prompts frequently describe runtime operations (migration, restart,
+    // deploy, cleanup) as capabilities being implemented or as prior bad
+    // classifications. A clear code-edit intent must outrank those referenced
+    // operation words; explicit acceptance_contract values still win earlier.
     return unique.includes("code_change") ? "code_change" : "repair";
   }
 

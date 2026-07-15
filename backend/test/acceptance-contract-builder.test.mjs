@@ -387,3 +387,17 @@ test("product-layer implementation aliases normalize into canonical builder cont
   assert.equal(contract.requirements.requires_integration, true);
   assert.equal(contract.semantic_validation.valid, true);
 });
+
+test("builder productization repair mentioning migration restart and deploy remains code_change", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "修复 P0-P2 产品化闭环，包含 schema migration、restart recovery 和 deploy health 的代码实现",
+    goal_prompt: "修改 backend classifier、worker、worktree 和验收状态机并增加测试，不是执行一次迁移或重启。",
+    mode: "builder"
+  });
+
+  assert.equal(contract.intent.operation_kind, "code_change");
+  assert.equal(contract.intent.mutation_scope, "repo");
+  assert.equal(contract.requirements.requires_commit, true);
+  assert.ok(!contract.blocking_requirements.some((item) => item.id === "backup_evidence"));
+  assert.ok(!contract.blocking_requirements.some((item) => item.id === "runtime_health_evidence"));
+});
