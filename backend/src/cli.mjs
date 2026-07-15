@@ -4,6 +4,7 @@ import { execSync } from "node:child_process";
 import { createGptWorkServer } from "./gptwork-server.mjs";
 import { startCodexWorker } from "./gptwork-server.mjs";
 import { resolveCliStartupConfig } from "./cli-startup-config.mjs";
+import { startStorageJanitor } from "./storage-janitor-service.mjs";
 
 // Force unbuffered stdout/stderr 
 if (process.stdout._handle) process.stdout._handle.setBlocking(true);
@@ -35,6 +36,13 @@ process.on("SIGTERM", () => process.exit(0));
 const host = config.host || "127.0.0.1";
 const server = await createGptWorkServer({ defaultWorkspaceRoot: config.workspaceRoot });
 await server.listen({ host, port: PORT });
+startStorageJanitor({
+  onResult: (result) => {
+    if (result.deleted_entries > 0 || result.severity !== "ok" || result.ok === false) {
+      w(`[gptwork] storage janitor ${JSON.stringify(result)}\n`);
+    }
+  },
+});
 
 if (config.codexWorker === true) {
   startCodexWorker(server);

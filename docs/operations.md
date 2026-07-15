@@ -707,3 +707,25 @@ gptwork status --local  # Quick status check
 *Runtime diagnostics: `codex-tui-runtime-diagnostics.mjs`, `diagnostics-service.mjs`*
 *Retention: `worker-maintenance.mjs`, `retention-cleanup.mjs`*
 *Reconciler: `runtime-reconciler.mjs`, `stale-state-sweeper.mjs`*
+
+## Storage lifecycle and `/tmp` inode protection
+
+GPTWork backend tests run through `backend/test/helpers/run-clean.mjs`. The wrapper creates one isolated `/tmp/gptwork-test-run-*` directory, sets `TMPDIR`, `TEMP`, and `TMP` for the child test process, and removes the directory after success, failure, or termination.
+
+The service storage janitor runs at startup and hourly. It removes only explicitly GPTWork-owned temp files/directories older than two hours. Unknown `/tmp` entries are never removed. Inode pressure is classified as:
+
+- below 75%: normal cleanup budget;
+- 75–84%: warning and aggressive owned-entry cleanup;
+- 85% or higher: critical diagnostic and aggressive owned-entry cleanup.
+
+Operator workflow:
+
+```text
+tmp_status
+cleanup_tmp(dry_run=true, max_age_ms=7200000)
+cleanup_tmp(dry_run=false, max_age_ms=7200000)
+retention_status
+retention_cleanup(dry_run=true, limit=50)
+```
+
+Task identities are compacted to permanent non-runnable tombstones rather than deleted. Goal directories older than seven days may be archived. Active, queued, review, repair, integration, dirty, unmerged, and unknown-provenance worktrees remain protected.
