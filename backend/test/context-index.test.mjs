@@ -184,10 +184,17 @@ describe("embeddings — fallback provider determinism", () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. Store adapter fallback when zvec unavailable
+// 3. Store adapter selection with zvec-first fallback
 // ---------------------------------------------------------------------------
 
-describe("zvec-store — adapter fallback", () => {
+describe("zvec-store — zvec-first adapter", () => {
+
+  it("declares @zvec/zvec as a required dependency with its reviewed install script approved", () => {
+    const packageJson = JSON.parse(readFileSync(join(backendRoot, "package.json"), "utf8"));
+    assert.strictEqual(packageJson.dependencies?.["@zvec/zvec"], "^0.5.0");
+    assert.strictEqual(packageJson.optionalDependencies?.["@zvec/zvec"], undefined);
+    assert.strictEqual(packageJson.allowScripts?.["@zvec/zvec@0.5.0"], true);
+  });
 
   it("createVectorStore returns local store when local mode is requested", async () => {
     const store = await zvecStore.createVectorStore({
@@ -214,6 +221,22 @@ describe("zvec-store — adapter fallback", () => {
     });
     assert.ok(store.available);
     assert.strictEqual(store.name, "local-json-store");
+  });
+
+  it("createVectorStore auto mode selects zvec whenever zvec initialization succeeds", async () => {
+    const tmpDir = mkdtempSync(join(tmpdir(), "ctx-zvec-auto-priority-"));
+    let store;
+    try {
+      store = await zvecStore.createVectorStore({
+        workspaceRoot: tmpDir,
+        prefer: "auto",
+        dimension: 4,
+      });
+      assert.strictEqual(store.name, "zvec-collection-store");
+    } finally {
+      await store?.close?.();
+      rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("createVectorStore zvec mode fails clearly when @zvec/zvec cannot load", async () => {

@@ -35,7 +35,10 @@
     "release:state-boundary:gate": "node scripts/state-boundary-release-gate.mjs",
     "release:state-boundary:gate:report": "node scripts/state-boundary-release-gate.mjs --json-report .gptwork/releases/state-boundary-gate.json"
   },
-  "optionalDependencies": {
+  "dependencies": {
     "@zvec/zvec": "^0.5.0"
+  },
+  "allowScripts": {
+    "@zvec/zvec@0.5.0": true
   }
 }
