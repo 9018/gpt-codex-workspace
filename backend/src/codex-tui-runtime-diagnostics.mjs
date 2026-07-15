@@ -169,6 +169,8 @@ export async function collectCodexTuiRuntimeDiagnostics({
   for (const record of sessionScan.records.slice(0, Number(maxSessions) || DEFAULT_MAX_SESSIONS)) {
     const task = record.task_id ? taskById.get(record.task_id) : null;
     const taskExplicit = task ? taskUsesCodexTuiGoal(task) : false;
+    const activeSession = ACTIVE_SESSION_STATUSES.has(record.status);
+    const referenceSeverity = activeSession ? "warning" : "info";
     const cwdExists = await pathExists(record.cwd);
     const resultJsonPath = record.goal_id ? join(workspaceRoot, ".gptwork", "goals", record.goal_id, "result.json") : null;
     const resultJsonPresent = await pathExists(resultJsonPath);
@@ -227,31 +229,40 @@ export async function collectCodexTuiRuntimeDiagnostics({
     if (record.cwd && !cwdExists) {
       addFinding(findings, {
         code: "codex_tui_session_cwd_missing",
-        severity: "warning",
-        category: "retained_reference",
+        severity: referenceSeverity,
+        category: activeSession ? "retained_reference" : "historical_reference",
+        historical: !activeSession,
         session_id: record.id,
         task_id: record.task_id,
-        message: "TUI session references a worktree path that is no longer present.",
+        message: activeSession
+          ? "TUI session references a worktree path that is no longer present."
+          : "Stopped historical TUI session references a worktree path that is no longer present.",
       });
     }
     if (record.task_id && task && !taskExplicit) {
       addFinding(findings, {
         code: "codex_tui_provider_metadata_missing",
-        severity: "warning",
-        category: "provider_metadata",
+        severity: referenceSeverity,
+        category: activeSession ? "provider_metadata" : "historical_reference",
+        historical: !activeSession,
         session_id: record.id,
         task_id: record.task_id,
-        message: "TUI session references a task whose metadata no longer explicitly selects codex_tui_goal.",
+        message: activeSession
+          ? "TUI session references a task whose metadata no longer explicitly selects codex_tui_goal."
+          : "Stopped historical TUI session references a task whose current metadata no longer selects codex_tui_goal.",
       });
     }
     if (record.task_id && !task) {
       addFinding(findings, {
         code: "codex_tui_task_missing",
-        severity: "warning",
-        category: "retained_reference",
+        severity: referenceSeverity,
+        category: activeSession ? "retained_reference" : "historical_reference",
+        historical: !activeSession,
         session_id: record.id,
         task_id: record.task_id,
-        message: "TUI session references a task that is not present in state.",
+        message: activeSession
+          ? "TUI session references a task that is not present in state."
+          : "Stopped historical TUI session references a task that is no longer retained in current state.",
       });
     }
     for (const finding of safeCollectorFindings(completion?.findings || [], record.id)) addFinding(findings, finding);
@@ -261,7 +272,7 @@ export async function collectCodexTuiRuntimeDiagnostics({
       task_id: record.task_id,
       goal_id: record.goal_id,
       status: record.status,
-      active: ACTIVE_SESSION_STATUSES.has(record.status),
+      active: activeSession,
       task_metadata_explicit: taskExplicit,
       task_present: record.task_id ? Boolean(task) : null,
       cwd_present: Boolean(record.cwd),

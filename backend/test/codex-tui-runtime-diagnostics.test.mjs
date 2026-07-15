@@ -145,6 +145,31 @@ test("reports stale and missing session provider metadata as diagnostics", async
   assert.ok(diagnostics.findings.some((finding) => finding.code === "codex_tui_no_result"));
 });
 
+test("stopped historical TUI references remain visible without elevating current health", async () => {
+  const repo = await makeGitRepo("codex-tui-runtime-history-");
+  const sessionStore = createCodexTuiSessionStore({ workspaceRoot: repo });
+  await sessionStore.createSession({
+    sessionId: "session_history",
+    taskId: "task_deleted",
+    goalId: "goal_history",
+    cwd: join(repo, "removed-worktree"),
+  });
+  await sessionStore.updateSession("session_history", { status: "stopped" });
+
+  const diagnostics = await collectCodexTuiRuntimeDiagnostics({
+    workspaceRoot: repo,
+    store: makeStore([]),
+    config: { codexTuiEnabled: true },
+    env: {},
+  });
+
+  const historical = diagnostics.findings.filter((finding) => finding.historical === true);
+  assert.ok(historical.some((finding) => finding.code === "codex_tui_task_missing"));
+  assert.ok(historical.some((finding) => finding.code === "codex_tui_session_cwd_missing"));
+  assert.ok(historical.every((finding) => finding.severity === "info"));
+  assert.equal(diagnostics.highest_severity, "info");
+});
+
 test("recovery status and diagnose include codex_tui_goal diagnostics when relevant", async () => {
   const repo = await makeGitRepo("codex-tui-runtime-recovery-");
   const sessionStore = createCodexTuiSessionStore({ workspaceRoot: repo });
