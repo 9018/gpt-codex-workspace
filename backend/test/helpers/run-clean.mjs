@@ -6,7 +6,7 @@ import { join, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 for (const key of Object.keys(process.env)) {
-  if (key.startsWith("GPTWORK_") || key === "NODE_TEST_CONTEXT") delete process.env[key];
+  if (key.startsWith("GPTWORK_")) delete process.env[key];
 }
 
 const backendRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");

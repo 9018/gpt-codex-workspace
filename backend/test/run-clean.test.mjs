@@ -13,6 +13,7 @@ async function runFixture(source) {
   const child = spawn(process.execPath, ["test/helpers/run-clean.mjs", fixture], {
     cwd: new URL("..", import.meta.url).pathname,
     stdio: ["ignore", "pipe", "pipe"],
+    env: Object.fromEntries(Object.entries(process.env).filter(([key]) => key !== "NODE_TEST_CONTEXT")),
   });
   let stdout = ""; let stderr = "";
   child.stdout.on("data", (chunk) => { stdout += chunk; });
