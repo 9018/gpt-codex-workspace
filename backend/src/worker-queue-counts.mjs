@@ -34,6 +34,14 @@ const COUNTED_STATUSES = new Set([
 
 const WORKER_QUEUE_COUNTS_CACHE_KEY = "worker_queue_counts";
 
+function isNonActionableHistoricalTask(task) {
+  if (task?.retention_compacted === true || task?.historical_import === true) return true;
+  const imported = task?.created_by === "github-import"
+    || task?.source === "github"
+    || task?.source_type === "github-import";
+  return imported && task?.auto_advance !== true;
+}
+
 function emptyQueueAges() {
   return Object.fromEntries(Object.keys(EMPTY_QUEUE_COUNTS).map((status) => [status, 0]));
 }
@@ -181,6 +189,7 @@ function currentWorkDecision(task, indexes = buildTaskQueueIndexes([])) {
 
 export function policyCurrentWorkDecision(task, indexes = buildTaskQueueIndexes([])) {
   const decision = currentWorkDecision(task, indexes);
+  if (isNonActionableHistoricalTask(task)) return { ...decision, blocks_current_work: false };
   if (task?.status === TASK_STATUSES.FAILED || task?.status === TASK_STATUSES.TIMED_OUT) {
     if (isResolvedLegacyTerminalTask(task)) return { ...decision, blocks_current_work: false };
     if (hasImplicitSuccessor(task, indexes)) return { ...decision, blocks_current_work: false };

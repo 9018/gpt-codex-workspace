@@ -105,6 +105,30 @@ test('collectWorkerQueueCounts separates raw indexed review counts from policy b
   assert.equal(result.current_blockers, 1);
 });
 
+test('collectWorkerQueueCounts excludes non-actionable GitHub imports from policy blockers', async () => {
+  const store = {
+    async load() {
+      return {
+        tasks: [
+          { assignee: 'codex', status: 'waiting_for_review', id: 'task_historical_review', created_by: 'github-import' },
+          { assignee: 'codex', status: 'waiting_for_repair', id: 'task_historical_repair', created_by: 'github-import', auto_advance: false },
+          { assignee: 'codex', status: 'waiting_for_review', id: 'task_explicit_live_import', created_by: 'github-import', auto_advance: true },
+        ],
+      };
+    },
+  };
+
+  const result = await collectWorkerQueueCounts(store);
+
+  assert.equal(result.raw_counts.waiting_for_review, 2);
+  assert.equal(result.raw_counts.waiting_for_repair, 1);
+  assert.equal(result.policy_counts.waiting_for_review, 1, 'explicit auto_advance import remains actionable');
+  assert.equal(result.policy_counts.waiting_for_repair, 0, 'historical import is not a repair blocker');
+  assert.equal(result.actionable_review, 1);
+  assert.equal(result.current_blockers, 1);
+  assert.equal(result.policy_excluded_count, 2);
+});
+
 test('collectWorkerQueueCounts reuses state-version derived cache and refreshes oldest ages', async () => {
   const store = await makeStateStore();
   const state = await store.load();
