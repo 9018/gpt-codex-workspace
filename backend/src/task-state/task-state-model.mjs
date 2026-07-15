@@ -212,10 +212,6 @@ for (const rs of Object.values(REVIEW_STATES)) {
  * @returns {{ nextStatus: string|null, allowed: boolean, terminal: boolean, reason: string }}
  */
 export function resolveTaskTransition({ currentStatus, event, payload = {}, task = {} }) {
-  if (!currentStatus || !event) {
-    return { nextStatus: null, allowed: false, terminal: false, reason: "missing_status_or_event" };
-  }
-
   // Reconciliation is the only audited path allowed to correct an active task
   // directly to a canonical status recovered from durable evidence.
   if (event === TASK_EVENTS.RECONCILIATION_CORRECTION && payload?.canonical_status) {
@@ -225,6 +221,10 @@ export function resolveTaskTransition({ currentStatus, event, payload = {}, task
       terminal: isTerminalStatus(payload.canonical_status),
       reason: "reconciliation_correction_to_canonical_status",
     };
+  }
+
+  if (!currentStatus || !event) {
+    return { nextStatus: null, allowed: false, terminal: false, reason: "missing_status_or_event" };
   }
 
   // Check terminal statuses — only reconciliation_correction allowed

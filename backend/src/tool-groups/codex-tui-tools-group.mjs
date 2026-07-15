@@ -141,9 +141,11 @@ export function createCodexTuiToolsGroup({
   createExecutionStoreFn = createExecutionStore,
   ensurePipelineRunsForTaskFn = ensurePipelineRunsForTask,
   reconcileTuiAgentRunsFn = reconcileTuiAgentRunsFromProgress,
+  transitionService: injectedTransitionService = null,
   workstreamId = null,
 } = {}) {
   const metadata = tuiToolMetadata();
+  const transitionService = injectedTransitionService || createTaskTransitionService({ store });
   const workspaceRoot = config?.defaultWorkspaceRoot || config?.defaultWorkspaceRootPath;
   const progressStore = createCodexTuiSessionStore({ workspaceRoot });
   const progressReadFn = progressStore;
@@ -182,24 +184,30 @@ export function createCodexTuiToolsGroup({
     }
 
     const task = await findTaskFn(store, task_id);
-    const claimed = await updateTask(store, task.id, (item) => {
-      const existingOwner = item.metadata?.tui_session_owner;
-      if (existingOwner) {
-        const err = new Error(`${existingOwner} Codex TUI session already owns task ${item.id}`);
-        err.code = "codex_tui_task_already_claimed";
-        throw err;
-      }
-      item.status = "running";
-      item.metadata = {
-        ...(item.metadata || {}),
-        codex_execution_provider: "codex_tui_goal",
-        tui_session_owner: "manual",
-        manual_tui_session_starting: true,
-      };
+    const existingOwner = task.metadata?.tui_session_owner;
+    if (existingOwner) {
+      const err = new Error(`${existingOwner} Codex TUI session already owns task ${task.id}`);
+      err.code = "codex_tui_task_already_claimed";
+      throw err;
+    }
+    const claimTransition = await transitionService.transitionTask({
+      task_id: task.id,
+      event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+      expected_statuses: [task.status],
+      payload: { canonical_status: "running", audit: { operation: "manual_tui_claim" } },
+      reason: "manual TUI session claimed task",
+      source: "codex_tui",
+      actor: { type: "operator", id: "codex_tui_start_goal" },
+      idempotency_key: `tui_claim:${task.id}:${task.status}`,
+    });
+    await store.mutate((state) => {
+      const item = (state.tasks || []).find((candidate) => candidate.id === task.id);
+      if (!item) return;
+      item.metadata = { ...(item.metadata || {}), codex_execution_provider: "codex_tui_goal", tui_session_owner: "manual", manual_tui_session_starting: true };
       item.logs ||= [];
       item.logs.push({ time: new Date().toISOString(), message: "[tui] manual session start claimed task" });
     });
-    const claimedTask = claimed.task;
+    const claimedTask = claimTransition.task;
     const previousStatus = task.status;
     let claimSettled = false;
     try {
@@ -370,10 +378,22 @@ export function createCodexTuiToolsGroup({
         finished_at: new Date().toISOString(),
       }).catch(() => {});
       await releaseRepoLockFn(workspaceRoot, worktreePath, claimedTask.id).catch(() => {});
-      await updateTask(store, claimedTask.id, (item) => {
-        item.status = "failed";
-        item.metadata = { ...(item.metadata || {}), manual_tui_session_starting: false };
-        item.result = { ...(item.result || {}), provider: "codex_tui_goal", start_error: err?.message || String(err) };
+      await transitionService.transitionTask({
+        task_id: claimedTask.id,
+        event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+        payload: {
+          canonical_status: "failed",
+          task_result_patch: { provider: "codex_tui_goal", start_error: err?.message || String(err) },
+          audit: { operation: "manual_tui_start_failed" },
+        },
+        reason: `TUI start failed: ${err?.message || String(err)}`,
+        source: "codex_tui",
+        actor: { type: "system", id: "codex_tui_start_goal" },
+        idempotency_key: `tui_start_failed:${claimedTask.id}:${execution.id}`,
+      }).catch(() => {});
+      await store.mutate((state) => {
+        const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
+        if (item) item.metadata = { ...(item.metadata || {}), manual_tui_session_starting: false };
       }).catch(() => {});
       claimSettled = true;
       return {
@@ -397,15 +417,10 @@ export function createCodexTuiToolsGroup({
       }).catch(() => {});
     }
 
-    await updateTask(store, claimedTask.id, (item) => {
-      item.status = "running";
-      item.metadata = {
-        ...(item.metadata || {}),
-        codex_execution_provider: "codex_tui_goal",
-        tui_session_owner: "manual",
-        manual_tui_session_starting: false,
-        tui_session_id: session.id,
-      };
+    await store.mutate((state) => {
+      const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
+      if (!item) return;
+      item.metadata = { ...(item.metadata || {}), codex_execution_provider: "codex_tui_goal", tui_session_owner: "manual", manual_tui_session_starting: false, tui_session_id: session.id };
       item.result = { ...(item.result || {}), provider: "codex_tui_goal", session_id: session.id, cwd: worktreePath };
     });
     claimSettled = true;
@@ -424,8 +439,18 @@ export function createCodexTuiToolsGroup({
     };
     } finally {
       if (!claimSettled) {
-        await updateTask(store, claimedTask.id, (item) => {
-          item.status = previousStatus;
+        await transitionService.transitionTask({
+          task_id: claimedTask.id,
+          event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+          payload: { canonical_status: previousStatus, audit: { operation: "manual_tui_claim_rollback" } },
+          reason: "manual TUI claim released before startup completed",
+          source: "codex_tui",
+          actor: { type: "system", id: "codex_tui_start_goal" },
+          idempotency_key: `tui_claim_rollback:${claimedTask.id}:${previousStatus}`,
+        }).catch(() => {});
+        await store.mutate((state) => {
+          const item = (state.tasks || []).find((candidate) => candidate.id === claimedTask.id);
+          if (!item) return;
           item.metadata = { ...(item.metadata || {}) };
           delete item.metadata.tui_session_owner;
           delete item.metadata.manual_tui_session_starting;
@@ -523,14 +548,11 @@ codex_tui_collect: tool({
         // durable task state. Do NOT transition when snapshot has blockers.
         if (snapshot.ready_for_review && snapshot.task_id) {
           try {
-            await updateTask(store, snapshot.task_id, (item) => {
-              // Only transition from running — do not regress already-transitioned tasks
-              if (['running', 'assigned', 'collecting'].includes(item.status)) {
-                item.status = 'waiting_for_review';
-              }
-              // Write durable evidence to task result
-              item.result = {
-                ...(item.result || {}),
+            const state = await store.load();
+            const currentTask = (state.tasks || []).find((item) => item.id === snapshot.task_id);
+            if (currentTask && ['running', 'assigned', 'collecting'].includes(currentTask.status)) {
+              const currentResult = currentTask.result || {};
+              const resultPatch = {
                 ...(snapshot.result_json || {}),
                 provider: 'codex_tui_goal',
                 session_id: snapshot.session_id,
@@ -552,14 +574,14 @@ codex_tui_collect: tool({
                   && snapshot.worktree_clean === true
                   && (snapshot.changed_files || []).length === 0
                     ? false
-                    : (snapshot.result_json?.repo_mutated ?? item.result?.repo_mutated ?? null),
+                    : (snapshot.result_json?.repo_mutated ?? currentResult.repo_mutated ?? null),
                 diagnostic_evidence: snapshot.requires_commit === false
                   ? {
-                      ...(item.result?.diagnostic_evidence || {}),
+                      ...(currentResult.diagnostic_evidence || {}),
                       ...(snapshot.result_json?.diagnostic_evidence || {}),
                       summary: snapshot.result_json?.diagnostic_evidence?.summary
                         || snapshot.result_json?.summary
-                        || item.result?.diagnostic_evidence?.summary
+                        || currentResult.diagnostic_evidence?.summary
                         || null,
                       report_path: snapshot.result_json_path || null,
                       repo_mutated: snapshot.worktree_clean === true
@@ -567,21 +589,33 @@ codex_tui_collect: tool({
                           ? false
                           : (snapshot.result_json?.diagnostic_evidence?.repo_mutated ?? null),
                     }
-                  : (snapshot.result_json?.diagnostic_evidence || item.result?.diagnostic_evidence || null),
+                  : (snapshot.result_json?.diagnostic_evidence || currentResult.diagnostic_evidence || null),
                 result_md_present: snapshot.result_md_present,
                 result_json_present: snapshot.result_json_present,
               };
-              // Clear session owner but preserve session_id in metadata
-              if (item.metadata) {
-                delete item.metadata.tui_session_owner;
-                item.metadata.tui_session_id = snapshot.session_id;
-              }
-              item.logs ||= [];
-              item.logs.push({
-                time: new Date().toISOString(),
-                message: '[tui] collect: complete evidence, transitioned to waiting_for_review',
+              await transitionService.transitionTask({
+                task_id: snapshot.task_id,
+                event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+                expected_statuses: [currentTask.status],
+                payload: {
+                  canonical_status: 'waiting_for_review',
+                  task_result_patch: resultPatch,
+                  audit: { operation: 'tui_collect_evidence_writeback', session_id: snapshot.session_id },
+                },
+                reason: 'TUI collect produced complete evidence',
+                source: 'codex_tui',
+                actor: { type: 'system', id: 'codex_tui_collect' },
+                idempotency_key: `tui_collect:${snapshot.task_id}:${snapshot.session_id}:${snapshot.commit || 'no_commit'}`,
               });
-            });
+              await store.mutate((nextState) => {
+                const item = (nextState.tasks || []).find((candidate) => candidate.id === snapshot.task_id);
+                if (!item) return;
+                item.metadata = { ...(item.metadata || {}), tui_session_id: snapshot.session_id };
+                delete item.metadata.tui_session_owner;
+                item.logs ||= [];
+                item.logs.push({ time: new Date().toISOString(), message: '[tui] collect: complete evidence, transitioned to waiting_for_review' });
+              });
+            }
           } catch (err) {
             // Non-fatal: snapshot is still returned, task state update failed
           }

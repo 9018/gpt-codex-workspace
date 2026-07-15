@@ -30,7 +30,10 @@
     "release:p5:gate": "node scripts/p5-release-gate.mjs",
     "release:p5:gate:report": "node scripts/p5-release-gate.mjs --json-report .gptwork/releases/p5-release-gate-report.json",
     "test:p0-p5": "node --test --test-reporter=dot 'test/p0-p5-release-gate.test.mjs'",
-    "release:p5:check": "npm run check:syntax && npm run check:imports && npm run test:p0-p5 && npm run release:p5:gate"
+    "release:p5:check": "npm run check:syntax && npm run check:imports && npm run test:p0-p5 && npm run release:p5:gate",
+    "test:state-boundary": "node --test --test-reporter=dot 'test/*state-boundary*.test.mjs' test/task-transition-service.test.mjs test/execution-runtime-service.test.mjs test/full-tui-tool-transition.test.mjs test/full-runtime-wiring.test.mjs test/runtime-reconciler-stale-tasks-transition.test.mjs test/runtime-watch-diagnostics.test.mjs",
+    "release:state-boundary:gate": "node scripts/state-boundary-release-gate.mjs",
+    "release:state-boundary:gate:report": "node scripts/state-boundary-release-gate.mjs --json-report .gptwork/releases/state-boundary-gate.json"
   },
   "optionalDependencies": {
     "@zvec/zvec": "^0.5.0"
