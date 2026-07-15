@@ -38,25 +38,51 @@ import { reconcileTaskRuntime } from "../runtime/task-runtime-reconciler.mjs";
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
 import { diagnosticVerificationPassed, reconcileTuiAgentRunsFromProgress } from "../codex-tui-agent-run-reconciler.mjs";
 import { ensurePipelineRunsForTask } from "../pipeline-orchestration.mjs";
+import { createTaskTransitionService } from "../task-state/task-transition-service.mjs";
+import { TASK_EVENTS } from "../task-state/task-transition-events.mjs";
 
 
-export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false } = {}) {
+export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false, transitionService: injectedTransitionService } = {}) {
   if (!store || !taskId) return null;
-  let updated = null;
-  await store.mutate(async (state) => {
-    const task = (state.tasks || []).find((item) => item.id === taskId);
+  let state = typeof store.load === "function" ? await store.load() : null;
+  let existingTask = (state?.tasks || []).find((item) => item.id === taskId);
+  if (!existingTask && typeof store.mutate === "function") {
+    await store.mutate(async (currentState) => {
+      state = currentState;
+      existingTask = (currentState.tasks || []).find((item) => item.id === taskId);
+    });
+  }
+  if (!existingTask) return null;
+  const wasTerminal = isTerminalStatus(existingTask.status);
+  let updated = existingTask;
+
+  if (!wasTerminal) {
+    const transitionService = injectedTransitionService || createTaskTransitionService({ store });
+    const transition = await transitionService.transitionTask({
+      task_id: taskId,
+      event: hasEvidence ? TASK_EVENTS.EXECUTION_SESSION_STOPPED : TASK_EVENTS.RUNTIME_LOST,
+      expected_statuses: [existingTask.status],
+      payload: hasEvidence ? {} : { repairable: true },
+      reason: `TUI stopped: ${reason}`,
+      source: "codex_tui",
+      actor: { type: "system", id: "codex_tui_stop" },
+      idempotency_key: `tui_stop:${taskId}:${hasEvidence ? "evidence" : "no_evidence"}:${reason}`,
+    });
+    updated = transition.task || existingTask;
+  }
+
+  await store.mutate(async (nextState) => {
+    const task = (nextState.tasks || []).find((item) => item.id === taskId);
     if (!task) return;
     task.metadata = { ...(task.metadata || {}) };
     delete task.metadata.tui_session_owner;
     delete task.metadata.manual_tui_session_starting;
-    const wasTerminal = isTerminalStatus(task.status);
-    if (!wasTerminal) task.status = hasEvidence ? "collecting" : "repairing";
     task.updated_at = new Date().toISOString();
     task.logs ||= [];
     task.logs.push({ time: task.updated_at, message: `[tui] stopped: ${reason}; next=${task.status}` });
-    state.activities ||= [];
-    state.activities.push({ time: task.updated_at, type: "task.tui_stopped_reconciled", task_id: task.id, status: task.status, reason });
-    const queueItem = (state.goal_queue || []).find((entry) => entry.task_id === task.id);
+    nextState.activities ||= [];
+    nextState.activities.push({ time: task.updated_at, type: "task.tui_stopped_reconciled", task_id: task.id, status: task.status, reason });
+    const queueItem = (nextState.goal_queue || []).find((entry) => entry.task_id === task.id);
     if (queueItem && !wasTerminal) {
       queueItem.status = hasEvidence ? "running" : "waiting";
       queueItem.blocked_reason = hasEvidence ? null : `automatic repair after TUI stop: ${reason}`;
