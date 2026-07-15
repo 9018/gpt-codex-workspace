@@ -436,14 +436,18 @@ function shouldPostResultComment(task) {
         const taskStatus = titleMatch ? titleMatch[2] : "queued";
         const now = new Date().toISOString();
         const intakeMeta = _extractTaskIntakeMetadata(issue);
+        const historicalImport = Boolean(idMatch);
         const task = {
-          id: "task_" + randomUUID(),
+          id: idMatch ? idMatch[1] : "task_" + randomUUID(),
           project_id: "default",
           workspace_id: intakeMeta.workspace_id || "hosted-default",
           title: taskTitle,
           description: issue.body || "",
           created_by: "github-import",
-          assignee: intakeMeta.assignee || (assignToCodex ? "codex" : ""),
+          source: "github-import",
+          historical_import: historicalImport,
+          auto_advance: historicalImport ? false : true,
+          assignee: historicalImport ? "" : (intakeMeta.assignee || (assignToCodex ? "codex" : "")),
           status: taskStatus,
           mode: intakeMeta.mode || "full",
           github_issue_number: issue.number,
@@ -451,8 +455,8 @@ function shouldPostResultComment(task) {
           logs: [{ time: now, message: "Imported from GitHub issue #" + issue.number }],
           artifacts: [],
           result: null,
-          created_at: now,
-          updated_at: now
+          created_at: issue.created_at || now,
+          updated_at: issue.updated_at || issue.created_at || now
         };
         if (!dryRun) {
           state.tasks.push(task);

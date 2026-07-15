@@ -47,6 +47,13 @@ const CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES = [
   TASK_STATUSES.WAITING_FOR_REPAIR,
 ].filter((status) => status !== TASK_STATUSES.RUNNING);
 
+function isHistoricalNonActionableTask(task) {
+  if (!task) return false;
+  if (task.retention_compacted === true || task.historical_import === true) return true;
+  const imported = task.source === "github-import" || task.created_by === "github-import";
+  return imported && task.auto_advance !== true;
+}
+
 function errorMessage(error) {
   return error && typeof error.message === "string" ? error.message : String(error || "unknown error");
 }
@@ -601,6 +608,9 @@ async function runSingleCodexTask(store, config, github, task, context, processG
       };
     }
     task = latestTask;
+    if (isHistoricalNonActionableTask(task)) {
+      return { task_id: task.id, status: task.status, skipped: true, progressed: false, reason: "historical task is non-actionable" };
+    }
 
     // Auto-promote queued tasks to assigned.
     if (task.status === "queued") {
@@ -689,6 +699,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES,
     maxTasks
   ).filter((task) =>
+    !isHistoricalNonActionableTask(task) &&
     canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
   );
 
@@ -711,6 +722,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
         CODEX_ACTIVE_QUEUE_CANDIDATE_STATUSES,
         maxTasks
       ).filter((task) =>
+        !isHistoricalNonActionableTask(task) &&
         canAccessProject(context, task.project_id) && canAccessWorkspace(context, task.workspace_id)
       );
     }

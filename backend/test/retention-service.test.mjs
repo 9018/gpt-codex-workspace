@@ -293,7 +293,7 @@ describe("retention-service", () => {
 
         // Check no changes reference active tasks
         for (const c of result.changes) {
-          if (c.family === "tasks" && c.action === "remove_terminal") {
+          if (c.family === "tasks" && c.action === "compact_terminal") {
             assert.ok(!c.detail.startsWith("task t_active_"), "should not suggest removing active tasks: " + c.detail);
           }
         }
@@ -304,9 +304,9 @@ describe("retention-service", () => {
           config: {}, store: st, workspaceRoot: dir,
           limit: 10, dryRun: true,
         });
-        const taskChanges = result2.changes.filter((c) => c.family === "tasks" && c.action === "remove_terminal");
+        const taskChanges = result2.changes.filter((c) => c.family === "tasks" && c.action === "compact_terminal");
         assert.ok(taskChanges.every((c) => !c.detail.includes("t_active_")), "no active tasks in removal suggestions");
-        assert.equal(taskChanges.length, 30, "should remove 30 oldest terminal tasks");
+        assert.equal(taskChanges.length, 30, "should compact 30 oldest terminal tasks");
       } finally {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       }
@@ -314,7 +314,7 @@ describe("retention-service", () => {
   });
 
   describe("retentionCleanup — apply", () => {
-    it("should remove terminal tasks beyond limit", async () => {
+    it("should compact terminal tasks beyond limit without deleting identities", async () => {
       const tasks = [];
       // 40 completed + 10 active = 50 total, but 40 terminal
       for (let i = 0; i < 40; i++) {
@@ -331,12 +331,16 @@ describe("retention-service", () => {
         });
         assert.equal(result.dry_run, false);
         assert.equal(result.applied, true);
-        assert.equal(result.changes_count, 31, "should have 30 removal changes + 1 summary = 31");
+        assert.equal(result.changes_count, 31, "should have 30 compaction changes + 1 summary = 31");
         assert.ok(result.after, "should have after state");
 
         const loadedState = await st.load();
-        // Should keep 10 terminal + 0 active = 10
-        assert.equal(loadedState.tasks.length, 10, "should keep 10 terminal tasks after limit=10");
+        // Canonical identities remain, while old payloads become non-actionable tombstones.
+        assert.equal(loadedState.tasks.length, 40, "must preserve every task identity");
+        const compacted = loadedState.tasks.filter((task) => task.retention_compacted === true);
+        assert.equal(compacted.length, 30);
+        assert.ok(compacted.every((task) => task.auto_advance === false));
+        assert.ok(compacted.every((task) => task.status === "completed"));
       } finally {
         await rm(dir, { recursive: true, force: true }).catch(() => {});
       }

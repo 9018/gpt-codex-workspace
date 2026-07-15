@@ -703,7 +703,7 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
 
   // ── 18. git branches (task/goal branches) ────────────────────────────
   {
-    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
+    const gitRoot = ((config?.defaultRepoPath ? _findGitRoot(config.defaultRepoPath) : null) || _findGitRoot(workspaceRoot));
     let totalBranches = 0;
     let terminalBranches = 0;
     let orphanedBranches = 0;
@@ -751,7 +751,7 @@ export async function retentionStatus({ config, store, workspaceRoot }) {
 
   // ── 19. git worktrees (active git worktree list) ─────────────────────
   {
-    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
+    const gitRoot = ((config?.defaultRepoPath ? _findGitRoot(config.defaultRepoPath) : null) || _findGitRoot(workspaceRoot));
     let totalWorktrees = 0;
     let activeWorktrees = 0;
     let terminalWorktrees = 0;
@@ -952,7 +952,7 @@ export async function retentionCleanup({
   const startTime = Date.now();
   const state = await store.load();
   // Preserve task metadata for resource cleanup before rolling retention removes old terminal records.
-  const taskCleanupSnapshot = [...(state.tasks || [])];
+  const taskCleanupSnapshot = (state.tasks || []).map((task) => structuredClone(task));
   const beforeState = { tasks: state.tasks?.length || 0, goals: state.goals?.length || 0 };
 
   const changes = [];
@@ -998,15 +998,44 @@ export async function retentionCleanup({
       .sort((a, b) => _getTs(b, "updated_at") - _getTs(a, "updated_at"));
 
     if (terminalTasks.length > limit) {
-      const toRemove = terminalTasks.slice(limit);
-      for (const t of toRemove) {
-        _recordChange("tasks", "remove_terminal", `task ${t.id} (${t.status})`, null);
+      const toCompact = terminalTasks.slice(limit).filter((task) => task.retention_compacted !== true);
+      for (const task of toCompact) {
+        _recordChange("tasks", "compact_terminal", `task ${task.id} (${task.status})`, null);
       }
       if (!dryRun) {
-        const ids = new Set(toRemove.map((t) => t.id));
-        _removeFromArray(tasks, (t) => ids.has(t.id));
+        const archivedAt = new Date().toISOString();
+        for (const task of toCompact) {
+          const tombstone = {
+            id: task.id,
+            project_id: task.project_id || null,
+            workspace_id: task.workspace_id || null,
+            goal_id: task.goal_id || null,
+            title: task.title || task.id,
+            status: task.status,
+            source: task.source || task.created_by || null,
+            created_by: task.created_by || task.source || null,
+            assignee: task.assignee || null,
+            github_issue_number: task.github_issue_number || null,
+            github_issue_url: task.github_issue_url || null,
+            source_request_id: task.source_request_id || null,
+            parent_task_id: task.parent_task_id || null,
+            root_task_id: task.root_task_id || null,
+            repair_of_task_id: task.repair_of_task_id || null,
+            repair_of_goal_id: task.repair_of_goal_id || null,
+            superseded_by_task_id: task.superseded_by_task_id || null,
+            created_at: task.created_at || null,
+            updated_at: task.updated_at || null,
+            completed_at: task.completed_at || null,
+            retention_compacted: true,
+            historical: true,
+            auto_advance: false,
+            archived_at: task.archived_at || archivedAt,
+          };
+          for (const key of Object.keys(task)) delete task[key];
+          Object.assign(task, tombstone);
+        }
       }
-      _recordChange("tasks", "summary", `removed ${toRemove.length} terminal tasks, kept ${limit}`, null);
+      _recordChange("tasks", "summary", `compacted ${toCompact.length} terminal tasks, kept ${limit} full records`, null);
     } else {
       _recordSkip("tasks", "within_limit", `${terminalTasks.length} terminal tasks (limit=${limit})`);
     }
@@ -1514,7 +1543,7 @@ export async function retentionCleanup({
       if (decision.action === "remove") {
         _recordChange("retained_worktrees", "remove_resolved_terminal", `task ${task.id} (${task.status}) reason=${decision.reason}`, worktreePath);
         if (!dryRun) {
-          const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
+          const gitRoot = ((config?.defaultRepoPath ? _findGitRoot(config.defaultRepoPath) : null) || _findGitRoot(workspaceRoot));
           let removedThroughGit = false;
           if (gitRoot) {
             try {
@@ -1561,7 +1590,7 @@ export async function retentionCleanup({
   // only remove an orphan when its branch is fully contained by HEAD and the
   // worktree has no local changes. Unknown, dirty, or unmerged resources stay.
   {
-    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
+    const gitRoot = ((config?.defaultRepoPath ? _findGitRoot(config.defaultRepoPath) : null) || _findGitRoot(workspaceRoot));
     const knownTaskIds = new Set(taskCleanupSnapshot.map((task) => task.id));
     if (gitRoot) {
       try {
@@ -1624,7 +1653,7 @@ export async function retentionCleanup({
 
   // ── 17. git branches cleanup (task/goal branches) ──────────────
   {
-    const gitRoot = (_findGitRoot(config?.defaultRepoPath) || _findGitRoot(workspaceRoot));
+    const gitRoot = ((config?.defaultRepoPath ? _findGitRoot(config.defaultRepoPath) : null) || _findGitRoot(workspaceRoot));
     const knownTasks = taskCleanupSnapshot;
 
     if (gitRoot) {

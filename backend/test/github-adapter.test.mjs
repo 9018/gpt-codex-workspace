@@ -176,6 +176,32 @@ test("importFromIssues limits batches, assigns Codex, and dedupes repeated issue
   }
 });
 
+
+test("importFromIssues restores explicit historical task ids as non-actionable records", async () => {
+  const previousFetch = globalThis.fetch;
+  const issue = {
+    number: 77,
+    title: "[GPTWork Task] Historical repair [waiting_for_repair]",
+    body: "**Task ID**: `task_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee`",
+    labels: [{ name: "gptwork-task" }], state: "open",
+    created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-02T00:00:00Z",
+    html_url: "https://github.com/owner/repo/issues/77"
+  };
+  globalThis.fetch = async () => ({ ok: true, json: async () => [issue] });
+  const state = { tasks: [], activities: [] };
+  const store = { load: async () => state, save: async () => {} };
+  try {
+    const sync = createGithubSync({ githubEnabled: true, githubRepo: "owner/repo", githubToken: "[REDACTED]" });
+    const imported = await sync.importFromIssues(store, { assignToCodex: true });
+    assert.equal(imported.length, 1);
+    assert.equal(imported[0].id, "task_aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+    assert.equal(imported[0].historical_import, true);
+    assert.equal(imported[0].auto_advance, false);
+    assert.equal(imported[0].created_at, issue.created_at);
+    assert.equal(imported[0].updated_at, issue.updated_at);
+  } finally { globalThis.fetch = previousFetch; }
+});
+
 test("pollIssues imports gptwork labels or GPTWork title prefixes without requiring both labels", async () => {
   const previousFetch = globalThis.fetch;
   const issues = [

@@ -128,6 +128,24 @@ test('runAssignedCodexTasks parks unsupported modes for review instead of hot-lo
   }
 });
 
+
+test('runAssignedCodexTasks ignores historical imported repair tasks', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-historical-import-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addTask(store.state, {
+      id: 'historical-repair-task', status: 'waiting_for_repair', title: 'Historical repair',
+      created_by: 'github-import',
+    });
+    await store.save();
+    const result = await runAssignedCodexTasks(store, { maxRepairAttempts: 2 }, {}, { limit: 10, concurrency: 1 });
+    assert.equal(result.inspected, 0);
+    await store.load();
+    assert.equal(store.state.tasks.filter((item) => item.parent_task_id === 'historical-repair-task').length, 0);
+  } finally { rmSync(tmpDir, { recursive: true, force: true }); }
+});
+
 test('runAssignedCodexTasks creates one repair child for parked repair parent idempotently', async () => {
   const tmpDir = mkdtempSync(join(tmpdir(), 'worker-repair-parked-'));
   try {
