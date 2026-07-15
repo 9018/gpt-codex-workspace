@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { join, dirname, resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
-import { execFileSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
 
 const TEST_DIR = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = resolve(TEST_DIR, '../src');
@@ -288,11 +288,15 @@ test('P5.5b: P5 gate script exists and is syntactically valid', () => {
   execFileSync('node', ['--check', gateScript], { stdio: 'pipe', timeout: 10_000 });
 });
 
-test('P5.5c: release gate produces GO/NO-GO result', async () => {
+test('P5.5c: release gate produces GO/NO-GO result with matching exit status', async () => {
   const gateScript = join(BACKEND_ROOT, 'scripts', 'p5-release-gate.mjs');
-  const out = execFileSync('node', [gateScript], { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
-  assert.ok(out.includes('GO') || out.includes('NO-GO'),
-    'p5-release-gate should produce a GO/NO-GO result');
+  const run = spawnSync('node', [gateScript], { encoding: 'utf8', timeout: 60_000, stdio: ['ignore', 'pipe', 'pipe'] });
+  assert.equal(run.error, undefined, run.error?.message);
+  const out = `${run.stdout || ''}${run.stderr || ''}`;
+  const reportsGo = out.includes('=== GO ===');
+  const reportsNoGo = out.includes('=== NO-GO ===');
+  assert.notEqual(reportsGo, reportsNoGo, 'p5-release-gate should produce exactly one GO/NO-GO result');
+  assert.equal(run.status, reportsGo ? 0 : 1, 'exit status must match the reported gate result');
 });
 
 test('P5.5d: no inert field name mismatch in product-status-view', async () => {

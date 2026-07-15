@@ -682,7 +682,7 @@ async function main() {
 
   // Build Go/No-Go report
   // GO requires all mandatory scenarios pass; diagnostics are advisory
-  const goNoGo = mandatoryFailedChecks === 0 ? 'GO' : 'NO-GO';
+  const goNoGo = blockers.length === 0 ? 'GO' : 'NO-GO';
   const durationMs = Date.now() - startedMs;
 
   console.log(`\n--- GATE REPORT ---`);

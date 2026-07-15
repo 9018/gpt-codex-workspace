@@ -653,7 +653,7 @@ async function main() {
   const mandatoryFailed = mandatorySections.reduce((s, x) => s + x.checks.filter(c => !c.passed).length, 0);
   const blockers = sections.flatMap(s => s.checks.filter(c => !c.passed));
   const advisories = sections.flatMap(s => s.checks.filter(c => c.advisory).map(c => ({ check: c.check, advisory: c.advisory })));
-  const goNoGo = mandatoryFailed === 0 ? 'GO' : 'NO-GO';
+  const goNoGo = blockers.length === 0 ? 'GO' : 'NO-GO';
 
   console.log(`\n--- GATE REPORT ---`);
   console.log(`Duration: ${formatDuration(Date.now() - startedMs)}`);
@@ -688,7 +688,7 @@ async function main() {
     schema_version: 1,
     gate_version: GATE_VERSION,
     scenario: 'AFC-P5',
-    passed: mandatoryFailed === 0,
+    passed: goNoGo === 'GO',
     started_at: startedAt,
     completed_at: new Date().toISOString(),
     duration_ms: Date.now() - startedMs,
