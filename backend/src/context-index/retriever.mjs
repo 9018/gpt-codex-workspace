@@ -14,6 +14,7 @@ import {
   chunkMessages,
   chunkResult,
 } from "./chunker.mjs";
+import { analyzeRetrievalIntent, rerankRetrievalCandidates } from "./retrieval-policy.mjs";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,6 +54,12 @@ export async function buildIndexChunks(ctx) {
     conversation_id: goal.conversation_id || "",
     task_id: task?.id || goal.task_id || "",
     workstream_id: task?.workstream_id || goal.workstream_id || "",
+    root_goal_id: task?.root_goal_id || goal.root_goal_id || goal.id,
+    parent_goal_id: task?.parent_goal_id || goal.parent_goal_id || "",
+    phase: task?.phase || goal.phase || "",
+    iteration: Number(task?.iteration ?? goal.iteration ?? 0),
+    shard_key: task?.shard_key || goal.shard_key || "",
+    lineage_depth: Number(task?.lineage_depth ?? goal.lineage_depth ?? 0),
     created_at: now,
   };
 
@@ -110,7 +117,13 @@ export async function buildIndexChunks(ctx) {
           source_type: "result",
           result_index: i,
           accepted: true,
-          status: prior.status || "accepted"
+          status: prior.status || "accepted",
+          root_goal_id: prior.root_goal_id || baseMeta.root_goal_id,
+          parent_goal_id: prior.parent_goal_id || "",
+          phase: prior.phase || "",
+          iteration: Number(prior.iteration || 0),
+          shard_key: prior.shard_key || "",
+          lineage_depth: Number(prior.lineage_depth || 0)
         },
       });
       for (const c of rChunks) {
@@ -220,9 +233,26 @@ export async function retrieveContext(params) {
   // since the vector store does not natively support time decay.
   const timeDecayDays = filters.time_decay ? Number(filters.time_decay) : 0;
 
-  const results = await store.search(queryVector, topK, searchFilters, {
+  const policyPlan = analyzeRetrievalIntent(queryText, {
+    taskId: options.taskId || options.task_id,
+    goalId: goalId || options.goalId || options.goal_id,
+    rootGoalId: options.rootGoalId || options.root_goal_id,
+    workstreamId: options.workstreamId || options.workstream_id,
+  });
+  const candidateTopK = Math.max(topK, Math.min(100, topK * 4));
+  const rawResults = await store.search(queryVector, candidateTopK, searchFilters, {
     retrievalMode: options.retrievalMode || "vector",
     queryText,
+  });
+  const storeDiagnostics = rawResults.retrievalDiagnostics || null;
+  let results = rerankRetrievalCandidates(rawResults, policyPlan, topK);
+  Object.defineProperty(results, "retrievalDiagnostics", {
+    value: {
+      ...(storeDiagnostics || {}),
+      ...(results.policyDiagnostics || {}),
+      policy: policyPlan,
+    },
+    enumerable: false,
   });
 
   if (timeDecayDays > 0 && results.length > 0) {
