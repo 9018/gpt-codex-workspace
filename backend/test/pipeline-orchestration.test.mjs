@@ -758,3 +758,57 @@ test("pipeline-orch: ensurePipelineRunsForTask prepares v2 advisory runs and con
     assert.equal(run.require_fresh_artifacts, true);
   }
 });
+
+// ===========================================================================
+// Tests: P2 risk-aware pipeline selection and dynamic gates
+// ===========================================================================
+
+test("pipeline-orch P2: explicit roles override risk policy", () => {
+  assert.deepEqual(
+    getEffectivePipelineRoles({ risk_level: "high", agent_roles: ["implementer", "tester"] }),
+    ["builder", "verifier"],
+  );
+});
+
+test("pipeline-orch P2: risk levels select the minimal safe role chain", () => {
+  assert.deepEqual(getEffectivePipelineRoles({ risk_level: "readonly" }), ["verifier"]);
+  assert.deepEqual(getEffectivePipelineRoles({ risk_level: "low" }), ["builder", "verifier"]);
+  assert.deepEqual(getEffectivePipelineRoles({ risk_level: "medium" }), ["planner", "builder", "verifier", "reviewer"]);
+  assert.deepEqual(getEffectivePipelineRoles({ risk_level: "high" }), [...DEFAULT_AGENT_PIPELINE]);
+});
+
+test("pipeline-orch P2: unknown tasks preserve the legacy full pipeline", () => {
+  assert.deepEqual(getEffectivePipelineRoles({}), [...DEFAULT_AGENT_PIPELINE]);
+  assert.deepEqual(getEffectivePipelineRoles({ risk_level: "unknown" }), [...DEFAULT_AGENT_PIPELINE]);
+});
+
+test("pipeline-orch P2: low-risk closure is not blocked by omitted reviewer finalizer or integrator", async () => {
+  const { applyPipelineGateBeforeClosure } = await import("../src/pipeline-orchestration.mjs");
+  const { createAgentRun, completeAgentRun } = await import("../src/agent-run-service.mjs");
+  const store = await makeStore();
+  await store.mutate((state) => {
+    state.tasks.push({ id: "t_low", goal_id: "g_low", risk_level: "low", require_pipeline_gates: true });
+  });
+
+  const builder = await createAgentRun(store, { task_id: "t_low", goal_id: "g_low", role: "builder", status: "queued" });
+  await completeAgentRun(store, {
+    agent_run_id: builder.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "change_summary", changed_count: 1 }],
+  });
+  const verifier = await createAgentRun(store, { task_id: "t_low", goal_id: "g_low", role: "verifier", status: "queued" });
+  await completeAgentRun(store, {
+    agent_run_id: verifier.agent_run.id,
+    status: "completed",
+    output_artifacts: [{ kind: "verification", passed: true }],
+  });
+
+  const result = await applyPipelineGateBeforeClosure(
+    store,
+    { id: "t_low", risk_level: "low", require_pipeline_gates: true },
+    { summary: "done", acceptance_findings: [] },
+    "completed",
+  );
+  assert.equal(result.taskStatus, "completed");
+  assert.equal(result.gatesSatisfied, true);
+});

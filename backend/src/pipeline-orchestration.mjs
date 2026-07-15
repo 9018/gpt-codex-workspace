@@ -55,6 +55,26 @@ export const DEFAULT_REVIEW_GATE_AFTER = "reviewer";
 /** Roles that block completion if unsatisfied. */
 export const BLOCKING_GATE_ROLES = Object.freeze(["verifier", "reviewer", "finalizer", "integrator"]);
 
+export const RISK_AWARE_PIPELINE_ROLES = Object.freeze({
+  readonly: Object.freeze(["verifier"]),
+  low: Object.freeze(["builder", "verifier"]),
+  medium: Object.freeze(["planner", "builder", "verifier", "reviewer"]),
+  high: DEFAULT_AGENT_PIPELINE,
+});
+
+function normalizePipelineRiskLevel(task = {}) {
+  const raw = task.risk_level ?? task.riskLevel ?? task.pipeline_risk_level ?? task.pipelineRiskLevel;
+  const value = String(raw || "").trim().toLowerCase().replace(/[\s-]+/g, "_");
+  if (["readonly", "read_only", "no_change", "diagnostic"].includes(value)) return "readonly";
+  if (["low", "medium", "high"].includes(value)) return value;
+  return null;
+}
+
+export function getEffectiveBlockingGateRoles(task = {}) {
+  const selected = new Set(getEffectivePipelineRoles(task));
+  return BLOCKING_GATE_ROLES.filter((role) => selected.has(role));
+}
+
 // ---------------------------------------------------------------------------
 // Pipeline creation
 // ---------------------------------------------------------------------------
@@ -213,6 +233,9 @@ export async function ensurePipelineRunsForTask(store, { task_id, goal_id, roles
  * }>}
  */
 export async function evaluateTaskPipelineGates(store, { task_id, allowMissingGates = false } = {}) {
+  const state = await store.load();
+  const task = (state.tasks || []).find((item) => item.id === task_id) || {};
+  const effectiveRoles = getEffectivePipelineRoles(task);
   const existing = await listAgentRuns(store, { task_id, limit: 100 });
   const agentRuns = existing.agent_runs || [];
 
@@ -238,7 +261,7 @@ export async function evaluateTaskPipelineGates(store, { task_id, allowMissingGa
     };
   }
 
-  const gateResult = evaluateAgentGates(agentRuns);
+  const gateResult = evaluateAgentGates(agentRuns, { requiredRoles: effectiveRoles });
 
   // Build human-readable blocking reasons
   const blockingReasons = gateResult.blocking_gates.map((role) => {
@@ -275,9 +298,7 @@ export async function checkPipelineGateBlocking(store, { task_id, allowMissingGa
 
   const state = await store.load();
   const task = (state.tasks || []).find((item) => item.id === task_id) || {};
-  const blockingRoles = task.pipeline_version === "task_pipeline_v2"
-    ? ["verifier", "reviewer", "finalizer"]
-    : [...BLOCKING_GATE_ROLES];
+  const blockingRoles = getEffectiveBlockingGateRoles(task);
 
   // Only consider blocking roles for this pipeline version.
   const blockingReasons = [];
@@ -354,8 +375,9 @@ export async function applyPipelineGateBeforeClosure(store, task, taskResult, ta
   // P0-MA11: Only check BLOCKING_GATE_ROLES (verifier, reviewer, finalizer, integrator)
   // context_curator and planner are informational, not blocking
   // If no agent runs exist and allowMissingGates=false, always block
+  const effectiveBlockingRoles = getEffectiveBlockingGateRoles(task);
   const blockingUnsatisfied = (gateResult.gates || []).filter(
-    g => BLOCKING_GATE_ROLES.includes(g.contract_role) && !g.satisfied
+    g => effectiveBlockingRoles.includes(g.contract_role) && !g.satisfied
   );
   const gatesSatisfied = blockingUnsatisfied.length === 0 && !gateResult.has_legacy_task;
 
@@ -505,6 +527,10 @@ export function getEffectivePipelineRoles(task = {}) {
   const roles = task.agent_roles || task.pipeline_roles || task.roles;
   if (Array.isArray(roles) && roles.length > 0) {
     return roles.map(role => mapLegacyRole(role));
+  }
+  const riskLevel = normalizePipelineRiskLevel(task);
+  if (riskLevel) {
+    return [...RISK_AWARE_PIPELINE_ROLES[riskLevel]];
   }
   if (task.pipeline_version === "task_pipeline_v2") {
     return [...TASK_ISOLATED_AGENT_PIPELINE];

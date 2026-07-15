@@ -267,11 +267,16 @@ export function getAgentRunArtifacts(agentRuns = [], role) {
  *   last_completed_role: string|null,
  * }}
  */
-export function evaluateAgentGates(agentRuns = []) {
+export function evaluateAgentGates(agentRuns = [], options = {}) {
   const gates = [];
   let lastCompletedRole = null;
   const presentRoles = new Set(agentRuns.map((run) => normalizeContractRole(run.role)));
-  const gateRoles = GATE_ROLES.filter((role) => BASE_GATE_ROLES.includes(role) || presentRoles.has(role));
+  const requiredRoles = Array.isArray(options.requiredRoles)
+    ? new Set(options.requiredRoles.map((role) => normalizeContractRole(role)))
+    : null;
+  const gateRoles = GATE_ROLES.filter((role) => requiredRoles
+    ? (role !== "context_curator" && requiredRoles.has(role))
+    : (BASE_GATE_ROLES.includes(role) || presentRoles.has(role)));
 
   for (const role of gateRoles) {
     const runs = agentRuns.filter((r) => normalizeContractRole(r.role) === role);
