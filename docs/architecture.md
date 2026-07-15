@@ -623,3 +623,23 @@ Tools: `retention_status`/`retention_cleanup`, `tmp_status`/`cleanup_tmp`, `goal
 - [Closed-Loop Automation](closed-loop-automation.md) — Goal → Task → Agent → Evidence → Acceptance → Replan/Continue/Stop 闭环设计
 - [Closure and Acceptance](closure-acceptance.md) — 验收门、合同验证、闭环节点判定详解
 - [E2E Acceptance](e2e-acceptance.md) — 端到端交付流程与验收
+
+### Delayed Tool Discovery (P0-08)
+
+Paths: `backend/src/tool-discovery/tool-catalog.mjs`, `backend/src/tool-groups/tool-discovery-tools-group.mjs`, `docs/delayed-tool-discovery.md`
+
+GPTWork builds a canonical read-only tool descriptor catalog from the assembled MCP tool registry. The catalog is searchable via `tool_search` (bounded ranked results) and `tool_describe` (exact descriptors by name), both always visible regardless of tool mode. Handlers are never exposed by the catalog.
+
+When `GPTWORK_DELAYED_TOOL_DISCOVERY=true`, the `tools/list` MCP method returns only bootstrap tools (`health_check`, `runtime_status`, `open_project_context`, `tool_search`, `tool_describe`). All other tools remain accessible via `tool_search`/`tool_describe` and invocable once discovered. The default is `false` for backward compatibility.
+
+See [docs/delayed-tool-discovery.md](delayed-tool-discovery.md) for usage.
+
+### Thread and Subagent Boundary (P0-09)
+
+Paths: `backend/src/thread/thread-view.mjs`, `docs/thread-subagent-boundary.md`
+
+A root Goal is the durable user-facing Thread. Every goal persists `root_goal_id` set to its own ID at creation. Child goals (repair, retry, follow-up, integration, verification) inherit the parent's `root_goal_id`, creating a stable thread lineage.
+
+The `buildThreadView()` helper produces a user-facing view with `thread_id`, `root_goal_id`, `thread_title`, `internal_title`, `phase`, `iteration`, and `is_internal_child`. Internal titles remain unchanged for audit, while `thread_title` stays stable across execution iterations. Legacy goals without `root_goal_id` are projected non-destructively with their own ID as the root.
+
+See [docs/thread-subagent-boundary.md](thread-subagent-boundary.md) for details.
