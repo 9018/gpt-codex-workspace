@@ -170,6 +170,42 @@ test("stopped historical TUI references remain visible without elevating current
   assert.equal(diagnostics.highest_severity, "info");
 });
 
+test("stopped dirty TUI snapshot is historical info while active dirty snapshot remains warning", async () => {
+  const repo = await makeGitRepo("codex-tui-runtime-dirty-history-");
+  const sessionStore = createCodexTuiSessionStore({ workspaceRoot: repo });
+  await sessionStore.createSession({
+    sessionId: "session_dirty_history",
+    taskId: "task_dirty_history",
+    goalId: "goal_dirty_history",
+    cwd: repo,
+  });
+  await sessionStore.updateSession("session_dirty_history", { status: "stopped" });
+  await writeFile(join(repo, "README.md"), "dirty historical snapshot\n");
+
+  const stoppedDiagnostics = await collectCodexTuiRuntimeDiagnostics({
+    workspaceRoot: repo,
+    store: makeStore([]),
+    config: { codexTuiEnabled: true },
+    env: {},
+  });
+  const stoppedDirty = stoppedDiagnostics.findings.find((finding) => finding.code === "codex_tui_dirty_worktree");
+  assert.equal(stoppedDirty.severity, "info");
+  assert.equal(stoppedDirty.historical, true);
+  assert.equal(stoppedDiagnostics.highest_severity, "info");
+
+  await sessionStore.updateSession("session_dirty_history", { status: "running" });
+  const activeDiagnostics = await collectCodexTuiRuntimeDiagnostics({
+    workspaceRoot: repo,
+    store: makeStore([]),
+    config: { codexTuiEnabled: true },
+    env: {},
+  });
+  const activeDirty = activeDiagnostics.findings.find((finding) => finding.code === "codex_tui_dirty_worktree");
+  assert.equal(activeDirty.severity, "warning");
+  assert.equal(activeDirty.historical, undefined);
+  assert.equal(activeDiagnostics.highest_severity, "warning");
+});
+
 test("recovery status and diagnose include codex_tui_goal diagnostics when relevant", async () => {
   const repo = await makeGitRepo("codex-tui-runtime-recovery-");
   const sessionStore = createCodexTuiSessionStore({ workspaceRoot: repo });

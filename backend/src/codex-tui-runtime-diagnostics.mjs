@@ -99,11 +99,12 @@ async function scanSessionRecords(sessionsDir) {
   return result;
 }
 
-function safeCollectorFindings(findings = [], sessionId) {
+function safeCollectorFindings(findings = [], sessionId, { active = false } = {}) {
   return findings.map((finding) => ({
     code: `codex_tui_${finding.code}`,
-    severity: finding.code === "dirty_worktree" ? "warning" : "info",
-    category: "provider_result_contract",
+    severity: finding.code === "dirty_worktree" && active ? "warning" : "info",
+    category: active ? "provider_result_contract" : "historical_result_contract",
+    ...(active ? {} : { historical: true }),
     session_id: sessionId,
     message: finding.code === "dirty_worktree"
       ? "TUI completion snapshot reports dirty worktree state. Treat this as provider/result contract evidence, not a real-code blocker by itself."
@@ -265,7 +266,7 @@ export async function collectCodexTuiRuntimeDiagnostics({
           : "Stopped historical TUI session references a task that is no longer retained in current state.",
       });
     }
-    for (const finding of safeCollectorFindings(completion?.findings || [], record.id)) addFinding(findings, finding);
+    for (const finding of safeCollectorFindings(completion?.findings || [], record.id, { active: activeSession })) addFinding(findings, finding);
 
     sessionSummaries.push({
       id: record.id,
