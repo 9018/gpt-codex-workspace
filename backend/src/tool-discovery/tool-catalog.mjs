@@ -7,6 +7,8 @@
  * @module tool-discovery/tool-catalog
  */
 
+import { computeToolCatalogRevision, createToolCatalogIndex } from "./tool-catalog-index.mjs";
+
 // ---------------------------------------------------------------------------
 // normalizeToolDescriptor
 // ---------------------------------------------------------------------------
@@ -57,6 +59,8 @@ export function createToolCatalog(tools) {
   for (const [name, tool] of Object.entries(tools)) {
     descriptors.set(name, normalizeToolDescriptor(name, tool));
   }
+  const lightweightIndex = createToolCatalogIndex(Array.from(descriptors.values()));
+  const revision = computeToolCatalogRevision(lightweightIndex);
 
   /**
    * Simple tokenizer that splits on word boundaries and lowercases.
@@ -144,6 +148,12 @@ export function createToolCatalog(tools) {
   }
 
   return {
+    revision,
+
+    index() {
+      return lightweightIndex.map((entry) => ({ ...entry }));
+    },
+
     /**
      * List all catalog entries (preserves insertion order).
      *

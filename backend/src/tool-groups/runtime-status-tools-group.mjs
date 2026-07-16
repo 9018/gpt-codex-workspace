@@ -129,6 +129,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           default_repo_path: config.defaultRepoPath,
           default_remote: config.defaultRemote,
           render_mode: config.renderMode || "text",
+          tool_discovery: config.toolDiscoveryDiagnostics || null,
           runtime_env_file_path: envPath,
           runtime_env_file_exists: envFileExists,
           runtime_env_loaded: envLoadResult.loadedPath !== null,

@@ -706,6 +706,17 @@ test("buildRuntimeConfig defaults renderMode to text", () => {
   assert.equal(sources.renderMode, "default");
 });
 
+test("buildRuntimeConfig tracks delayed tool discovery value and source", () => {
+  process.env.GPTWORK_DELAYED_TOOL_DISCOVERY = "true";
+  try {
+    const { config, sources } = buildRuntimeConfig("/tmp/test-root-delayed-discovery");
+    assert.equal(config.delayedToolDiscovery, true);
+    assert.equal(sources.delayedToolDiscovery, "process.env");
+  } finally {
+    delete process.env.GPTWORK_DELAYED_TOOL_DISCOVERY;
+  }
+});
+
 test("buildRuntimeConfig accepts text, selective, and card render modes", () => {
   for (const mode of ["text", "selective", "card"]) {
     clearGptWorkVars();

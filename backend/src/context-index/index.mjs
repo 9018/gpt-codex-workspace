@@ -11,3 +11,8 @@ export { buildIndexChunks, indexGoalContext, retrieveContext } from "./retriever
 export { buildContextBundle } from "./context-bundle-builder.mjs";
 export { buildContextManifest, CONTEXT_MANIFEST_SCHEMA_VERSION } from "./context-curator.mjs";
 export { maybeBuildContextBundle, tryBuildContextBundle } from "./context-index-hooks.mjs";
+export { buildCodeSymbolIndex, findSymbolReferences, readSymbolRange } from "./code-symbol-index.mjs";
+export { buildProjectCodeMap } from "./project-code-map.mjs";
+export { planContextBudget } from "./context-budget-planner.mjs";
+export { buildAnalysisEntryBundle } from "./analysis-entry-bundle.mjs";
+export { createContextTelemetry } from "./context-telemetry.mjs";

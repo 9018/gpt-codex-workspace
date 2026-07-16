@@ -48,7 +48,10 @@ import { createPlanningToolsGroup } from "./tool-groups/planning-tools-group.mjs
 import { createArtifactHandoffToolsGroup } from "./tool-groups/artifact-handoff-tools-group.mjs";
 import { readGoalWorkspace } from "./goal-workspace-status.mjs";
 import { createToolCatalog } from "./tool-discovery/tool-catalog.mjs";
+import { buildToolDiscoveryDiagnostics } from "./tool-discovery/tool-discovery-diagnostics.mjs";
+import { resolveToolDiscoveryConfig } from "./tool-discovery/tool-discovery-config.mjs";
 import { createToolDiscoveryToolsGroup } from "./tool-groups/tool-discovery-tools-group.mjs";
+import { createCodeNavigationToolsGroup } from "./tool-groups/code-navigation-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
@@ -61,6 +64,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "list_actionable_reviews",
     "product_status",
     "open_project_context",
+    "tool_search",
+    "tool_describe",
     "create_encoded_goal",
     "get_task",
     "list_tasks",
@@ -75,6 +80,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "gptwork_doctor",
     "github_status",
     "open_project_context",
+    "tool_search",
+    "tool_describe",
     "project_context_status",
     "context_status",
     "context_prepare",
@@ -100,6 +107,11 @@ export const TOOL_MODE_ALLOWLISTS = {
     "update_task_status",
     "request_human_review",
     "preview_codex_context",
+    "read_symbol",
+    "read_function",
+    "read_file_ranges",
+    "find_references",
+    "read_related_tests",
     "read_text_file",
     "list_dir",
     "stat_path",
@@ -218,6 +230,11 @@ export const TOOL_MODE_ALLOWLISTS = {
     "complete_task",
     "update_task_status",
     "read_text_file",
+    "read_symbol",
+    "read_function",
+    "read_file_ranges",
+    "find_references",
+    "read_related_tests",
     "write_text_file",
     "list_dir",
     "stat_path",
@@ -330,6 +347,7 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     ...createChatGptRequestToolsGroup({ tool, schema, config, store, github }),
 
     ...createWorkspaceReadToolsGroup({ tool, schema, store, config }),
+    ...createCodeNavigationToolsGroup({ tool, schema, config }),
     ...createWorkspaceMutationToolsGroup({ tool, schema, store, config }),
     ...createWorkspaceOperationsToolsGroup({ tool, schema, store, config }),
 
@@ -365,13 +383,31 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
     }),
   };
   allTools = tools;
-  const catalog = createToolCatalog(tools);
-  Object.assign(tools, createToolDiscoveryToolsGroup({ tool, schema, catalog }));
+  let catalog = null;
+  const catalogDelegate = {
+    search: (...args) => catalog.search(...args),
+    get: (...args) => catalog.get(...args),
+    list: (...args) => catalog.list(...args),
+  };
+  Object.assign(tools, createToolDiscoveryToolsGroup({ tool, schema, catalog: catalogDelegate }));
+  catalog = createToolCatalog(tools);
+  const discoveryConfig = config.toolDiscoveryConfig || resolveToolDiscoveryConfig({
+    explicitValue: config.delayedToolDiscovery,
+  });
+  const callable = createCallableTools(tools, config.toolMode);
+  const exposed = listExposedTools({ tools, mode: config.toolMode, discoveryConfig });
+  config.toolDiscoveryCatalog = catalog;
+  config.toolDiscoveryDiagnostics = buildToolDiscoveryDiagnostics({
+    catalog,
+    discoveryConfig,
+    callableToolCount: Object.keys(callable).length,
+    exposedToolCount: Object.keys(exposed).length,
+  });
   allTools = tools;
   return tools;
 }
 
-const DELAYED_DISCOVERY_BOOTSTRAP = new Set([
+export const DELAYED_DISCOVERY_BOOTSTRAP = new Set([
   "health_check", "runtime_status", "open_project_context",
   "tool_search", "tool_describe",
 ]);
@@ -380,8 +416,25 @@ export function createCallableTools(tools, mode) {
   return filterToolsForMode(tools, mode);
 }
 
-export function createDiscoverableTools(tools, mode, { delayed = process.env.GPTWORK_DELAYED_TOOL_DISCOVERY === "true" } = {}) {
+export function listExposedTools({ tools, mode, discoveryConfig, audience } = {}) {
   const callable = createCallableTools(tools, mode);
-  if (!delayed) return callable;
-  return Object.fromEntries(Object.entries(callable).filter(([name]) => DELAYED_DISCOVERY_BOOTSTRAP.has(name)));
+  const audienceFiltered = audience
+    ? Object.fromEntries(Object.entries(callable).filter(([, descriptor]) => {
+        const audiences = descriptor.metadata?.audience || [];
+        return audiences.length === 0 || audiences.includes(audience);
+      }))
+    : callable;
+  if (!discoveryConfig?.enabled) return audienceFiltered;
+  return Object.fromEntries(
+    [...DELAYED_DISCOVERY_BOOTSTRAP]
+      .filter((name) => audienceFiltered[name])
+      .map((name) => [name, audienceFiltered[name]])
+  );
+}
+
+export function createDiscoverableTools(tools, mode, options = {}) {
+  const discoveryConfig = options.discoveryConfig || resolveToolDiscoveryConfig({
+    explicitValue: options.delayed,
+  });
+  return listExposedTools({ tools, mode, discoveryConfig, audience: options.audience });
 }

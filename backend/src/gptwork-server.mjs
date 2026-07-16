@@ -22,6 +22,7 @@ import { listenHttp } from "./server-http-listener.mjs";
 import { createCallableTools, createDiscoverableTools, createTools } from "./server-tools.mjs";
 import { createEventLogger } from "./event-log-service.mjs";
 import { createHookBus } from "./hook-service.mjs";
+import { resolveToolDiscoveryConfig } from "./tool-discovery/tool-discovery-config.mjs";
 let notifyTerminalTaskIfNeeded = null;
 let notifyCreatedTaskIfNeeded = null;
 let emitTaskLifecycleEvent = null;
@@ -60,6 +61,14 @@ export async function createGptWorkServer(options = {}) {
     earlyEnvResult.keys  // pass preloaded keys so source tracking stays correct
   );
   const { config: rcc, sources, envLoadResult } = rc;
+  const toolDiscoveryConfig = resolveToolDiscoveryConfig({
+    env: process.env,
+    runtimeConfig: {
+      value: rcc.delayedToolDiscovery,
+      source: sources.delayedToolDiscovery,
+    },
+    explicitValue: options.delayedToolDiscovery,
+  });
   const config = {
     statePath,
     defaultWorkspaceRoot,
@@ -107,7 +116,8 @@ export async function createGptWorkServer(options = {}) {
     githubRepo: rcc.githubRepo,
     githubToken: rcc.githubToken,
     toolMode: options.toolMode || rcc.toolMode,
-    delayedToolDiscovery: options.delayedToolDiscovery ?? process.env.GPTWORK_DELAYED_TOOL_DISCOVERY === 'true',
+    delayedToolDiscovery: toolDiscoveryConfig.enabled,
+    toolDiscoveryConfig,
     renderMode: options.renderMode || rcc.renderMode,
     // Recovery / break-glass plane
     recoveryPlaneEnabled: rcc.recoveryPlaneEnabled,
@@ -216,16 +226,9 @@ setLifecycleEventEmitter(emitTaskLifecycleEvent);
         if (message.method === "notifications/initialized") return null;
         if (message.method === "tools/list") {
           assertAuthorized(headers, config);
-          const visible = createDiscoverableTools(tools, config.toolMode);
-          // Delayed discovery mode (GPTWORK_DELAYED_TOOL_DISCOVERY=true):
-          // Only list bootstrap tools.  The rest are discoverable via tool_search/tool_describe.
-          if (config.delayedToolDiscovery) {
-            const bootstrap = new Set(["health_check", "runtime_status", "open_project_context", "tool_search", "tool_describe"]);
-            const filtered = Object.fromEntries(
-              Object.entries(visible).filter(([name]) => bootstrap.has(name))
-            );
-            return jsonResult(message.id, { tools: toolList(filtered, config.renderMode) });
-          }
+          const visible = createDiscoverableTools(tools, config.toolMode, {
+            discoveryConfig: config.toolDiscoveryConfig,
+          });
           return jsonResult(message.id, { tools: toolList(visible, config.renderMode) });
         }
         if (message.method === "resources/list") {

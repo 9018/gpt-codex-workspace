@@ -5,8 +5,9 @@ import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
 import { TASK_STATUSES, isHumanReviewStatus } from "./task-status-taxonomy.mjs";
 import { collectRetainedWorktreeDiagnostics } from "./task-worktree-manager.mjs";
-
-const TEXT_LIMIT = 8000;
+import { buildProjectCodeMap } from "./context-index/project-code-map.mjs";
+import { buildAnalysisEntryBundle } from "./context-index/analysis-entry-bundle.mjs";
+import { createContextTelemetry } from "./context-index/context-telemetry.mjs";
 
 function safeGit(args, cwd) {
   try {
@@ -96,16 +97,38 @@ export async function collectProjectContext({ config, store, workerState, regist
   };
   const packageScripts = scriptsFromPackage(repoRoot);
   const backendScripts = scriptsFromPackage(join(repoRoot, "backend"));
+  let codeMap = { revision: null, directories: [], files: {}, cache_hit: false };
+  try {
+    codeMap = buildProjectCodeMap({ repoRoot });
+  } catch {
+    // Project context remains available for non-git or partially initialized workspaces.
+  }
+  const recentChanges = dirty
+    .map((entry) => entry.slice(3).trim())
+    .filter(Boolean)
+    .slice(0, 20);
+  const telemetry = createContextTelemetry();
+  const repo = {
+    root: repoRoot,
+    branch,
+    head,
+    dirty: dirty.length > 0,
+    dirty_paths: dirty.slice(0, 40),
+  };
+  const analysisEntry = buildAnalysisEntryBundle({
+    repo,
+    currentBlockers,
+    taskIntent: recentChanges.join(" "),
+    codeMap,
+    recentChanges,
+    maxBytes: 32_000,
+    telemetry,
+    catalogRevision: config.toolDiscoveryDiagnostics?.catalog_revision || "",
+  });
 
   return {
     ok: true,
-    repo: {
-      root: repoRoot,
-      branch,
-      head,
-      dirty: dirty.length > 0,
-      dirty_paths: dirty.slice(0, 40),
-    },
+    repo,
     config: {
       workspace_root: config.defaultWorkspaceRoot,
       state_path: config.statePath,
@@ -151,9 +174,9 @@ export async function collectProjectContext({ config, store, workerState, regist
     worktree_retention: retainedWorktrees,
     repositories: typeof registry?.list === "function" ? registry.list().slice(0, 20) : [],
     file_tree: boundedTree(repoRoot, 80),
-    readme_excerpt: (() => {
-      try { return readFileSync(join(repoRoot, "README.md"), "utf8").slice(0, TEXT_LIMIT); } catch { return ""; }
-    })(),
-    recommended_next_tools: ["create_encoded_goal", "list_tasks", "get_task", "runtime_status", "worker_status"],
+    readme_excerpt: "",
+    analysis_entry: analysisEntry,
+    context_telemetry: telemetry.snapshot(),
+    recommended_next_tools: ["read_symbol", "find_references", "read_related_tests", "create_encoded_goal", "list_tasks", "get_task", "runtime_status", "worker_status"],
   };
 }

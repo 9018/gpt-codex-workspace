@@ -21,6 +21,7 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { normalizeCodexHomeMode, resolveCodexHome } from "./path-context/codex-home-resolver.mjs";
+import { parseBooleanEnv } from "./tool-discovery/tool-discovery-config.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..", "..");
@@ -177,6 +178,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     statePath: _get("GPTWORK_STATE_PATH", workspaceRoot + "/.gptwork/state.json"),
     runtimeEnvFile: _get("GPTWORK_RUNTIME_ENV_FILE", ".gptwork/runtime.env"),
     toolMode: _get("GPTWORK_TOOL_MODE", "standard"),
+    delayedToolDiscovery: parseBooleanEnv(_get("GPTWORK_DELAYED_TOOL_DISCOVERY", false)).value,
     renderMode: normalizeRenderMode(_get("GPTWORK_RENDER_MODE", "text")),
 
     // Codex
@@ -320,6 +322,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     statePath: "GPTWORK_STATE_PATH",
     runtimeEnvFile: "GPTWORK_RUNTIME_ENV_FILE",
     toolMode: "GPTWORK_TOOL_MODE",
+    delayedToolDiscovery: "GPTWORK_DELAYED_TOOL_DISCOVERY",
     renderMode: "GPTWORK_RENDER_MODE",
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
     codexFirstOutputTimeout: "GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT",

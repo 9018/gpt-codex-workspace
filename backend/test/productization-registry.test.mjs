@@ -104,12 +104,37 @@ test("minimal tool mode exposes only its explicit safe subset", async () => {
     "list_tasks",
     "open_project_context",
     "runtime_status",
+    "tool_describe",
+    "tool_search",
     "worker_status",
   ].sort());
   assert.equal(names.includes("create_agent_run"), false);
   assert.equal(names.includes("handoff_to_agent"), false);
   assert.equal(names.includes("run_agent_pipeline"), false);
   assert.equal(names.includes("show_changes"), false);
+});
+
+test("minimal delayed discovery exposes exactly the five bootstrap tools", async () => {
+  const server = await makeServer({
+    toolMode: "minimal",
+    delayedToolDiscovery: true,
+  });
+  const response = await server.handleRpc({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "tools/list",
+    params: {},
+  }, {
+    authorization: "Bearer test-token",
+  });
+
+  assert.deepEqual(response.result.tools.map((tool) => tool.name), [
+    "health_check",
+    "runtime_status",
+    "open_project_context",
+    "tool_search",
+    "tool_describe",
+  ]);
 });
 
 test("operator tool mode does not expose agent or handoff tools", async () => {

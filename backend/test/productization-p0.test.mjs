@@ -46,7 +46,15 @@ test("open_project_context returns bounded first-step project context", async ()
   assert.ok(context.project_files.some((file) => file.name === "README.md"));
   assert.ok(Array.isArray(context.file_tree));
   assert.ok(context.file_tree.length <= 80);
+  assert.equal(context.readme_excerpt || "", "", "analysis entry must not return README content by default");
+  assert.equal(context.analysis_entry.repo.root, context.repo.root);
+  assert.ok(Array.isArray(context.analysis_entry.hot_files));
+  assert.ok(Array.isArray(context.analysis_entry.relevant_symbols));
+  assert.ok(Array.isArray(context.analysis_entry.recommended_queries));
+  assert.ok(context.analysis_entry.context_budget);
+  assert.ok(Buffer.byteLength(JSON.stringify(context.analysis_entry), "utf8") <= 32_000);
   assert.ok(context.recommended_next_tools.includes("create_encoded_goal"));
+  assert.ok(context.recommended_next_tools.includes("read_symbol"));
   assert.match(response.result.content[0].text, /项目上下文/);
 });
 
