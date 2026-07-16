@@ -11,6 +11,7 @@ dist/
 .gptwork/*.env
 !.gptwork/*.env.example
 .gptwork/runtime.env
+.codex-runtime/
 
 # Runtime state files (never commit these)
 data/state.json

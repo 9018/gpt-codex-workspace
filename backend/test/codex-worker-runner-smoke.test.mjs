@@ -7,6 +7,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { StateStore } from '../src/state-store.mjs';
 import { runAssignedCodexTasks } from '../src/codex-worker-runner.mjs';
+import { createProgressionCommandStore } from '../src/progression/progression-command-store.mjs';
 
 function initGitRepo(dir) {
   mkdirSync(dir, { recursive: true });
@@ -96,6 +97,102 @@ test('runAssignedCodexTasks isolates per-task processor failures', async () => {
 
     const goodResult = result.tasks.find((item) => item.task_id === 'good-task');
     assert.equal(goodResult.status, 'completed');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runAssignedCodexTasks drains durable progression commands during an idle worker tick', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-progression-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addTask(store.state, {
+      id: 'task_progression_done',
+      status: 'completed',
+      decision_revision: 'revision-1',
+      result: {
+        unified_decision: {
+          task_id: 'task_progression_done',
+          revision: 'revision-1',
+          status: 'completed',
+        },
+      },
+    });
+    await store.save();
+    const commandStore = createProgressionCommandStore({
+      store,
+      idFactory: () => 'pcmd_worker_tick',
+    });
+    await commandStore.createCommand({
+      task_id: 'task_progression_done',
+      decision_revision: 'revision-1',
+      action: 'complete_task',
+      payload: {
+        task_id: 'task_progression_done',
+        unified_decision: {
+          task_id: 'task_progression_done',
+          revision: 'revision-1',
+          status: 'completed',
+        },
+      },
+    });
+
+    const result = await runAssignedCodexTasks(store, {}, {}, { limit: 10, concurrency: 1 });
+
+    assert.deepEqual(result.progression_commands, {
+      claimed: 1,
+      applied: 1,
+      failed: 0,
+      superseded: 0,
+    });
+    assert.equal((await commandStore.getCommand('pcmd_worker_tick')).status, 'applied');
+  } finally {
+    rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('runAssignedCodexTasks supersedes progression commands from an older decision revision', async () => {
+  const tmpDir = mkdtempSync(join(tmpdir(), 'worker-progression-stale-'));
+  try {
+    const store = makeStore(tmpDir);
+    await store.load();
+    addTask(store.state, {
+      id: 'task_progression_newer',
+      status: 'completed',
+      decision_revision: 'revision-2',
+      result: {
+        unified_decision: {
+          task_id: 'task_progression_newer',
+          revision: 'revision-2',
+          status: 'completed',
+        },
+      },
+    });
+    await store.save();
+    const commandStore = createProgressionCommandStore({
+      store,
+      idFactory: () => 'pcmd_worker_stale',
+    });
+    await commandStore.createCommand({
+      task_id: 'task_progression_newer',
+      decision_revision: 'revision-1',
+      action: 'complete_task',
+      payload: {
+        task_id: 'task_progression_newer',
+        unified_decision: {
+          task_id: 'task_progression_newer',
+          revision: 'revision-1',
+          status: 'completed',
+        },
+      },
+    });
+
+    const result = await runAssignedCodexTasks(store, {}, {}, { limit: 10, concurrency: 1 });
+
+    assert.equal(result.progression_commands.superseded, 1);
+    assert.equal(result.progression_commands.applied, 0);
+    assert.equal((await commandStore.getCommand('pcmd_worker_stale')).status, 'superseded');
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

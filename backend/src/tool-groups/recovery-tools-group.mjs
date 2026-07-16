@@ -44,7 +44,7 @@ import { forceReleaseRepoLock } from "../repo-lock-lifecycle.mjs";
 import { STALL_THRESHOLD_MS } from "../repo-lock-paths.mjs";
 import { sha256 } from "../mcp-tooling.mjs";
 import { scanPendingRestartMarkers, writePendingRestartMarker, scheduleServiceRestart, updateRestartMarkerStatus, getPendingRestartsDir } from "../safe-restart.mjs";
-import { getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
+import { getRestartInstruction, getRestartStrategy, getRestartSummary } from "../restart-strategy.mjs";
 import { collectCodexTuiRuntimeDiagnostics } from "../codex-tui-runtime-diagnostics.mjs";
 import {
   TASK_STATUSES,
@@ -850,7 +850,12 @@ export function createRecoveryToolsGroup({
               store,
             });
           } catch (e) {
-            restartResult = { ok: false, reason: "scheduler error: " + e.message, instruction: "Run: cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend && npm run start (or check GPTWORK_RESTART_MODE)" };
+            const restartStrategy = getRestartStrategy(config);
+            restartResult = {
+              ok: false,
+              reason: "scheduler error: " + e.message,
+              instruction: getRestartInstruction(restartStrategy),
+            };
           }
 
           await audit({ tool: "recovery_safe_restart", action: "restart", apply: true, result: restartResult.ok ? "ok" : "needs_external", marker_id: markerId, summary: "restart triggered", elapsed_ms: Date.now() - start });
@@ -1047,7 +1052,7 @@ export function createRecoveryToolsGroup({
     name: "recovery_file_read",
     description: "Read bounded project files for emergency diagnosis. Path must be within allowed roots. Max read bytes enforced. Secrets automatically redacted in output and refused for high-risk paths (.env, token, key files).",
     inputSchema: schema({
-      path: { type: "string", description: "Absolute or relative path within allowed roots.", examples: ["/home/a9017/mcp/workspace/.gptwork/state.json"] },
+      path: { type: "string", description: "Absolute or relative path within allowed roots.", examples: ["/workspace/.gptwork/state.json"] },
       max_bytes: { type: "integer", description: "Max bytes to read. Default: 50000.", default: 50000, maximum: 200000 },
       allow_secret_path: { type: "boolean", description: "Override secret path protection. Even when true, values are redacted.", default: false },
     }, ["path"]),
@@ -1128,7 +1133,7 @@ export function createRecoveryToolsGroup({
     inputSchema: schema({
       dry_run: { type: "boolean", description: "Preview without applying. Default: true.", default: true },
       apply: { type: "boolean", description: "Actually apply patch.", default: false },
-      target_file: { type: "string", description: "File to patch (must be within allowed roots).", examples: ["/home/a9017/mcp/workspace/gpt-codex-workspace/backend/src/runtime-config.mjs"] },
+      target_file: { type: "string", description: "File to patch (must be within allowed roots).", examples: ["/workspace/project/backend/src/runtime-config.mjs"] },
       patch_content: { type: "string", description: "Unified diff patch content.", examples: ["--- a/file\n+++ b/file\n@@ -1 +1 @@\n-old\n+new"] },
     }, ["target_file", "patch_content"]),
     ...common,

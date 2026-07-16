@@ -1,3 +1,7 @@
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
 export const CODEX_EXECUTION_PROVIDERS = Object.freeze({
   EXEC: "codex_exec",
   TUI_GOAL: "codex_tui_goal",
@@ -96,17 +100,13 @@ export function getTaskExecutionProviderMode(task = {}) {
 // Codex configuration.  If the plugin is not found, the return object
 // includes a clear diagnostic and suggested remediation.
 
-import { existsSync } from 'node:fs';
-
 // P0-UA6-G4: Superpowers plugin preflight for TUI fallback.
 // When explicit TUI fallback is requested, verify that the Superpowers
 // plugin is available.  The check looks for the superpowers skill
 // directory.  If the plugin is not found, a clear diagnostic with
 // remediation is returned, and the TUI session must not start
 // (codex_exec remains the default fallback provider).
-export function checkSuperpowersPluginForTuiFallback(config = {}) {
-  const env = process.env || {};
-  const codexHome = env.CODEX_HOME || '';
+export function checkSuperpowersPluginForTuiFallback(config = {}, env = process.env) {
   const requireSuperpowers = config.requireSuperpowersPluginForTuiFallback === true
     || env.GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI === 'true';
   if (!requireSuperpowers) {
@@ -114,14 +114,17 @@ export function checkSuperpowersPluginForTuiFallback(config = {}) {
   }
 
   // Check for Superpowers plugin by looking for its skill directory
-  const pluginPaths = [
-    codexHome ? codexHome + '/plugins/superpowers' : null,
-    codexHome ? codexHome + '/plugins/cache/openai-curated/superpowers' : null,
-    codexHome ? codexHome + '/plugins/cache/openai-api-curated/superpowers' : null,
-    '/home/a9017/.codex/plugins/cache/openai-curated/superpowers',
-    '/home/a9017/.codex/plugins/cache/openai-api-curated/superpowers',
-    '/home/a9017/.codex/skills/superpowers',
-  ].filter(Boolean);
+  const codexHomes = [...new Set([
+    config.codexHome,
+    env.CODEX_HOME,
+    join(homedir(), ".codex"),
+  ].filter(Boolean))];
+  const pluginPaths = codexHomes.flatMap((codexHome) => [
+    join(codexHome, "plugins", "superpowers"),
+    join(codexHome, "plugins", "cache", "openai-curated", "superpowers"),
+    join(codexHome, "plugins", "cache", "openai-api-curated", "superpowers"),
+    join(codexHome, "skills", "superpowers"),
+  ]);
 
   let found = false;
   for (const p of pluginPaths) {
@@ -144,4 +147,3 @@ export function checkSuperpowersPluginForTuiFallback(config = {}) {
     },
   };
 }
-

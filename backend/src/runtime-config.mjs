@@ -20,6 +20,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeCodexHomeMode, resolveCodexHome } from "./path-context/codex-home-resolver.mjs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = resolve(__dirname, "..", "..");
@@ -158,6 +159,13 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK",
   ], true);
   const backendRoot = resolve(workspaceRoot || PROJECT_ROOT, "backend");
+  const defaultRepoPath = _get("GPTWORK_DEFAULT_REPO_PATH", "");
+  const codexHomeMode = normalizeCodexHomeMode(_get("GPTWORK_CODEX_HOME_MODE", "project"));
+  const codexHome = resolveCodexHome({
+    projectRoot: defaultRepoPath || workspaceRoot || PROJECT_ROOT,
+    mode: codexHomeMode,
+    explicitPath: _get("GPTWORK_CODEX_HOME", ""),
+  });
 
   // ── Resolved values ──────────────────────────────────────────────
 
@@ -198,7 +206,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     // Git defaults
     defaultRepo: _get("GPTWORK_DEFAULT_REPO", ""),
     defaultBranch: _get("GPTWORK_DEFAULT_BRANCH", "main"),
-    defaultRepoPath: _get("GPTWORK_DEFAULT_REPO_PATH", ""),
+    defaultRepoPath,
     defaultRemote: _get("GPTWORK_DEFAULT_REMOTE", "origin"),
     enableTaskWorktrees: _getBool("GPTWORK_ENABLE_TASK_WORKTREES", true),
 
@@ -255,7 +263,8 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     artifactHandoffV3Enabled: _getBool("GPTWORK_ARTIFACT_HANDOFF_V3_ENABLED", false),
 
     // Other
-    codexHome: _get("GPTWORK_CODEX_HOME", resolve(workspaceRoot || PROJECT_ROOT, ".codex")),
+    codexHomeMode,
+    codexHome,
     python: _get("GPTWORK_PYTHON", process.platform === "win32" ? "python" : "python3"),
     logPath: _get("GPTWORK_LOG_PATH", ""),
     requireAuth: _getBool("GPTWORK_REQUIRE_AUTH", true),
@@ -357,6 +366,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     maxReadBytes: "GPTWORK_MAX_READ_BYTES",
     maxShellOutputBytes: "GPTWORK_MAX_SHELL_OUTPUT_BYTES",
     codexHome: "GPTWORK_CODEX_HOME",
+    codexHomeMode: "GPTWORK_CODEX_HOME_MODE",
     python: "GPTWORK_PYTHON",
     logPath: "GPTWORK_LOG_PATH",
     requireAuth: "GPTWORK_REQUIRE_AUTH",
@@ -404,6 +414,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     "GPTWORK_REQUIRE_SUPERPOWERS_PLUGIN_FOR_TUI_FALLBACK",
   ]);
   sources.requireSuperpowersPluginForTuiFallback = sources.requireSuperpowersForTui;
+  if (codexHomeMode !== "explicit") sources.codexHome = "default";
 
   return { config, sources, envLoadResult };
 }

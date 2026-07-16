@@ -648,6 +648,18 @@ test("scheduleDetachedRestart returns method info", () => {
   assert.doesNotMatch(JSON.stringify(result), /secret|password|token|credential|key|api_key/i);
 });
 
+test("scheduleDetachedRestart uses strategy cwd for manual restart instructions", () => {
+  const cwd = "/tmp/gptwork-custom-backend";
+  const result = scheduleDetachedRestart({
+    strategy: { mode: "none", command: "", cwd, markerKind: "npm" },
+  });
+
+  assert.equal(result.scheduled, false);
+  assert.equal(result.manual_restart_required, true);
+  assert.match(result.command, new RegExp(cwd));
+  assert.equal(result.instruction, `cd "${cwd}" && npm run start`);
+});
+
 // ================================================================
 // 11. Edge cases
 // ================================================================

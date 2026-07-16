@@ -39,6 +39,11 @@ export async function handleHttp(req, res, server) {
     res.setHeader("mcp-session-id", req.headers["mcp-session-id"] || randomUUID());
     setSseHeaders(res);
     const response = await server.handleRpc(message, headersWithPathToken(req), (progress) => writeSseMessage(res, progress));
+    if (response == null) {
+      res.statusCode = 202;
+      res.end();
+      return;
+    }
     if (response) writeSseMessage(res, response);
     res.end();
   } catch (error) {

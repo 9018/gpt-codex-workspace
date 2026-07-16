@@ -8,6 +8,10 @@ import { randomUUID } from "node:crypto";
 import { validateTaskDelta, renderDeltaInstruction } from "./codex-tui-task-delta.mjs";
 import { createTaskContextStore } from "./context-contract/task-context-store.mjs";
 import { releaseLockForTask } from "./repo-lock.mjs";
+import { buildCodexProcessEnvironment } from "./path-context/codex-process-environment.mjs";
+import { snapshotNativeSessions } from "./codex-session/codex-session-inventory.mjs";
+import { resolveNativeSessionBinding } from "./codex-session/codex-session-resolver.mjs";
+import { createCodexSessionManifestStore } from "./codex-session/codex-session-manifest-store.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -285,6 +289,7 @@ async function startCodexTuiGoalSessionImpl({
   ptyAdapter = null,
   command = "codex",
   evidenceWaitMs = null,
+  pathContext = null,
   requireSuperpowers = true,
   releaseLockFn = null,
   onTerminalized = null,
@@ -297,6 +302,17 @@ async function startCodexTuiGoalSessionImpl({
   const adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
+  const nativeSessionsBefore = pathContext
+    ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
+    : [];
+  const processEnv = pathContext
+    ? buildCodexProcessEnvironment(pathContext, {
+      taskId: task?.id,
+      goalId: goal?.id,
+      executionId,
+      controlSessionId: sessionId,
+    })
+    : undefined;
 
   let existing = null;
   try { existing = await store.readSession(sessionId, { maxChars: 0 }); } catch (err) { if (err?.code !== "ENOENT") throw err; }
@@ -338,6 +354,7 @@ async function startCodexTuiGoalSessionImpl({
       command,
       evidence_wait_ms: Number.isFinite(Number(evidenceWaitMs)) ? Number(evidenceWaitMs) : null,
       require_superpowers_for_tui: requireSuperpowers !== false,
+      codex_home: pathContext?.codexHome || null,
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
   });
@@ -363,6 +380,7 @@ async function startCodexTuiGoalSessionImpl({
   try {
     ptySession = await adapter.spawn({
       cwd,
+      env: processEnv,
       command,
       args: [initialPrompt],
       onData: (chunk) => {
@@ -424,6 +442,18 @@ async function startCodexTuiGoalSessionImpl({
     bootstrapMethod = "argv_prompt_enter";
   }
   const bootstrapSentAt = new Date().toISOString();
+  const nativeSessionsAfter = pathContext
+    ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
+    : [];
+  const nativeBinding = pathContext
+    ? resolveNativeSessionBinding({
+      output: bootstrapOutput,
+      before: nativeSessionsBefore,
+      after: nativeSessionsAfter,
+      cwd,
+      pid: ptySession.pid ?? null,
+    })
+    : null;
 
   record = await store.updateSession(sessionId, {
     status: "running",
@@ -433,7 +463,29 @@ async function startCodexTuiGoalSessionImpl({
     bootstrap_method: bootstrapMethod,
     first_output_at: firstOutputAt,
     submitted: true,
+    native_session_id: nativeBinding?.nativeSessionId || null,
+    native_session_binding_source: nativeBinding?.source || null,
+    native_session_binding_reason: nativeBinding?.reason || null,
   });
+  if (pathContext) {
+    try {
+      await createCodexSessionManifestStore({ projectRoot: pathContext.projectRoot }).write({
+        control_session_id: sessionId,
+        native_session_id: nativeBinding?.nativeSessionId || null,
+        native_session_binding_source: nativeBinding?.source || null,
+        native_session_binding_reason: nativeBinding?.reason || null,
+        task_id: task?.id || null,
+        goal_id: goal?.id || null,
+        execution_id: executionId || null,
+        cwd,
+        codex_home: pathContext.codexHome,
+        provider: "codex_tui_goal",
+        status: "running",
+      });
+    } catch {
+      // Session attribution diagnostics must not make a live TUI unavailable.
+    }
+  }
   return {
     ...record,
     bootstrap_sent_at: bootstrapSentAt,

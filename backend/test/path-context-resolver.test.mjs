@@ -1,0 +1,95 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import { mkdir, mkdtemp } from "node:fs/promises";
+import { homedir, tmpdir } from "node:os";
+import { join } from "node:path";
+
+import { resolveCodexHome } from "../src/path-context/codex-home-resolver.mjs";
+import { resolvePathContext } from "../src/path-context/path-context-resolver.mjs";
+import { track, afterEachHook } from "./helpers/temp-cleanup.mjs";
+
+afterEachHook(test);
+
+function git(cwd, args) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }).trim();
+}
+
+async function makeRepo() {
+  const root = track(await mkdtemp(join(tmpdir(), "gptwork-path-context-")));
+  git(root, ["init", "-b", "main"]);
+  git(root, ["config", "user.email", "path-context@example.test"]);
+  git(root, ["config", "user.name", "Path Context Test"]);
+  await mkdir(join(root, "src"));
+  git(root, ["add", "."]);
+  git(root, ["commit", "--allow-empty", "-m", "initial"]);
+  return root;
+}
+
+test("resolveCodexHome supports project, user, and explicit modes", async () => {
+  const projectRoot = await makeRepo();
+  assert.equal(resolveCodexHome({ projectRoot, mode: "project" }), join(projectRoot, ".codex-runtime"));
+  assert.equal(resolveCodexHome({ projectRoot, mode: "user" }), join(homedir(), ".codex"));
+  assert.equal(resolveCodexHome({ projectRoot, mode: "explicit", explicitPath: "/tmp/codex-explicit" }), "/tmp/codex-explicit");
+  assert.throws(
+    () => resolveCodexHome({ projectRoot, mode: "explicit" }),
+    (error) => error?.code === "codex_home_explicit_path_required",
+  );
+});
+
+test("resolvePathContext prefers task bindings and validates a linked worktree", async () => {
+  const projectRoot = await makeRepo();
+  const worktreePath = `${projectRoot}-worktree`;
+  track(worktreePath);
+  git(projectRoot, ["worktree", "add", "-b", "task/path-context", worktreePath, "HEAD"]);
+
+  const context = await resolvePathContext({
+    mcpRoot: join(projectRoot, ".."),
+    projectsRoot: join(projectRoot, ".."),
+    workspaceRoot: join(projectRoot, ".."),
+    task: {
+      id: "task_path",
+      worktree_path: worktreePath,
+      result: { repo_resolution: { canonical_repo_path: projectRoot } },
+    },
+    repository: { canonical_path: "/must/not/win" },
+    config: { defaultRepoPath: "/also/must/not/win", codexHomeMode: "project" },
+  });
+
+  assert.equal(context.projectRoot, projectRoot);
+  assert.equal(context.canonicalRepoPath, projectRoot);
+  assert.equal(context.worktreePath, worktreePath);
+  assert.equal(context.executionCwd, worktreePath);
+  assert.equal(context.codexHome, join(projectRoot, ".codex-runtime"));
+  assert.equal(context.nativeSessionsRoot, join(projectRoot, ".codex-runtime", "sessions"));
+  assert.equal(context.controlSessionsRoot, join(projectRoot, ".gptwork", "codex-sessions"));
+});
+
+test("resolvePathContext uses repository then explicit config then default repository", async () => {
+  const repositoryRoot = await makeRepo();
+  const explicitRoot = await makeRepo();
+  const defaultRoot = await makeRepo();
+
+  const repositoryContext = await resolvePathContext({
+    repository: { canonical_path: repositoryRoot },
+    config: { projectRoot: explicitRoot, defaultRepoPath: defaultRoot },
+  });
+  assert.equal(repositoryContext.projectRoot, repositoryRoot);
+
+  const explicitContext = await resolvePathContext({
+    config: { projectRoot: explicitRoot, defaultRepoPath: defaultRoot },
+  });
+  assert.equal(explicitContext.projectRoot, explicitRoot);
+
+  const defaultContext = await resolvePathContext({
+    config: { defaultRepoPath: defaultRoot },
+  });
+  assert.equal(defaultContext.projectRoot, defaultRoot);
+});
+
+test("resolvePathContext fails closed instead of falling back to cwd or workspaceRoot", async () => {
+  await assert.rejects(
+    () => resolvePathContext({ workspaceRoot: process.cwd(), config: {} }),
+    (error) => error?.code === "project_root_unresolved",
+  );
+});

@@ -20,6 +20,9 @@ import { reconcileAllActiveTaskRuntimes } from "./runtime/task-runtime-reconcile
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
 import { sendCodexTuiSessionInput, stopCodexTuiSession } from "./codex-tui-session-manager.mjs";
 import { releaseLockForTask } from "./repo-lock.mjs";
+import { createProgressionCommandActuator } from "./progression/progression-command-actuator.mjs";
+import { createProgressionCommandHandlers } from "./progression/progression-command-handlers.mjs";
+import { createProgressionCommandStore } from "./progression/progression-command-store.mjs";
 import { existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
@@ -619,6 +622,106 @@ async function retryIntegrationForTask(store, config, task) {
   }
 }
 
+function taskDecisionRevision(task = {}) {
+  return task.decision_revision
+    ?? task.result?.unified_decision?.revision
+    ?? task.result?.unified_decision?.decision_revision
+    ?? task.result?.finalizer_decision?.revision
+    ?? task.result?.finalizer_decision?.unified_decision?.revision
+    ?? task.result?.finalizer_decision?.unified_decision?.decision_revision
+    ?? null;
+}
+
+function progressionProjectionError(command, message) {
+  const error = new Error(`${command.action} projection not satisfied: ${message}`);
+  error.code = "progression_projection_not_satisfied";
+  return error;
+}
+
+function createWorkerProgressionHandlers(store, config) {
+  async function loadTask(command) {
+    const state = await store.load();
+    const taskId = command.payload?.task_id || command.payload?.parent_task_id || command.task_id;
+    const task = state.tasks?.find((item) => item.id === taskId) || null;
+    if (!task) throw progressionProjectionError(command, `task ${taskId} not found`);
+    return { state, task };
+  }
+
+  return createProgressionCommandHandlers({
+    async complete_task(command) {
+      const { task } = await loadTask(command);
+      if (!isCompletedStatus(task.status)) {
+        throw progressionProjectionError(command, `task ${task.id} status=${task.status || "unknown"}`);
+      }
+      return { task_id: task.id, status: task.status, already_applied: true };
+    },
+
+    async propagate_goal(command) {
+      const state = await store.load();
+      const goal = state.goals?.find((item) => item.id === command.payload.goal_id) || null;
+      if (!goal) throw progressionProjectionError(command, `goal ${command.payload.goal_id} not found`);
+      if (!isCompletedStatus(goal.status)) {
+        throw progressionProjectionError(command, `goal ${goal.id} status=${goal.status || "unknown"}`);
+      }
+      return { goal_id: goal.id, status: goal.status, already_applied: true };
+    },
+
+    async advance_queue(command) {
+      const { state, task } = await loadTask(command);
+      const queueItem = state.goal_queue?.find((item) =>
+        item.task_id === task.id || (task.goal_id && item.goal_id === task.goal_id)
+      ) || null;
+      if (!queueItem) return { task_id: task.id, not_applicable: true };
+      if (!isCompletedStatus(queueItem.status)) {
+        throw progressionProjectionError(command, `queue ${queueItem.queue_id} status=${queueItem.status || "unknown"}`);
+      }
+      return { task_id: task.id, queue_id: queueItem.queue_id, status: queueItem.status, already_applied: true };
+    },
+
+    async create_repair_task(command) {
+      const { task } = await loadTask(command);
+      const result = await ensureRepairTaskForWaitingParent(store, config, task);
+      if (!result.repair_task_id) {
+        throw progressionProjectionError(command, result.reason || `repair task was not created for ${task.id}`);
+      }
+      return result;
+    },
+
+    async integrate_change(command) {
+      const { task } = await loadTask(command);
+      if (isCompletedStatus(task.status)) {
+        return { task_id: task.id, status: task.status, already_applied: true };
+      }
+      const result = await retryIntegrationForTask(store, config, task);
+      if (!isCompletedStatus(result.status)) {
+        throw progressionProjectionError(command, result.reason || `integration status=${result.status || "unknown"}`);
+      }
+      return result;
+    },
+  });
+}
+
+async function drainProgressionCommands(store, config, maxTasks) {
+  const commandStore = createProgressionCommandStore({ store });
+  const actuator = createProgressionCommandActuator({
+    commandStore,
+    handlers: createWorkerProgressionHandlers(store, config),
+    owner: config.progressionCommandOwner || `codex-worker:${process.pid}`,
+    leaseMs: config.progressionCommandLeaseMs || 60_000,
+    retryDelayMs: config.progressionCommandRetryDelayMs || 5_000,
+    getCurrentDecisionRevision: async (taskId) => {
+      const state = await store.load();
+      const task = state.tasks?.find((item) => item.id === taskId) || null;
+      return task ? taskDecisionRevision(task) : null;
+    },
+  });
+  const configuredLimit = Number(config.progressionCommandBatchSize);
+  const maxCommands = Number.isFinite(configuredLimit) && configuredLimit > 0
+    ? configuredLimit
+    : Math.min(100, Math.max(3, maxTasks * 3));
+  return actuator.drain({ maxCommands });
+}
+
 async function runSingleCodexTask(store, config, github, task, context, processGeneralTask) {
   let transitioned = false;
   try {
@@ -716,6 +819,13 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
   state = await store.load();
   const reviewRecovery = await recoverAcceptedVerifiedReviewTasks(store, maxTasks);
   const queueReconciliation = await reconcileRunningQueueItems(store);
+  const progressionCommands = await drainProgressionCommands(store, config, maxTasks).catch((error) => ({
+    claimed: 0,
+    applied: 0,
+    failed: 0,
+    superseded: 0,
+    error: errorMessage(error),
+  }));
 
   // Use indexed query from StateStore instead of full scan on state.tasks.
   // The query is fair across status buckets so large assigned backlogs do not
@@ -803,6 +913,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     queue_autostart: queueAutostart,
     review_recovery: reviewRecovery,
     queue_reconciliation: queueReconciliation,
+    progression_commands: progressionCommands,
     runtime_reconciliation: runtimeReconciliation,
     completed,
     failed,

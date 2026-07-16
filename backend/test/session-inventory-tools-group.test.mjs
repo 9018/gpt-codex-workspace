@@ -1,6 +1,12 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createSessionInventoryToolsGroup } from '../src/tool-groups/session-inventory-tools-group.mjs';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import {
+  createSessionInventoryToolsGroup,
+  listCodexSessionsMetadata,
+} from '../src/tool-groups/session-inventory-tools-group.mjs';
 
 function fakeTool(description, inputSchema, handler) {
   return { description, inputSchema, handler };
@@ -32,7 +38,7 @@ test('session inventory tool group exposes stable public tool names and schemas'
   assert.equal(tools.list_codex_sessions_metadata.inputSchema.properties.limit, 'integer');
   assert.deepEqual(tools.list_codex_sessions_metadata.inputSchema.required, []);
   assert.ok(typeof tools.list_codex_sessions_metadata.description === 'string');
-  assert.ok(tools.list_codex_sessions_metadata.description.includes('.codex/sessions'));
+  assert.ok(tools.list_codex_sessions_metadata.description.includes('CODEX_HOME/sessions'));
 
   // create_codex_session_inventory_task: limit (optional)
   assert.equal(tools.create_codex_session_inventory_task.inputSchema.properties.limit, 'integer');
@@ -71,6 +77,27 @@ test('list_codex_sessions_metadata handler rejects without workspace:read scope'
     () => tools.list_codex_sessions_metadata.handler({}, { user_id: 'test', scopes: [] }),
     /workspace:read/,
   );
+});
+
+test('session inventory treats codexHome as CODEX_HOME and reads its sessions directory', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-codex-home-'));
+  try {
+    const sessionsRoot = join(codexHome, 'sessions', '2026', '07', '17');
+    await mkdir(sessionsRoot, { recursive: true });
+    await writeFile(join(sessionsRoot, 'session.jsonl'), '{}\n');
+
+    const result = await listCodexSessionsMetadata(
+      { codexHome },
+      { year: '2026', month: '07', day: '17' },
+      { user_id: 'test', scopes: ['workspace:read'] },
+    );
+
+    assert.equal(result.root, join(codexHome, 'sessions'));
+    assert.equal(result.count, 1);
+    assert.equal(result.sessions[0].relative_path, '2026/07/17/session.jsonl');
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
 });
 
 test('create_codex_session_inventory_task handler calls createTask with readonly mode', async () => {

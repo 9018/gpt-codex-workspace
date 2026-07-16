@@ -216,9 +216,9 @@ function createAdapter({
   }
 
   return {
-    async spawn({ cwd, onData, onExit, args = [], command: spawnCommand } = {}) {
+    async spawn({ cwd, env: processEnv, onData, onExit, args = [], command: spawnCommand } = {}) {
       const env = {
-        ...process.env,
+        ...(processEnv || process.env),
         TERM: "xterm-256color",
       };
       const cmd = spawnCommand || defaultCommand;

@@ -247,6 +247,18 @@ test("gptwork_doctor returns runtime env diagnostics", async () => {
   assert.equal(typeof result.hosted_default_root_aligned, "boolean");
 });
 
+test("gptwork_doctor derives hosted root alignment from configured paths", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-doctor-root-"));
+  const workspaceRoot = join(root, "workspace");
+  const server = await makeServer({
+    defaultWorkspaceRoot: workspaceRoot,
+    defaultRepoPath: join(workspaceRoot, "project"),
+  });
+
+  const result = await callTool(server, "gptwork_doctor");
+  assert.equal(result.hosted_default_root_aligned, true);
+});
+
 test("gptwork_doctor returns repo diagnostics", async () => {
   const server = await makeServer();
   const result = await callTool(server, "gptwork_doctor");

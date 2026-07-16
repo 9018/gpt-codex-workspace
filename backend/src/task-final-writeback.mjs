@@ -25,6 +25,7 @@ import { continueOnCompletedOutcome, convergeGoalFromContinuation, goalStatusFro
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
 
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
@@ -273,6 +274,7 @@ export async function finalizeCodexTaskRun({
   createRepairGoalFromFindingsFn = createRepairGoalFromFindings,
   scheduleRepairAttemptFn = scheduleRepairAttempt,
   createGoalFn = createGoal,
+  reconcileProgressionCommandsInStateFn = reconcileProgressionCommandsInState,
   deliveryResultRecovery = null,
 }) {
   if (runFilePath) {
@@ -784,11 +786,31 @@ export async function finalizeCodexTaskRun({
     });
   }
 
+  const progressionDecision = buildProgressionDecision({
+    task,
+    goal,
+    taskResult,
+    doneAt,
+    config,
+  });
   const result = typeof store.mutate === "function"
-    ? await mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn: notifyTerminalTask })
+    ? await mutateFinalTaskState({
+        store,
+        task,
+        taskStatus,
+        taskResult,
+        doneAt,
+        cr,
+        config,
+        goal,
+        progressionDecision,
+        reconcileProgressionCommandsInStateFn,
+        notifyTerminalTaskFn: notifyTerminalTask,
+      })
     : await updateTaskFn(store, task.id, (item) => {
       applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config });
     });
+  const progressionReport = result?.progression_commands || null;
 
   if (taskStatus === "completed" && (task.workstream_id || goal?.workstream_id)) {
     const outcomeUpdate = await updateWorkstreamContextFromCompletedTask({
@@ -906,7 +928,49 @@ export async function finalizeCodexTaskRun({
   } catch {
     // Non-critical — goal sweep must not fail finalization.
   }
-  return { task_id: result.task.id, status: taskStatus, kind: taskResult.kind, auto_start: autoStartResult };
+  return {
+    task_id: result.task.id,
+    status: taskStatus,
+    kind: taskResult.kind,
+    auto_start: autoStartResult,
+    progression_commands: progressionReport,
+  };
+}
+
+function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, doneAt, config = {} } = {}) {
+  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
+  if (!unifiedDecision || typeof unifiedDecision !== "object") return null;
+  const revision = task.decision_revision
+    ?? taskResult.finalizer_decision?.revision
+    ?? doneAt
+    ?? unifiedDecision.revision
+    ?? unifiedDecision.decision_revision;
+  const evidenceRevision = task.evidence_revision
+    ?? taskResult.evidence_revision
+    ?? taskResult.verification?.revision
+    ?? taskResult.contract_verification?.revision
+    ?? doneAt
+    ?? unifiedDecision.evidence_revision
+    ?? revision;
+  return {
+    ...unifiedDecision,
+    task_id: task.id,
+    goal_id: goal?.id || task.goal_id || null,
+    revision,
+    decision_revision: revision,
+    evidence_revision: evidenceRevision,
+    normalized_at: doneAt ?? revision,
+    integration: {
+      ...(taskResult.integration || {}),
+      source_commit: taskResult.integration?.source_commit
+        || taskResult.integration?.commit
+        || taskResult.commit
+        || null,
+      target_branch: taskResult.integration?.target_branch
+        || config.defaultBranch
+        || "main",
+    },
+  };
 }
 
 function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) {
@@ -1276,7 +1340,19 @@ function deriveSpecWorktreeRecord(taskResult = {}, existingWorktree = null) {
   };
 }
 
-async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneAt, cr, config, goal, notifyTerminalTaskFn }) {
+async function mutateFinalTaskState({
+  store,
+  task,
+  taskStatus,
+  taskResult,
+  doneAt,
+  cr,
+  config,
+  goal,
+  progressionDecision,
+  reconcileProgressionCommandsInStateFn,
+  notifyTerminalTaskFn,
+}) {
   return store.mutate(async (state) => {
     state.tasks ||= [];
     state.goals ||= [];
@@ -1284,6 +1360,9 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
     const item = state.tasks.find((candidate) => candidate.id === task.id);
     if (!item) throw new Error(`task not found: ${task.id}`);
     applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config });
+    if (progressionDecision?.revision !== undefined && progressionDecision?.revision !== null) {
+      item.decision_revision = progressionDecision.revision;
+    }
     item.updated_at = new Date().toISOString();
     state.activities.push({ time: item.updated_at, type: "task.updated", task_id: task.id, status: item.status });
     await notifyTerminalTaskFn(item);
@@ -1321,7 +1400,14 @@ async function mutateFinalTaskState({ store, task, taskStatus, taskResult, doneA
       }
     }
     reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt });
-    return { task: item };
+    const progressionReport = progressionDecision
+      ? reconcileProgressionCommandsInStateFn({
+          state,
+          decisions: [progressionDecision],
+          now: () => doneAt,
+        })
+      : null;
+    return { task: item, progression_commands: progressionReport };
   });
 }
 

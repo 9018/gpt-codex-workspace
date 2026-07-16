@@ -17,6 +17,7 @@ export function runLocalShell(command, cwd, timeout, maxOutputBytes, onChildSpaw
 
     const child = spawn(shell, [shellFlag, command], {
       cwd,
+      env: options.env || process.env,
       detached: process.platform !== "win32",
       stdio: ["pipe", "pipe", "pipe"],
       maxBuffer: maxBuf

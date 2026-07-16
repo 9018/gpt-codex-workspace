@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { buildRuntimeConfig, loadRuntimeEnv } from "../src/runtime-config.mjs";
 import { createGptWorkServer } from "../src/gptwork-server.mjs";
 import "./helpers/env-isolation.mjs";
@@ -75,6 +75,43 @@ test("buildRuntimeConfig derives productized restart defaults without author pat
   assert.equal(sources.restartCwd, "default");
   assert.equal(sources.restartCommand, "default");
   assert.equal(sources.sshSocksProxy, "default");
+});
+
+test("buildRuntimeConfig defaults CODEX_HOME to the project-scoped runtime directory", () => {
+  clearGptWorkVars();
+  const { config, sources } = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(config.codexHomeMode, "project");
+  assert.equal(config.codexHome, "/tmp/test-root/.codex-runtime");
+  assert.equal(sources.codexHomeMode, "default");
+  assert.equal(sources.codexHome, "default");
+});
+
+test("buildRuntimeConfig resolves user and explicit CODEX_HOME modes", () => {
+  clearGptWorkVars();
+  process.env.GPTWORK_CODEX_HOME_MODE = "user";
+  process.env.GPTWORK_CODEX_HOME = "/ignored/in/user/mode";
+  const user = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(user.config.codexHome, join(homedir(), ".codex"));
+  assert.equal(user.sources.codexHomeMode, "process.env");
+  assert.equal(user.sources.codexHome, "default");
+
+  clearGptWorkVars();
+  process.env.GPTWORK_CODEX_HOME_MODE = "explicit";
+  process.env.GPTWORK_CODEX_HOME = "/tmp/custom-codex-home";
+  const explicit = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(explicit.config.codexHome, "/tmp/custom-codex-home");
+  assert.equal(explicit.sources.codexHome, "process.env");
+
+  clearGptWorkVars();
+});
+
+test("buildRuntimeConfig rejects explicit CODEX_HOME mode without an absolute path", () => {
+  clearGptWorkVars();
+  process.env.GPTWORK_CODEX_HOME_MODE = "explicit";
+  assert.throws(() => buildRuntimeConfig("/tmp/test-root"), /CODEX_HOME is required/i);
+  process.env.GPTWORK_CODEX_HOME = "relative/path";
+  assert.throws(() => buildRuntimeConfig("/tmp/test-root"), /absolute path/i);
+  clearGptWorkVars();
 });
 
 test("buildRuntimeConfig defaults delivery result recovery commands to empty list", () => {

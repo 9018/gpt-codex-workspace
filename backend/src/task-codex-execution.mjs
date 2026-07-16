@@ -2,6 +2,9 @@ import { fireHeartbeat, updateRunHeartbeat, writeRunLogs, ensureRunLogFiles, cre
 import { parseCodexResultWithFallback } from "./codex-result-parser.mjs";
 import { updateRepoLock } from "./repo-lock.mjs";
 import { runLocalShell } from "./workspace-service.mjs";
+import { parseNativeCodexSessionId } from "./codex-session/native-session-id-parser.mjs";
+import { createCodexSessionManifestStore } from "./codex-session/codex-session-manifest-store.mjs";
+import { buildCodexProcessEnvironment } from "./path-context/codex-process-environment.mjs";
 /**
  * Re-resolve codex exec CLI arguments at execution time.
  * Reads from the current process.env GPTWORK_CODEX_EXEC_ARGS so that
@@ -91,6 +94,9 @@ export async function executeCodexTaskRun({
   promptFile,
   runFilePath = null,
   runId = null,
+  pathContext = null,
+  executionId = null,
+  controlSessionId = null,
   repoLockPath = null,
   runLocalShellFn = runLocalShell,
   parseCodexResultFn = parseCodexResultWithFallback,
@@ -131,6 +137,14 @@ export async function executeCodexTaskRun({
   });
 
   const cwd = executionCwd || workspaceRoot;
+  const processEnv = pathContext
+    ? buildCodexProcessEnvironment(pathContext, {
+      taskId: task?.id,
+      goalId: goal?.id,
+      executionId: executionId || runId,
+      controlSessionId,
+    })
+    : process.env;
   cr = await runLocalShellFn(cmd, cwd, config.codexExecTimeout, 1000000, (pid) => {
     if (repoLockPath) {
       updateRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id, { child_pid: pid }).catch(() => {});
@@ -141,6 +155,7 @@ export async function executeCodexTaskRun({
       updateRunHeartbeatFn(runFilePath, "running_codex", { codex_child_pid: pid }).catch(() => {});
     }
   }, {
+    env: processEnv,
     firstOutputTimeoutSeconds: config.codexFirstOutputTimeout || 180,
     contentFirstOutputTimeoutSeconds: config.codexContentFirstOutputTimeout || 0,
     noProgressTimeoutSeconds: config.codexNoProgressTimeout || 0,
@@ -249,7 +264,27 @@ export async function executeCodexTaskRun({
     reasoning_effort: headerMeta?.reasoning_effort || null,
     config_source: effectiveConfigSource,
     effective_args: effectiveCodexExecArgs,
+    native_session_id: parseNativeCodexSessionId(`${cr?.stdout || ""}\n${cr?.stderr || ""}`),
   };
+
+  if (pathContext && (controlSessionId || executionId || runId)) {
+    const manifestControlId = controlSessionId || executionId || runId;
+    try {
+      await createCodexSessionManifestStore({ projectRoot: pathContext.projectRoot }).write({
+        control_session_id: manifestControlId,
+        native_session_id: codexMeta.native_session_id,
+        task_id: task?.id || null,
+        goal_id: goal?.id || null,
+        execution_id: executionId || runId || null,
+        cwd,
+        codex_home: pathContext.codexHome,
+        provider: "codex_exec",
+        status: cr?.returncode === 0 ? "completed" : "failed",
+      });
+    } catch {
+      // Session attribution diagnostics must not change task execution outcome.
+    }
+  }
 
   return { cr, parsedResult, summary, codexMeta };
 }

@@ -125,6 +125,20 @@ test("POST /mcp with valid JSON-RPC delegates to handleRpc", async () => {
   assert.match(res._body(), /"id":1/);
 });
 
+test("POST /mcp notification returns 202 Accepted with no body", async () => {
+  const req = mockReq({
+    method: "POST", url: "/mcp",
+    headers: { "mcp-session-id": "notification-session" },
+    body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
+  });
+  const res = mockRes();
+  await handleHttp(req, res, mockServer(null));
+
+  assert.equal(res._statusCode(), 202);
+  assert.equal(res._headers["mcp-session-id"], "notification-session");
+  assert.equal(res._body(), "");
+});
+
 test("POST /mcp with invalid JSON returns parse error via 400", async () => {
   const req = mockReq({ method: "POST", url: "/mcp", body: "not-json" });
   const res = mockRes();

@@ -1,6 +1,6 @@
 import { execSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { SERVICE_NAME } from "./safe-restart-marker-store.mjs";
 import { getRestartStrategy, getRestartInstruction } from "./restart-strategy.mjs";
 
@@ -54,7 +54,7 @@ export function scheduleDetachedRestart(options = {}) {
     case "npm": {
       // Try restart script first, fall back to inline nohup
       const scriptPath = join(cwd || "", "scripts/restart-npm-gptwork.sh");
-      const parentDir = cwd ? join(cwd, "..") : "/home/a9017/mcp/workspace/gpt-codex-workspace";
+      const parentDir = dirname(cwd);
       const logDir = join(parentDir, ".gptwork/logs");
       mkdirSync(logDir, { recursive: true });
 
@@ -185,13 +185,16 @@ export function scheduleDetachedRestart(options = {}) {
     // -----------------------------------------------------------------------
     case "none":
     default:
+      {
+        const instruction = getRestartInstruction(restartStrategy);
       return {
         method: "manual-restart-required",
-        command: getRestartInstruction(restartStrategy),
+        command: instruction,
         scheduled: false,
         manual_restart_required: true,
         restart_mode: mode,
-        instruction: "cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend && npm run start",
+        instruction: `cd "${cwd}" && npm run start`,
       };
+      }
   }
 }

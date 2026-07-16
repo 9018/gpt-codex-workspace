@@ -1,0 +1,7 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+PROJECT_ROOT="$(git rev-parse --show-toplevel)"
+export CODEX_HOME="${PROJECT_ROOT}/.codex-runtime"
+mkdir -p "${CODEX_HOME}"
+exec codex "$@"

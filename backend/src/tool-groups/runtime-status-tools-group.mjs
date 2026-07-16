@@ -1,5 +1,5 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, resolve, sep } from "node:path";
 import { resolveRepoDir, collectRuntimeGitInfoCached, collectRestartMarkerStatus, reconcilePendingRestartMarkers, withCache } from "../diagnostics-service.mjs";
 import { getRepoLockSummary } from "../repo-lock.mjs";
 import { workerStatusSnapshot, workerStatusExtendedSnapshot } from "../codex-worker-state.mjs";
@@ -24,6 +24,13 @@ export function createRuntimeStatusToolsGroup({
 
   function isRuntimeEnvConfigured() {
     return envLoadResult.keys.length > 0 || hasProcessEnvRuntimeConfig();
+  }
+
+  function isDefaultRepoInsideWorkspace() {
+    if (!config.defaultWorkspaceRoot || !config.defaultRepoPath) return false;
+    const workspaceRoot = resolve(config.defaultWorkspaceRoot);
+    const repoPath = resolve(config.defaultRepoPath);
+    return repoPath === workspaceRoot || repoPath.startsWith(workspaceRoot + sep);
   }
 
   async function getCachedRepoLockSummary() {
@@ -278,7 +285,7 @@ try { await reconcilePendingRestartMarkers(config.defaultWorkspaceRoot, config.d
           runtime_env_configured: isRuntimeEnvConfigured(),
           runtime_env_file_path: envLoadResult.loadedPath || null,
           workspace_root: config.defaultWorkspaceRoot,
-          hosted_default_root_aligned: config.defaultWorkspaceRoot === '/home/a9017/mcp/workspace',
+          hosted_default_root_aligned: isDefaultRepoInsideWorkspace(),
           default_repo: config.defaultRepo,
           default_branch: config.defaultBranch,
           default_repo_path: config.defaultRepoPath,

@@ -1,3 +1,10 @@
+import { normalizeIntegrationFacts } from "./domain/integration-semantics.mjs";
+import {
+  normalizeDecisionRevision,
+  UNIFIED_DECISION_SCHEMA_VERSION,
+} from "./domain/unified-decision-schema.mjs";
+import { assertValidUnifiedDecision, validateUnifiedDecision } from "./domain/unified-decision-validator.mjs";
+
 /**
  * codex-unified-decision.mjs — UnifiedAcceptanceDecision type and normalizer.
  *
@@ -80,10 +87,9 @@ function list(value) {
   return Array.isArray(value) ? value.filter(Boolean) : [];
 }
 
-function firstOf(...sources) {
-  for (const rawSource of sources) {
-    const source = rawSource && typeof rawSource === 'object' ? rawSource : {};
-    if (source !== null && source !== undefined && source !== '') return source;
+export function firstOf(...values) {
+  for (const value of values) {
+    if (value !== null && value !== undefined && value !== '') return value;
   }
   return null;
 }
@@ -97,13 +103,11 @@ function buildIntegrationEffect({ status, decision, taskResult } = {}) {
   const tr = asObject(taskResult);
   const integration = asObject(tr.integration || d.integration || {});
 
-  const isCompleted = status === UNIFIED_STATUSES.COMPLETED;
   const integrationRequired = d.integration_required === true
     || d.requires_integration === true
     || d.integration_effect?.required === true
     || tr.needs_integration === true
-    || integration.required === true
-    || (isCompleted && list(tr.changed_files).length > 0 && integration.satisfied !== true);
+    || integration.required === true;
 
   const integrationStatus = integration.status || d.integration_effect?.status || null;
   const integrationSatisfied = integration.satisfied === true
@@ -114,11 +118,17 @@ function buildIntegrationEffect({ status, decision, taskResult } = {}) {
     || tr.auto_integration_completion?.completed === true
     || (!integrationRequired);
 
+  const integrationTerminal = integration.terminal === true
+    || ['merged', 'ff_only_merged', 'skipped', 'not_required'].includes(String(integrationStatus || '').toLowerCase())
+    || d.integration_effect?.terminal === true
+    || tr.auto_integration_completion?.completed === true
+    || !integrationRequired;
+
   return {
     required: integrationRequired,
     status: integrationStatus || (integrationSatisfied ? 'satisfied' : null),
     satisfied: integrationSatisfied,
-    terminal: integrationSatisfied,
+    terminal: integrationTerminal,
   };
 }
 
@@ -126,7 +136,8 @@ function buildGoalEffect({ status, decision } = {}) {
   const d = asObject(decision);
   const existing = asObject(d.goal_effect);
   const isCompleted = status === UNIFIED_STATUSES.COMPLETED;
-  const completeGoal = existing.complete_goal === true || (isCompleted && d.safe_to_auto_advance !== false);
+  const completeGoal = isCompleted
+    && (existing.complete_goal === true || d.safe_to_auto_advance !== false);
   return {
     status,
     complete_goal: completeGoal,
@@ -137,7 +148,8 @@ function buildGoalEffect({ status, decision } = {}) {
 function buildQueueEffect({ status, decision } = {}) {
   const d = asObject(decision);
   const isCompleted = status === UNIFIED_STATUSES.COMPLETED;
-  const safeToAutoAdvance = d.safe_to_auto_advance === true || (isCompleted && d.blocking_passed !== false);
+  const safeToAutoAdvance = isCompleted
+    && (d.safe_to_auto_advance === true || d.blocking_passed !== false);
   return {
     status,
     unblock_dependents: safeToAutoAdvance,
@@ -336,7 +348,13 @@ export function normalizeToUnifiedDecision({
   const vd = asObject(verification);
   const tr = asObject(taskResult);
 
-  const status = deriveStatus({ finalizerDecision: fd, closureDecision: cd, convergenceDecision, gateDecision: gd, verification: vd, taskResult: tr });
+  const proposedStatus = deriveStatus({ finalizerDecision: fd, closureDecision: cd, convergenceDecision, gateDecision: gd, verification: vd, taskResult: tr });
+  const proposedIntegrationEffect = buildIntegrationEffect({ status: proposedStatus, decision: fd, taskResult: tr });
+  const status = proposedStatus === UNIFIED_STATUSES.COMPLETED
+    && proposedIntegrationEffect.required
+    && (!proposedIntegrationEffect.satisfied || !proposedIntegrationEffect.terminal)
+    ? UNIFIED_STATUSES.WAITING_FOR_INTEGRATION
+    : proposedStatus;
 
   const reason = firstOf(
     fd.reason, cd.reason, gd.reason,
@@ -368,7 +386,7 @@ export function normalizeToUnifiedDecision({
   const requiresIntegration = deriveRequiresIntegration({ status, decision: fd, taskResult: tr });
   const safeToAutoAdvance = deriveSafeToAutoAdvance({ status, decision: fd, verification: vd });
 
-  const integrationEffect = buildIntegrationEffect({ status, decision: fd, taskResult: tr });
+  const integrationEffect = proposedIntegrationEffect;
   const goalEffect = buildGoalEffect({ status, decision: fd });
   const queueEffect = buildQueueEffect({ status, decision: fd });
 
@@ -378,7 +396,50 @@ export function normalizeToUnifiedDecision({
     || (convergenceDecision && convergenceDecision.nextStatus === UNIFIED_STATUSES.RESTART_PENDING)
     || tr.restart_required === true;
 
-  return {
+  const taskId = task?.id || tr.task_id || fd.task_id || "unbound_task";
+  const decisionRevision = normalizeDecisionRevision(
+    task?.decision_revision ?? fd.decision_revision ?? fd.revision,
+    timestamp,
+  );
+  const evidenceRevision = vd.revision
+    ?? contractVerification?.revision
+    ?? tr.evidence_revision
+    ?? tr.updated_at
+    ?? timestamp;
+  const verificationPassed = vd.passed === false
+    ? false
+    : status === UNIFIED_STATUSES.COMPLETED || vd.passed === true;
+  const acceptancePassed = contractVerification?.blocking_passed === false
+    || contractVerification?.completion_eligible === false
+    ? false
+    : status === UNIFIED_STATUSES.COMPLETED
+      || contractVerification?.blocking_passed === true
+      || contractVerification?.completion_eligible === true;
+  const facts = {
+    provider: tr.execution_backend || tr.provider || null,
+    verification: { ...vd, passed: verificationPassed },
+    acceptance: { ...asObject(contractVerification), passed: acceptancePassed },
+    review: {
+      blocking_findings: blockers,
+      requires_review: requiresReview,
+    },
+    integration: normalizeIntegrationFacts(integrationEffect),
+    delivery: asObject(tr.delivery),
+    closure: { status, reason },
+  };
+  const effects = {
+    task: { status },
+    goal: goalEffect,
+    queue: queueEffect,
+    workstream: { status, advance: safeToAutoAdvance },
+    integration: integrationEffect,
+  };
+  const decision = {
+    schema_version: UNIFIED_DECISION_SCHEMA_VERSION,
+    task_id: taskId,
+    decision_revision: decisionRevision,
+    evidence_revision: evidenceRevision,
+    facts,
     status,
     reason,
     closure_reason: closureReason,
@@ -397,9 +458,14 @@ export function normalizeToUnifiedDecision({
     integration_effect: integrationEffect,
     goal_effect: goalEffect,
     queue_effect: queueEffect,
+    effects,
     source,
     normalized_at: timestamp,
   };
+  const consistency = validateUnifiedDecision(decision);
+  decision.consistency = consistency;
+  assertValidUnifiedDecision(decision);
+  return decision;
 }
 
 /**
@@ -435,8 +501,10 @@ export function checkDecisionConsistency(decision) {
     issues.push('status=completed but requires_review=true');
   }
 
-  if (decision.status === UNIFIED_STATUSES.COMPLETED && decision.requires_integration && !decision.integration_effect.satisfied) {
-    issues.push('status=completed but requires_integration=true without integration satisfied');
+  if (decision.status === UNIFIED_STATUSES.COMPLETED
+    && decision.integration_effect?.required === true
+    && (decision.integration_effect.satisfied !== true || decision.integration_effect.terminal !== true)) {
+    issues.push('status=completed but required integration is not satisfied and terminal');
   }
 
   if (decision.status === UNIFIED_STATUSES.COMPLETED && decision.queue_effect && decision.queue_effect.hold_queue === true) {

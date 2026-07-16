@@ -30,6 +30,7 @@ import { executeAgentBackendRun, resolveAgentBackendId } from "./agent-execution
 import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgentRun, writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writePlannerAgentRun, completeQueuedAgentRuns, skipDownstreamAgentRunsForBlocker } from "./agent-run-writeback.mjs";
 import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
 import { syncAgentRunProgress } from "./subagent-progress-bridge.mjs";
+import { resolvePathContext } from "./path-context/path-context-resolver.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -456,6 +457,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const executeCodexTaskRunFn = deps.executeCodexTaskRunFn || executeCodexTaskRun;
   const runCommandFn = deps.runCommandFn;
   const executeAgentBackendRunFn = deps.executeAgentBackendRunFn || ((args) => executeAgentBackendRun(args, { runCodexTaskFn: executeCodexTaskRunFn, runLocalShellFn: runCommandFn }));
+  const resolvePathContextFn = deps.resolvePathContextFn || resolvePathContext;
   const finalizeCodexTaskRunFn = deps.finalizeCodexTaskRunFn || finalizeCodexTaskRun;
   const updateTaskFn = deps.updateTaskFn || updateTask;
   const appendGoalMessageFn = deps.appendGoalMessageFn || appendGoalMessage;
@@ -566,6 +568,22 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   let executionCwd = usesCanonicalExecution ? (resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath) : null;
   let worktreeMaterialized = usesCanonicalExecution; // canonical execution doesn't need worktree materialization
   let tuiEvidenceReady = null;
+  let pathContext = null;
+
+  async function ensurePathContext() {
+    if (pathContext) return pathContext;
+    pathContext = await resolvePathContextFn({
+      workspaceRoot: config.defaultWorkspaceRoot || config.workspaceRoot,
+      task: {
+        ...task,
+        canonical_repo_path: resolvedRepo.canonical_repo_path,
+        task_worktree_path: executionCwd || resolvedRepo.task_worktree_path,
+      },
+      repository: { canonical_path: resolvedRepo.canonical_repo_path },
+      config,
+    });
+    return pathContext;
+  }
 
   async function materializeExecutionWorktree() {
     if (worktreeMaterialized) return { ok: true };
@@ -761,6 +779,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
     const tuiWorktree = await materializeExecutionWorktree();
     if (!tuiWorktree.ok) return failWorktree(tuiWorktree.reason);
+    const tuiPathContext = await ensurePathContext();
 
     // Acquire repo lock before starting TUI session
     const tuiLockPath = resolvedRepo.lock_repo_path || executionCwd;
@@ -786,6 +805,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       worktreePath: executionCwd,
       branch: resolvedRepo.worktree_lifecycle?.branch_name || resolvedRepo.task_branch || null,
       baseCommit: resolvedRepo.worktree_lifecycle?.base_sha || resolvedRepo.base_sha || null,
+      pathContext: tuiPathContext,
+      executionId: task.execution_id || task.run_id || null,
       releaseLockFn: () => releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id),
     });
 
@@ -1008,6 +1029,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }
 
     try {
+      const execPathContext = await ensurePathContext();
       ({ cr, parsedResult, summary, codexMeta } = await executeAgentBackendRunFn({
         config,
         workspaceRoot: workspace.root,
@@ -1020,6 +1042,8 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
         runId,
         repoLockPath,
         executionCwd,
+        pathContext: execPathContext,
+        executionId: runId,
       }));
     } catch (e) {
       summary = "[ERROR] " + e.message;

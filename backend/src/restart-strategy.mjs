@@ -9,12 +9,16 @@
  *   none      – manual restart only; no automatic restart
  */
 
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 export const RESTART_MODES = ["npm", "command", "systemd", "none"];
 
 // Defaults for this workspace
 export const DEFAULT_RESTART_MODE = "npm";
 export const RESTART_SCRIPTS_DIR = "scripts";
 export const RESTART_SCRIPT_NAME = "restart-npm-gptwork.sh";
+export const DEFAULT_RESTART_CWD = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // ---------------------------------------------------------------------------
 // Public helpers
@@ -33,7 +37,7 @@ export function getRestartStrategy(config = {}) {
   const markerKind = _resolveMarkerKind(config);
 
   const restartModeSource = _source("GPTWORK_RESTART_MODE", config && config.restartMode, DEFAULT_RESTART_MODE);
-  const restartCwdSource = _source("GPTWORK_RESTART_CWD", config?.restartCwd, "/home/a9017/mcp/workspace/gpt-codex-workspace/backend");
+  const restartCwdSource = _source("GPTWORK_RESTART_CWD", config?.restartCwd, DEFAULT_RESTART_CWD);
   const restartCommandSource = _source("GPTWORK_RESTART_COMMAND", config?.restartCommand, null);
   const restartMarkerKindSource = _source("GPTWORK_RESTART_MARKER_KIND", config?.restartMarkerKind, "npm");
 
@@ -82,7 +86,7 @@ export function getRestartInstruction(strategy) {
     case "systemd":
       return "systemd user service restart (legacy mode)";
     case "none":
-      return "Manual restart required. Start GPTWork with: cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend && npm run start";
+      return `Manual restart required. Start GPTWork with: cd "${strategy.cwd}" && npm run start`;
     default:
       return `Restart mode: ${strategy.mode}`;
   }
@@ -125,7 +129,7 @@ export function getRestartSummary(strategy) {
       break;
     case "none":
       summary.restart_command_summary = "manual";
-      summary.restart_instruction = "cd /home/a9017/mcp/workspace/gpt-codex-workspace/backend && npm run start";
+      summary.restart_instruction = `cd "${strategy.cwd}" && npm run start`;
       break;
   }
   return summary;
@@ -148,7 +152,7 @@ function _resolveMode(config) {
 function _resolveCwd(config) {
   return (config && config.restartCwd) ||
     process.env.GPTWORK_RESTART_CWD ||
-    "/home/a9017/mcp/workspace/gpt-codex-workspace/backend";
+    DEFAULT_RESTART_CWD;
 }
 
 function _resolveCommand(config, mode, cwd) {

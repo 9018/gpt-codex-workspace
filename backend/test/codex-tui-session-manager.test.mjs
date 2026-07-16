@@ -120,6 +120,56 @@ test("start persists workstream, execution and context bindings", async () => {
   assert.equal(session.active_delta_revision, 0);
 });
 
+test("start binds TUI environment and native Codex session to the project manifest", async () => {
+  const projectRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-native-project-")));
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-native-workspace-")));
+  const codexHome = join(projectRoot, ".codex-runtime");
+  await mkdir(join(codexHome, "sessions"), { recursive: true });
+  const pathContext = {
+    projectRoot,
+    canonicalRepoPath: projectRoot,
+    executionCwd: projectRoot,
+    worktreePath: null,
+    codexHome,
+    nativeSessionsRoot: join(codexHome, "sessions"),
+  };
+  const fakeAdapter = makeFakeAdapter();
+  fakeAdapter.spawn = async function spawn(options) {
+    this.spawns.push(options);
+    setTimeout(() => options.onData?.("session id: native-tui-1\nTUI ready $ "), 10);
+    return {
+      pid: 101,
+      write: (text) => this.writes.push(text),
+      stop: (reason) => this.stops.push(reason),
+    };
+  };
+
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_native", title: "Native binding" },
+    goal: { id: "goal_native" },
+    cwd: projectRoot,
+    workspaceRoot,
+    executionId: "exec-native",
+    pathContext,
+    ptyAdapter: fakeAdapter,
+  });
+
+  assert.equal(fakeAdapter.spawns[0].env.CODEX_HOME, codexHome);
+  assert.equal(fakeAdapter.spawns[0].env.GPTWORK_CONTROL_SESSION_ID, session.id);
+  assert.equal(session.native_session_id, "native-tui-1");
+  assert.equal(session.native_session_binding_source, "process_output");
+  const manifest = JSON.parse(await readFile(join(
+    projectRoot,
+    ".gptwork",
+    "codex-sessions",
+    "manifests",
+    `${session.id}.json`,
+  ), "utf8"));
+  assert.equal(manifest.native_session_id, "native-tui-1");
+  assert.equal(manifest.execution_id, "exec-native");
+  assert.equal(manifest.provider, "codex_tui_goal");
+});
+
 test("start does not send bootstrap Enter when Codex already auto-submitted the argv prompt", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-auto-submit-")));
   const fakeAdapter = makeFakeAdapter();

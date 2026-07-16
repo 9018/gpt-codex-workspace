@@ -244,6 +244,7 @@ test("processGeneralTask real worktree path flows through resolveTaskRepository 
           worktree_lifecycle: null,
         };
       },
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => {
         return {
           lock_repo_path: taskWorktreePath,
@@ -437,6 +438,7 @@ test("processGeneralTaskWithDeps: acceptance passed + no changes -> completed", 
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_pass_noop", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_pass_noop", created_at: new Date().toISOString() },
@@ -490,6 +492,7 @@ test("processGeneralTaskWithDeps: acceptance followups stay next_tasks without b
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_followup", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_followup", created_at: new Date().toISOString() },
@@ -545,6 +548,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_acc_int_ok", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_acc_int_ok", created_at: new Date().toISOString() },
@@ -603,6 +607,7 @@ test("processGeneralTaskWithDeps: acceptance passed + code changes + integration
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_lock", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_int_lock", created_at: new Date().toISOString() },
@@ -656,6 +661,7 @@ test("processGeneralTaskWithDeps: acceptance failed + repair possible -> waiting
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_repair", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_fail_repair", created_at: new Date().toISOString() },
@@ -727,6 +733,7 @@ test("processGeneralTaskWithDeps: acceptance failed + no repair -> waiting_for_r
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_fail_review", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_fail_review", created_at: new Date().toISOString() },
@@ -784,6 +791,7 @@ test("processGeneralTaskWithDeps: delivery recovery completes commit_missing dir
       deliveryResultRecoveryCommands: ["true"],
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_delivery_recovery", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_delivery_recovery", created_at: new Date().toISOString() },
@@ -859,6 +867,7 @@ test("processGeneralTaskWithDeps: already_integrated delivery recovery deduplica
       deliveryResultRecoveryCommands: ["true"],
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_delivery_recovery_already", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_delivery_recovery_already", created_at: new Date().toISOString() },
@@ -919,6 +928,7 @@ test("processGeneralTaskWithDeps: integration conflict -> waiting_for_repair", a
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_conflict", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_int_conflict", created_at: new Date().toISOString() },
@@ -1093,6 +1103,7 @@ test("processGeneralTaskWithDeps: integration push_failed creates repair when al
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_int_push_failed", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.task_worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_int_push_failed" },
@@ -1211,6 +1222,7 @@ test("processGeneralTaskWithDeps: branch_pushed auto completion can ff-only clos
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed_auto", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed_auto", base_sha: "base123", created_at: new Date().toISOString() },
@@ -1404,6 +1416,7 @@ test("processGeneralTaskWithDeps: integration skipped is still terminal (complet
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_skipped", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_skipped", created_at: new Date().toISOString() },
@@ -1544,6 +1557,25 @@ const ctx = {
 
 const verifiedTestWorktree = async () => ({ valid: true, source: "test-fixture" });
 
+const resolveTestPathContext = async ({ task = {}, config = {}, workspaceRoot = null } = {}) => {
+  const projectRoot = task.canonical_repo_path || config.defaultRepoPath;
+  const executionCwd = task.task_worktree_path || projectRoot;
+  const codexHome = join(projectRoot, ".codex-runtime");
+  return {
+    mcpRoot: workspaceRoot || config.defaultWorkspaceRoot,
+    projectsRoot: workspaceRoot || config.defaultWorkspaceRoot,
+    workspaceRoot: workspaceRoot || config.defaultWorkspaceRoot,
+    projectRoot,
+    canonicalRepoPath: projectRoot,
+    executionCwd,
+    worktreePath: task.task_worktree_path || null,
+    codexHome,
+    nativeSessionsRoot: join(codexHome, "sessions"),
+    controlSessionsRoot: join(projectRoot, ".gptwork", "codex-sessions"),
+    codexHomeMode: "project",
+  };
+};
+
 console.log("task-general-processor PR0 integration tests loaded");
 
 /**
@@ -1569,6 +1601,13 @@ test("processGeneralTaskWithDeps routes execution through selected agent backend
     await store.load();
     const plan = makeRepoPlan("task_backend_route", tmpDir, "github.com/acme/repo");
     const calls = [];
+    const expectedPathContext = {
+      projectRoot: plan.canonical_repo_path,
+      canonicalRepoPath: plan.canonical_repo_path,
+      executionCwd: plan.task_worktree_path,
+      codexHome: join(plan.canonical_repo_path, ".codex-runtime"),
+      nativeSessionsRoot: join(plan.canonical_repo_path, ".codex-runtime", "sessions"),
+    };
 
     const result = await processGeneralTaskWithDeps(store, {
       defaultWorkspaceRoot: tmpDir,
@@ -1578,6 +1617,7 @@ test("processGeneralTaskWithDeps routes execution through selected agent backend
       agentRoleBackends: { verifier: "null" },
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => plan,
+      resolvePathContextFn: async () => expectedPathContext,
       materializeTaskWorktreeFn: async () => ({
         lock_repo_path: plan.task_worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_backend_route" },
@@ -1587,8 +1627,8 @@ test("processGeneralTaskWithDeps routes execution through selected agent backend
       executeCodexTaskRunFn: async () => {
         throw new Error("legacy codex executor should not be called when verifier routes to null backend");
       },
-      executeAgentBackendRunFn: async ({ task: routedTask, role, executionCwd }) => {
-        calls.push({ type: "execute", role, taskRole: routedTask.role, executionCwd });
+      executeAgentBackendRunFn: async ({ task: routedTask, role, executionCwd, pathContext, executionId }) => {
+        calls.push({ type: "execute", role, taskRole: routedTask.role, executionCwd, pathContext, executionId });
         return {
           backend: "null",
           cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
@@ -1635,6 +1675,9 @@ test("processGeneralTaskWithDeps routes execution through selected agent backend
     const finalized = calls.find((call) => call.type === "finalize").taskResult;
     assert.equal(finalized.execution_backend, "null");
     assert.equal(finalized.execution_backend_role, "verifier");
+    const executed = calls.find((call) => call.type === "execute");
+    assert.equal(executed.pathContext, expectedPathContext);
+    assert.equal(executed.executionId, "run_backend");
   } finally {
     rmSync(tmpDir, { recursive: true, force: true });
   }

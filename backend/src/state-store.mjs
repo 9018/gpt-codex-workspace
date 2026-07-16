@@ -404,6 +404,8 @@ export class StateStore {
       context_links: [],
       goals: [],
       agent_runs: [],
+      progression_commands: {},
+      progression_command_idempotency: {},
       goal_queue: [],
       conversations: [],
       memories: [],

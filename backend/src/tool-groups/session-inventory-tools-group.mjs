@@ -12,7 +12,7 @@ function validateDateSegment(value) {
 
 export async function listCodexSessionsMetadata(config, { year = "", month = "", day = "", limit = 50 }, context) {
   requireScope(context, "workspace:read");
-  const sessionsRoot = join(config.codexHome, ".codex", "sessions");
+  const sessionsRoot = join(config.codexHome, "sessions");
   const parts = [year, month, day].filter(Boolean).map(validateDateSegment);
   const targetRoot = join(sessionsRoot, ...parts);
   const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
@@ -75,7 +75,7 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
     const result = await createTask(store, config, {
       title: "List Codex session metadata",
       description: [
-        "List Codex session file metadata under /home/a9017/.codex/sessions only.",
+        "List Codex session file metadata under the configured CODEX_HOME/sessions directory only.",
         `Return at most ${boundedLimit} files with relative_path, size, and modified_at.`,
         "Do not read session file contents.",
         "Do not inspect tokens, configs, cookies, cache files, memories, or shell snapshots."
@@ -93,7 +93,7 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
 
   return {
     list_codex_sessions_metadata: tool(
-      "Use this when the user asks to list /home/a9017 Codex sessions. Lists only files under the approved .codex/sessions directory. Metadata only: relative path, size, and modified time. Does not read session contents.",
+      "Use this when the user asks to list Codex sessions. Lists only files under the configured CODEX_HOME/sessions directory. Metadata only: relative path, size, and modified time. Does not read session contents.",
       schema({ year: "string", month: "string", day: "string", limit: "integer" }),
       async (args, context) => listCodexSessionsMetadata(config, args, context),
     ),
