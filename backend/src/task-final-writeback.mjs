@@ -37,34 +37,13 @@ import {
   finalizeVerificationRepairAttempt,
 } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
-import { runTaskCompletionVerification, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
+import { runTaskClosureReview, runTaskCompletionVerification, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
   attachAlreadyIntegratedCommitEvidence,
   attachResolvedWorktreeEvidence,
   buildFallbackResultJson,
   normalizeCompletedDeliveryState,
 } from "./task-finalization/finalization-proofs.mjs";
-
-function createdFollowupFromTaskResult(taskResult = {}) {
-  if (!taskResult.repair_goal_id && !taskResult.repair_task_id) return null;
-  return {
-    goal: taskResult.repair_goal_id ? { id: taskResult.repair_goal_id } : null,
-    task: taskResult.repair_task_id ? { id: taskResult.repair_task_id } : null,
-  };
-}
-
-function contractForClosure({ goal, taskResult } = {}) {
-  return goal?.acceptance_contract || taskResult?.acceptance_contract || null;
-}
-
-function resultForClosure({ taskStatus, taskResult = {}, verification = null } = {}) {
-  return {
-    ...taskResult,
-    status: taskStatus,
-    verification: taskResult.verification || verification || null,
-    contract_verification: taskResult.contract_verification || verification?.contract_verification || null,
-  };
-}
 
 function unresolvedBlockingFindings(findings = []) {
   return Array.isArray(findings)
@@ -308,81 +287,29 @@ export async function finalizeCodexTaskRun({
       taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
     }
 
-    let acceptanceGate = null;
-    try {
-      acceptanceGate = await runAcceptanceGateFn({
-        task,
-        goal,
-        repoPath: verifierRepoPath,
-        resultJson: resultForClosure({ taskStatus, taskResult, verification }),
-        resultJsonPath,
-        config: {
-          ...config,
-          verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
-        },
-        verification,
-        writeArtifacts: true,
-      });
-    } catch (err) {
-      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-      taskResult.warnings.push("Acceptance gate execution failed: " + (err?.message || String(err)));
-    }
-    if (acceptanceGate) {
-      taskResult.acceptance_gate = acceptanceGate;
-      taskResult.acceptance_result_path = acceptanceGate.artifacts?.acceptance_json || null;
-      if (acceptanceGate.contract_verification) taskResult.contract_verification = acceptanceGate.contract_verification;
-    }
-    const closureDecision = acceptanceGate?.closure_decision || decideTaskClosure({
-        contract: contractForClosure({ goal, taskResult }),
-        contractVerification: taskResult.contract_verification || verification.contract_verification || null,
-        verification,
-        integration: taskResult.integration,
-        deployment: taskResult.deployment || taskResult.runtime || null,
-        result: resultForClosure({ taskStatus, taskResult, verification }),
-        task,
-        config: {
-          ...config,
-          verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
-        },
-      });
-    const acceptanceRepair = await finalizeAcceptanceRepairCreation({
-      closureDecision,
+    const closureReview = await runTaskClosureReview({
+      taskStatus,
       taskResult,
       task,
       goal,
       store,
       config,
       resolvedRepo,
+      verifierRepoPath,
+      resultJsonPath,
+      verification,
+      runAcceptanceGateFn,
+      decideTaskClosureFn: decideTaskClosure,
+      finalizeAcceptanceRepairCreationFn: finalizeAcceptanceRepairCreation,
       shouldAttemptRepairFn,
       createRepairGoalFromFindingsFn,
       createGoalFn,
+      planFollowupTasksFn: planFollowupTasks,
+      planUnacceptedTaskFollowupFn: planUnacceptedTaskFollowup,
+      applyClosureDecisionToTaskResultFn: applyClosureDecisionToTaskResult,
     });
-    taskResult = acceptanceRepair.taskResult;
-    const plannedFollowups = planFollowupTasks({
-      task,
-      goal,
-      result: taskResult,
-      contractVerification: taskResult.contract_verification || verification.contract_verification || null,
-      closureDecision,
-    });
-    const unacceptedFollowup = planUnacceptedTaskFollowup({
-      task,
-      goal,
-      result: taskResult,
-      closureDecision,
-      acceptanceGate,
-      created: createdFollowupFromTaskResult(taskResult),
-    });
-    if (unacceptedFollowup) taskResult.followup_processing = unacceptedFollowup;
-    const closureApplied = applyClosureDecisionToTaskResult({
-      taskStatus,
-      taskResult,
-      closureDecision,
-      plannedFollowups,
-      config,
-    });
-    taskStatus = closureApplied.taskStatus;
-    taskResult = closureApplied.taskResult;
+    taskStatus = closureReview.taskStatus;
+    taskResult = closureReview.taskResult;
   }
   // Agent run writebacks: builder, integrator, verifier, reviewer, finalizer (non-blocking)
   const _writebackCtx = { eventLogger: context?.eventLogger, hookBus: context?.hookBus };

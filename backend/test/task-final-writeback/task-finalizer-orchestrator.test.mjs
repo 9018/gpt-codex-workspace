@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  runTaskClosureReview,
   runTaskCompletionVerification,
   runTaskFinalizerOrchestration,
 } from "../../src/task-finalization/task-finalizer-orchestrator.mjs";
@@ -66,4 +67,41 @@ test("runTaskCompletionVerification captures verifier errors and merges findings
   assert.equal(result.taskResult.failure_class, "verifier_error");
   assert.equal(result.taskResult.acceptance_findings.length, 2);
   assert.equal(result.taskResult.acceptance_findings[1].code, "verifier_error");
+});
+
+test("runTaskClosureReview applies acceptance gate closure and planned followups", async () => {
+  const closureDecision = {
+    status: "auto_completed_with_followups",
+    task_status: "completed",
+    reason: "non_blocking_followup",
+  };
+  const result = await runTaskClosureReview({
+    taskStatus: "completed",
+    taskResult: { summary: "done", acceptance_findings: [] },
+    task: { id: "task_closure", title: "Closure helper" },
+    goal: { id: "goal_closure", acceptance_contract: { id: "contract_closure" } },
+    store: { state: { tasks: [] } },
+    config: {},
+    verifierRepoPath: "/repo/main",
+    resultJsonPath: "/tmp/result.json",
+    verification: { passed: true, contract_verification: { blocking_passed: true } },
+    runAcceptanceGateFn: async () => ({
+      closure_decision: closureDecision,
+      contract_verification: { blocking_passed: true, non_blocking_followups: [{ code: "docs" }] },
+      artifacts: { acceptance_json: "/tmp/acceptance.json" },
+    }),
+    finalizeAcceptanceRepairCreationFn: async ({ taskResult }) => ({ taskResult }),
+    planFollowupTasksFn: () => [{ title: "Write docs" }],
+    planUnacceptedTaskFollowupFn: () => ({ status: "queued" }),
+    applyClosureDecisionToTaskResultFn: ({ taskStatus, taskResult, plannedFollowups }) => ({
+      taskStatus,
+      taskResult: { ...taskResult, closure_decision: closureDecision, followups: plannedFollowups },
+    }),
+  });
+
+  assert.equal(result.taskStatus, "completed");
+  assert.equal(result.taskResult.acceptance_result_path, "/tmp/acceptance.json");
+  assert.equal(result.taskResult.contract_verification.non_blocking_followups[0].code, "docs");
+  assert.deepEqual(result.taskResult.followups, [{ title: "Write docs" }]);
+  assert.equal(result.taskResult.followup_processing.status, "queued");
 });

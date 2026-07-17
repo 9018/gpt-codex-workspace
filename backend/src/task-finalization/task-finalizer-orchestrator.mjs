@@ -123,6 +123,124 @@ export async function runTaskCompletionVerification({
   return { taskStatus, taskResult, verification };
 }
 
+export function contractForClosure({ goal, taskResult } = {}) {
+  return goal?.acceptance_contract || taskResult?.acceptance_contract || null;
+}
+
+export function resultForClosure({ taskStatus, taskResult = {}, verification = null } = {}) {
+  return {
+    ...taskResult,
+    status: taskStatus,
+    verification: taskResult.verification || verification || null,
+    contract_verification: taskResult.contract_verification || verification?.contract_verification || null,
+  };
+}
+
+export function createdFollowupFromTaskResult(taskResult = {}) {
+  if (!taskResult.repair_goal_id && !taskResult.repair_task_id) return null;
+  return {
+    goal: taskResult.repair_goal_id ? { id: taskResult.repair_goal_id } : null,
+    task: taskResult.repair_task_id ? { id: taskResult.repair_task_id } : null,
+  };
+}
+
+export async function runTaskClosureReview({
+  taskStatus,
+  taskResult = {},
+  task,
+  goal,
+  store,
+  config = {},
+  resolvedRepo,
+  verifierRepoPath,
+  resultJsonPath,
+  verification,
+  runAcceptanceGateFn,
+  decideTaskClosureFn,
+  finalizeAcceptanceRepairCreationFn,
+  shouldAttemptRepairFn,
+  createRepairGoalFromFindingsFn,
+  createGoalFn,
+  planFollowupTasksFn,
+  planUnacceptedTaskFollowupFn,
+  applyClosureDecisionToTaskResultFn,
+} = {}) {
+  let acceptanceGate = null;
+  try {
+    acceptanceGate = await runAcceptanceGateFn({
+      task,
+      goal,
+      repoPath: verifierRepoPath,
+      resultJson: resultForClosure({ taskStatus, taskResult, verification }),
+      resultJsonPath,
+      config: {
+        ...config,
+        verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
+      },
+      verification,
+      writeArtifacts: true,
+    });
+  } catch (err) {
+    taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+    taskResult.warnings.push("Acceptance gate execution failed: " + (err?.message || String(err)));
+  }
+  if (acceptanceGate) {
+    taskResult.acceptance_gate = acceptanceGate;
+    taskResult.acceptance_result_path = acceptanceGate.artifacts?.acceptance_json || null;
+    if (acceptanceGate.contract_verification) taskResult.contract_verification = acceptanceGate.contract_verification;
+  }
+  const closureDecision = acceptanceGate?.closure_decision || decideTaskClosureFn({
+    contract: contractForClosure({ goal, taskResult }),
+    contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+    verification,
+    integration: taskResult.integration,
+    deployment: taskResult.deployment || taskResult.runtime || null,
+    result: resultForClosure({ taskStatus, taskResult, verification }),
+    task,
+    config: {
+      ...config,
+      verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
+    },
+  });
+  const acceptanceRepair = await finalizeAcceptanceRepairCreationFn({
+    closureDecision,
+    taskResult,
+    task,
+    goal,
+    store,
+    config,
+    resolvedRepo,
+    shouldAttemptRepairFn,
+    createRepairGoalFromFindingsFn,
+    createGoalFn,
+  });
+  taskResult = acceptanceRepair.taskResult;
+  const plannedFollowups = planFollowupTasksFn({
+    task,
+    goal,
+    result: taskResult,
+    contractVerification: taskResult.contract_verification || verification.contract_verification || null,
+    closureDecision,
+  });
+  const unacceptedFollowup = planUnacceptedTaskFollowupFn({
+    task,
+    goal,
+    result: taskResult,
+    closureDecision,
+    acceptanceGate,
+    created: createdFollowupFromTaskResult(taskResult),
+  });
+  if (unacceptedFollowup) taskResult.followup_processing = unacceptedFollowup;
+  const closureApplied = applyClosureDecisionToTaskResultFn({
+    taskStatus,
+    taskResult,
+    closureDecision,
+    plannedFollowups,
+    config,
+  });
+  return { taskStatus: closureApplied.taskStatus, taskResult: closureApplied.taskResult, verification, acceptanceGate, closureDecision };
+}
+
 export async function runTaskFinalizerOrchestration({
   taskStatus,
   taskResult,
