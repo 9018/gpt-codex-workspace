@@ -2,7 +2,12 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizeToUnifiedDecision } from "../../src/codex-unified-decision.mjs";
-import { buildProgressionDecision, runCompletedTaskAutoStart, runPostFinalizationEffects } from "../../src/task-finalization/task-finalization-effects.mjs";
+import {
+  buildProgressionDecision,
+  runCompletedTaskAutoStart,
+  runPostFinalizationEffects,
+  writeGoalFinalizationArtifacts,
+} from "../../src/task-finalization/task-finalization-effects.mjs";
 
 test("buildProgressionDecision normalizes unified decision revisions and integration target", () => {
   const unifiedDecision = normalizeToUnifiedDecision({
@@ -120,4 +125,36 @@ test("runCompletedTaskAutoStart starts only completed tasks and captures failure
     },
   });
   assert.deepEqual(failed, { auto_started: false, error: "queue unavailable", details: [] });
+});
+
+test("writeGoalFinalizationArtifacts writes result md, goal message, and fallback result json", async () => {
+  const workspaceWrites = [];
+  const messages = [];
+  const files = [];
+  const result = await writeGoalFinalizationArtifacts({
+    store: { state: {} },
+    config: {},
+    workspace: { root: "/workspace" },
+    workspaceFiles: { result_md: ".gptwork/goals/goal_artifacts/result.md" },
+    context: { trace_id: "ctx" },
+    goal: { id: "goal_artifacts", workspace_id: "hosted-default" },
+    task: { id: "task_artifacts" },
+    taskStatus: "waiting_for_review",
+    taskResult: { summary: "needs review" },
+    summary: "needs review",
+    doneAt: "2026-07-17T12:00:00.000Z",
+    resultJsonPath: null,
+    writeWorkspaceTextInternalFn: async (...args) => workspaceWrites.push(args),
+    appendGoalMessageFn: async (...args) => messages.push(args),
+    writeFileFn: async (...args) => files.push(args),
+    buildFallbackResultJsonFn: ({ taskStatus, taskResult, summary }) => ({ taskStatus, taskResult, summary }),
+  });
+
+  assert.equal(result.wrote_result_md, true);
+  assert.equal(workspaceWrites[0][3], ".gptwork/goals/goal_artifacts/result.md");
+  assert.match(workspaceWrites[0][4], /Waiting for review at: 2026-07-17T12:00:00.000Z/);
+  assert.equal(messages[0][2].goal_id, "goal_artifacts");
+  assert.match(messages[0][2].content, /Waiting for review task task_artifacts/);
+  assert.equal(files[0][0], "/workspace/.gptwork/goals/goal_artifacts/result.json");
+  assert.equal(JSON.parse(files[0][1]).taskStatus, "waiting_for_review");
 });

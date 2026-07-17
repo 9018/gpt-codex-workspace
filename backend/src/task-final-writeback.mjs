@@ -31,7 +31,12 @@ import { writeFinalizationAgentRuns } from "./task-finalization/finalization-not
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
-import { buildProgressionDecision, runCompletedTaskAutoStart, runPostFinalizationEffects } from "./task-finalization/task-finalization-effects.mjs";
+import {
+  buildProgressionDecision,
+  runCompletedTaskAutoStart,
+  runPostFinalizationEffects,
+  writeGoalFinalizationArtifacts,
+} from "./task-finalization/task-finalization-effects.mjs";
 import {
   applyNoChangeRepairCompletionSummary,
   finalizeAcceptanceRepairCreation,
@@ -444,32 +449,24 @@ export async function finalizeCodexTaskRun({
     if (typeof store.mutate !== "function") {
       await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
     }
-    const statusLabels = {
-      "completed": "Completed",
-      "failed": "Failed",
-      "timed_out": "Timed out",
-      "waiting_for_review": "Waiting for review",
-      "waiting_for_integration": "Waiting for integration",
-      "waiting_for_repair": "Waiting for repair",
-      "blocked": "Blocked",
-    };
-    const statusLabel = statusLabels[taskStatus] || taskStatus;
-    await writeWorkspaceTextInternalFn(store, config, goal.workspace_id, workspaceFiles.result_md,
-      "# Result\n\n" + summary + "\n\n" + statusLabel + " at: " + doneAt + "\n", context);
-    await appendGoalMessageFn(store, config, {
-      goal_id: goal.id,
-      role: "codex",
-      content: "[worker] " + statusLabel + " task " + task.id + ".\n\n" + summary,
-      memory_key: "codex_last_result",
-      memory_value: summary.slice(0, 4000),
-    }, context);
-
-    // Write fallback result.json so it always exists for subsequent parses.
-    const _rjPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + goal.id + "/result.json");
-    try {
-      const _rjData = buildFallbackResultJson({ taskStatus, taskResult, summary });
-      await writeFileFn(_rjPath, JSON.stringify(_rjData, null, 2) + "\n", "utf8");
-    } catch {}
+    await writeGoalFinalizationArtifacts({
+      store,
+      config,
+      workspace,
+      workspaceFiles,
+      context,
+      goal,
+      task,
+      taskStatus,
+      taskResult,
+      summary,
+      doneAt,
+      resultJsonPath,
+      writeWorkspaceTextInternalFn,
+      appendGoalMessageFn,
+      writeFileFn,
+      buildFallbackResultJsonFn: buildFallbackResultJson,
+    });
   }
 
   const autoStartResult = await runCompletedTaskAutoStart({

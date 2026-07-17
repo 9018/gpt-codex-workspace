@@ -91,3 +91,59 @@ export async function runCompletedTaskAutoStart({
     return { auto_started: false, error: err?.message || String(err), details: [] };
   }
 }
+
+export async function writeGoalFinalizationArtifacts({
+  store,
+  config,
+  workspace,
+  workspaceFiles = {},
+  context,
+  goal,
+  task = {},
+  taskStatus,
+  taskResult = {},
+  summary = "",
+  doneAt,
+  resultJsonPath,
+  writeWorkspaceTextInternalFn,
+  appendGoalMessageFn,
+  writeFileFn,
+  buildFallbackResultJsonFn,
+} = {}) {
+  if (!goal) return { wrote_result_md: false, wrote_goal_message: false, wrote_result_json: false, reason: "no_goal" };
+  const statusLabels = {
+    completed: "Completed",
+    failed: "Failed",
+    timed_out: "Timed out",
+    waiting_for_review: "Waiting for review",
+    waiting_for_integration: "Waiting for integration",
+    waiting_for_repair: "Waiting for repair",
+    blocked: "Blocked",
+  };
+  const statusLabel = statusLabels[taskStatus] || taskStatus;
+
+  await writeWorkspaceTextInternalFn(store, config, goal.workspace_id, workspaceFiles.result_md,
+    "# Result\n\n" + summary + "\n\n" + statusLabel + " at: " + doneAt + "\n", context);
+  await appendGoalMessageFn(store, config, {
+    goal_id: goal.id,
+    role: "codex",
+    content: "[worker] " + statusLabel + " task " + task.id + ".\n\n" + summary,
+    memory_key: "codex_last_result",
+    memory_value: summary.slice(0, 4000),
+  }, context);
+
+  const fallbackResultJsonPath = resultJsonPath || (workspace.root + "/.gptwork/goals/" + goal.id + "/result.json");
+  let wroteResultJson = false;
+  try {
+    const fallbackResultJson = buildFallbackResultJsonFn({ taskStatus, taskResult, summary });
+    await writeFileFn(fallbackResultJsonPath, JSON.stringify(fallbackResultJson, null, 2) + "\n", "utf8");
+    wroteResultJson = true;
+  } catch {}
+
+  return {
+    wrote_result_md: true,
+    wrote_goal_message: true,
+    wrote_result_json: wroteResultJson,
+    result_json_path: fallbackResultJsonPath,
+  };
+}
