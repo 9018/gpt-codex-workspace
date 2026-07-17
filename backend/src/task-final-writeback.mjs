@@ -35,9 +35,8 @@ import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./t
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
 import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
-import { finalizeWaitingForIntegration } from "./task-finalization/integration-finalizer.mjs";
+import { runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
-  applyVerifiedDeliveryResultRecovery,
   attachResolvedWorktreeEvidence,
   buildFallbackResultJson,
   normalizeCompletedDeliveryState,
@@ -264,9 +263,11 @@ export async function finalizeCodexTaskRun({
     });
   }
 
-  const integrationFinalization = await finalizeWaitingForIntegration({
+  const orchestration = await runTaskFinalizerOrchestration({
     taskStatus,
     taskResult,
+    summary,
+    deliveryResultRecovery,
     task,
     goal,
     store,
@@ -278,18 +279,9 @@ export async function finalizeCodexTaskRun({
     createRepairGoalFromFindingsFn,
     createGoalFn,
   });
-  taskStatus = integrationFinalization.taskStatus;
-  taskResult = integrationFinalization.taskResult;
-
-  const recoveryDecision = applyVerifiedDeliveryResultRecovery({
-    taskStatus,
-    taskResult,
-    summary,
-    deliveryResultRecovery,
-  });
-  taskStatus = recoveryDecision.taskStatus;
-  taskResult = recoveryDecision.taskResult;
-  summary = recoveryDecision.summary;
+  taskStatus = orchestration.taskStatus;
+  taskResult = orchestration.taskResult;
+  summary = orchestration.summary;
 
   const verifierRepoPath = taskResult?.auto_integration_completion?.completed === true
     ? (resolvedRepo?.canonical_repo_path || taskResult?.execution_cwd || resolvedRepo?.task_worktree_path || workspace?.root || config.defaultRepoPath || config.defaultWorkspaceRoot)
