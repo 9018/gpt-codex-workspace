@@ -60,3 +60,11 @@ test("task final writeback reuses shared repair metadata utility", async () => {
   assert.doesNotMatch(source, /function\s+applyRepairMetadata\s*\(/);
   assert.match(source, /task-processing\/task-repair-context\.mjs/);
 });
+
+test("task finalization exposes extracted facts collector", async () => {
+  const finalizerSource = await readFile(new URL("src/task-final-writeback.mjs", backendRoot), "utf8");
+  const factsSource = await readFile(new URL("src/task-finalization/task-finalization-facts.mjs", backendRoot), "utf8");
+  assert.doesNotMatch(finalizerSource, /function\s+collectTaskFinalizerEvidence\s*\(/);
+  assert.match(finalizerSource, /task-finalization\/task-finalization-facts\.mjs/);
+  assert.match(factsSource, /export\s+function\s+collectTaskFinalizationFacts\s*\(/);
+});
