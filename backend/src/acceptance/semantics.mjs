@@ -69,10 +69,8 @@ export function validateContractSemantics(contract = {}) {
   if (!KNOWN_EXECUTION_MODES.has(executionMode)) errors.push(err("unknown_execution_mode", `unknown execution_mode: ${executionMode || "(missing)"}`));
   if (!KNOWN_SEMANTIC_CONFIDENCES.has(semanticConfidence)) errors.push(err("unknown_semantic_confidence", `unknown semantic_confidence: ${semanticConfidence || "(missing)"}`));
 
-  if (operationKind === "code_change") {
-    if (normalized.requirements.requires_commit !== true) errors.push(err("code_change_requires_commit", "code_change contracts must require commit evidence."));
-    if (normalized.requirements.requires_integration !== true) errors.push(err("code_change_requires_integration", "code_change contracts must require integration evidence."));
-  }
+  // operation_kind selects defaults only. Explicit requirements are authoritative,
+  // so code_change does not itself force commit or integration policy.
 
   if (operationKind === "restart") {
     if (normalized.requirements.requires_commit === true) errors.push(err("restart_requires_commit_conflict", "restart contracts must not require commit evidence by default."));
@@ -111,10 +109,8 @@ export function validateContractSemantics(contract = {}) {
     if (normalized.requirements.requires_commit !== true) errors.push(err("integration_requires_commit", "integration contracts must require commit evidence."));
     if (normalized.requirements.requires_integration === true) errors.push(err("integration_requires_integration_conflict", "integration contracts must not require integration evidence (they are the integration)."));
   }
-  if (operationKind === "repair") {
-    if (normalized.requirements.requires_commit !== true) errors.push(err("repair_requires_commit", "repair contracts must require commit evidence."));
-    if (normalized.requirements.requires_integration !== true) errors.push(err("repair_requires_integration", "repair contracts must require integration evidence."));
-  }
+  // Repair tasks also inherit defaults, but explicit requirements may narrow
+  // the mutation/integration scope without making the contract invalid.
   if (operationKind === "queue_admin") {
     if (normalized.requirements.requires_commit === true) errors.push(err("queue_admin_requires_commit_conflict", "queue_admin contracts must not require commit evidence."));
     if (normalized.requirements.requires_integration === true) errors.push(err("queue_admin_requires_integration_conflict", "queue_admin contracts must not require integration evidence."));

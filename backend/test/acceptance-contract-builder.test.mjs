@@ -181,8 +181,7 @@ test("normalizes an explicit contract while preserving caller intent", () => {
   assert.equal(contract.schema_version, 2);
   assert.equal(contract.intent.operation_kind, "restart");
   assert.equal(contract.requirements.requires_restart, true);
-  assert.ok(contract.blocking_requirements.some((item) => item.id === "custom_health_probe"));
-  assert.ok(contract.blocking_requirements.some((item) => item.id === "runtime_health_evidence"));
+  assert.deepEqual(contract.blocking_requirements.map((item) => item.id), ["custom_health_probe"]);
 });
 
 // ===========================================================================
@@ -400,4 +399,90 @@ test("builder productization repair mentioning migration restart and deploy rema
   assert.equal(contract.requirements.requires_commit, true);
   assert.ok(!contract.blocking_requirements.some((item) => item.id === "backup_evidence"));
   assert.ok(!contract.blocking_requirements.some((item) => item.id === "runtime_health_evidence"));
+});
+
+test("full implementation request outranks incidental documentation wording", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "按照已完成的产品化设计，实现增量代码分析与上下文索引的 Wave 1。",
+    goal_prompt: "设计文档只是前置产物；必须完成源码、测试、验证和提交。",
+    mode: "full",
+    acceptance_contract: {
+      criteria: [{ id: "state", description: "实现持久化 IndexState" }],
+    },
+  });
+  assert.equal(contract.intent.operation_kind, "code_change");
+  assert.deepEqual(contract.blocking_requirements.map((item) => item.id), ["state"]);
+  assert.ok(!contract.blocking_requirements.some((item) => item.id === "docs_changed"));
+});
+
+test("explicit blocking requirements replace operation profile defaults", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Implement a code change",
+    mode: "builder",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change" },
+      blocking_requirements: [
+        { id: "custom_acceptance", description: "Custom acceptance", evidence: ["custom_report"] },
+      ],
+    },
+  });
+
+  assert.deepEqual(contract.blocking_requirements.map((item) => item.id), ["custom_acceptance"]);
+});
+
+test("explicit verification plan replaces operation profile defaults", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Implement a code change",
+    mode: "builder",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change" },
+      verification_plan: {
+        profile: "targeted",
+        required_commands: ["targeted_test"],
+        required_reports: ["targeted_report"],
+      },
+    },
+  });
+
+  assert.equal(contract.verification_plan.profile, "targeted");
+  assert.deepEqual(contract.verification_plan.required_commands, ["targeted_test"]);
+  assert.deepEqual(contract.verification_plan.required_reports, ["targeted_report"]);
+});
+
+test("criteria compile into blocking requirements when blockers are not explicitly provided", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Implement persistent index state",
+    mode: "builder",
+    acceptance_contract: {
+      criteria: [
+        { id: "state", description: "Persistent IndexState is implemented", evidence: ["changed_files", "tests"] },
+        { id: "api", description: "analyze_changes is exposed" },
+      ],
+    },
+  });
+
+  assert.deepEqual(contract.blocking_requirements.map((item) => item.id), ["state", "api"]);
+  assert.deepEqual(contract.blocking_requirements[0].evidence, ["changed_files", "tests"]);
+  assert.deepEqual(contract.blocking_requirements[1].evidence, ["verification"]);
+});
+
+test("explicit requirements remain authoritative over operation kind defaults", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "Implement code in an isolated branch without integrating it",
+    mode: "builder",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change" },
+      requirements: {
+        requires_commit: true,
+        requires_integration: false,
+      },
+      blocking_requirements: [
+        { id: "commit_present", evidence: ["commit"] },
+        { id: "verification_report", evidence: ["verification.commands"] },
+      ],
+    },
+  });
+
+  assert.equal(contract.requirements.requires_integration, false);
+  assert.equal(contract.semantic_validation.valid, true);
 });

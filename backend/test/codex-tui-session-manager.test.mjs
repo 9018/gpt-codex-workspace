@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, readlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, readlink, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -534,4 +534,92 @@ test("process cleanup refuses non-isolated cwd", async () => {
   });
   assert.equal(result.attempted, false);
   assert.deepEqual(kills, []);
+});
+
+test("creates project CODEX_HOME before spawning Codex TUI", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-home-")));
+  const codexHome = join(cwd, ".codex-runtime");
+  const fakeAdapter = makeFakeAdapter();
+  await startCodexTuiGoalSession({
+    task: { id: "task_home", title: "Home preparation" },
+    goal: { id: "goal_home" },
+    cwd,
+    workspaceRoot: cwd,
+    ptyAdapter: fakeAdapter,
+    pathContext: {
+      projectRoot: cwd,
+      canonicalRepoPath: cwd,
+      executionCwd: cwd,
+      workspaceRoot: cwd,
+      codexHome,
+      nativeSessionsRoot: join(codexHome, "sessions"),
+    },
+  });
+  assert.equal((await stat(codexHome)).isDirectory(), true);
+});
+
+test("status reconciles terminal result evidence even while PTY remains alive", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-result-status-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_result", title: "Result projection" },
+    goal: { id: "goal_result" },
+    cwd,
+    workspaceRoot: cwd,
+    ptyAdapter: fakeAdapter,
+  });
+  await mkdir(join(cwd, ".gptwork", "goals", "goal_result"), { recursive: true });
+  await writeFile(join(cwd, ".gptwork", "goals", "goal_result", "result.json"), JSON.stringify({
+    status: "failed", summary: "pipeline failed", changed_files: [], tests: "none",
+    commit: "none", remote_head: "none", warnings: [], followups: [],
+    verification: { commands: [], passed: false },
+  }));
+  const status = await getCodexTuiSessionStatus(session.id, { workspaceRoot: cwd });
+  assert.equal(status.status, "failed");
+  assert.equal(status.pid_alive, false);
+});
+
+test("code-0 PTY exit waits for delayed contract-valid result before failing closed", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-delayed-result-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-delayed-result-cwd-")));
+  const goalDir = join(workspaceRoot, ".gptwork", "goals", "goal_delayed_result");
+  await mkdir(goalDir, { recursive: true });
+  const fakeAdapter = makeFakeAdapter();
+  let released = 0;
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_delayed_result", title: "Delayed result" },
+    goal: { id: "goal_delayed_result" },
+    cwd,
+    workspaceRoot,
+    evidenceWaitMs: 250,
+    ptyAdapter: fakeAdapter,
+    releaseLockFn: async () => { released += 1; },
+  });
+
+  fakeAdapter.emitExit({ exit_code: 0, signal: null, source: "pty-exit" });
+  setTimeout(() => {
+    writeFile(join(goalDir, "result.json"), JSON.stringify({
+      status: "completed",
+      summary: "late durable completion",
+      changed_files: ["backend/src/example.mjs"],
+      tests: { passed: 1, failed: 0 },
+      commit: "abc123",
+      remote_head: null,
+      warnings: [],
+      followups: [],
+      verification: { commands: ["node --test backend/test/example.test.mjs"], passed: true },
+    }, null, 2)).catch(() => {});
+  }, 40);
+
+  await new Promise((resolve) => setTimeout(resolve, 180));
+  const record = await readCodexTuiSession(session.id, { workspaceRoot, maxChars: 0 });
+  assert.equal(record.status, "completed");
+  assert.equal(record.result_status, "completed");
+  assert.equal(record.terminal_event_count, 1);
+  assert.equal(released, 1);
+  const result = await readResult(workspaceRoot, "goal_delayed_result");
+  assert.equal(result.status, "completed");
+  assert.equal(result.summary, "late durable completion");
+  assert.equal(result.commit, "abc123");
+  assert.equal(result.verification.passed, true);
 });

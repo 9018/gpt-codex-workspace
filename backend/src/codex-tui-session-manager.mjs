@@ -128,6 +128,20 @@ async function readTerminalResult(resultPath) {
   }
 }
 
+async function readTerminalResultWithRetry(resultPath, {
+  waitMs = 0,
+  sleepFn = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  const deadline = Date.now() + Math.max(0, Number(waitMs) || 0);
+  let result = await readTerminalResult(resultPath);
+  while (!result && Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    await sleepFn(Math.min(50, Math.max(1, remaining)));
+    result = await readTerminalResult(resultPath);
+  }
+  return result;
+}
+
 async function writeJsonAtomic(path, value) {
   await mkdir(join(path, ".."), { recursive: true });
   const tmpPath = `${path}.${randomUUID()}.tmp`;
@@ -166,7 +180,11 @@ async function terminalizeCodexTuiSession({ sessionId, store, event, releaseLock
     const terminalEvent = normalizeTerminalEvent(event);
     const workspaceRoot = current.metadata?.session_store_root || current.metadata?.workspace_root;
     const resultPath = join(workspaceRoot, ".gptwork", "goals", current.goal_id, "result.json");
-    let result = await readTerminalResult(resultPath);
+    const configuredWaitMs = Number(current.metadata?.evidence_wait_ms);
+    const evidenceWaitMs = terminalEvent.exit_code === 0
+      ? (Number.isFinite(configuredWaitMs) && configuredWaitMs >= 0 ? configuredWaitMs : 1_500)
+      : 0;
+    let result = await readTerminalResultWithRetry(resultPath, { waitMs: evidenceWaitMs });
     if (!result) {
       result = failClosedResult(terminalEvent);
       await writeJsonAtomic(resultPath, result);
@@ -310,6 +328,10 @@ async function startCodexTuiGoalSessionImpl({
   const adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
+  if (pathContext?.codexHome) {
+    await mkdir(pathContext.codexHome, { recursive: true });
+    if (pathContext.nativeSessionsRoot) await mkdir(pathContext.nativeSessionsRoot, { recursive: true });
+  }
   const nativeSessionsBefore = pathContext
     ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
     : [];
@@ -622,8 +644,26 @@ export async function stopCodexTuiSession(sessionId, { reason = "stopped", works
 
 export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null, candidateWorkspaceRoots = [] } = {}) {
   const store = await storeForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots });
-  const active = activeSessions.get(sessionId);
-  const record = await normalizeRecoveredSessionRecord(store, sessionId);
+  let active = activeSessions.get(sessionId);
+  let record = await normalizeRecoveredSessionRecord(store, sessionId);
+  if (["created", "running"].includes(record.status)) {
+    const root = record.metadata?.session_store_root || record.metadata?.workspace_root;
+    const resultPath = root && record.goal_id ? join(root, ".gptwork", "goals", record.goal_id, "result.json") : null;
+    const terminalResult = resultPath ? await readTerminalResult(resultPath) : null;
+    if (terminalResult) {
+      record = await terminalizeCodexTuiSession({
+        sessionId, store,
+        releaseLockFn: active?.releaseLockFn || null,
+        onTerminalized: active?.onTerminalized || null,
+        event: { source: "result-evidence", error: terminalResult.summary },
+      });
+      if (active?.ptySession) {
+        try { active.ptySession.stop(); } catch { /* terminal state already durable */ }
+      }
+      activeSessions.delete(sessionId);
+      active = null;
+    }
+  }
   const pid = active?.ptySession?.pid ?? record.pty_pid ?? null;
   return {
     id: record.id,

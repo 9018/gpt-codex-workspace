@@ -110,6 +110,17 @@ const BUILDER_CODE_INTENT_PATTERN = /\b(fix|implement|modify|refactor|add tests?
 function selectOperationKind({ matches = [], text = "", normalizedMode = "" } = {}) {
   const unique = [...new Set(matches)];
 
+  // Explicit implementation language must outrank incidental references to
+  // design/docs. Full-mode task prompts often cite a design document while
+  // requesting actual source and test changes.
+  if (
+    unique.includes("code_change") &&
+    BUILDER_CODE_INTENT_PATTERN.test(text) &&
+    /源码|测试|提交|implement|implementation|source|code|tests?|fix|modify|refactor/iu.test(text)
+  ) {
+    return "code_change";
+  }
+
   // Builder tasks often mention the *wrong* contract/profile they are fixing
   // (for example: "cleanup/admin contract was misclassified").  Do not let a
   // negative reference to cleanup/admin outrank a clear code-change intent.
@@ -146,13 +157,35 @@ function mergeUniqueById(defaultItems, explicitItems) {
   return [...merged.values()];
 }
 
-function mergeVerificationPlan(defaultPlan = {}, explicitPlan = {}) {
+function resolveVerificationPlan(defaultPlan = {}, explicitPlan, hasExplicitPlan = false) {
+  if (!hasExplicitPlan) return cloneJson(defaultPlan) || {};
   return {
     ...defaultPlan,
-    ...explicitPlan,
-    required_commands: [...new Set([...normalizeList(defaultPlan.required_commands), ...normalizeList(explicitPlan.required_commands)].map(String))],
-    required_reports: [...new Set([...normalizeList(defaultPlan.required_reports), ...normalizeList(explicitPlan.required_reports)].map(String))]
+    ...(explicitPlan || {}),
+    required_commands: normalizeList(explicitPlan?.required_commands).map(String),
+    required_reports: normalizeList(explicitPlan?.required_reports).map(String),
   };
+}
+
+function compileCriteria(criteria = []) {
+  return normalizeList(criteria).map((criterion, index) => {
+    if (typeof criterion === "string") {
+      return {
+        id: `criterion_${index + 1}`,
+        description: criterion,
+        evidence: ["verification"],
+      };
+    }
+    const id = String(criterion?.id || `criterion_${index + 1}`);
+    return {
+      ...criterion,
+      id,
+      description: String(criterion?.description || criterion?.title || id),
+      evidence: normalizeList(criterion?.evidence).length > 0
+        ? normalizeList(criterion.evidence).map(String)
+        : ["verification"],
+    };
+  });
 }
 
 function hasCharacterIndexedKeys(obj) {
@@ -199,6 +232,15 @@ export function buildAcceptanceContract(args = {}) {
   const operationKind = explicitKind || inferred.operation_kind;
   const defaults = getDefaultAcceptanceContractProfile(operationKind);
 
+  const hasExplicitVerificationPlan = Object.hasOwn(explicit, "verification_plan");
+  const hasExplicitBlockingRequirements = Object.hasOwn(explicit, "blocking_requirements");
+  const compiledCriteria = compileCriteria(explicit.criteria);
+  const resolvedBlockingRequirements = hasExplicitBlockingRequirements
+    ? normalizeList(explicit.blocking_requirements)
+    : compiledCriteria.length > 0
+      ? compiledCriteria
+      : defaults.blocking_requirements;
+
   const contract = {
     ...defaults,
     ...explicit,
@@ -211,8 +253,8 @@ export function buildAcceptanceContract(args = {}) {
       ...defaults.requirements,
       ...(explicit.requirements || {})
     },
-    verification_plan: mergeVerificationPlan(defaults.verification_plan, explicit.verification_plan || {}),
-    blocking_requirements: mergeUniqueById(defaults.blocking_requirements, explicit.blocking_requirements),
+    verification_plan: resolveVerificationPlan(defaults.verification_plan, explicit.verification_plan, hasExplicitVerificationPlan),
+    blocking_requirements: cloneJson(resolvedBlockingRequirements) || [],
     state_assertions: mergeUniqueById(defaults.state_assertions, explicit.state_assertions),
     non_blocking_quality_expectations: mergeUniqueById(defaults.non_blocking_quality_expectations, explicit.non_blocking_quality_expectations),
     completion_policy: {
