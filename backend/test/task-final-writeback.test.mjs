@@ -14,6 +14,7 @@ import assert from "node:assert/strict";
 
 import { finalizeCodexTaskRun } from "../src/task-final-writeback.mjs";
 import { setTerminalNotifier } from "../src/task-lifecycle.mjs";
+import { UnifiedDecisionInvariantError } from "../src/domain/unified-decision-validator.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -400,6 +401,56 @@ test("task-final-writeback: terminal notification is deferred to a progression c
   assert.ok(completeCommand, "complete_task command should be persisted");
   assert.equal(completeCommand.status, "pending");
   assert.equal(completeCommand.task_id, "task_label_test");
+});
+
+test("task-final-writeback: invalid unified decision aborts before state mutation", async () => {
+  let mutateCalled = false;
+  const args = makeMinimalArgs("completed");
+  args.task = { id: "task_invalid_unified", logs: [], decision_revision: 1 };
+  args.goal = { id: "goal_invalid_unified", workspace_id: "hosted-default" };
+  args.store = {
+    mutate: async () => {
+      mutateCalled = true;
+      throw new Error("state mutation must not run for invalid unified decisions");
+    },
+  };
+  args.taskResult = {
+    ...args.taskResult,
+    verification: { passed: true, commands: [{ cmd: "npm test", exit_code: 0 }] },
+    contract_verification: { blocking_passed: true, completion_eligible: true },
+    unified_decision: {
+      schema_version: 2,
+      task_id: "task_invalid_unified",
+      decision_revision: 2,
+      evidence_revision: 2,
+      facts: {
+        verification: { passed: true },
+        acceptance: { passed: true },
+      },
+      status: "completed",
+      reason: "invalid completion",
+      blockers: [],
+      repairable_blockers: [],
+      requires_review: false,
+      requires_repair: false,
+      requires_integration: true,
+      safe_to_auto_advance: true,
+      effects: {
+        task: { status: "completed" },
+        goal: { status: "completed", complete_goal: true },
+        queue: { unblock_dependents: true, hold_queue: false },
+        workstream: { status: "completed" },
+        integration: { required: true, satisfied: false, terminal: false },
+      },
+    },
+  };
+
+  await assert.rejects(
+    () => finalizeCodexTaskRun(args),
+    (error) => error instanceof UnifiedDecisionInvariantError
+      && error.violations.includes("completed_without_terminal_integration"),
+  );
+  assert.equal(mutateCalled, false);
 });
 
 test("task-final-writeback: git worktree cleanup does not overwrite repo_resolution lifecycle with metadata-only data", async () => {

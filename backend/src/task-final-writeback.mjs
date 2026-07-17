@@ -26,6 +26,7 @@ import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalization } from './task-finalization/task-final-state-decider.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
+import { assertValidUnifiedDecision } from './domain/unified-decision-validator.mjs';
 
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
@@ -683,6 +684,7 @@ export async function finalizeCodexTaskRun({
   taskResult = applyNoChangeRepairCompletionSummary({ task, taskResult });
   taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
   taskResult = attachResolvedWorktreeEvidence(taskResult, resolvedRepo);
+  assertValidInputUnifiedDecision(taskResult);
 
   const finalizerDecision = decideTaskFinalization(collectTaskFinalizerEvidence({
     task,
@@ -873,6 +875,12 @@ export async function finalizeCodexTaskRun({
   };
 }
 
+function assertValidInputUnifiedDecision(taskResult = {}) {
+  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
+  if (!unifiedDecision || typeof unifiedDecision !== "object") return;
+  assertValidUnifiedDecision(unifiedDecision);
+}
+
 function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, doneAt, config = {} } = {}) {
   const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
   if (!unifiedDecision || typeof unifiedDecision !== "object") return null;
@@ -888,7 +896,7 @@ function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, don
     ?? doneAt
     ?? unifiedDecision.evidence_revision
     ?? revision;
-  return {
+  const progressionDecision = {
     ...unifiedDecision,
     task_id: task.id,
     goal_id: goal?.id || task.goal_id || null,
@@ -910,6 +918,8 @@ function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, don
       || unifiedDecision.worktree_effect
       || null,
   };
+  assertValidUnifiedDecision(progressionDecision);
+  return progressionDecision;
 }
 
 function attachResolvedWorktreeEvidence(taskResult = {}, resolvedRepo = null) {
