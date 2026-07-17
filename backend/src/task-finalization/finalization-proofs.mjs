@@ -1,3 +1,5 @@
+import { execFileSync } from "node:child_process";
+
 export function attachResolvedWorktreeEvidence(taskResult = {}, resolvedRepo = null) {
   if (resolvedRepo?.worktree_lifecycle?.mode !== "git_worktree" || !resolvedRepo?.task_worktree_path) return taskResult;
   const lifecycle = {
@@ -16,6 +18,44 @@ export function attachResolvedWorktreeEvidence(taskResult = {}, resolvedRepo = n
       worktree_lifecycle: lifecycle,
     },
   };
+}
+
+export function attachAlreadyIntegratedCommitEvidence({
+  taskStatus,
+  taskResult = {},
+  candidatePaths = [],
+  execFileSyncFn = execFileSync,
+} = {}) {
+  if (taskStatus !== "completed" || !taskResult?.commit || taskResult.integration?.merged || taskResult.auto_integration_completion?.completed) {
+    return taskResult;
+  }
+
+  const checkPaths = [...new Set(candidatePaths.filter(Boolean))];
+  for (const checkPath of checkPaths) {
+    try {
+      const head = execFileSyncFn("git", ["rev-parse", "HEAD"], { cwd: checkPath, encoding: "utf8", timeout: 10000 }).trim();
+      let integrated = head === taskResult.commit;
+      if (!integrated) {
+        try {
+          execFileSyncFn("git", ["merge-base", "--is-ancestor", taskResult.commit, head], { cwd: checkPath, timeout: 10000 });
+          integrated = true;
+        } catch {}
+      }
+      if (integrated) {
+        return {
+          ...taskResult,
+          integration: {
+            ...(taskResult.integration || {}),
+            merged: true,
+            status: "already_integrated",
+            commit: taskResult.commit,
+            required: false,
+          },
+        };
+      }
+    } catch {}
+  }
+  return taskResult;
 }
 
 export function buildFallbackResultJson({ taskStatus, taskResult = {}, summary = "" }) {

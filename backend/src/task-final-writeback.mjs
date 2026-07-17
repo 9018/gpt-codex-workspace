@@ -1,7 +1,6 @@
 import { dirname, join } from "node:path";
 import { appendFileSync } from "node:fs";
 import { mkdir, writeFile as nodeWriteFile } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
 import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { convergeStaleGoalStatuses } from "./goal-convergence.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
@@ -40,6 +39,7 @@ import {
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
 import { runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
+  attachAlreadyIntegratedCommitEvidence,
   attachResolvedWorktreeEvidence,
   buildFallbackResultJson,
   normalizeCompletedDeliveryState,
@@ -295,45 +295,17 @@ export async function finalizeCodexTaskRun({
     || config.defaultRepoPath
     || config.defaultWorkspaceRoot;
 
-  // P0-AutoTerm: Before verification, check if the task commit is already
-  // reachable on the canonical repo HEAD.  If so, populate integration
-  // evidence so the contract verifier does not produce a false
-  // integration_completed_missing blocker for an already-integrated task.
-  // P0-Fix2: Try multiple paths (primary worktree/stale, then canonical) so
-  // that already-integrated commits on the canonical branch are not missed
-  // when the worktree has been cleaned up.
-  if (taskStatus === "completed" && taskResult?.commit
-      && !taskResult.integration?.merged && !taskResult.auto_integration_completion?.completed) {
-    const _checkPaths = [...new Set([
+  taskResult = attachAlreadyIntegratedCommitEvidence({
+    taskStatus,
+    taskResult,
+    candidatePaths: [
       verifierRepoPath,
       resolvedRepo?.canonical_repo_path,
       workspace?.root,
       config.defaultRepoPath,
       config.defaultWorkspaceRoot,
-    ].filter(Boolean))];
-    for (const _checkPath of _checkPaths) {
-      try {
-        const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: _checkPath, encoding: "utf8", timeout: 10000 }).trim();
-        let integrated = head === taskResult.commit;
-        if (!integrated) {
-          try {
-            execFileSync("git", ["merge-base", "--is-ancestor", taskResult.commit, head], { cwd: _checkPath, timeout: 10000 });
-            integrated = true;
-          } catch {}
-        }
-        if (integrated) {
-          taskResult.integration = {
-            ...(taskResult.integration || {}),
-            merged: true,
-            status: "already_integrated",
-            commit: taskResult.commit,
-            required: false,
-          };
-          break;
-        }
-      } catch {}
-    }
-  }
+    ],
+  });
 
   if (taskStatus === "completed") {
     const resultJsonForVerification = buildFallbackResultJson({ taskStatus, taskResult, summary });

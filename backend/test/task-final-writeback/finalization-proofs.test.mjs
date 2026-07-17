@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  attachAlreadyIntegratedCommitEvidence,
   attachResolvedWorktreeEvidence,
   buildExecutionCwdProof,
   buildFallbackResultJson,
@@ -85,4 +86,25 @@ test("normalizeCompletedDeliveryState clears stale integration blockers only wit
   assert.equal(normalized.delivery_state_normalized, true);
   assert.equal(normalized.closure_path, "complete");
   assert.match(normalized.closure_summary, /Closure path: complete/);
+});
+
+test("attachAlreadyIntegratedCommitEvidence records canonical integration proof", () => {
+  const calls = [];
+  const result = attachAlreadyIntegratedCommitEvidence({
+    taskStatus: "completed",
+    taskResult: { commit: "abc123" },
+    candidatePaths: ["/repo/task", "/repo/main"],
+    execFileSyncFn: (_cmd, args, options) => {
+      calls.push({ args, cwd: options.cwd });
+      if (options.cwd === "/repo/task") throw new Error("stale worktree");
+      if (args[0] === "rev-parse") return "def456\n";
+      if (args[0] === "merge-base") return "";
+      throw new Error("unexpected command");
+    },
+  });
+
+  assert.equal(result.integration.status, "already_integrated");
+  assert.equal(result.integration.merged, true);
+  assert.equal(result.integration.commit, "abc123");
+  assert.equal(calls.some((call) => call.cwd === "/repo/main" && call.args[0] === "merge-base"), true);
 });
