@@ -210,6 +210,78 @@ export async function mutateFinalTaskState({
   });
 }
 
+export async function runFinalizationStateTransition({
+  store,
+  config = {},
+  task,
+  goal = null,
+  taskStatus,
+  taskResult = {},
+  doneAt,
+  cr,
+  workspace,
+  workspaceFiles,
+  summary = "",
+  context,
+  repoLockPath,
+  resultJsonPath,
+  github,
+  reconciliationResult = null,
+  buildProgressionDecisionFn = buildProgressionDecision,
+  mutateFinalTaskStateFn = mutateFinalTaskState,
+  updateTaskFn,
+  applyTaskStateProjectionFn = applyTaskStateProjection,
+  reconcileProgressionCommandsInStateFn,
+  runFinalizationPostStateEffectsFn = runFinalizationPostStateEffects,
+  ...postStateEffectFns
+} = {}) {
+  const progressionDecision = buildProgressionDecisionFn({
+    task,
+    goal,
+    taskResult,
+    doneAt,
+    config,
+  });
+  const result = typeof store.mutate === "function"
+    ? await mutateFinalTaskStateFn({
+        store,
+        task,
+        taskStatus,
+        taskResult,
+        doneAt,
+        cr,
+        config,
+        goal,
+        progressionDecision,
+        reconcileProgressionCommandsInStateFn,
+      })
+    : await updateTaskFn(store, task.id, (item) => {
+        applyTaskStateProjectionFn(item, { taskStatus, taskResult, doneAt, cr, config });
+      });
+  const progressionReport = result?.progression_commands || null;
+
+  return await runFinalizationPostStateEffectsFn({
+    store,
+    config,
+    task,
+    finalTask: result.task,
+    goal,
+    taskStatus,
+    taskResult,
+    summary,
+    doneAt,
+    workspace,
+    workspaceFiles,
+    context,
+    repoLockPath,
+    resultJsonPath,
+    progressionReport,
+    github,
+    reconciliationResult,
+    ...postStateEffectFns,
+  });
+}
+
 export async function runFinalizationPostStateEffects({
   store,
   config = {},

@@ -25,12 +25,9 @@ import { reconcileProgressionCommandsInState } from './progression/progression-c
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 import { writeDefaultFinalizationAgentRuns } from "./task-finalization/finalization-notifier.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
-import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import {
-  buildProgressionDecision,
-  mutateFinalTaskState,
-  runFinalizationPostStateEffects,
+  runFinalizationStateTransition,
   runPostFinalizationEffects,
 } from "./task-finalization/task-finalization-effects.mjs";
 import {
@@ -216,39 +213,14 @@ export async function finalizeCodexTaskRun({
   taskResult = finalDecisionReconciliation.taskResult;
   const reconciliationResult = finalDecisionReconciliation.reconciliationResult;
 
-  const progressionDecision = buildProgressionDecision({
-    task,
-    goal,
-    taskResult,
-    doneAt,
-    config,
-  });
-  const result = typeof store.mutate === "function"
-    ? await mutateFinalTaskState({
-        store,
-        task,
-        taskStatus,
-        taskResult,
-        doneAt,
-        cr,
-        config,
-        goal,
-        progressionDecision,
-        reconcileProgressionCommandsInStateFn,
-      })
-    : await updateTaskFn(store, task.id, (item) => {
-      applyTaskStateProjection(item, { taskStatus, taskResult, doneAt, cr, config });
-    });
-  const progressionReport = result?.progression_commands || null;
-
-  return await runFinalizationPostStateEffects({
+  return await runFinalizationStateTransition({
     store,
     config,
     task,
-    finalTask: result.task,
     goal,
     taskStatus,
     taskResult,
+    cr,
     summary,
     doneAt,
     workspace,
@@ -256,9 +228,10 @@ export async function finalizeCodexTaskRun({
     context,
     repoLockPath,
     resultJsonPath,
-    progressionReport,
     github,
     reconciliationResult,
+    updateTaskFn,
+    reconcileProgressionCommandsInStateFn,
     updateWorkstreamContextFromCompletedTaskFn: updateWorkstreamContextFromCompletedTask,
     releaseFinalizationRepoLockFn: releaseFinalizationRepoLock,
     loadRestartMarkerFn,

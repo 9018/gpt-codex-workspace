@@ -6,6 +6,7 @@ import {
   buildProgressionDecision,
   mutateFinalTaskState,
   runCompletedTaskAutoStart,
+  runFinalizationStateTransition,
   runFinalizationPostStateEffects,
   runPostFinalizationEffects,
   writeGoalFinalizationArtifacts,
@@ -213,6 +214,57 @@ test("mutateFinalTaskState projects task, goal, queue, and progression commands 
   assert.equal(store.state.activities.at(-1).type, "queue.dependency_reconciled");
   assert.deepEqual(result.progression_commands, { applied: 1 });
   assert.equal(reconciled[0].at, "2026-07-17T13:00:00.000Z");
+});
+
+test("runFinalizationStateTransition persists final state and delegates post-state effects", async () => {
+  const calls = [];
+  const receipt = await runFinalizationStateTransition({
+    store: {
+      async mutate(fn) {
+        calls.push("mutate");
+        return fn({ tasks: [{ id: "task_transition", status: "running", logs: [] }], goals: [], activities: [] });
+      },
+    },
+    config: { defaultBranch: "main" },
+    task: { id: "task_transition", decision_revision: 4 },
+    goal: null,
+    taskStatus: "completed",
+    taskResult: {
+      kind: "success",
+      unified_decision: { queue_effect: { unblock_dependents: true } },
+    },
+    doneAt: "2026-07-17T15:00:00.000Z",
+    cr: { returncode: 0 },
+    workspace: { root: "/workspace" },
+    workspaceFiles: {},
+    summary: "done",
+    context: {},
+    github: { syncTask: async () => ({ ok: true }) },
+    reconciliationResult: { reconciled: true },
+    buildProgressionDecisionFn: (input) => {
+      calls.push(["decision", input.task.id]);
+      return { revision: 9 };
+    },
+    mutateFinalTaskStateFn: async (input) => {
+      calls.push(["state", input.progressionDecision.revision]);
+      return { task: { id: "task_transition", status: "completed" }, progression_commands: { applied: 1 } };
+    },
+    runFinalizationPostStateEffectsFn: async (input) => {
+      calls.push(["post", input.finalTask.status, input.progressionReport.applied]);
+      return { task_id: input.finalTask.id, status: input.taskStatus, progression_commands: input.progressionReport };
+    },
+  });
+
+  assert.deepEqual(receipt, {
+    task_id: "task_transition",
+    status: "completed",
+    progression_commands: { applied: 1 },
+  });
+  assert.deepEqual(calls, [
+    ["decision", "task_transition"],
+    ["state", 9],
+    ["post", "completed", 1],
+  ]);
 });
 
 test("runFinalizationPostStateEffects applies post-state effects and returns receipt data", async () => {
