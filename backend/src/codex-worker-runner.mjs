@@ -4,7 +4,7 @@ import {
   canAccessWorkspace,
   defaultTokenContext,
 } from "./auth-context.mjs";
-import { normalizeLegacyModes, updateTask } from "./task-lifecycle.mjs";
+import { normalizeLegacyModes, notifyTerminalTask, updateTask } from "./task-lifecycle.mjs";
 import { isCodexSessionInventoryTask } from "./task-status.mjs";
 import { completeCodexSessionInventoryTask } from "./tool-groups/session-inventory-tools-group.mjs";
 import { mapConcurrent } from "./codex-worker-concurrency.mjs";
@@ -23,6 +23,7 @@ import { releaseLockForTask } from "./repo-lock.mjs";
 import { createProgressionCommandActuator } from "./progression/progression-command-actuator.mjs";
 import { createProgressionCommandHandlers } from "./progression/progression-command-handlers.mjs";
 import { createProgressionCommandStore } from "./progression/progression-command-store.mjs";
+import { notifyAppliedFinalizationCommand } from "./task-finalization/finalization-notifier.mjs";
 import { executeWorktreeCleanupCommand } from "./task-finalization/worktree-cleanup.mjs";
 import { existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
@@ -720,6 +721,13 @@ async function drainProgressionCommands(store, config, maxTasks) {
       const task = state.tasks?.find((item) => item.id === taskId) || null;
       return task ? taskDecisionRevision(task) : null;
     },
+    onCommandApplied: async (command) => notifyAppliedFinalizationCommand(command, {
+      taskResolver: async (taskId) => {
+        const state = await store.load();
+        return state.tasks?.find((item) => item.id === taskId) || null;
+      },
+      notifyTerminalTaskFn: notifyTerminalTask,
+    }),
   });
   const configuredLimit = Number(config.progressionCommandBatchSize);
   const maxCommands = Number.isFinite(configuredLimit) && configuredLimit > 0

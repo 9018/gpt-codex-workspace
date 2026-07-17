@@ -7,6 +7,7 @@ export function createProgressionCommandActuator({
   leaseMs = 60_000,
   getCurrentDecisionRevision,
   assertPreconditions,
+  onCommandApplied,
   retryDelayMs = 5_000,
   now,
 } = {}) {
@@ -50,6 +51,7 @@ export function createProgressionCommandActuator({
       }
       const result = await handler(command);
       const applied = await commandStore.markApplied({ id: command.id, owner, result });
+      if (typeof onCommandApplied === "function") await onCommandApplied(applied);
       return { claimed: 1, applied: 1, failed: 0, superseded: 0, command: applied };
     } catch (error) {
       const retryAt = command.attempt < command.max_attempts
