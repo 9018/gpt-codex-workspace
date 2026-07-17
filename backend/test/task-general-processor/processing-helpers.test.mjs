@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { applyRepairMetadata, taskWithRepairContext } from "../../src/task-processing/task-repair-context.mjs";
 import { statusForHealingAction } from "../../src/task-processing/task-healing-controller.mjs";
 import { applySuccessfulDeliveryRecovery } from "../../src/task-processing/task-delivery-recovery.mjs";
+import { recordAgentRunWritebackFailure } from "../../src/task-processing/agent-run-writeback-failure.mjs";
 
 test("repair context preserves root lineage and resolved worktree", () => {
   const args = applyRepairMetadata({}, { root_task_id: "root", repair_attempt: 2, ignored: true });
@@ -39,4 +40,23 @@ test("successful already-integrated recovery is terminal and deduplicates warnin
   assert.equal(result.convergence.nextStatus, "completed");
   assert.deepEqual(result.warnings, ["existing", "Delivery already integrated: existing", "integrated"]);
   assert.equal(result.acceptance_findings[0].resolved, true);
+});
+
+test("agent run writeback failure utility records bounded warnings", () => {
+  const taskResult = { warnings: "not-an-array" };
+  const err = new Error("x".repeat(700));
+
+  recordAgentRunWritebackFailure(taskResult, "builder", err);
+
+  assert.deepEqual(taskResult.agent_run_writeback, [{
+    role: "builder",
+    status: "failed",
+    reason: "x".repeat(500),
+  }]);
+  assert.deepEqual(taskResult.warnings, [{
+    code: "agent_run_writeback_failed",
+    role: "builder",
+    severity: "warning",
+    message: "x".repeat(500),
+  }]);
 });
