@@ -25,7 +25,6 @@ import { continueOnCompletedOutcome, convergeGoalFromContinuation, goalStatusFro
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalization } from './task-finalization/task-final-state-decider.mjs';
 import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
-import { assertValidUnifiedDecision } from './domain/unified-decision-validator.mjs';
 
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
@@ -36,6 +35,7 @@ import { applyTaskStateProjection } from "./task-finalization/task-state-project
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
 import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
+import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
 import {
   applyVerifiedDeliveryResultRecovery,
   attachResolvedWorktreeEvidence,
@@ -888,12 +888,6 @@ export async function finalizeCodexTaskRun({
     auto_start: autoStartResult,
     progression_commands: progressionReport,
   };
-}
-
-function assertValidInputUnifiedDecision(taskResult = {}) {
-  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
-  if (!unifiedDecision || typeof unifiedDecision !== "object") return;
-  assertValidUnifiedDecision(unifiedDecision);
 }
 
 async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorktreeFn }) {
