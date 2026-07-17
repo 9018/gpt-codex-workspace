@@ -210,6 +210,129 @@ export async function mutateFinalTaskState({
   });
 }
 
+export async function runFinalizationPostStateEffects({
+  store,
+  config = {},
+  task = {},
+  finalTask = null,
+  goal = null,
+  taskStatus,
+  taskResult = {},
+  summary = "",
+  doneAt,
+  workspace,
+  workspaceFiles,
+  context,
+  repoLockPath,
+  resultJsonPath,
+  progressionReport = null,
+  github,
+  reconciliationResult = null,
+  updateWorkstreamContextFromCompletedTaskFn,
+  releaseFinalizationRepoLockFn,
+  loadRestartMarkerFn,
+  releaseRepoLockFn,
+  updateGoalStatusFn,
+  writeWorkspaceTextInternalFn,
+  appendGoalMessageFn,
+  writeFileFn,
+  buildFallbackResultJsonFn,
+  autoStartNextOnTaskCompletedFn,
+  propagateRepairChildCompletionFn,
+  handleRepairCompletionFn,
+  runPostFinalizationEffectsFn = runPostFinalizationEffects,
+  goalStatusFromReconciliationFn = () => null,
+  projectGoalStatusForFinalizedTaskFn,
+  logFn = () => {},
+} = {}) {
+  const effectiveTask = finalTask || task;
+  if (taskStatus === "completed" && (task.workstream_id || goal?.workstream_id)) {
+    const outcomeUpdate = await updateWorkstreamContextFromCompletedTaskFn({
+      store,
+      workspaceRoot: config.defaultWorkspaceRoot,
+      task: effectiveTask || { ...task, status: taskStatus },
+      goal,
+      result: taskResult,
+    }).catch((error) => ({ applied: false, reason: error.message }));
+    taskResult.workstream_context_update = outcomeUpdate;
+  }
+
+  await releaseFinalizationRepoLockFn({
+    config,
+    task,
+    repoLockPath,
+    loadRestartMarkerFn,
+    releaseRepoLockFn,
+  });
+
+  if (goal) {
+    const canonicalGoalStatus = goalStatusFromReconciliationFn(reconciliationResult);
+    const goalStatus = canonicalGoalStatus || projectGoalStatusForFinalizedTaskFn({
+      goal,
+      task: effectiveTask || task,
+      taskStatus,
+      taskResult,
+      state: store.state || {},
+    });
+    if (typeof store.mutate !== "function") {
+      await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
+    }
+    await writeGoalFinalizationArtifacts({
+      store,
+      config,
+      workspace,
+      workspaceFiles,
+      context,
+      goal,
+      task,
+      taskStatus,
+      taskResult,
+      summary,
+      doneAt,
+      resultJsonPath,
+      writeWorkspaceTextInternalFn,
+      appendGoalMessageFn,
+      writeFileFn,
+      buildFallbackResultJsonFn,
+    });
+  }
+
+  const autoStartResult = await runCompletedTaskAutoStart({
+    taskStatus,
+    store,
+    config,
+    task: effectiveTask,
+    autoStartNextOnTaskCompletedFn,
+  });
+
+  await propagateRepairChildCompletionFn({
+    task,
+    taskStatus,
+    taskResult,
+    finalTask: effectiveTask,
+    store,
+    config,
+    handleRepairCompletionFn,
+    logFn,
+  });
+
+  await runPostFinalizationEffectsFn({
+    store,
+    task: effectiveTask,
+    taskResult,
+    github,
+    logFn,
+  });
+
+  return {
+    task_id: effectiveTask.id,
+    status: taskStatus,
+    kind: taskResult.kind,
+    auto_start: autoStartResult,
+    progression_commands: progressionReport,
+  };
+}
+
 function reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt } = {}) {
   if (!Array.isArray(state.goal_queue)) return;
   if (!goal || !shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult })) return;

@@ -6,6 +6,7 @@ import {
   buildProgressionDecision,
   mutateFinalTaskState,
   runCompletedTaskAutoStart,
+  runFinalizationPostStateEffects,
   runPostFinalizationEffects,
   writeGoalFinalizationArtifacts,
 } from "../../src/task-finalization/task-finalization-effects.mjs";
@@ -212,4 +213,73 @@ test("mutateFinalTaskState projects task, goal, queue, and progression commands 
   assert.equal(store.state.activities.at(-1).type, "queue.dependency_reconciled");
   assert.deepEqual(result.progression_commands, { applied: 1 });
   assert.equal(reconciled[0].at, "2026-07-17T13:00:00.000Z");
+});
+
+test("runFinalizationPostStateEffects applies post-state effects and returns receipt data", async () => {
+  const calls = [];
+  const taskResult = { kind: "success" };
+  const receipt = await runFinalizationPostStateEffects({
+    store: { state: { goal_queue: [] } },
+    config: { defaultWorkspaceRoot: "/workspace" },
+    task: { id: "task_post", workstream_id: "ws_1" },
+    finalTask: { id: "task_post", status: "completed" },
+    goal: { id: "goal_post", workstream_id: "ws_1" },
+    taskStatus: "completed",
+    taskResult,
+    summary: "done",
+    doneAt: "2026-07-17T14:00:00.000Z",
+    workspace: { root: "/workspace" },
+    workspaceFiles: { result_md: ".gptwork/goals/goal_post/result.md" },
+    context: { trace_id: "ctx" },
+    repoLockPath: "/tmp/repo.lock",
+    resultJsonPath: null,
+    progressionReport: { applied: 2 },
+    github: { syncTask: async () => ({ ok: true, updated: true }) },
+    updateWorkstreamContextFromCompletedTaskFn: async () => {
+      calls.push("workstream");
+      return { applied: true };
+    },
+    releaseFinalizationRepoLockFn: async () => calls.push("lock"),
+    loadRestartMarkerFn: async () => null,
+    releaseRepoLockFn: async () => null,
+    updateGoalStatusFn: async () => calls.push("goal-status"),
+    writeWorkspaceTextInternalFn: async () => calls.push("result-md"),
+    appendGoalMessageFn: async () => calls.push("goal-message"),
+    writeFileFn: async () => calls.push("result-json"),
+    buildFallbackResultJsonFn: ({ taskStatus }) => ({ taskStatus }),
+    autoStartNextOnTaskCompletedFn: async () => {
+      calls.push("auto-start");
+      return { auto_started: true };
+    },
+    propagateRepairChildCompletionFn: async () => calls.push("repair-propagation"),
+    handleRepairCompletionFn: async () => null,
+    runPostFinalizationEffectsFn: async ({ taskResult }) => {
+      calls.push("post-effects");
+      taskResult.github_sync = { ok: true };
+      return { github_sync: { ok: true }, goal_sweep: { ok: true, count: 0 } };
+    },
+    logFn: () => {},
+    goalStatusFromReconciliationFn: () => "completed",
+    projectGoalStatusForFinalizedTaskFn: () => "completed",
+  });
+
+  assert.deepEqual(calls, [
+    "workstream",
+    "lock",
+    "goal-status",
+    "result-md",
+    "goal-message",
+    "result-json",
+    "auto-start",
+    "repair-propagation",
+    "post-effects",
+  ]);
+  assert.equal(taskResult.workstream_context_update.applied, true);
+  assert.deepEqual(receipt, {
+    task_id: "task_post",
+    status: "completed",
+    kind: "success",
+    auto_start: { auto_started: true },
+    progression_commands: { applied: 2 },
+  });
 });

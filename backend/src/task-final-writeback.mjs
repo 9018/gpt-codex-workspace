@@ -5,7 +5,6 @@ import { fireHeartbeat } from "./codex-run-metadata.mjs";
 import { convergeStaleGoalStatuses } from "./goal-convergence.mjs";
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
-import { removeTaskWorktree } from "./task-worktree-manager.mjs";
 import { updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
@@ -34,9 +33,8 @@ import { projectGoalStatusForFinalizedTask } from "./task-finalization/goal-stat
 import {
   buildProgressionDecision,
   mutateFinalTaskState,
-  runCompletedTaskAutoStart,
+  runFinalizationPostStateEffects,
   runPostFinalizationEffects,
-  writeGoalFinalizationArtifacts,
 } from "./task-finalization/task-finalization-effects.mjs";
 import {
   applyNoChangeRepairCompletionSummary,
@@ -79,7 +77,6 @@ export async function finalizeCodexTaskRun({
   releaseRepoLockFn = releaseRepoLock,
   updateGoalStatusFn = updateGoalStatus,
   writeWorkspaceTextInternalFn = writeWorkspaceTextInternal,
-  removeTaskWorktreeFn = removeTaskWorktree,
   writeFileFn = nodeWriteFile,
   verifyTaskCompletionFn = verifyTaskCompletion,
   runAcceptanceGateFn = runAcceptanceGate,
@@ -319,115 +316,49 @@ export async function finalizeCodexTaskRun({
     });
   const progressionReport = result?.progression_commands || null;
 
-  if (taskStatus === "completed" && (task.workstream_id || goal?.workstream_id)) {
-    const outcomeUpdate = await updateWorkstreamContextFromCompletedTask({
-      store,
-      workspaceRoot: config.defaultWorkspaceRoot,
-      task: result?.task || { ...task, status: taskStatus },
-      goal,
-      result: taskResult,
-    }).catch((error) => ({ applied: false, reason: error.message }));
-    taskResult.workstream_context_update = outcomeUpdate;
-  }
-
-  await releaseFinalizationRepoLock({
+  return await runFinalizationPostStateEffects({
+    store,
     config,
     task,
+    finalTask: result.task,
+    goal,
+    taskStatus,
+    taskResult,
+    summary,
+    doneAt,
+    workspace,
+    workspaceFiles,
+    context,
     repoLockPath,
+    resultJsonPath,
+    progressionReport,
+    github,
+    reconciliationResult,
+    updateWorkstreamContextFromCompletedTaskFn: updateWorkstreamContextFromCompletedTask,
+    releaseFinalizationRepoLockFn: releaseFinalizationRepoLock,
     loadRestartMarkerFn,
     releaseRepoLockFn,
-  });
-
-  if (goal) {
-    // P0-AFC7: Consume reconciliation goalStatus when available (from R0 canonical outcome)
-    const canonicalGoalStatus = goalStatusFromReconciliation(reconciliationResult);
-    const goalStatus = canonicalGoalStatus || projectGoalStatusForFinalizedTask({
-      goal,
-      task: result?.task || task,
-      taskStatus,
-      taskResult,
-      state: store.state || {},
-    });
-    if (typeof store.mutate !== "function") {
-      await updateGoalStatusFn(store, goal.id, goalStatus, doneAt);
-    }
-    await writeGoalFinalizationArtifacts({
-      store,
-      config,
-      workspace,
-      workspaceFiles,
-      context,
-      goal,
-      task,
-      taskStatus,
-      taskResult,
-      summary,
-      doneAt,
-      resultJsonPath,
-      writeWorkspaceTextInternalFn,
-      appendGoalMessageFn,
-      writeFileFn,
-      buildFallbackResultJsonFn: buildFallbackResultJson,
-    });
-  }
-
-  const autoStartResult = await runCompletedTaskAutoStart({
-    taskStatus,
-    store,
-    config,
-    task: result.task,
+    updateGoalStatusFn,
+    writeWorkspaceTextInternalFn,
+    appendGoalMessageFn,
+    writeFileFn,
+    buildFallbackResultJsonFn: buildFallbackResultJson,
     autoStartNextOnTaskCompletedFn,
-  });
-
-  await propagateRepairChildCompletion({
-    task,
-    taskStatus,
-    taskResult,
-    finalTask: result.task,
-    store,
-    config,
+    propagateRepairChildCompletionFn: propagateRepairChildCompletion,
     handleRepairCompletionFn: handleRepairCompletion,
+    runPostFinalizationEffectsFn: ({ store, task, taskResult, github, logFn }) => runPostFinalizationEffects({
+      store,
+      task,
+      taskResult,
+      github,
+      convergeStaleGoalStatusesFn: convergeStaleGoalStatuses,
+      logFn,
+    }),
+    goalStatusFromReconciliationFn: goalStatusFromReconciliation,
+    projectGoalStatusForFinalizedTaskFn: projectGoalStatusForFinalizedTask,
     logFn: (line) => {
       const logPath = process.env.GPTWORK_LOG_PATH;
       if (logPath) appendFileSync(logPath, line);
     },
   });
-
-  await runPostFinalizationEffects({
-    store,
-    task: result.task,
-    taskResult,
-    github,
-    convergeStaleGoalStatusesFn: convergeStaleGoalStatuses,
-    logFn: (line) => {
-      const logPath = process.env.GPTWORK_LOG_PATH;
-      if (logPath) appendFileSync(logPath, line);
-    },
-  });
-  return {
-    task_id: result.task.id,
-    status: taskStatus,
-    kind: taskResult.kind,
-    auto_start: autoStartResult,
-    progression_commands: progressionReport,
-  };
-}
-
-async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorktreeFn }) {
-  if (resolvedRepo?.worktree_lifecycle?.mode !== "git_worktree" || !resolvedRepo?.task_worktree_path) return null;
-  try {
-    return await removeTaskWorktreeFn(task.id, {
-      workspaceRoot: config.defaultWorkspaceRoot,
-      repoId: resolvedRepo.repo_id,
-      canonicalRepoPath: resolvedRepo.canonical_repo_path,
-      worktreePath: resolvedRepo.task_worktree_path,
-    });
-  } catch (error) {
-    return {
-      ok: false,
-      removed: false,
-      error: error?.message || String(error || "git worktree remove failed"),
-      worktree_path: resolvedRepo.task_worktree_path,
-    };
-  }
 }
