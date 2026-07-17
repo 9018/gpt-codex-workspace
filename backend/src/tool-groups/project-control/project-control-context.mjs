@@ -11,6 +11,8 @@
  * @module project-control-context
  */
 
+import { relative, resolve } from "node:path";
+
 /**
  * Error thrown when takeover invariants are not satisfied.
  */
@@ -57,4 +59,84 @@ export function validateTakeoverContext(run, options = {}) {
   }
 
   return { valid: errors.length === 0, errors, run };
+}
+
+/**
+ * Strictly assert that ChatGPT has direct control of the given run.
+ * Used by all Project Control write tools as a pre-flight guard.
+ *
+ * @param {object} options
+ * @param {string} options.runId - Expected run ID
+ * @param {number} options.controllerEpoch - Expected controller epoch
+ * @param {object} options.run - ExecutionRun
+ * @param {object} options.lease - Controller lease state
+ * @param {string} [options.requestedPath] - Path being accessed (optional)
+ * @param {object} [options.plan] - SupervisorPlan (optional)
+ * @returns {{ valid: boolean, errors: string[] }}
+ * @throws {ProjectControlInvariantError} On invariant violation
+ */
+export function assertChatGPTDirectControl({
+  runId,
+  controllerEpoch,
+  run,
+  lease,
+  requestedPath,
+  plan,
+} = {}) {
+  const errors = [];
+
+  // 1. Run ID consistency
+  if (runId && run.id !== runId) {
+    errors.push(`Run id mismatch: expected "${runId}", got "${run.id}"`);
+  }
+
+  // 2. Run state must be chatgpt_direct
+  if (run.state !== "chatgpt_direct") {
+    errors.push(
+      `Run state must be "chatgpt_direct", got "${run.state}"`
+    );
+  }
+
+  // 3. Controller owner must be chatgpt_direct
+  const controllerOwner = run.supervision?.controller_owner;
+  if (controllerOwner !== "chatgpt_direct") {
+    errors.push(
+      `Controller owner must be "chatgpt_direct", got "${controllerOwner}"`
+    );
+  }
+
+  // 4. Lease owner must be chatgpt_direct
+  if (lease?.owner !== "chatgpt_direct") {
+    errors.push(
+      `Lease owner must be "chatgpt_direct", got "${lease?.owner}"`
+    );
+  }
+
+  // 5. Controller epoch must match
+  if (controllerEpoch != null && controllerEpoch !== (lease?.epoch ?? run.supervision?.controller_epoch)) {
+    errors.push(
+      `Controller epoch mismatch: expected ${controllerEpoch}, lease has ${lease?.epoch}, run has ${run.supervision?.controller_epoch}`
+    );
+  }
+
+  // 6. Requested path must be inside the run's worktree
+  if (requestedPath && run.workspace_ref?.worktree_path) {
+    const worktreePath = resolve(run.workspace_ref.worktree_path);
+    const absRequested = resolve(requestedPath);
+    const rel = relative(worktreePath, absRequested);
+    if (rel.startsWith("..") || rel === absRequested) {
+      errors.push(
+        `Requested path "${requestedPath}" is outside the worktree "${worktreePath}"`
+      );
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new ProjectControlInvariantError(
+      `ChatGPT direct control invariants violated: ${errors.join("; ")}`,
+      { runId, controllerEpoch, errors }
+    );
+  }
+
+  return { valid: true, errors: [] };
 }
