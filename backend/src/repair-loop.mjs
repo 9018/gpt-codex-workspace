@@ -448,7 +448,11 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
 
       // If parent has a worktree, trigger re-integration
       // Otherwise, mark as completed directly
-      const hasWorktree = Boolean(
+      const completedRepairAlreadyIntegrated = completedTask.result?.integration?.merged === true
+        || completedTask.result?.integration?.satisfied === true
+        || completedTask.result?.integration?.auto_completed === true
+        || completedTask.result?.auto_integration_completion?.completed === true;
+      const hasWorktree = !completedRepairAlreadyIntegrated && Boolean(
         parent.worktree?.path
         || parent.result?.repo_resolution?.task_worktree_path
         || parent.result?.worktree_lifecycle?.worktree_path

@@ -333,13 +333,15 @@ test("task-final-writeback: unknown status passes through as-is", async () => {
   }
 });
 
-test("task-final-writeback: git worktree cleanup failure is fail-closed and recorded", async () => {
+test("task-final-writeback: git worktree cleanup is deferred to a progression command", async () => {
   let savedTask = null;
+  let savedState = null;
   const args = makeMinimalArgs("completed");
   args.store = {
     mutate: async (updater) => {
       const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
       const result = await updater(state);
+      savedState = state;
       savedTask = result.task;
       return result;
     },
@@ -350,31 +352,34 @@ test("task-final-writeback: git worktree cleanup failure is fail-closed and reco
     task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: { mode: "git_worktree", ok: true },
   };
-  args.removeTaskWorktreeFn = async () => ({
-    ok: false,
-    removed: false,
-    error: "worktree remove failed: dirty files",
-    command: "git -C /tmp/canonical-repo worktree remove /tmp/.gptwork/worktrees/repo/task_label_test",
-    worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
-  });
+  args.removeTaskWorktreeFn = async () => {
+    throw new Error("finalizer must not remove worktrees directly");
+  };
 
   await finalizeCodexTaskRun(args);
 
-  assert.equal(savedTask.status, "failed");
-  assert.equal(savedTask.result.worktree_lifecycle.cleanup_supported, true);
-  assert.equal(savedTask.result.worktree_lifecycle.cleanup.ok, false);
-  assert.match(savedTask.result.worktree_lifecycle.cleanup.error, /dirty files/);
-  assert.ok(savedTask.result.acceptance_findings.some((finding) => finding.code === "git_worktree_cleanup_failed"));
+  assert.equal(savedTask.status, "completed");
+  assert.equal(savedTask.result.worktree_lifecycle?.cleanup, undefined);
+  const commands = Object.values(savedState.progression_commands || {});
+  const cleanupCommand = commands.find((command) => command.action === "cleanup_worktree");
+  assert.ok(cleanupCommand, "cleanup_worktree command should be persisted");
+  assert.equal(cleanupCommand.status, "pending");
+  assert.deepEqual(cleanupCommand.payload, {
+    task_id: "task_label_test",
+    worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
+  });
 });
 
 test("task-final-writeback: git worktree cleanup does not overwrite repo_resolution lifecycle with metadata-only data", async () => {
   let savedTask = null;
   let fallbackJson = null;
+  let savedState = null;
   const args = makeMinimalArgs("completed");
   args.store = {
     mutate: async (updater) => {
       const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
       const result = await updater(state);
+      savedState = state;
       savedTask = result.task;
       return result;
     },
@@ -401,11 +406,9 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
     task_worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
     worktree_lifecycle: args.taskResult.repo_resolution.worktree_lifecycle,
   };
-  args.removeTaskWorktreeFn = async () => ({
-    ok: true,
-    removed: true,
-    worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
-  });
+  args.removeTaskWorktreeFn = async () => {
+    throw new Error("finalizer must not remove worktrees directly");
+  };
   args.writeFileFn = async (path, content) => {
     if (path.endsWith("/result.json")) fallbackJson = JSON.parse(content);
   };
@@ -416,13 +419,14 @@ test("task-final-writeback: git worktree cleanup does not overwrite repo_resolut
   assert.equal(savedTask.result.worktree_lifecycle.mode, "git_worktree");
   assert.equal(savedTask.result.worktree_lifecycle.ok, true);
   assert.equal(savedTask.result.worktree_lifecycle.cleanup_supported, true);
-  assert.equal(savedTask.result.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(savedTask.result.worktree_lifecycle.cleanup, undefined);
   assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.mode, "git_worktree");
-  assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.cleanup, undefined);
   assert.equal(savedTask.result.repo_resolution.worktree_lifecycle.created_during_run, true);
   assert.equal(fallbackJson.repo_resolution.worktree_lifecycle.mode, "git_worktree");
-  assert.equal(fallbackJson.repo_resolution.worktree_lifecycle.cleanup.ok, true);
+  assert.equal(fallbackJson.repo_resolution.worktree_lifecycle.cleanup, undefined);
   assert.equal(fallbackJson.execution_cwd_proof.used_task_worktree_path, true);
+  assert.ok(Object.values(savedState.progression_commands || {}).some((command) => command.action === "cleanup_worktree"));
 });
 
 test("task-final-writeback: persists spec-shaped task.worktree record", async () => {
@@ -453,7 +457,9 @@ test("task-final-writeback: persists spec-shaped task.worktree record", async ()
   };
   args.taskResult.worktree_lifecycle = args.taskResult.repo_resolution.worktree_lifecycle;
   args.resolvedRepo = args.taskResult.repo_resolution;
-  args.removeTaskWorktreeFn = async () => ({ ok: true, removed: true, worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test" });
+  args.removeTaskWorktreeFn = async () => {
+    throw new Error("finalizer must not remove worktrees directly");
+  };
 
   await finalizeCodexTaskRun(args);
 
@@ -464,7 +470,7 @@ test("task-final-writeback: persists spec-shaped task.worktree record", async ()
     base_ref: "main",
     base_sha: "a".repeat(40),
     head_sha: "b".repeat(40),
-    status: "removed",
+    status: "completed",
   });
   assert.equal(savedTask.execution_mode, "worktree");
   assert.equal(savedTask.attempt, 0);
@@ -988,7 +994,7 @@ test("task-final-writeback: waiting_for_integration branch_pushed auto completio
   assert.equal(savedTask.result.integration.auto_completed, true);
   assert.equal(savedTask.result.auto_integration_completion.completed, true);
   assert.equal(savedTask.result.needs_integration, false);
-  assert.equal(removedWorktree, true);
+  assert.equal(removedWorktree, false);
 });
 
 test("task-final-writeback: accepted auto integration is not demoted by fallback verifier and advances queue", async () => {

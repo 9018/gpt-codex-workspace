@@ -665,52 +665,9 @@ export async function finalizeCodexTaskRun({
   }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
 
 
-  // Cleanup policy: remove_on_success_retain_on_failure.
-  // Only remove worktree when task completed successfully.
-  // For failed/timed_out/waiting_for_review/waiting_for_repair/waiting_for_integration,
-  // retain the worktree to allow debugging, review, or repair.
-  let cleanup = null;
-  if (taskStatus === "completed") {
-    cleanup = await cleanupTaskWorktree({
-      task,
-      config,
-      resolvedRepo,
-      removeTaskWorktreeFn,
-    });
-  } else {
-    // Retain worktree for non-completed / non-terminal states
-    if (resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {
-      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-      taskResult.warnings.push("Worktree retained: " + resolvedRepo.task_worktree_path + " (status=" + taskStatus + ")");
-    }
-  }
-  if (cleanup) {
-    const updatedLifecycle = {
-      ...(taskResult.worktree_lifecycle || resolvedRepo?.worktree_lifecycle || {}),
-      cleanup_supported: true,
-      cleanup,
-    };
-    taskResult.worktree_lifecycle = updatedLifecycle;
-    if (taskResult.repo_resolution && typeof taskResult.repo_resolution === "object") {
-      taskResult.repo_resolution = {
-        ...taskResult.repo_resolution,
-        worktree_lifecycle: updatedLifecycle,
-      };
-    }
-    if (cleanup.ok === false) {
-      taskStatus = "failed";
-      taskResult.kind = taskResult.kind || "worktree_cleanup_failed";
-      taskResult.summary = taskResult.summary || "Task worktree cleanup failed.";
-      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-      taskResult.warnings.push("Task worktree cleanup failed: " + (cleanup.error || "unknown error"));
-      taskResult.acceptance_findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
-      taskResult.acceptance_findings.push({
-        severity: "blocker",
-        code: "git_worktree_cleanup_failed",
-        message: cleanup.error || "git worktree remove failed",
-        source: "worktree_lifecycle",
-      });
-    }
+  if (taskStatus !== "completed" && resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {
+    taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+    taskResult.warnings.push("Worktree retained: " + resolvedRepo.task_worktree_path + " (status=" + taskStatus + ")");
   }
 
 
@@ -725,6 +682,7 @@ export async function finalizeCodexTaskRun({
   taskResult.needs_integration = _closureResult.needsIntegration;
   taskResult = applyNoChangeRepairCompletionSummary({ task, taskResult });
   taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
+  taskResult = attachResolvedWorktreeEvidence(taskResult, resolvedRepo);
 
   const finalizerDecision = decideTaskFinalization(collectTaskFinalizerEvidence({
     task,
@@ -948,6 +906,29 @@ function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, don
       target_branch: taskResult.integration?.target_branch
         || config.defaultBranch
         || "main",
+    },
+    worktree_effect: taskResult.finalizer_decision?.worktree_effect
+      || unifiedDecision.worktree_effect
+      || null,
+  };
+}
+
+function attachResolvedWorktreeEvidence(taskResult = {}, resolvedRepo = null) {
+  if (resolvedRepo?.worktree_lifecycle?.mode !== "git_worktree" || !resolvedRepo?.task_worktree_path) return taskResult;
+  const lifecycle = {
+    ...(taskResult.worktree_lifecycle || {}),
+    ...(resolvedRepo.worktree_lifecycle || {}),
+    worktree_path: taskResult.worktree_lifecycle?.worktree_path || resolvedRepo.task_worktree_path,
+  };
+  return {
+    ...taskResult,
+    worktree_lifecycle: lifecycle,
+    repo_resolution: {
+      ...(taskResult.repo_resolution || {}),
+      repo_id: taskResult.repo_resolution?.repo_id || resolvedRepo.repo_id || null,
+      canonical_repo_path: taskResult.repo_resolution?.canonical_repo_path || resolvedRepo.canonical_repo_path || null,
+      task_worktree_path: taskResult.repo_resolution?.task_worktree_path || resolvedRepo.task_worktree_path,
+      worktree_lifecycle: lifecycle,
     },
   };
 }
