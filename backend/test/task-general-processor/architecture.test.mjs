@@ -54,3 +54,9 @@ test("task-processing pipeline is a compact explicit-stage orchestrator", async 
     assert.match(source, new RegExp(`\\b${stage}\\b`), `missing explicit stage ${stage}`);
   }
 });
+
+test("task final writeback reuses shared repair metadata utility", async () => {
+  const source = await readFile(new URL("src/task-final-writeback.mjs", backendRoot), "utf8");
+  assert.doesNotMatch(source, /function\s+applyRepairMetadata\s*\(/);
+  assert.match(source, /task-processing\/task-repair-context\.mjs/);
+});

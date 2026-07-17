@@ -30,22 +30,7 @@ import { reconcileProgressionCommandsInState } from './progression/progression-c
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writeback-failure.mjs";
-
-function applyRepairMetadata(args = {}, repairGoal = {}) {
-  for (const key of [
-    "root_task_id",
-    "parent_task_id",
-    "repair_attempt",
-    "max_attempts",
-    "repair_of_goal_id",
-    "repair_of_task_id",
-    "repair_of_worktree",
-    "repair_of_branch",
-  ]) {
-    if (repairGoal[key] !== undefined) args[key] = repairGoal[key];
-  }
-  return args;
-}
+import { applyRepairMetadata } from "./task-processing/task-repair-context.mjs";
 
 function createdFollowupFromTaskResult(taskResult = {}) {
   if (!taskResult.repair_goal_id && !taskResult.repair_task_id) return null;
