@@ -31,7 +31,7 @@ import { writeFinalizationAgentRuns } from "./task-finalization/finalization-not
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
-import { buildProgressionDecision, runPostFinalizationEffects } from "./task-finalization/task-finalization-effects.mjs";
+import { buildProgressionDecision, runCompletedTaskAutoStart, runPostFinalizationEffects } from "./task-finalization/task-finalization-effects.mjs";
 import {
   applyNoChangeRepairCompletionSummary,
   finalizeAcceptanceRepairCreation,
@@ -472,14 +472,13 @@ export async function finalizeCodexTaskRun({
     } catch {}
   }
 
-  let autoStartResult = null;
-  if (taskStatus === "completed") {
-    try {
-      autoStartResult = await autoStartNextOnTaskCompletedFn(store, config, result.task);
-    } catch (err) {
-      autoStartResult = { auto_started: false, error: err?.message || String(err), details: [] };
-    }
-  }
+  const autoStartResult = await runCompletedTaskAutoStart({
+    taskStatus,
+    store,
+    config,
+    task: result.task,
+    autoStartNextOnTaskCompletedFn,
+  });
 
   await propagateRepairChildCompletion({
     task,

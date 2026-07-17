@@ -76,3 +76,18 @@ export async function runPostFinalizationEffects({
 
   return report;
 }
+
+export async function runCompletedTaskAutoStart({
+  taskStatus,
+  store,
+  config,
+  task,
+  autoStartNextOnTaskCompletedFn,
+} = {}) {
+  if (taskStatus !== "completed") return null;
+  try {
+    return await autoStartNextOnTaskCompletedFn(store, config, task);
+  } catch (err) {
+    return { auto_started: false, error: err?.message || String(err), details: [] };
+  }
+}

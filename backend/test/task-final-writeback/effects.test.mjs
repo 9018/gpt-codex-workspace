@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizeToUnifiedDecision } from "../../src/codex-unified-decision.mjs";
-import { buildProgressionDecision, runPostFinalizationEffects } from "../../src/task-finalization/task-finalization-effects.mjs";
+import { buildProgressionDecision, runCompletedTaskAutoStart, runPostFinalizationEffects } from "../../src/task-finalization/task-finalization-effects.mjs";
 
 test("buildProgressionDecision normalizes unified decision revisions and integration target", () => {
   const unifiedDecision = normalizeToUnifiedDecision({
@@ -86,4 +86,38 @@ test("runPostFinalizationEffects records github sync and non-blocking stale swee
   });
   assert.equal(failed.github_sync.ok, false);
   assert.equal(failed.goal_sweep.ok, false);
+});
+
+test("runCompletedTaskAutoStart starts only completed tasks and captures failures", async () => {
+  const calls = [];
+  const started = await runCompletedTaskAutoStart({
+    taskStatus: "completed",
+    store: { state: {} },
+    config: { defaultWorkspaceRoot: "/workspace" },
+    task: { id: "task_done" },
+    autoStartNextOnTaskCompletedFn: async (_store, _config, task) => {
+      calls.push(task.id);
+      return { auto_started: true, task_id: "task_next" };
+    },
+  });
+  assert.deepEqual(calls, ["task_done"]);
+  assert.equal(started.auto_started, true);
+
+  const skipped = await runCompletedTaskAutoStart({
+    taskStatus: "waiting_for_review",
+    task: { id: "task_review" },
+    autoStartNextOnTaskCompletedFn: async () => {
+      throw new Error("should not run");
+    },
+  });
+  assert.equal(skipped, null);
+
+  const failed = await runCompletedTaskAutoStart({
+    taskStatus: "completed",
+    task: { id: "task_done" },
+    autoStartNextOnTaskCompletedFn: async () => {
+      throw new Error("queue unavailable");
+    },
+  });
+  assert.deepEqual(failed, { auto_started: false, error: "queue unavailable", details: [] });
 });
