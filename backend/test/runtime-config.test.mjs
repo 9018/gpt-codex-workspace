@@ -195,6 +195,37 @@ test("buildRuntimeConfig exposes codex TUI productization settings", async () =>
   assert.equal(sources.requireSuperpowersForTui, "runtime.env");
 });
 
+test("buildRuntimeConfig exposes autonomous TUI autopilot settings", async () => {
+  clearGptWorkVars();
+  const { root } = await makeEnvFile(
+    "GPTWORK_TUI_AUTOPILOT_ENABLED=true\n" +
+    "GPTWORK_TUI_AUTOPILOT_MAX_ACTIONS=77\n" +
+    "GPTWORK_TUI_AUTOPILOT_MAX_REPAIRS=4\n" +
+    "GPTWORK_TUI_FRAME_STABLE_MS=650\n" +
+    "GPTWORK_TUI_NO_PROGRESS_SECONDS=90\n" +
+    "GPTWORK_TUI_CLASSIFIER_ENABLED=false\n"
+  );
+  const { config, sources } = buildRuntimeConfig(root);
+  assert.equal(config.tuiAutopilotEnabled, true);
+  assert.equal(config.tuiAutopilotMaxActions, 77);
+  assert.equal(config.tuiAutopilotMaxRepairs, 4);
+  assert.equal(config.tuiFrameStableMs, 650);
+  assert.equal(config.tuiNoProgressSeconds, 90);
+  assert.equal(config.tuiClassifierEnabled, false);
+  assert.equal(sources.tuiAutopilotEnabled, "runtime.env");
+});
+
+test("buildRuntimeConfig enables autonomous TUI autopilot by default", () => {
+  clearGptWorkVars();
+  const { config } = buildRuntimeConfig("/tmp/test-root");
+  assert.equal(config.tuiAutopilotEnabled, true);
+  assert.equal(config.tuiAutopilotMaxActions, 100);
+  assert.equal(config.tuiAutopilotMaxRepairs, 3);
+  assert.equal(config.tuiFrameStableMs, 500);
+  assert.equal(config.tuiNoProgressSeconds, 120);
+  assert.equal(config.tuiClassifierEnabled, true);
+});
+
 test("buildRuntimeConfig accepts legacy TUI superpowers env via canonical config field", async () => {
   clearGptWorkVars();
   const { root } = await makeEnvFile(

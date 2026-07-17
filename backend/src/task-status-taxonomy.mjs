@@ -17,6 +17,7 @@ export const TASK_STATUSES = Object.freeze({
   NEEDS_DECISION: 'needs_decision',
   WAITING_FOR_LOCK: 'waiting_for_lock',
   WAITING_FOR_REVIEW: 'waiting_for_review',
+  WAITING_FOR_SUPERVISOR: 'waiting_for_supervisor',
   // Typed review/recovery states
   WAITING_FOR_HUMAN_REVIEW: REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
   WAITING_FOR_MISSING_EVIDENCE_REPAIR: REVIEW_STATES.WAITING_FOR_MISSING_EVIDENCE_REPAIR,
@@ -57,6 +58,7 @@ export const ACTIVE_EXECUTION_STATUSES = Object.freeze(new Set([
 /** Human review statuses: includes both legacy waiting_for_review and typed states. */
 export const HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_SUPERVISOR,
   TASK_STATUSES.NEEDS_DECISION,
   ...Object.values(REVIEW_STATES),
 ]));
@@ -64,6 +66,7 @@ export const HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
 /** Human review statuses that exclude machine-repairable typed states. */
 export const TRUE_HUMAN_REVIEW_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_SUPERVISOR,
   REVIEW_STATES.WAITING_FOR_HUMAN_REVIEW,
   REVIEW_STATES.WAITING_FOR_MANUAL_TERMINAL_DECISION,
   REVIEW_STATES.HUMAN_INTERRUPTED_FOR_REPAIR_BUDGET_EXHAUSTED,
@@ -93,6 +96,7 @@ export const FAILED_TERMINAL_STATUSES = Object.freeze(new Set([
 export const NON_TERMINAL_WAIT_STATUSES = Object.freeze(new Set([
   TASK_STATUSES.WAITING_FOR_LOCK,
   TASK_STATUSES.WAITING_FOR_REVIEW,
+  TASK_STATUSES.WAITING_FOR_SUPERVISOR,
   TASK_STATUSES.WAITING_FOR_REPAIR,
   TASK_STATUSES.WAITING_FOR_INTEGRATION,
 ]));

@@ -996,6 +996,7 @@ test("processGeneralTaskWithDeps: prompt preparation waiting_for_review action p
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_review", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.task_worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_review" },
@@ -1030,6 +1031,7 @@ test("processGeneralTaskWithDeps: prompt preparation retry action requeues withi
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_retry", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.task_worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_retry" },
@@ -1067,6 +1069,7 @@ test("processGeneralTaskWithDeps: execution retry action requeues within retry b
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_healing_exec_retry", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.task_worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.task_worktree_path, branch_name: "gptwork/task/task_healing_exec_retry" },
@@ -1165,6 +1168,7 @@ test("processGeneralTaskWithDeps: integration branch_pushed does NOT mark task c
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed", created_at: new Date().toISOString() },
@@ -1302,6 +1306,7 @@ test("processGeneralTaskWithDeps: branch_pushed without passed acceptance does n
       maxRepairAttempts: 0,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_branch_pushed_no_accept", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_branch_pushed_no_accept", created_at: new Date().toISOString() },
@@ -1360,6 +1365,7 @@ test("processGeneralTaskWithDeps: integration pr_opened does NOT mark task compl
       codexExecTimeout: 10,
     }, task, ctx, {}, {
       resolveTaskRepositoryPlanFn: async () => makeRepoPlan("task_pr_opened", tmpDir, "github.com/acme/repo"),
+      resolvePathContextFn: resolveTestPathContext,
       materializeTaskWorktreeFn: async (plan) => ({
         lock_repo_path: plan.worktree_path,
         worktree_lifecycle: { mode: "git_worktree", ok: true, worktree_path: plan.worktree_path, branch_name: "gptwork/task/task_pr_opened", created_at: new Date().toISOString() },

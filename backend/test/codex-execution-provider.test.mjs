@@ -8,12 +8,14 @@ import {
   checkSuperpowersPluginForTuiFallback,
   normalizeCodexExecutionProvider,
   taskUsesCodexTuiGoal,
+  describeCodexExecutionProvider,
+  getTaskExecutionProviderMode,
 } from "../src/codex-execution-provider.mjs";
 
-test("normalizeCodexExecutionProvider defaults missing provider to codex_exec", () => {
-  assert.equal(normalizeCodexExecutionProvider(), CODEX_EXECUTION_PROVIDERS.EXEC);
-  assert.equal(normalizeCodexExecutionProvider(null), CODEX_EXECUTION_PROVIDERS.EXEC);
-  assert.equal(normalizeCodexExecutionProvider(""), CODEX_EXECUTION_PROVIDERS.EXEC);
+test("normalizeCodexExecutionProvider defaults missing provider to autonomous codex TUI", () => {
+  assert.equal(normalizeCodexExecutionProvider(), CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
+  assert.equal(normalizeCodexExecutionProvider(null), CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
+  assert.equal(normalizeCodexExecutionProvider(""), CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
 });
 
 test("normalizeCodexExecutionProvider accepts codex_tui_goal", () => {
@@ -23,7 +25,7 @@ test("normalizeCodexExecutionProvider accepts codex_tui_goal", () => {
   );
 });
 
-test("normalizeCodexExecutionProvider defaults unknown provider to codex_exec", () => {
+test("normalizeCodexExecutionProvider preserves compatibility for an unknown explicit provider", () => {
   assert.equal(normalizeCodexExecutionProvider("something_else"), CODEX_EXECUTION_PROVIDERS.EXEC);
 });
 
@@ -31,7 +33,23 @@ test("taskUsesCodexTuiGoal reads provider from task metadata", () => {
   assert.equal(taskUsesCodexTuiGoal({ metadata: { codex_execution_provider: "codex_tui_goal" } }), true);
   assert.equal(taskUsesCodexTuiGoal({ metadata: { codex_execution_provider: "codex_exec" } }), false);
   assert.equal(taskUsesCodexTuiGoal({ metadata: { codex_execution_provider: "unknown" } }), false);
-  assert.equal(taskUsesCodexTuiGoal({}), false);
+  assert.equal(taskUsesCodexTuiGoal({}), true);
+});
+
+test("provider descriptions expose TUI as autonomous default and exec as availability fallback", () => {
+  const tui = describeCodexExecutionProvider();
+  const exec = describeCodexExecutionProvider("codex_exec");
+  assert.equal(tui.is_default, true);
+  assert.equal(tui.is_manual_fallback, false);
+  assert.match(tui.description, /autonomous/i);
+  assert.equal(exec.is_default, false);
+  assert.equal(exec.is_availability_fallback, true);
+});
+
+test("task provider mode distinguishes explicit selection from the TUI default", () => {
+  assert.deepEqual(getTaskExecutionProviderMode({}).provider, CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
+  assert.equal(getTaskExecutionProviderMode({}).explicit, false);
+  assert.equal(getTaskExecutionProviderMode({ metadata: { codex_execution_provider: "codex_exec" } }).explicit, true);
 });
 
 test("checkSuperpowersPluginForTuiFallback resolves plugins from configured CODEX_HOME", async () => {

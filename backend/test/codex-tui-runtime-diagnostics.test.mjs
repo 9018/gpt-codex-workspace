@@ -53,7 +53,7 @@ test("omits codex_tui_goal diagnostics when TUI is not configured and no task/se
   assert.equal(diagnostics, null);
 });
 
-test("reports explicit optional provider state without changing codex_exec default semantics", async () => {
+test("reports autonomous TUI as the default provider", async () => {
   const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-runtime-explicit-")));
 
   const diagnostics = await collectCodexTuiRuntimeDiagnostics({
@@ -67,9 +67,9 @@ test("reports explicit optional provider state without changing codex_exec defau
   });
 
   assert.equal(diagnostics.provider, CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
-  assert.equal(diagnostics.optional, true);
-  assert.equal(diagnostics.activation, "explicit_only");
-  assert.equal(diagnostics.default_provider, CODEX_EXECUTION_PROVIDERS.EXEC);
+  assert.equal(diagnostics.optional, false);
+  assert.equal(diagnostics.activation, "default_autonomous");
+  assert.equal(diagnostics.default_provider, CODEX_EXECUTION_PROVIDERS.TUI_GOAL);
   assert.equal(diagnostics.enabled, false);
   assert.equal(diagnostics.explicit_task_count, 1);
   assert.equal(diagnostics.session_store.present, false);
@@ -121,7 +121,7 @@ test("summarizes missing result and retained session references without leaking 
   assert.equal(serialized.includes("Summary contains"), false);
 });
 
-test("reports stale and missing session provider metadata as diagnostics", async () => {
+test("reports stale default-provider session references without requiring provider metadata", async () => {
   const repo = await makeGitRepo();
   const store = createCodexTuiSessionStore({ workspaceRoot: repo });
   await store.createSession({
@@ -141,7 +141,7 @@ test("reports stale and missing session provider metadata as diagnostics", async
   assert.equal(diagnostics.session_store.stale_reference_count, 1);
   assert.equal(diagnostics.completion.no_result_count, 1);
   assert.ok(diagnostics.findings.some((finding) => finding.code === "codex_tui_session_cwd_missing"));
-  assert.ok(diagnostics.findings.some((finding) => finding.code === "codex_tui_provider_metadata_missing"));
+  assert.equal(diagnostics.findings.some((finding) => finding.code === "codex_tui_provider_metadata_missing"), false);
   assert.ok(diagnostics.findings.some((finding) => finding.code === "codex_tui_no_result"));
 });
 
@@ -244,8 +244,8 @@ test("recovery status and diagnose include codex_tui_goal diagnostics when relev
   const diagnose = await tools.recovery_diagnose.handler({});
 
   assert.equal(status.codex_tui_goal.provider, "codex_tui_goal");
-  assert.equal(status.codex_tui_goal.optional, true);
-  assert.equal(status.codex_tui_goal.activation, "explicit_only");
+  assert.equal(status.codex_tui_goal.optional, false);
+  assert.equal(status.codex_tui_goal.activation, "default_autonomous");
   assert.ok(diagnose.codex_tui_goal.findings.some((finding) => finding.code === "codex_tui_no_result"));
   assert.ok(diagnose.issues.some((issue) => issue.category === "codex_tui_goal" && /codex_tui_no_result/.test(issue.detail)));
 });

@@ -226,13 +226,13 @@ test('runtime_status handler returns expected shape keys', async () => {
   assert.equal(typeof result.github, 'object');
   if (result.codex_tui_goal !== undefined) {
     assert.equal(result.codex_tui_goal.provider, 'codex_tui_goal');
-    assert.equal(result.codex_tui_goal.optional, true);
-    assert.equal(result.codex_tui_goal.activation, 'explicit_only');
+    assert.equal(result.codex_tui_goal.optional, false);
+    assert.equal(result.codex_tui_goal.activation, 'default_autonomous');
     assert.equal(result.codex_tui_goal.highest_severity, 'ok');
   }
 });
 
-test('runtime_status includes optional explicit codex_tui_goal diagnostics when TUI state is relevant', async () => {
+test('runtime_status includes autonomous default codex_tui_goal diagnostics when TUI state is relevant', async () => {
   const workspaceRoot = await makeGitWorkspace();
   const sessionStore = createCodexTuiSessionStore({ workspaceRoot });
   await sessionStore.createSession({
@@ -263,9 +263,9 @@ test('runtime_status includes optional explicit codex_tui_goal diagnostics when 
   const result = await tools.runtime_status.handler();
 
   assert.equal(result.codex_tui_goal.provider, 'codex_tui_goal');
-  assert.equal(result.codex_tui_goal.optional, true);
-  assert.equal(result.codex_tui_goal.activation, 'explicit_only');
-  assert.equal(result.codex_tui_goal.default_provider, 'codex_exec');
+  assert.equal(result.codex_tui_goal.optional, false);
+  assert.equal(result.codex_tui_goal.activation, 'default_autonomous');
+  assert.equal(result.codex_tui_goal.default_provider, 'codex_tui_goal');
   assert.equal(result.codex_tui_goal.session_store.session_count, 1);
   assert.equal(result.codex_tui_goal.completion.no_result_count, 1);
 });

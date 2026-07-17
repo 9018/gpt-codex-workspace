@@ -14,13 +14,20 @@ export const AGENT_TUI_PROVIDERS = Object.freeze({
 
 export function normalizeCodexExecutionProvider(value) {
   const provider = String(value || "").trim();
+  if (!provider) return CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+  if (provider === CODEX_EXECUTION_PROVIDERS.EXEC) return CODEX_EXECUTION_PROVIDERS.EXEC;
   if (provider === CODEX_EXECUTION_PROVIDERS.TUI_GOAL) return CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+  if (provider === "codex_tui") return CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
   return CODEX_EXECUTION_PROVIDERS.EXEC;
 }
 
 export function taskUsesCodexTuiGoal(task) {
-  const provider = task?.metadata?.codex_execution_provider;
-  return String(provider || "").trim() === CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+  return normalizeCodexExecutionProvider(task?.metadata?.codex_execution_provider) === CODEX_EXECUTION_PROVIDERS.TUI_GOAL;
+}
+
+export function taskExplicitlyUsesCodexTuiGoal(task) {
+  const provider = String(task?.metadata?.codex_execution_provider || "").trim();
+  return provider === CODEX_EXECUTION_PROVIDERS.TUI_GOAL || provider === "codex_tui";
 }
 
 export function isCodexTuiEnabled(config = {}, env = process.env) {
@@ -41,14 +48,11 @@ export function getClaudeTuiConfig(config = {}, env = process.env) {
 // ---------------------------------------------------------------------------
 // Codex execution provider mode descriptions for diagnostics and docs.
 // These make it unambiguous in runtime_status / doctor output which provider
-// is the default production path and which is the manual operator fallback.
+// is the default autonomous path and which is the typed availability fallback.
 // ---------------------------------------------------------------------------
 
 /**
  * Describe the execution provider mode in a human-readable form.
- * Explicitly labels codex_exec as the default production path and
- * codex_tui_goal as the manual operator fallback.
- *
  * @param {string} provider - Provider identifier (codex_exec or codex_tui_goal)
  * @returns {{ id: string, label: string, is_default: boolean, is_manual_fallback: boolean, description: string }}
  */
@@ -57,18 +61,20 @@ export function describeCodexExecutionProvider(provider) {
   if (p === CODEX_EXECUTION_PROVIDERS.TUI_GOAL) {
     return {
       id: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
-      label: "codex_tui_goal (manual operator fallback)",
-      is_default: false,
-      is_manual_fallback: true,
-      description: "Codex TUI interactive mode. This is a MANUAL OPERATOR FALLBACK, not an automatic execution path. The operator works interactively in a terminal session and must collect durable evidence (commit, tests, result.md) to enter the acceptance/verification closure loop."
+      label: "codex_tui_goal (default autonomous provider)",
+      is_default: true,
+      is_manual_fallback: false,
+      is_availability_fallback: false,
+      description: "Codex TUI autonomous mode. This is the default execution path: WorkMCP drives instructions, confirmations, choices, continuation, evidence collection, repair, and resume without routine human input."
     };
   }
   return {
     id: CODEX_EXECUTION_PROVIDERS.EXEC,
-    label: "codex_exec (default automatic production path)",
-    is_default: true,
+    label: "codex_exec (typed availability fallback)",
+    is_default: false,
     is_manual_fallback: false,
-    description: "Codex exec automatic mode. This is the DEFAULT production execution path. Codex runs autonomously via CLI, produces structured result contracts, verification evidence, and commits. All tasks default to this provider unless explicitly configured to codex_tui_goal."
+    is_availability_fallback: true,
+    description: "Codex exec automatic mode. It is selected explicitly or used only when the native TUI provider is typed as unavailable; prompt loops, missing evidence, and ordinary execution failures do not authorize this fallback."
   };
 }
 
@@ -85,27 +91,16 @@ export function getTaskExecutionProviderMode(task = {}) {
   const desc = describeCodexExecutionProvider(provider);
   return {
     provider,
-    explicit: raw === CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+    explicit: typeof raw === "string" && raw.trim().length > 0,
     is_default: desc.is_default,
     is_manual_fallback: desc.is_manual_fallback,
+    is_availability_fallback: desc.is_availability_fallback === true,
     description: desc.description,
   };
 }
 
 
-// P0-UA6-G4: Superpowers plugin preflight for TUI fallback.
-// When explicit TUI fallback is requested, verify that the Superpowers
-// plugin is available.  The check is intentionally simple and synchronous:
-// it looks for the superpowers skill directory or MCP tool entry in the
-// Codex configuration.  If the plugin is not found, the return object
-// includes a clear diagnostic and suggested remediation.
-
-// P0-UA6-G4: Superpowers plugin preflight for TUI fallback.
-// When explicit TUI fallback is requested, verify that the Superpowers
-// plugin is available.  The check looks for the superpowers skill
-// directory.  If the plugin is not found, a clear diagnostic with
-// remediation is returned, and the TUI session must not start
-// (codex_exec remains the default fallback provider).
+// Compatibility-named preflight for the autonomous TUI provider.
 export function checkSuperpowersPluginForTuiFallback(config = {}, env = process.env) {
   const requireSuperpowers = config.requireSuperpowersPluginForTuiFallback === true
     || env.GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI === 'true';

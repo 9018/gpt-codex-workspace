@@ -12,6 +12,7 @@ import { buildCodexProcessEnvironment } from "./path-context/codex-process-envir
 import { snapshotNativeSessions } from "./codex-session/codex-session-inventory.mjs";
 import { resolveNativeSessionBinding } from "./codex-session/codex-session-resolver.mjs";
 import { createCodexSessionManifestStore } from "./codex-session/codex-session-manifest-store.mjs";
+import { createTuiAutopilotController } from "./tui-autopilot/tui-autopilot-controller.mjs";
 
 const activeSessions = new Map();
 const sessionStores = new Map();
@@ -291,6 +292,13 @@ async function startCodexTuiGoalSessionImpl({
   evidenceWaitMs = null,
   pathContext = null,
   requireSuperpowers = true,
+  tuiAutopilotEnabled = true,
+  tuiAutopilotMaxActions = 100,
+  tuiAutopilotMaxRepairs = 3,
+  tuiFrameStableMs = 500,
+  tuiNoProgressSeconds = 120,
+  tuiClassifierEnabled = true,
+  resumeNativeSessionId = null,
   releaseLockFn = null,
   onTerminalized = null,
 } = {}) {
@@ -354,6 +362,13 @@ async function startCodexTuiGoalSessionImpl({
       command,
       evidence_wait_ms: Number.isFinite(Number(evidenceWaitMs)) ? Number(evidenceWaitMs) : null,
       require_superpowers_for_tui: requireSuperpowers !== false,
+      tui_autopilot_enabled: tuiAutopilotEnabled !== false,
+      tui_autopilot_max_actions: Number(tuiAutopilotMaxActions || 100),
+      tui_autopilot_max_repairs: Number(tuiAutopilotMaxRepairs || 3),
+      tui_frame_stable_ms: Number(tuiFrameStableMs || 500),
+      tui_no_progress_seconds: Number(tuiNoProgressSeconds || 120),
+      tui_classifier_enabled: tuiClassifierEnabled !== false,
+      resume_native_session_id: resumeNativeSessionId || null,
       codex_home: pathContext?.codexHome || null,
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
@@ -377,12 +392,33 @@ async function startCodexTuiGoalSessionImpl({
   let ptySession;
   let earlyTerminalization = null;
   let bootstrapOutput = "";
+  const pendingAutopilotInputs = [];
+  const writeAutopilotInput = async (input) => {
+    const text = String(input ?? "");
+    if (ptySession) ptySession.write(text);
+    else pendingAutopilotInputs.push(text);
+    await store.appendSessionLog(sessionId, `[autopilot-input] ${text}`);
+  };
+  const autopilot = tuiAutopilotEnabled === false ? null : createTuiAutopilotController({
+    sessionId,
+    active: false,
+    allowedRoots: [cwd],
+    maxActions: Number(tuiAutopilotMaxActions || 100),
+    maxRepairs: Number(tuiAutopilotMaxRepairs || 3),
+    noProgressMs: Number(tuiNoProgressSeconds || 120) * 1_000,
+    writeInput: writeAutopilotInput,
+    interrupt: () => writeAutopilotInput("\x03"),
+    resume: () => writeAutopilotInput("/resume\r"),
+    persist: (patch) => store.updateSession(sessionId, patch),
+  });
   try {
     ptySession = await adapter.spawn({
       cwd,
       env: processEnv,
       command,
-      args: [initialPrompt],
+      args: resumeNativeSessionId
+        ? ["resume", String(resumeNativeSessionId), initialPrompt]
+        : [initialPrompt],
       onData: (chunk) => {
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
@@ -397,6 +433,12 @@ async function startCodexTuiGoalSessionImpl({
             last_meaningful_progress_at: new Date().toISOString(),
           }).catch(() => {});
         }
+        autopilot?.ingest(text).catch((err) => {
+          store.updateSession(sessionId, {
+            autopilot_error: String(err?.message || err),
+            autopilot_error_at: new Date().toISOString(),
+          }).catch(() => {});
+        });
       },
       onExit: (event) => {
         earlyTerminalization = terminalizeCodexTuiSession({ sessionId, store, event, releaseLockFn, onTerminalized });
@@ -424,6 +466,7 @@ async function startCodexTuiGoalSessionImpl({
     try { ptySession.stop(); } catch { /* process already reached a terminal path */ }
     return earlyTerminalization;
   }
+  for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
   activeSessions.set(sessionId, { store, ptySession, releaseLockFn, onTerminalized });
 
   // Codex versions differ in how an argv prompt is handled: some submit it
@@ -442,6 +485,7 @@ async function startCodexTuiGoalSessionImpl({
     bootstrapMethod = "argv_prompt_enter";
   }
   const bootstrapSentAt = new Date().toISOString();
+  autopilot?.activate();
   const nativeSessionsAfter = pathContext
     ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
     : [];
@@ -457,6 +501,7 @@ async function startCodexTuiGoalSessionImpl({
 
   record = await store.updateSession(sessionId, {
     status: "running",
+    autonomous: tuiAutopilotEnabled !== false,
     pty_pid: ptySession.pid ?? null,
     started_at: bootstrapSentAt,
     bootstrap_sent_at: bootstrapSentAt,
@@ -466,6 +511,7 @@ async function startCodexTuiGoalSessionImpl({
     native_session_id: nativeBinding?.nativeSessionId || null,
     native_session_binding_source: nativeBinding?.source || null,
     native_session_binding_reason: nativeBinding?.reason || null,
+    resume_native_session_id: resumeNativeSessionId || null,
   });
   if (pathContext) {
     try {

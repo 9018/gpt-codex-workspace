@@ -2,7 +2,12 @@ import { existsSync } from "node:fs";
 import { access, readFile, readdir } from "node:fs/promises";
 import { constants as fsConstants } from "node:fs";
 import { join } from "node:path";
-import { CODEX_EXECUTION_PROVIDERS, isCodexTuiEnabled, taskUsesCodexTuiGoal } from "./codex-execution-provider.mjs";
+import {
+  CODEX_EXECUTION_PROVIDERS,
+  isCodexTuiEnabled,
+  taskExplicitlyUsesCodexTuiGoal,
+  taskUsesCodexTuiGoal,
+} from "./codex-execution-provider.mjs";
 import { CODEX_TUI_SESSIONS_DIR, assertSafeCodexTuiSessionId } from "./codex-tui-session-store.mjs";
 import { collectCodexTuiCompletion } from "./codex-tui-completion-collector.mjs";
 
@@ -125,7 +130,7 @@ export async function collectCodexTuiRuntimeDiagnostics({
   const sessionScan = await scanSessionRecords(sessionsDir);
   const tasks = await loadTasks(store);
   const taskById = new Map(tasks.map((task) => [task.id, task]));
-  const explicitTasks = tasks.filter((task) => taskUsesCodexTuiGoal(task));
+  const explicitTasks = tasks.filter((task) => taskExplicitlyUsesCodexTuiGoal(task));
   const enabled = isCodexTuiEnabled(config, env);
   const relevant = enabled || explicitTasks.length > 0 || sessionScan.records.length > 0 || sessionScan.invalid_record_count > 0 || !sessionScan.readable;
   if (!relevant) return null;
@@ -297,10 +302,10 @@ export async function collectCodexTuiRuntimeDiagnostics({
 
   return {
     provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
-    provider_label: "codex_tui_goal (optional, explicit provider)",
-    optional: true,
-    activation: "explicit_only",
-    default_provider: CODEX_EXECUTION_PROVIDERS.EXEC,
+    provider_label: "codex_tui_goal (default autonomous provider)",
+    optional: false,
+    activation: "default_autonomous",
+    default_provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
     enabled,
     config_source: codexTuiConfigSource(config, env),
     explicit_task_count: explicitTasks.length,

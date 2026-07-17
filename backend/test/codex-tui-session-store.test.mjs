@@ -27,6 +27,9 @@ test("session store creates, reads, updates, and lists records", async () => {
   assert.equal(created.status, "created");
   assert.equal(created.task_id, "task_1");
   assert.equal(created.goal_id, "goal_1");
+  assert.equal(created.autopilot_state, "created");
+  assert.equal(created.action_attempts, 0);
+  assert.equal(created.checkpoint, null);
 
   const updated = await store.updateSession("session_1", { status: "running", pty_pid: 123 });
   assert.equal(updated.status, "running");

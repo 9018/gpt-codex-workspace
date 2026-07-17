@@ -196,6 +196,69 @@ test("start does not send bootstrap Enter when Codex already auto-submitted the 
   assert.deepEqual(fakeAdapter.writes, []);
 });
 
+test("start uses native Codex resume arguments when a persisted native session is available", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-native-resume-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_native_resume", title: "Native resume" },
+    goal: { id: "goal_native_resume" },
+    cwd,
+    ptyAdapter: fakeAdapter,
+    resumeNativeSessionId: "native-persisted",
+  });
+
+  assert.equal(fakeAdapter.spawns[0].args[0], "resume");
+  assert.equal(fakeAdapter.spawns[0].args[1], "native-persisted");
+  assert.match(fakeAdapter.spawns[0].args[2], /goal_id=goal_native_resume/);
+  assert.equal(session.resume_native_session_id, "native-persisted");
+});
+
+test("autonomous session handles confirmation frames and persists autopilot state", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-autopilot-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_autopilot", title: "Autopilot confirmation" },
+    goal: { id: "goal_autopilot" },
+    cwd,
+    ptyAdapter: fakeAdapter,
+    tuiAutopilotEnabled: true,
+  });
+
+  fakeAdapter.emitData(`Run npm test in ${cwd}? (y/n)`);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  assert.equal(fakeAdapter.writes.at(-1), "y\r");
+  const stored = await readCodexTuiSession(session.id, { maxChars: 0 });
+  assert.equal(stored.autonomous, true);
+  assert.equal(stored.autopilot_state, "awaiting_confirmation");
+  assert.equal(stored.action_attempts, 1);
+  assert.match(stored.last_frame_digest, /^[a-f0-9]{64}$/);
+});
+
+test("session persists the complete autonomous runtime policy", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-policy-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_policy", title: "Autopilot policy" },
+    goal: { id: "goal_policy" },
+    cwd,
+    ptyAdapter: fakeAdapter,
+    tuiAutopilotEnabled: true,
+    tuiAutopilotMaxActions: 41,
+    tuiAutopilotMaxRepairs: 5,
+    tuiFrameStableMs: 750,
+    tuiNoProgressSeconds: 33,
+    tuiClassifierEnabled: false,
+  });
+
+  const stored = await readCodexTuiSession(session.id, { maxChars: 0 });
+  assert.equal(stored.metadata.tui_autopilot_max_actions, 41);
+  assert.equal(stored.metadata.tui_autopilot_max_repairs, 5);
+  assert.equal(stored.metadata.tui_frame_stable_ms, 750);
+  assert.equal(stored.metadata.tui_no_progress_seconds, 33);
+  assert.equal(stored.metadata.tui_classifier_enabled, false);
+});
+
 test("manager sends input, reads status, and stops sessions safely", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-")));
   const fakeAdapter = makeFakeAdapter();

@@ -60,6 +60,24 @@ function baseDeps(root, overrides = {}) {
       };
     },
     verifyTaskWorktreeFn: async () => ({ valid: true, source: "test-fixture" }),
+    resolvePathContextFn: async ({ task }) => {
+      const projectRoot = task.canonical_repo_path || root;
+      const executionCwd = task.task_worktree_path || projectRoot;
+      const codexHome = join(projectRoot, ".codex-runtime");
+      return {
+        mcpRoot: root,
+        projectsRoot: root,
+        workspaceRoot: root,
+        projectRoot,
+        canonicalRepoPath: projectRoot,
+        executionCwd,
+        worktreePath: task.task_worktree_path || null,
+        codexHome,
+        nativeSessionsRoot: join(codexHome, "sessions"),
+        controlSessionsRoot: join(projectRoot, ".gptwork", "codex-sessions"),
+        codexHomeMode: "project",
+      };
+    },
     acquireRepoLockFn: async () => ({ acquired: true, lock: { safe_repo_id: "default", status: "held" } }),
     appendGoalMessageFn: async () => {},
     prepareCodexTaskRunFn: async () => ({ promptFile: null, runFilePath: null, runId: "run_1" }),
@@ -88,7 +106,7 @@ function baseDeps(root, overrides = {}) {
   };
 }
 
-test("missing provider metadata still routes to codex_exec", async () => {
+test("missing provider metadata defaults to autonomous codex TUI", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-exec-")));
   await mkdir(join(root, ".gptwork", "worktrees", "task_1"), { recursive: true });
   const store = makeStore(root);
@@ -100,15 +118,103 @@ test("missing provider metadata still routes to codex_exec", async () => {
       execCalled = true;
       return { cr: { returncode: 0 }, parsedResult: { structured: true, status: "completed", summary: "ok", changed_files: [], tests: "none" }, summary: "ok" };
     },
-    startCodexTuiGoalSessionFn: async () => { tuiCalled = true; throw new Error("should not start TUI"); },
+    startCodexTuiGoalSessionFn: async (args) => {
+      tuiCalled = true;
+      return { id: "session_default_tui", task_id: args.task.id, goal_id: args.goal.id, cwd: args.cwd, status: "running" };
+    },
+    runCodexTuiEvidenceCycleFn: async () => ({
+      evidence_ready: true,
+      session_id: "session_default_tui",
+      collected: {
+        result_json: {
+          status: "completed",
+          summary: "default TUI completed",
+          changed_files: [],
+          tests: "none",
+          commit: "none",
+          verification: { passed: true, commands: [] },
+          operation_kind: "diagnostic",
+          integration_not_required: true,
+        },
+        changed_files: [],
+        tests: "none",
+        commit: "none",
+        result_md_present: true,
+        worktree_clean: true,
+        findings: [],
+      },
+    }),
   }));
 
-  assert.equal(execCalled, true);
-  assert.equal(tuiCalled, false);
-  assert.notEqual(result.kind, "codex_tui_session_started");
+  assert.equal(execCalled, false);
+  assert.equal(tuiCalled, true);
+  assert.equal(result.status, "completed");
 });
 
-test("codex_tui_goal metadata routes to session manager and does not invoke codex exec", async () => {
+test("general processor uses the unified dispatcher without parking a healthy TUI run for review", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "codex-unified-dispatcher-")));
+  const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
+  const statuses = [];
+  let dispatchInput = null;
+  const deps = baseDeps(root, {
+    updateTaskFn: async (currentStore, taskId, updater) => {
+      const currentTask = currentStore.state.tasks.find((item) => item.id === taskId);
+      updater(currentTask);
+      statuses.push(currentTask.status);
+      return { task: currentTask };
+    },
+    taskProviderDispatcherFn: async (input) => {
+      dispatchInput = input;
+      return {
+        status: "completed",
+        provider: "codex_tui",
+        attempt: {
+          id: "attempt_unified_tui",
+          state: "completed",
+          provider: "codex_tui",
+          provider_handle: { session_id: "session_unified_tui", native_session_id: "native_unified_tui" },
+        },
+        evidence: {
+          status: "completed",
+          summary: "unified TUI completed",
+          changed_files: [],
+          tests: [],
+          commit: null,
+          verification: { passed: true, commands: [] },
+          raw: { operation_kind: "diagnostic", integration_not_required: true },
+        },
+      };
+    },
+    resolvePathContextFn: async ({ task }) => ({
+      workspace_root: root,
+      canonical_repo_path: root,
+      task_worktree_path: task.task_worktree_path,
+      execution_cwd: task.task_worktree_path,
+      codex_home: join(root, ".codex"),
+    }),
+    startCodexTuiGoalSessionFn: async (args) => ({
+      id: "legacy_session_must_not_start",
+      cwd: args.cwd,
+      status: "running",
+    }),
+  });
+
+  const result = await processGeneralTaskWithDeps(
+    store,
+    { defaultWorkspaceRoot: root, defaultRepoPath: root, enableTaskWorktrees: true, codexTuiEnabled: true },
+    store.state.tasks[0],
+    {},
+    {},
+    deps,
+  );
+
+  assert.equal(dispatchInput.task.id, "task_1");
+  assert.equal(dispatchInput.executionCwd, join(root, ".gptwork", "worktrees", "task_1"));
+  assert.equal(result.status, "completed");
+  assert.equal(statuses.includes("waiting_for_review"), false);
+});
+
+test("codex_tui_goal missing evidence schedules automatic recovery without invoking codex exec", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-tui-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
   let execCalled = false;
@@ -126,9 +232,10 @@ test("codex_tui_goal metadata routes to session manager and does not invoke code
   assert.equal(tuiArgs.task.id, "task_1");
   assert.equal(tuiArgs.goal.id, "goal_1");
   assert.equal(tuiArgs.cwd, join(root, ".gptwork", "worktrees", "task_1"));
-  assert.equal(result.kind, "codex_tui_awaiting_evidence");
-  assert.equal(result.session_id, "session_1");
-  assert.equal(store.state.tasks[0].result.provider, "codex_tui_goal");
+  assert.equal(result.status, "retry_wait");
+  assert.equal(result.result.session_id, "session_1");
+  assert.equal(store.state.tasks[0].status, "retry_wait");
+  assert.equal(store.state.tasks[0].result.provider, "codex_tui");
   assert.equal(store.state.tasks[0].result.commit, "none");
   assert.deepEqual(store.state.tasks[0].result.changed_files, []);
   assert.equal(store.state.tasks[0].result.tests, null);
@@ -239,7 +346,7 @@ test("codex_tui_goal ready evidence enters acceptance integration finalizer path
   assert.equal(finalized.integration.status, "completed");
 });
 
-test("codex_tui_goal missing result.json terminates as failed with actionable evidence", async () => {
+test("codex_tui_goal missing result.json enters automatic retry with actionable evidence", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-missing-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
 
@@ -248,11 +355,11 @@ test("codex_tui_goal missing result.json terminates as failed with actionable ev
     startCodexTuiGoalSessionFn: async (args) => ({ id: "session_missing", task_id: args.task.id, goal_id: args.goal.id, cwd: args.cwd, status: "running" }),
   }));
 
-  assert.equal(result.status, "failed");
-  assert.equal(result.session_id, "session_missing");
-  assert.equal(store.state.tasks[0].status, "failed");
+  assert.equal(result.status, "retry_wait");
+  assert.equal(result.result.session_id, "session_missing");
+  assert.equal(store.state.tasks[0].status, "retry_wait");
   assert.equal(store.state.tasks[0].result.session_id, "session_missing");
-  assert.equal(store.state.tasks[0].result.tui_phase, "blocked_missing_evidence");
+  assert.equal(store.state.tasks[0].result.tui_phase, "automatic_recovery_pending");
   assert.equal(store.state.tasks[0].result.collect_result.status, "not_ready");
   assert.match(store.state.tasks[0].result.collect_result.expected_result_json, /goal_1\/result\.json$/);
   assert.equal(store.state.tasks[0].result.collect_result.finding.code, "tui_result_json_missing");
@@ -310,22 +417,36 @@ test("codex_tui_goal dirty ready evidence becomes a blocker instead of closing",
   assert.equal(finalized.taskResult.verification.passed, false);
 });
 
-test("codex_tui_goal metadata returns disabled result when TUI config is disabled", async () => {
+test("codex_tui_goal falls back to exec only when TUI config is disabled", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-disabled-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
   let execCalled = false;
   let tuiCalled = false;
 
   const result = await processGeneralTaskWithDeps(store, { defaultWorkspaceRoot: root, defaultRepoPath: root, enableTaskWorktrees: true, codexTuiEnabled: false }, store.state.tasks[0], {}, {}, baseDeps(root, {
-    executeCodexTaskRunFn: async () => { execCalled = true; throw new Error("codex exec should not run"); },
+    executeCodexTaskRunFn: async () => {
+      execCalled = true;
+      return {
+        cr: { returncode: 0, stdout: "", stderr: "", timed_out: false },
+        parsedResult: {
+          structured: true,
+          status: "completed",
+          summary: "exec availability fallback completed",
+          changed_files: [],
+          tests: { passed: 1, failed: 0 },
+          commit: "none",
+        },
+        summary: "exec availability fallback completed",
+        codexMeta: { provider: "codex_exec" },
+      };
+    },
     startCodexTuiGoalSessionFn: async () => { tuiCalled = true; throw new Error("TUI should not start"); },
   }));
 
-  assert.equal(execCalled, false);
+  assert.equal(execCalled, true);
   assert.equal(tuiCalled, false);
-  assert.equal(result.kind, "codex_tui_disabled");
-  assert.equal(result.provider, "codex_tui_goal");
-  assert.equal(result.status, "provider_unavailable");
+  assert.notEqual(result.status, "waiting_for_review");
+  assert.equal(result.result?.summary || result.summary, "exec availability fallback completed");
 });
 
 test("unknown provider metadata still routes to codex_exec", async () => {

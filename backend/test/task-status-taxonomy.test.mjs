@@ -33,6 +33,7 @@ const expectedStatuses = [
   'waiting_for_integration_uncertain',
   'waiting_for_policy_uncertain',
   'waiting_for_provider_unavailable',
+  'waiting_for_supervisor',
   'waiting_for_repair_budget_exhausted',
   'waiting_for_manual_terminal_decision',
   'waiting_for_missing_evidence_repair',
@@ -91,13 +92,14 @@ test('active execution statuses classify correctly', () => {
 });
 
 test('review, repair, and wait statuses classify correctly', () => {
-  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'needs_decision', 'waiting_for_review',  'waiting_for_evidence_missing',  'waiting_for_human_required',  'waiting_for_human_review',  'waiting_for_integration_recovery',  'waiting_for_integration_uncertain',  'waiting_for_policy_uncertain',  'waiting_for_provider_unavailable',  'waiting_for_repair_budget_exhausted',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_missing_evidence_repair',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
+  assert.deepEqual([...HUMAN_REVIEW_STATUSES].sort(), [  'needs_decision', 'waiting_for_review', 'waiting_for_supervisor',  'waiting_for_evidence_missing',  'waiting_for_human_required',  'waiting_for_human_review',  'waiting_for_integration_recovery',  'waiting_for_integration_uncertain',  'waiting_for_policy_uncertain',  'waiting_for_provider_unavailable',  'waiting_for_repair_budget_exhausted',  'waiting_for_result_contract_repair',  'waiting_for_noop_evidence',  'waiting_for_missing_evidence_repair',  'waiting_for_manual_terminal_decision',  'human_interrupted_for_repair_budget_exhausted',].sort());
   assert.deepEqual([...REPAIR_STATUSES], ['waiting_for_repair']);
   assert.deepEqual([...NON_TERMINAL_WAIT_STATUSES].sort(), [
     'waiting_for_integration',
     'waiting_for_lock',
     'waiting_for_repair',
     'waiting_for_review',
+    'waiting_for_supervisor',
   ]);
   assert.equal(isHumanReviewStatus(' WAITING_FOR_REVIEW '), true);
   // P0-03: New canonical review states should be classified as human review statuses
@@ -127,6 +129,8 @@ test('review, repair, and wait statuses classify correctly', () => {
   assert.equal(isNonTerminalWaitStatus('waiting_for_evidence_missing'), true);
   assert.equal(isNonTerminalWaitStatus('waiting_for_human_required'), true);
   assert.equal(isNonTerminalWaitStatus('waiting_for_repair_budget_exhausted'), true);
+  assert.equal(isNonTerminalWaitStatus('waiting_for_supervisor'), true);
+  assert.equal(isTrueHumanReviewStatus('waiting_for_supervisor'), true);
 });
 
 test('completed status classifies distinctly from terminal failures', () => {

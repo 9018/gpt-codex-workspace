@@ -31,6 +31,7 @@ import { writeBuilderAgentRun, writeIntegratorAgentRun, writeContextCuratorAgent
 import { applyPipelineGateBeforeClosure, ensurePipelineRunsForTask, isLegacyTask } from "./pipeline-orchestration.mjs";
 import { syncAgentRunProgress } from "./subagent-progress-bridge.mjs";
 import { resolvePathContext } from "./path-context/path-context-resolver.mjs";
+import { dispatchTaskProvider } from "./task-processing/task-provider-dispatcher.mjs";
 
 const RETRY_HEALING_ACTIONS = new Set([
   "retry_with_backoff",
@@ -475,6 +476,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   const startCodexTuiGoalSessionFn = deps.startCodexTuiGoalSessionFn || startCodexTuiGoalSession;
   const runCodexTuiEvidenceCycleFn = deps.runCodexTuiEvidenceCycleFn || runCodexTuiEvidenceCycle;
   const stopCodexTuiSessionFn = deps.stopCodexTuiSessionFn || stopCodexTuiSession;
+  const taskProviderDispatcherFn = deps.taskProviderDispatcherFn || dispatchTaskProvider;
   const analyzeDeliveryRecoveryCandidateFn = deps.analyzeDeliveryRecoveryCandidateFn || analyzeDeliveryRecoveryCandidate;
   const runDeliveryRecoveryFn = deps.runDeliveryRecoveryFn || runDeliveryRecovery;
   const now = new Date().toISOString();
@@ -568,6 +570,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   let executionCwd = usesCanonicalExecution ? (resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath) : null;
   let worktreeMaterialized = usesCanonicalExecution; // canonical execution doesn't need worktree materialization
   let tuiEvidenceReady = null;
+  let providerExecutionReady = null;
   let pathContext = null;
 
   async function ensurePathContext() {
@@ -646,7 +649,244 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     return { task_id: task.id, status: "failed", kind: "worktree_error", reason: failMsg };
   }
 
-  if (taskUsesCodexTuiGoal(task)) {
+  const _goalId = goal ? goal.id : task.id;
+  const _goalStateDir = config.defaultWorkspaceRoot + "/.gptwork/goals/" + _goalId;
+  const _resultJsonPath = _goalStateDir + "/result.json";
+  const _resultMdPath = _goalStateDir + "/result.md";
+  let promptFile = null;
+  let runFilePath = null;
+  let runId = null;
+  const mode = task.mode || "full";
+  let summary = "";
+  let parsedResult = null;
+  let cr = null;
+  let codexMeta = null;
+  let healingAction = null;
+
+  if (taskUsesCodexTuiGoal(task) && task.metadata?.tui_session_owner === "manual") {
+    return {
+      kind: "codex_tui_owned_by_manual",
+      provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+      status: "running",
+      task_id: task.id,
+      goal_id: goal?.id || null,
+      session_id: task.metadata?.tui_session_id || task.result?.session_id || null,
+      starting: task.metadata?.manual_tui_session_starting === true,
+      skipped: true,
+      reason: "Manual Codex TUI execution already owns this task",
+    };
+  }
+
+  const executionWorktree = await materializeExecutionWorktree();
+  if (!executionWorktree.ok) return failWorktree(executionWorktree.reason);
+  const executionPathContext = await ensurePathContext();
+  const _executionRepoPath = executionCwd || resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || config.defaultRepoPath;
+  const lockPath = usesCanonicalExecution
+    ? (resolvedRepo.canonical_repo_path || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || resolvedRepo.task_worktree_path)
+    : (resolvedRepo.lock_repo_path || resolvedRepo.task_worktree_path);
+  if (lockPath) {
+    const lockResult = await acquireRepoLockFn(config.defaultWorkspaceRoot, lockPath, {
+      taskId: task.id,
+      runId: null,
+      mode: task.mode || "full",
+    });
+    if (!lockResult.acquired) {
+      const lockMsg = "[worker] execution path locked by task " + lockResult.heldByTask + ", retry after completion. Skipping.";
+      await updateTaskFn(store, task.id, (item) => {
+        item.status = "waiting_for_lock";
+        item.lock_blocked_at = new Date().toISOString();
+        item.lock_blocked_by = lockResult.heldByTask;
+        item.logs.push({ time: new Date().toISOString(), message: lockMsg });
+      });
+      return { task_id: task.id, status: "waiting_for_lock", skipped: true, reason: lockMsg };
+    }
+    repoLockPath = lockPath;
+  }
+
+  await updateTaskFn(store, task.id, (item) => {
+    item.status = "running";
+    item.logs.push({ time: new Date().toISOString(), message: "[worker] execution provider dispatch started" });
+  });
+
+  try {
+    const prepResult = await prepareCodexTaskRunFn({
+      task,
+      goal,
+      workspaceFiles,
+      workspaceRoot: workspace.root,
+      config,
+      repoLockPath,
+      executionRepoPath: _executionRepoPath,
+      goalStateDir: _goalStateDir,
+      resultJsonPath: _resultJsonPath,
+      resultMdPath: _resultMdPath,
+    });
+    promptFile = prepResult.promptFile;
+    runFilePath = prepResult.runFilePath;
+    runId = prepResult.runId;
+  } catch (prepErr) {
+    const prepHealingAction = determineHealingActionFn({
+      error: prepErr,
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
+    return parkTaskForHealingRetry({
+      store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
+      releaseLockForTaskFn, repoLockPath, error: prepErr, healingAction: prepHealingAction,
+      prefix: "[worker] failed during prompt preparation",
+    });
+  }
+
+  try {
+    providerExecutionReady = await taskProviderDispatcherFn({
+      workspaceRoot: config.defaultWorkspaceRoot || workspace.root,
+      task,
+      goal,
+      executionCwd,
+      pathContext: executionPathContext,
+      inputSnapshot: {
+        digest: `${task.id}:${runId || "no-run"}`,
+        task_id: task.id,
+        goal_id: goal?.id || null,
+        acceptance_contract: task.acceptance_contract || goal?.acceptance_contract || null,
+      },
+      tuiAvailable: isCodexTuiEnabled(config),
+      codexTuiEvidenceWaitMs: config.codexTuiEvidenceWaitMs ?? 120_000,
+      context: {
+        config,
+        workspaceRoot: workspace.root,
+        candidateWorkspaceRoots: [config.defaultWorkspaceRoot, workspace.root].filter(Boolean),
+        task,
+        goal,
+        resultJsonPath: _resultJsonPath,
+        promptFile,
+        runFilePath,
+        runId,
+        repoLockPath,
+        executionCwd,
+        pathContext: executionPathContext,
+        executionId: runId,
+        worktreePath: executionCwd,
+        branch: resolvedRepo.worktree_lifecycle?.branch_name || resolvedRepo.task_branch || null,
+        baseCommit: resolvedRepo.worktree_lifecycle?.base_sha || resolvedRepo.base_sha || null,
+        releaseLockFn: () => releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id),
+      },
+    }, {
+      executeCodexTaskRunFn: (args) => executeAgentBackendRunFn({
+        ...args,
+        role: task.role || task.agent_role || goal?.role || goal?.agent_role || mode,
+      }),
+      startCodexTuiGoalSessionFn,
+      runCodexTuiEvidenceCycleFn,
+      stopCodexTuiSessionFn,
+      tuiAvailableFn: async ({ tuiAvailable }) => tuiAvailable !== false,
+      repositorySnapshot: deps.repositorySnapshotFn,
+      acceptanceSnapshot: deps.acceptanceSnapshotFn,
+      sleepFn: deps.executionProviderSleepFn,
+      ...(deps.executionProviderObserveIntervalMs !== undefined
+        ? { observeIntervalMs: deps.executionProviderObserveIntervalMs }
+        : {}),
+      ...(deps.executionProviderMaxObserveCycles !== undefined
+        ? { maxObserveCycles: deps.executionProviderMaxObserveCycles }
+        : {}),
+    });
+  } catch (error) {
+    healingAction = determineHealingActionFn({
+      error,
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
+    return parkTaskForHealingRetry({
+      store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
+      releaseLockForTaskFn, repoLockPath, error, healingAction,
+      prefix: "[worker] failed during execution provider dispatch",
+    });
+  } finally {
+    try { await rm(promptFile, { force: true }); } catch {}
+  }
+
+  if (providerExecutionReady.status === "provider_unavailable") {
+    const unavailableResult = {
+      kind: taskUsesCodexTuiGoal(task) && !isCodexTuiEnabled(config) ? "codex_tui_disabled" : "execution_provider_unavailable",
+      provider: taskUsesCodexTuiGoal(task) ? CODEX_EXECUTION_PROVIDERS.TUI_GOAL : providerExecutionReady.provider,
+      status: "provider_unavailable",
+      task_id: task.id,
+      goal_id: goal?.id || null,
+      commit: "none",
+      changed_files: [],
+      tests: null,
+      failure: providerExecutionReady.failure || providerExecutionReady.attempt?.failure || null,
+    };
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "failed";
+      item.result = unavailableResult;
+      item.logs.push({ time: new Date().toISOString(), message: "[worker] execution provider unavailable" });
+    });
+    if (repoLockPath) await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id).catch(() => {});
+    return unavailableResult;
+  }
+
+  if (providerExecutionReady.status === "waiting_for_supervisor") {
+    const supervisorResult = {
+      kind: "waiting_for_supervisor",
+      provider: providerExecutionReady.provider,
+      status: "waiting_for_supervisor",
+      task_id: task.id,
+      goal_id: goal?.id || null,
+      checkpoint: providerExecutionReady.checkpoint || providerExecutionReady.attempt?.checkpoint || null,
+      session_id: providerExecutionReady.attempt?.provider_handle?.session_id || null,
+      native_session_id: providerExecutionReady.attempt?.provider_handle?.native_session_id || null,
+    };
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "waiting_for_supervisor";
+      item.result = supervisorResult;
+      item.logs.push({ time: new Date().toISOString(), message: "[worker] bounded supervisor checkpoint persisted" });
+    });
+    if (repoLockPath) await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id).catch(() => {});
+    return supervisorResult;
+  }
+
+  if (providerExecutionReady.provider === "codex_tui" && providerExecutionReady.evidence) {
+    const handle = providerExecutionReady.attempt?.provider_handle || {};
+    const completion = handle.completion || providerExecutionReady.evidence.raw || {};
+    const session = { id: handle.session_id || null, cwd: handle.cwd || executionCwd };
+    tuiEvidenceReady = {
+      session,
+      collected: completion,
+      taskResult: normalizeTuiEvidenceToTaskResult({
+        evidence_ready: true,
+        collected: completion,
+        result_json: completion.result_json || providerExecutionReady.evidence.raw || {},
+      }, task, goal, session),
+    };
+  }
+
+  if (
+    providerExecutionReady
+    && !providerExecutionReady.evidence
+    && !providerExecutionReady.attempt?.provider_handle?.result
+    && providerExecutionReady.status === "failed"
+  ) {
+    const providerFailure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || {};
+    const providerError = Object.assign(
+      new Error(providerFailure.message || providerFailure.detail || providerFailure.code || "execution provider failed"),
+      { code: providerFailure.code || null },
+    );
+    healingAction = determineHealingActionFn({
+      error: providerError,
+      task,
+      retryCount: task.healing_retry_count || 0,
+    });
+    if (RETRY_HEALING_ACTIONS.has(healingAction?.action)) {
+      return parkTaskForHealingRetry({
+        store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
+        releaseLockForTaskFn, repoLockPath, error: providerError, healingAction,
+        prefix: "[worker] execution provider failed",
+      });
+    }
+  }
+
+  if (!providerExecutionReady && taskUsesCodexTuiGoal(task)) {
     if (!isCodexTuiEnabled(config)) {
       const disabledResult = {
         kind: "codex_tui_disabled",
@@ -918,7 +1158,7 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     });
   }
 
-  if (!tuiEvidenceReady && goal) {
+  if (!providerExecutionReady && !tuiEvidenceReady && goal) {
     await appendGoalMessageFn(store, config, {
       goal_id: goal.id,
       role: "codex",
@@ -926,23 +1166,17 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }, context);
   }
 
-  if (!tuiEvidenceReady && !worktreeMaterialized) {
+  if (!providerExecutionReady && !tuiEvidenceReady && !worktreeMaterialized) {
     const workerWorktree = await materializeExecutionWorktree();
     if (!workerWorktree.ok) return failWorktree(workerWorktree.reason);
   }
 
   // Compute contract paths once for the full prepare -> execute -> finalize chain
-  const _goalId = goal ? goal.id : task.id;
-  const _goalStateDir = config.defaultWorkspaceRoot + "/.gptwork/goals/" + _goalId;
-  const _resultJsonPath = _goalStateDir + "/result.json";
-  const _resultMdPath = _goalStateDir + "/result.md";
-  const _executionRepoPath = executionCwd || resolvedRepo.task_worktree_path || resolvedRepo.canonical_repo_path || config.defaultRepoPath;
-
   // Acquire execution lock on task worktree path (not canonical repo).
   // In worktree mode, each task uses its own worktree path as lock resource,
   // so concurrent tasks on different worktrees are NOT serialized by this lock.
   // In legacy mode (no worktrees), lock on canonical repo path.
-  if (!tuiEvidenceReady) {
+  if (!providerExecutionReady && !tuiEvidenceReady) {
     const lockPath = usesCanonicalExecution
       ? (resolvedRepo.canonical_repo_path || resolvedRepoPlan.canonical_repo_path || config.defaultRepoPath || resolvedRepo.task_worktree_path)
       : (resolvedRepo.lock_repo_path || resolvedRepo.task_worktree_path);
@@ -973,19 +1207,36 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
     }
   }
 
-  let promptFile = null;
-  let runFilePath = null;
-  let runId = null;
-  const mode = task.mode || "full";
-  let summary = "";
-  let parsedResult = null;
-  let cr = null;
-  let codexMeta = null;
-  let healingAction = null;
   const executionBackendRole = tuiEvidenceReady ? "operator" : (task.role || task.agent_role || goal?.role || goal?.agent_role || mode);
   const executionBackend = tuiEvidenceReady ? "codex_tui_superpowers" : resolveAgentBackendId({ config, role: executionBackendRole, task });
 
-  if (tuiEvidenceReady) {
+  if (providerExecutionReady && !tuiEvidenceReady) {
+    const providerHandle = providerExecutionReady.attempt?.provider_handle || {};
+    const execResult = providerHandle.result || null;
+    if (execResult) {
+      ({ cr, parsedResult, summary, codexMeta } = execResult);
+      const failure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || null;
+      if (failure?.failure_class && parsedResult && !parsedResult.failure_class) {
+        parsedResult.failure_class = failure.failure_class;
+      }
+    } else {
+      const failure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || {};
+      const timedOut = providerExecutionReady.status === "timed_out";
+      summary = failure.message || failure.detail || `Execution provider ended in ${providerExecutionReady.status}`;
+      parsedResult = {
+        structured: true,
+        status: timedOut ? "timed_out" : "failed",
+        summary,
+        changed_files: [],
+        tests: null,
+        commit: "none",
+        verification: { passed: false, commands: [], findings: [failure] },
+        failure_class: failure.failure_class || (timedOut ? "execution_timeout" : "execution_failed"),
+      };
+      cr = { returncode: timedOut ? 124 : 1, stdout: "", stderr: summary, timed_out: timedOut };
+      codexMeta = { provider: providerExecutionReady.provider, native_session_id: failure.native_session_id || null };
+    }
+  } else if (tuiEvidenceReady) {
     parsedResult = tuiEvidenceReady.taskResult;
     summary = parsedResult.summary;
     cr = { returncode: 0, stdout: "", stderr: "", timed_out: false };
@@ -1090,6 +1341,16 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
       };
   }
 
+  const providerFindings = providerExecutionReady?.evidence?.verification?.findings;
+  if (Array.isArray(providerFindings) && providerFindings.length > 0) {
+    taskResult.acceptance_findings = [
+      ...(Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : []),
+      ...providerFindings.filter((finding) => !taskResult.acceptance_findings?.some(
+        (existing) => existing?.code === finding?.code && existing?.message === finding?.message,
+      )),
+    ];
+  }
+
   taskResult.repo_resolution = {
     repo_id: resolvedRepo.repo_id,
     canonical_repo_path: resolvedRepo.canonical_repo_path,
@@ -1119,6 +1380,35 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
   } else if (parsedResult) {
     taskResult.model = parsedResult.model || taskResult.model || null;
     taskResult.provider = parsedResult.provider || taskResult.provider || null;
+  }
+
+  if (
+    providerExecutionReady?.provider === "codex_tui"
+    && !providerExecutionReady.evidence
+    && ["failed", "timed_out"].includes(providerExecutionReady.status)
+  ) {
+    const handle = providerExecutionReady.attempt?.provider_handle || {};
+    const failure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || {};
+    taskResult.session_id = handle.session_id || null;
+    taskResult.native_session_id = handle.native_session_id || failure.native_session_id || null;
+    taskResult.tui_phase = "automatic_recovery_pending";
+    taskResult.failure_class = failure.failure_class || "result_missing";
+    taskResult.collect_result = failure.cycle || null;
+    taskResult.verification = {
+      passed: false,
+      commands: [],
+      findings: [failure.cycle?.finding || failure].filter(Boolean),
+    };
+    await updateTaskFn(store, task.id, (item) => {
+      item.status = "retry_wait";
+      item.metadata = { ...(item.metadata || {}), tui_session_id: taskResult.session_id };
+      delete item.metadata.tui_session_owner;
+      item.result = structuredClone(taskResult);
+      item.logs.push({
+        time: new Date().toISOString(),
+        message: `[worker] Codex TUI evidence unavailable; automatic recovery scheduled (${taskResult.failure_class})`,
+      });
+    });
   }
 
   if (parsedResult) applyLegacyNoChangeCompatibility(parsedResult);
@@ -1235,6 +1525,13 @@ export async function processGeneralTaskWithDeps(store, config, task, context, g
 
   const doneAt = new Date().toISOString();
   let taskStatus = deriveTaskStatusFromTaskResult(taskResult);
+  if (
+    providerExecutionReady?.provider === "codex_tui"
+    && !providerExecutionReady.evidence
+    && taskResult.failure_class === "result_missing"
+  ) {
+    taskStatus = "retry_wait";
+  }
   taskStatus = applyAutonomyValidation(taskStatus, taskResult, goal, parsedResult);
   taskStatus = await applyRuntimeCodeChangeGuard({
     taskStatus,

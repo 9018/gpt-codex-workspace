@@ -6,6 +6,24 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }) {
+  const deadline = now() + maxWaitMs;
+  while (now() < deadline) {
+    if (existsSync(resultJsonPath)) return true;
+    await sleepFn(pollMs);
+  }
+  return existsSync(resultJsonPath);
+}
+
+function evidenceRepairInstruction(resultJsonPath) {
+  return [
+    "Continue the current task in this same Codex session.",
+    `Durable completion evidence is missing. Write a contract-valid result.json at ${resultJsonPath}.`,
+    "Include terminal status, summary, changed_files, tests, commit, remote_head, warnings, followups, and verification commands/passed.",
+    "Run any remaining acceptance checks first, then write the evidence file and continue to a terminal state.",
+  ].join(" ") + "\r";
+}
+
 /**
  * Run the TUI evidence collection cycle: poll for result.json, then collect
  * durable evidence via collectCodexTuiCompletion.
@@ -25,6 +43,7 @@ export async function runCodexTuiEvidenceCycle({
   collectFn = collectCodexTuiCompletion,
   now = Date.now,
   sleepFn = sleep,
+  sendInputFn = null,
   maxWaitMs = 120_000,
   pollMs = 5_000,
 } = {}) {
@@ -32,14 +51,13 @@ export async function runCodexTuiEvidenceCycle({
   if (!sessionId) throw new Error("sessionId is required");
 
   const resultJsonPath = join(workspaceRoot, ".gptwork", "goals", goal.id, "result.json");
-  const deadline = now() + maxWaitMs;
-  let timedOut = true;
-
-  while (now() < deadline) {
-    if (existsSync(resultJsonPath)) { timedOut = false; break; }
-    await sleepFn(pollMs);
+  let timedOut = !(await waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }));
+  let repairAttempted = false;
+  if (timedOut && typeof sendInputFn === "function") {
+    repairAttempted = true;
+    await sendInputFn(sessionId, evidenceRepairInstruction(resultJsonPath));
+    timedOut = !(await waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }));
   }
-
 
   const collected = await collectFn({ sessionId, workspaceRoot });
 
@@ -70,6 +88,7 @@ export async function runCodexTuiEvidenceCycle({
       reason: "tui_result_json_missing",
       status: "timed_out",
       timed_out: true,
+      repair_attempted: repairAttempted,
       session_id: sessionId,
       goal_id: goal.id,
       task_id: task?.id || null,
@@ -105,8 +124,9 @@ export async function runCodexTuiEvidenceCycle({
 
   return {
     evidence_ready: true,
-    reason: "tui_result_json_collected",
+    reason: repairAttempted ? "tui_result_json_collected_after_repair" : "tui_result_json_collected",
     status: "ready",
+    repair_attempted: repairAttempted,
     session_id: sessionId,
     goal_id: goal.id,
     task_id: task?.id || null,
