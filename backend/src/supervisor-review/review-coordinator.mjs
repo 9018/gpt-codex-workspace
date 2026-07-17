@@ -1,13 +1,9 @@
 /**
- * review-coordinator.mjs — Review Coordinator
+ * review-coordinator.mjs — Review Coordinator.
  *
  * Provides the tick() function that replaces the old acceptance-service
  * orchestration in the checkpoint-supervisor-loop. Builds a review
  * packet from current run state and creates/returns a review request.
- *
- * The coordinator is stateless — all state is in the stores.
- *
- * Tick returns: { review_required, request, skipped_reason }
  *
  * @module supervisor-review/review-coordinator
  */
@@ -17,7 +13,7 @@
  *
  * @param {object} deps
  * @param {object} deps.reviewPacketBuilder - { build({ runId }) }
- * @param {object} deps.reviewRequestStore - { getOrCreate({ runId, packet }) }
+ * @param {object} deps.reviewRequestStore - { getOrCreate({ runId, packet }), listByRun(runId) }
  * @returns {object} { tick }
  */
 export function createReviewCoordinator(deps) {
@@ -32,6 +28,23 @@ export function createReviewCoordinator(deps) {
    */
   async function tick(runId) {
     const packet = await deps.reviewPacketBuilder.build({ runId });
+
+    // Quick check via listByRun if available (avoids creating duplicate index entry)
+    if (deps.reviewRequestStore.listByRun) {
+      const existingRequests = await deps.reviewRequestStore.listByRun(runId);
+      const match = existingRequests.find(
+        (r) => r.revision_id === packet.revision.id
+      );
+      if (match) {
+        return {
+          review_required: false,
+          request: match,
+          skipped_reason: `Review already exists with status: ${match.status}`,
+        };
+      }
+    }
+
+    // Create or get existing request
     const request = await deps.reviewRequestStore.getOrCreate({ runId, packet });
 
     if (request.status === "pending") {
