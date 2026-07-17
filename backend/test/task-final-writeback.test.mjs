@@ -13,6 +13,7 @@ import assert from "node:assert/strict";
  */
 
 import { finalizeCodexTaskRun } from "../src/task-final-writeback.mjs";
+import { setTerminalNotifier } from "../src/task-lifecycle.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -368,6 +369,37 @@ test("task-final-writeback: git worktree cleanup is deferred to a progression co
     task_id: "task_label_test",
     worktree_path: "/tmp/.gptwork/worktrees/repo/task_label_test",
   });
+});
+
+test("task-final-writeback: terminal notification is deferred to a progression command", async () => {
+  let savedTask = null;
+  let savedState = null;
+  const args = makeMinimalArgs("completed");
+  args.store = {
+    mutate: async (updater) => {
+      const state = { tasks: [{ id: "task_label_test", logs: [] }], goals: [args.goal], activities: [] };
+      const result = await updater(state);
+      savedState = state;
+      savedTask = result.task;
+      return result;
+    },
+  };
+  setTerminalNotifier(async () => {
+    throw new Error("finalizer must not notify terminal tasks directly");
+  });
+
+  try {
+    await finalizeCodexTaskRun(args);
+  } finally {
+    setTerminalNotifier(null);
+  }
+
+  assert.equal(savedTask.status, "completed");
+  const commands = Object.values(savedState.progression_commands || {});
+  const completeCommand = commands.find((command) => command.action === "complete_task");
+  assert.ok(completeCommand, "complete_task command should be persisted");
+  assert.equal(completeCommand.status, "pending");
+  assert.equal(completeCommand.task_id, "task_label_test");
 });
 
 test("task-final-writeback: git worktree cleanup does not overwrite repo_resolution lifecycle with metadata-only data", async () => {

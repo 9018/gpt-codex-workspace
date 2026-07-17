@@ -7,7 +7,7 @@ import { determineGoalStatus, convergeStaleGoalStatuses } from "./goal-convergen
 import { loadRestartMarker } from "./safe-restart.mjs";
 import { releaseRepoLock } from "./repo-lock.mjs";
 import { removeTaskWorktree } from "./task-worktree-manager.mjs";
-import { notifyTerminalTask, updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
+import { updateGoalStatus, updateTask } from "./task-lifecycle.mjs";
 import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
@@ -742,7 +742,6 @@ export async function finalizeCodexTaskRun({
         goal,
         progressionDecision,
         reconcileProgressionCommandsInStateFn,
-        notifyTerminalTaskFn: notifyTerminalTask,
       })
     : await updateTaskFn(store, task.id, (item) => {
       applyTaskFinalState(item, { taskStatus, taskResult, doneAt, cr, config });
@@ -1267,7 +1266,6 @@ async function mutateFinalTaskState({
   goal,
   progressionDecision,
   reconcileProgressionCommandsInStateFn,
-  notifyTerminalTaskFn,
 }) {
   return store.mutate(async (state) => {
     state.tasks ||= [];
@@ -1281,7 +1279,6 @@ async function mutateFinalTaskState({
     }
     item.updated_at = new Date().toISOString();
     state.activities.push({ time: item.updated_at, type: "task.updated", task_id: task.id, status: item.status });
-    await notifyTerminalTaskFn(item);
 
     let goalStatus = null;
     if (goal) {
