@@ -27,6 +27,7 @@ import { reconcileProgressionCommandsInState } from './progression/progression-c
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writeback-failure.mjs";
+import { writeFinalizationAgentRuns } from "./task-finalization/finalization-notifier.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
@@ -312,37 +313,20 @@ export async function finalizeCodexTaskRun({
     taskStatus = closureReview.taskStatus;
     taskResult = closureReview.taskResult;
   }
-  // Agent run writebacks: builder, integrator, verifier, reviewer, finalizer (non-blocking)
-  const _writebackCtx = { eventLogger: context?.eventLogger, hookBus: context?.hookBus };
-  await writeBuilderAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    taskResult,
-    summary: taskResult.summary || '',
-  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "builder", err));
-  if (taskResult.integration?.status || taskResult.integration?.satisfied === true || taskResult.auto_integration_completion?.attempted === true) {
-    await writeIntegratorAgentRun(store, {
-      task_id: task.id,
-      goal_id: goal?.id,
-      integrationResult: taskResult.integration || {},
-    }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "integrator", err));
-  }
-  await writeVerifierAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    verification: taskResult.verification || {},
-  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "verifier", err));
-  await writeReviewerAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
-    reviewer_decision: taskResult.reviewer_decision || { decision: { status: taskStatus } },
-  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "reviewer", err));
-  await writeFinalizerAgentRun(store, {
-    task_id: task.id,
-    goal_id: goal?.id,
+  await writeFinalizationAgentRuns({
+    store,
+    task,
+    goal,
     taskResult,
     taskStatus,
-  }, _writebackCtx).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
+    context,
+    writeBuilderAgentRunFn: writeBuilderAgentRun,
+    writeIntegratorAgentRunFn: writeIntegratorAgentRun,
+    writeVerifierAgentRunFn: writeVerifierAgentRun,
+    writeReviewerAgentRunFn: writeReviewerAgentRun,
+    writeFinalizerAgentRunFn: writeFinalizerAgentRun,
+    recordAgentRunWritebackFailureFn: recordAgentRunWritebackFailure,
+  });
 
 
   if (taskStatus !== "completed" && resolvedRepo?.worktree_lifecycle?.mode === "git_worktree" && resolvedRepo?.task_worktree_path) {

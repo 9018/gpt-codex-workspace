@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { notifyAppliedFinalizationCommand } from "../../src/task-finalization/finalization-notifier.mjs";
+import { notifyAppliedFinalizationCommand, writeFinalizationAgentRuns } from "../../src/task-finalization/finalization-notifier.mjs";
 
 test("notifyAppliedFinalizationCommand notifies terminal task after complete_task applies", async () => {
   const notified = [];
@@ -38,4 +38,35 @@ test("notifyAppliedFinalizationCommand ignores non-applied or non-terminal comma
   assert.deepEqual(notified, []);
   assert.deepEqual(pending, { notified: false, reason: "command_not_applied" });
   assert.deepEqual(cleanup, { notified: false, reason: "not_terminal_notification_command" });
+});
+
+test("writeFinalizationAgentRuns writes stage runs and records non-blocking failures", async () => {
+  const calls = [];
+  const failures = [];
+  const taskResult = {
+    summary: "done",
+    verification: { passed: true },
+    reviewer_decision: { passed: true },
+    integration: { status: "merged" },
+  };
+
+  const result = await writeFinalizationAgentRuns({
+    store: { state: {} },
+    task: { id: "task_agent_runs" },
+    goal: { id: "goal_agent_runs" },
+    taskResult,
+    taskStatus: "completed",
+    context: { eventLogger: {}, hookBus: {} },
+    writeBuilderAgentRunFn: async () => calls.push("builder"),
+    writeIntegratorAgentRunFn: async () => calls.push("integrator"),
+    writeVerifierAgentRunFn: async () => { throw new Error("verifier down"); },
+    writeReviewerAgentRunFn: async () => calls.push("reviewer"),
+    writeFinalizerAgentRunFn: async () => calls.push("finalizer"),
+    recordAgentRunWritebackFailureFn: (_taskResult, role, err) => failures.push({ role, message: err.message }),
+  });
+
+  assert.deepEqual(calls, ["builder", "integrator", "reviewer", "finalizer"]);
+  assert.deepEqual(failures, [{ role: "verifier", message: "verifier down" }]);
+  assert.equal(result.verifier.ok, false);
+  assert.equal(result.integrator.skipped, false);
 });
