@@ -364,9 +364,24 @@ function integrationEffect(evidence = {}, status) {
   };
 }
 
+function worktreeEffect(evidence = {}, status) {
+  const result = asObject(evidence.codex_result || evidence.result || evidence.task_result);
+  const lifecycle = result.worktree_lifecycle || result.repo_resolution?.worktree_lifecycle || evidence.worktree_lifecycle || null;
+  const worktreePath = result.repo_resolution?.task_worktree_path
+    || lifecycle?.worktree_path
+    || evidence.task?.worktree_path
+    || evidence.task?.worktree?.path
+    || null;
+  return {
+    cleanup_required: status === "completed" && lifecycle?.mode === "git_worktree" && Boolean(worktreePath),
+    worktree_path: worktreePath,
+  };
+}
+
 function decision(evidence, { status, reason, blockers = [], repairableBlockers = [], safeToAutoAdvance = false } = {}) {
   const normalizedStatus = FINALIZER_STATUSES.has(status) ? status : "waiting_for_review";
   const reviewStateBlock = createReviewStateBlock({ reason, blockers, repairBudgetExhausted: reason === "repair_budget_exhausted" });
+  const finalWorktreeEffect = worktreeEffect(evidence, normalizedStatus);
   const finalizerDecisionToNormalize = {
     status: normalizedStatus,
     reason: String(reason || "finalizer_decision"),
@@ -375,6 +390,7 @@ function decision(evidence, { status, reason, blockers = [], repairableBlockers 
     safe_to_auto_advance: safeToAutoAdvance === true,
     blocking_passed: (blockers || []).length === 0 && (repairableBlockers || []).length === 0,
     integration_effect: integrationEffect(evidence, normalizedStatus),
+    worktree_effect: finalWorktreeEffect,
     goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
     queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
   };
@@ -392,6 +408,7 @@ function decision(evidence, { status, reason, blockers = [], repairableBlockers 
     non_blocking_followups: followupsFrom(evidence),
     ...reviewStateBlock,
     integration_effect: integrationEffect(evidence, normalizedStatus),
+    worktree_effect: finalWorktreeEffect,
     goal_effect: goalEffect(normalizedStatus, safeToAutoAdvance),
     queue_effect: queueEffect(normalizedStatus, safeToAutoAdvance),
     safe_to_auto_advance: safeToAutoAdvance === true,

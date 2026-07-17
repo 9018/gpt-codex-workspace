@@ -47,3 +47,19 @@ test("decideTaskFinalization exposes the Plan 08 finalization decider entrypoint
   assert.equal(finalizationDecision.unified_decision.status, legacyDecision.unified_decision.status);
   assert.equal(finalizationDecision.status, "completed");
 });
+
+test("decideTaskFinalization includes a worktree cleanup effect for completed git worktrees", () => {
+  const evidence = acceptedEvidence();
+  evidence.codex_result.repo_resolution = {
+    task_worktree_path: "/tmp/gptwork-task-3",
+    worktree_lifecycle: { mode: "git_worktree" },
+  };
+
+  const decision = decideTaskFinalization(evidence);
+
+  assert.equal(decision.status, "completed");
+  assert.deepEqual(decision.worktree_effect, {
+    cleanup_required: true,
+    worktree_path: "/tmp/gptwork-task-3",
+  });
+});

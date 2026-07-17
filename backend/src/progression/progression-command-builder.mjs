@@ -47,5 +47,12 @@ export function buildProgressionCommands(decision = {}) {
   if (decision.safe_to_auto_advance === true && decision.queue_effect?.unblock_dependents === true) {
     commands.push(base(decision, "advance_queue", { task_id: decision.task_id }));
   }
+  const cleanupPath = decision.worktree_effect?.worktree_path || decision.worktree?.path || null;
+  if (decision.worktree_effect?.cleanup_required === true && cleanupPath) {
+    commands.push(base(decision, "cleanup_worktree", {
+      task_id: decision.task_id,
+      worktree_path: cleanupPath,
+    }));
+  }
   return commands;
 }

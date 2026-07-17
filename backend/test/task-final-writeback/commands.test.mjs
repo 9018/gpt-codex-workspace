@@ -22,3 +22,33 @@ test("buildFinalizationCommands returns progression commands without mutating de
   assert.deepEqual(commands.map((command) => command.decision_revision), [7, 7, 7]);
   assert.equal(JSON.stringify(decision), before);
 });
+
+test("buildFinalizationCommands appends worktree cleanup after terminal effects", () => {
+  const decision = {
+    task_id: "task_2",
+    goal_id: "goal_2",
+    revision: 8,
+    status: "completed",
+    safe_to_auto_advance: true,
+    queue_effect: { unblock_dependents: true, hold_queue: false },
+    goal_effect: { complete_goal: true },
+    integration_effect: { required: true, terminal: true, satisfied: true },
+    worktree_effect: {
+      cleanup_required: true,
+      worktree_path: "/tmp/gptwork-task-2",
+    },
+  };
+
+  const commands = buildFinalizationCommands(decision);
+
+  assert.deepEqual(commands.map((command) => command.action), [
+    "complete_task",
+    "propagate_goal",
+    "advance_queue",
+    "cleanup_worktree",
+  ]);
+  assert.deepEqual(commands.at(-1).payload, {
+    task_id: "task_2",
+    worktree_path: "/tmp/gptwork-task-2",
+  });
+});
