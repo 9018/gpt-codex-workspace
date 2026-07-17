@@ -1,3 +1,12 @@
+import {
+  writeBuilderAgentRun,
+  writeFinalizerAgentRun,
+  writeIntegratorAgentRun,
+  writeReviewerAgentRun,
+  writeVerifierAgentRun,
+} from "../agent-run-writeback.mjs";
+import { recordAgentRunWritebackFailure } from "../task-processing/agent-run-writeback-failure.mjs";
+
 export async function notifyAppliedFinalizationCommand(command = {}, {
   taskResolver,
   notifyTerminalTaskFn,
@@ -100,4 +109,30 @@ export async function writeFinalizationAgentRuns({
   });
 
   return report;
+}
+
+export async function writeDefaultFinalizationAgentRuns({
+  store,
+  task,
+  goal,
+  taskResult,
+  taskStatus,
+  context,
+  agentRunWriters = {},
+  recordAgentRunWritebackFailureFn = recordAgentRunWritebackFailure,
+} = {}) {
+  return writeFinalizationAgentRuns({
+    store,
+    task,
+    goal,
+    taskResult,
+    taskStatus,
+    context,
+    writeBuilderAgentRunFn: agentRunWriters.writeBuilderAgentRunFn || writeBuilderAgentRun,
+    writeIntegratorAgentRunFn: agentRunWriters.writeIntegratorAgentRunFn || writeIntegratorAgentRun,
+    writeVerifierAgentRunFn: agentRunWriters.writeVerifierAgentRunFn || writeVerifierAgentRun,
+    writeReviewerAgentRunFn: agentRunWriters.writeReviewerAgentRunFn || writeReviewerAgentRun,
+    writeFinalizerAgentRunFn: agentRunWriters.writeFinalizerAgentRunFn || writeFinalizerAgentRun,
+    recordAgentRunWritebackFailureFn,
+  });
 }

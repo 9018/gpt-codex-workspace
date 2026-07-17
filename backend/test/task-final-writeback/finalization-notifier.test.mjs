@@ -1,7 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { notifyAppliedFinalizationCommand, writeFinalizationAgentRuns } from "../../src/task-finalization/finalization-notifier.mjs";
+import {
+  notifyAppliedFinalizationCommand,
+  writeDefaultFinalizationAgentRuns,
+  writeFinalizationAgentRuns,
+} from "../../src/task-finalization/finalization-notifier.mjs";
 
 test("notifyAppliedFinalizationCommand notifies terminal task after complete_task applies", async () => {
   const notified = [];
@@ -69,4 +73,32 @@ test("writeFinalizationAgentRuns writes stage runs and records non-blocking fail
   assert.deepEqual(failures, [{ role: "verifier", message: "verifier down" }]);
   assert.equal(result.verifier.ok, false);
   assert.equal(result.integrator.skipped, false);
+});
+
+test("writeDefaultFinalizationAgentRuns binds default agent writers", async () => {
+  const calls = [];
+  const failures = [];
+  const taskResult = { summary: "done", verification: { passed: true }, reviewer_decision: { passed: true } };
+
+  const result = await writeDefaultFinalizationAgentRuns({
+    store: { state: {} },
+    task: { id: "task_default_agent_runs" },
+    goal: { id: "goal_default_agent_runs" },
+    taskResult,
+    taskStatus: "completed",
+    context: { eventLogger: {}, hookBus: {} },
+    agentRunWriters: {
+      writeBuilderAgentRunFn: async () => calls.push("builder"),
+      writeIntegratorAgentRunFn: async () => calls.push("integrator"),
+      writeVerifierAgentRunFn: async () => calls.push("verifier"),
+      writeReviewerAgentRunFn: async () => calls.push("reviewer"),
+      writeFinalizerAgentRunFn: async () => calls.push("finalizer"),
+    },
+    recordAgentRunWritebackFailureFn: (_taskResult, role, err) => failures.push({ role, message: err.message }),
+  });
+
+  assert.deepEqual(calls, ["builder", "verifier", "reviewer", "finalizer"]);
+  assert.deepEqual(failures, []);
+  assert.equal(result.integrator.skipped, true);
+  assert.equal(result.finalizer.ok, true);
 });

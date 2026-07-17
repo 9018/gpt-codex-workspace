@@ -22,10 +22,8 @@ import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalization } from './task-finalization/task-final-state-decider.mjs';
 import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
 
-import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
-import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writeback-failure.mjs";
-import { writeFinalizationAgentRuns } from "./task-finalization/finalization-notifier.mjs";
+import { writeDefaultFinalizationAgentRuns } from "./task-finalization/finalization-notifier.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
@@ -181,19 +179,13 @@ export async function finalizeCodexTaskRun({
     taskStatus = completionPipeline.taskStatus;
     taskResult = completionPipeline.taskResult;
   }
-  await writeFinalizationAgentRuns({
+  await writeDefaultFinalizationAgentRuns({
     store,
     task,
     goal,
     taskResult,
     taskStatus,
     context,
-    writeBuilderAgentRunFn: writeBuilderAgentRun,
-    writeIntegratorAgentRunFn: writeIntegratorAgentRun,
-    writeVerifierAgentRunFn: writeVerifierAgentRun,
-    writeReviewerAgentRunFn: writeReviewerAgentRun,
-    writeFinalizerAgentRunFn: writeFinalizerAgentRun,
-    recordAgentRunWritebackFailureFn: recordAgentRunWritebackFailure,
   });
 
 
