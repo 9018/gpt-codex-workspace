@@ -12,7 +12,6 @@ import { writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { verifyTaskCompletion } from "./task-acceptance.mjs";
 import { autoStartNextOnTaskCompleted } from "./goal-queue.mjs";
 import { canRetryTask, classifyTaskFailure } from "./failure-classifier.mjs";
-import { sanitizeTaskBranchName } from "./task-worktree-manager.mjs";
 import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion, scheduleRepairAttempt } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
@@ -29,18 +28,14 @@ import { reconcileProgressionCommandsInState } from './progression/progression-c
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writeback-failure.mjs";
-import { applyRepairMetadata } from "./task-processing/task-repair-context.mjs";
+import { applyRepairMetadata, taskWithRepairContext } from "./task-processing/task-repair-context.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
 import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
-import {
-  applyFailedIntegrationCompletion,
-  applySuccessfulIntegrationCompletion,
-  classifyFinalizationIntegrationResult,
-} from "./task-finalization/integration-finalizer.mjs";
+import { finalizeWaitingForIntegration } from "./task-finalization/integration-finalizer.mjs";
 import {
   applyVerifiedDeliveryResultRecovery,
   attachResolvedWorktreeEvidence,
@@ -212,24 +207,6 @@ function autoIntegrationClosureVerification({ taskResult = {}, fallbackVerificat
   };
 }
 
-function taskWithRepairContext(task, resolvedRepo) {
-  return {
-    ...task,
-    worktree_path: task.worktree_path || resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
-    worktree: task.worktree || {
-      path: resolvedRepo?.task_worktree_path || resolvedRepo?.worktree_lifecycle?.worktree_path || null,
-      branch: resolvedRepo?.worktree_lifecycle?.branch_name || resolvedRepo?.task_branch || null,
-    },
-    repo_id: task.repo_id || resolvedRepo?.repo_id || null,
-    result: {
-      ...(task.result || {}),
-      repo_resolution: resolvedRepo || task.result?.repo_resolution || null,
-      worktree_lifecycle: resolvedRepo?.worktree_lifecycle || task.result?.worktree_lifecycle || null,
-    },
-  };
-}
-
-
 const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
 
 export async function finalizeCodexTaskRun({
@@ -287,91 +264,22 @@ export async function finalizeCodexTaskRun({
     });
   }
 
-  // Integration queue: if task is waiting_for_integration, attempt serial integration
-  if (taskStatus === "waiting_for_integration") {
-    try {
-      const gitPath = (resolvedRepo && resolvedRepo.task_worktree_path) || (resolvedRepo && resolvedRepo.canonical_repo_path) || null;
-      if (gitPath && resolvedRepo && resolvedRepo.repo_id) {
-        const integrationResult = await runIntegrationQueueFn({
-          repoId: resolvedRepo.repo_id,
-          targetBranch: config.defaultBranch || "main",
-          worktreePath: gitPath,
-          canonicalRepoPath: (resolvedRepo && resolvedRepo.canonical_repo_path) || null,
-          taskBranch: (resolvedRepo && resolvedRepo.worktree_lifecycle && resolvedRepo.worktree_lifecycle.branch_name) || sanitizeTaskBranchName(task.id),
-          integrationMode: config.integrationMode || "push_branch",
-          checkCommands: config.integrationCheckCommands,
-          locksBasePath: config.defaultWorkspaceRoot,
-          taskId: task.id,
-        });
-
-        if (integrationResult.ok) {
-          taskResult.integration = { ...integrationResult };
-          const integrationDecision = classifyFinalizationIntegrationResult(integrationResult);
-          if (integrationDecision.kind === 'terminal_completed') {
-            taskStatus = integrationDecision.task_status;
-          } else if (integrationDecision.should_attempt_auto_completion) {
-            const autoCompletion = await runAutoIntegrationCompletionFn({
-              task,
-              goal,
-              taskResult,
-              resolvedRepo,
-              integrationResult,
-              config,
-            });
-            taskResult.auto_integration_completion = autoCompletion;
-            if (autoCompletion.completed === true) {
-              taskStatus = "completed";
-              taskResult = applySuccessfulIntegrationCompletion({ taskResult, integrationResult, autoCompletion });
-            } else {
-              taskStatus = "waiting_for_review";
-              taskResult = applyFailedIntegrationCompletion({ taskResult, autoCompletion });
-            }
-          } else {
-            taskStatus = integrationDecision.task_status;
-          }
-        } else if (classifyFinalizationIntegrationResult(integrationResult).should_attempt_repair) {
-          // Integration failed — create repair or escalate
-          const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
-          if (intCanRepair.should_repair) {
-            const intRepairGoal = await createRepairGoalFromFindingsFn({
-              task: taskWithRepairContext(task, resolvedRepo),
-              goal,
-              findings: [{ severity: "blocker", code: "integration_" + integrationResult.status, message: integrationResult.error || "Integration " + integrationResult.status, source: "integration_queue" }],
-              repairProposals: [{ title: "Resolve integration failure", proposed_action: "Fix integration " + integrationResult.status + " and rerun integration." }],
-            });
-            taskStatus = "waiting_for_repair";
-            taskResult.repair_goal = intRepairGoal;
-            taskResult.repair_attempt = intRepairGoal.repair_attempt;
-            taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
-            // Attempt to create repair goal
-            try {
-              const created = await createGoalFn(store, config, applyRepairMetadata({
-                user_request: intRepairGoal.user_request,
-                goal_prompt: intRepairGoal.goal_prompt,
-                title: "Repair: " + task.title + " (integration conflict)",
-                project_id: task.project_id || (goal ? goal.project_id : "default"),
-                workspace_id: intRepairGoal.workspace_id || task.workspace_id || (goal ? goal.workspace_id : "hosted-default"),
-                mode: intRepairGoal.mode || "full",
-                assign_to_codex: true,
-                skip_created_notification: false,
-              }, intRepairGoal));
-              taskResult.repair_goal_id = created.goal?.id || null;
-              taskResult.repair_task_id = created.task?.id || null;
-            } catch {}
-          } else {
-            taskStatus = "waiting_for_review";
-            taskResult.repair_denied_reason = intCanRepair.reason;
-            taskResult.integration = { status: integrationResult.status, error: integrationResult.error, conflict_files: integrationResult.conflict_files };
-          }
-        } else {
-          taskResult.integration = { status: integrationResult.status, error: integrationResult.error };
-        }
-      }
-    } catch (integrationErr) {
-      taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-      taskResult.warnings.push("Integration queue execution failed: " + integrationErr.message);
-    }
-  }
+  const integrationFinalization = await finalizeWaitingForIntegration({
+    taskStatus,
+    taskResult,
+    task,
+    goal,
+    store,
+    config,
+    resolvedRepo,
+    runIntegrationQueueFn,
+    runAutoIntegrationCompletionFn,
+    shouldAttemptRepairFn,
+    createRepairGoalFromFindingsFn,
+    createGoalFn,
+  });
+  taskStatus = integrationFinalization.taskStatus;
+  taskResult = integrationFinalization.taskResult;
 
   const recoveryDecision = applyVerifiedDeliveryResultRecovery({
     taskStatus,
