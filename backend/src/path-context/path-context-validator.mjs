@@ -37,12 +37,18 @@ export function validatePathContext(input = {}) {
 
   context.projectRoot = realpathOrResolved(context.projectRoot);
   context.canonicalRepoPath = realpathOrResolved(context.canonicalRepoPath);
+  for (const field of ["mcpRoot", "projectsRoot", "workspaceRoot"]) {
+    if (context[field]) context[field] = realpathOrResolved(context[field]);
+  }
   const canonicalGitDir = gitCommonDir(context.canonicalRepoPath);
   if (!canonicalGitDir) {
     throw new PathContextError("canonical_repo_not_git", `canonical repository is not a Git checkout: ${context.canonicalRepoPath}`);
   }
   if (context.projectRoot !== context.canonicalRepoPath) {
     throw new PathContextError("project_root_mismatch", "projectRoot must equal canonicalRepoPath");
+  }
+  if (context.projectsRoot && context.projectsRoot === context.projectRoot) {
+    throw new PathContextError("projects_root_is_project_root", "projectsRoot must be a container, not the projectRoot");
   }
 
   if (context.worktreePath) {

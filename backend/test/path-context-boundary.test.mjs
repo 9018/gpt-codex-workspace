@@ -76,6 +76,14 @@ test("validatePathContext requires the native session root to be CODEX_HOME/sess
   );
 });
 
+test("validatePathContext rejects projectsRoot being used as projectRoot", async () => {
+  const projectRoot = await makeRepo("gptwork-boundary-projects-root-");
+  assert.throws(
+    () => validatePathContext(validContext(projectRoot, { projectsRoot: projectRoot })),
+    (error) => error?.code === "projects_root_is_project_root",
+  );
+});
+
 test("production source contains no author-specific home path", async () => {
   const srcRoot = join(backendRoot, "src");
   const files = execFileSync("find", [srcRoot, "-type", "f", "-name", "*.mjs"], { encoding: "utf8" })
