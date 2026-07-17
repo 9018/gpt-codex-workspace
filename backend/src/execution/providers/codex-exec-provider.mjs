@@ -59,7 +59,7 @@ export function createCodexExecProvider({ executeCodexTaskRunFn = executeCodexTa
     });
     return {
       provider_run_id: attempt.id,
-      attempt_id: attempt.id,
+      control_session_id: context.controlSessionId || attempt.id,
       native_session_id: result.codexMeta?.native_session_id || null,
       result,
       failure: executionFailure(result, attempt),
@@ -69,7 +69,7 @@ export function createCodexExecProvider({ executeCodexTaskRunFn = executeCodexTa
   return {
     name: "codex_exec",
     revision: "exec-adapter-v1",
-    async available() { return true; },
+    async availability() { return true; },
     start,
     async resume(attempt, checkpoint, context = {}) {
       return start(attempt, { ...context, checkpoint });

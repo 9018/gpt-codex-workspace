@@ -11,6 +11,14 @@
  *
  * @module execution-evidence-normalizer
  */
+/**
+ * @deprecated Wave 10R — 旧 execution 路径。
+ * 新代码应使用 execution-core/ 模块：
+ *   ExecutionRunService → execution-core/execution-run-service.mjs
+ *   ExecutionRunStore → execution-core/execution-run-store.mjs
+ * 将在下次大版本中移除。
+ */
+
 
 import { randomUUID } from "node:crypto";
 import { EVIDENCE_SCHEMA_VERSION, createEvidenceSkeleton, validateExecutionEvidence } from "./execution-evidence-schema.mjs";

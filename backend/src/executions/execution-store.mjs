@@ -10,6 +10,14 @@
  * Execution records are stored under:
  *   <workspaceRoot>/.gptwork/executions/<execution_id>.json
  */
+/**
+ * @deprecated Wave 10R — 旧 execution 路径。
+ * 新代码应使用 execution-core/ 模块：
+ *   ExecutionRunService → execution-core/execution-run-service.mjs
+ *   ExecutionRunStore → execution-core/execution-run-store.mjs
+ * 将在下次大版本中移除。
+ */
+
 
 import { appendFile, mkdir, readFile, readdir, rename, stat, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";

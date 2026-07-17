@@ -1,12 +1,23 @@
 /**
  * execution-contract.mjs — Execution request validation and normalization.
  *
- * Defines the contract that both codex_exec and codex_tui providers must
- * satisfy when requesting an execution.  This is the shared protocol
- * between the Execution Runtime and all providers.
+ * Defines the protocol for creating execution requests.  The primary
+ * identifier is `intent_id` (or an inline `intent`), allowing questions
+ * and other non-task operations to flow through the same pipeline.
+ *
+ * Backward-compatible: old callers that pass only `task_id` + `provider`
+ * still work — the normalizer fills in defaults.
  *
  * @module execution-contract
  */
+/**
+ * @deprecated Wave 10R — 旧 execution 路径。
+ * 新代码应使用 execution-core/ 模块：
+ *   ExecutionRunService → execution-core/execution-run-service.mjs
+ *   ExecutionRunStore → execution-core/execution-run-store.mjs
+ * 将在下次大版本中移除。
+ */
+
 
 import { randomUUID } from "node:crypto";
 
@@ -24,6 +35,7 @@ export const DEFAULT_TIMEOUT_MS = 7_200_000;
 
 /**
  * Validate an execution request object.
+ * Supports both new-style (intent_id/intent) and legacy (task_id + provider).
  *
  * @param {object} input - Raw request input
  * @returns {{ valid: boolean, errors: string[] }}
@@ -35,12 +47,24 @@ export function validateExecutionRequest(input) {
     return { valid: false, errors: ["input must be a non-null object"] };
   }
 
-  if (!input.task_id || typeof input.task_id !== "string") {
-    errors.push("task_id is required and must be a string");
+  // New-style: intent or intent_id is required
+  if (!input?.intent_id && !input?.intent) {
+    // Legacy fallback — allow task_id alone for backward compatibility
+    if (!input.task_id || typeof input.task_id !== "string") {
+      errors.push("intent_id or intent is required");
+    }
   }
 
-  if (!input.provider || !EXECUTION_PROVIDERS.includes(input.provider)) {
-    errors.push(`provider must be one of: ${EXECUTION_PROVIDERS.join(", ")}`);
+  if (input.task_id != null && typeof input.task_id !== "string") {
+    errors.push("task_id must be a string when provided");
+  }
+
+  // Provider is optional now (defaults to "auto")
+  const requestedProvider =
+    input.execution_policy?.preferred_provider || input.provider || "codex_tui";
+
+  if (requestedProvider !== "auto" && !EXECUTION_PROVIDERS.includes(requestedProvider)) {
+    errors.push(`provider must be one of: auto, ${EXECUTION_PROVIDERS.join(", ")}`);
   }
 
   if (input.interaction_mode && !INTERACTION_MODES.includes(input.interaction_mode)) {
@@ -58,6 +82,14 @@ export function validateExecutionRequest(input) {
 }
 
 /**
+ * Create a canonical request_id.
+ * @returns {string}
+ */
+function createRequestId() {
+  return `req_${randomUUID()}`;
+}
+
+/**
  * Normalize a raw request into a canonical ExecutionRequest.
  *
  * @param {object} input - Raw request input
@@ -71,14 +103,19 @@ export function normalizeExecutionRequest(input) {
   }
 
   return {
-    request_id: input.request_id || `req_${randomUUID()}`,
-    task_id: input.task_id,
+    request_id: input.request_id || createRequestId(),
+    intent_id: input.intent_id || (input.intent ? input.intent.id : null),
+    intent: input.intent || null,
+    task_id: input.task_id || null,
     goal_id: input.goal_id || null,
     workstream_id: input.workstream_id || null,
-    provider: input.provider,
-    interaction_mode: input.interaction_mode || "batch",
-    workspace_id: input.workspace_id || "hosted-default",
-    repo_id: input.repo_id || null,
+    execution_policy: {
+      preferred_provider:
+        input.execution_policy?.preferred_provider || input.provider || "codex_tui",
+      fallback_allowed: input.execution_policy?.fallback_allowed === true,
+      interaction_mode:
+        input.execution_policy?.interaction_mode || input.interaction_mode || "automatic",
+    },
     context_ref: input.context_ref || null,
     acceptance_contract_ref: input.acceptance_contract_ref || null,
     timeout_ms: Number(input.timeout_ms) || DEFAULT_TIMEOUT_MS,

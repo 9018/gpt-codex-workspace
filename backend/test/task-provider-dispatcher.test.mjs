@@ -28,7 +28,7 @@ test("default TUI and explicit exec enter one dispatcher and persist provider-ne
     codex_exec: {
       name: "codex_exec",
       revision: "test-exec",
-      async available() { return true; },
+      async availability() { return true; },
       async start(attempt) { calls.push(["codex_exec", attempt.task_id]); return { id: attempt.id }; },
       async observe() { return { state: "evidence_ready" }; },
       async collect() { return { status: "completed", summary: "exec done", changed_files: [], tests: [] }; },
@@ -37,7 +37,7 @@ test("default TUI and explicit exec enter one dispatcher and persist provider-ne
     codex_tui: {
       name: "codex_tui",
       revision: "test-tui",
-      async available() { return true; },
+      async availability() { return true; },
       async start(attempt) { calls.push(["codex_tui", attempt.task_id]); return { id: attempt.id }; },
       async observe() { return { state: "evidence_ready" }; },
       async collect() { return { status: "completed", summary: "tui done", changed_files: [], tests: [] }; },
@@ -63,19 +63,19 @@ test("default TUI and explicit exec enter one dispatcher and persist provider-ne
   assert.equal(tui.attempt.state, "completed");
 });
 
-test("explicit unavailable TUI automatically falls back to exec with a checkpoint", async () => {
+test("explicit unavailable TUI does not automatically fall back to exec", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "task-provider-unavailable-")));
   const calls = [];
   const providers = {
     codex_exec: {
-      name: "codex_exec", async available() { return true; },
+      name: "codex_exec", async availability() { return true; },
       async start(attempt) { calls.push(["start", attempt.provider]); return { id: attempt.id }; },
       async observe() { return { state: "evidence_ready" }; },
       async collect() { return { status: "completed", summary: "exec fallback done" }; },
       async send() {}, async interrupt() {}, async resume(attempt) { return this.start(attempt); }, async dispose() {},
     },
     codex_tui: {
-      name: "codex_tui", async available() { return false; },
+      name: "codex_tui", async availability() { return false; },
       async start() {}, async observe() {}, async collect() {}, async send() {}, async interrupt() {}, async resume() {}, async dispose() {},
     },
   };
@@ -84,10 +84,10 @@ test("explicit unavailable TUI automatically falls back to exec with a checkpoin
     metadata: { codex_execution_provider: "codex_tui_goal" },
   }), { providers });
 
-  assert.equal(result.status, "completed");
-  assert.equal(result.provider, "codex_exec");
-  assert.equal(result.evidence.summary, "exec fallback done");
-  assert.deepEqual(calls, [["start", "codex_exec"]]);
+  assert.equal(result.status, "waiting_for_supervisor");
+  assert.equal(result.provider, "codex_tui");
+  assert.equal(result.failure.code, "tui_unavailable");
+  assert.deepEqual(calls, []);
   assert.notEqual(result.status, "waiting_for_review");
   assert.notEqual(result.status, "waiting_for_operator");
 });

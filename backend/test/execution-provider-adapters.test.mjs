@@ -203,7 +203,8 @@ test("codex TUI adapter resumes a live control session before spawning a native 
 
   assert.equal(handle.session_id, "control-live");
   assert.equal(handle.native_session_id, "native-live");
-  assert.deepEqual(calls, [["control-live", "/resume\r"]]);
+  // Running session should NOT blindly send /resume
+  assert.deepEqual(calls, []);
 });
 
 test("codex TUI adapter starts native resume when the control session cannot be attached", async () => {

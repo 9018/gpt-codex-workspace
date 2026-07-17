@@ -79,40 +79,83 @@ export function createCodexTuiProvider({
   return {
     name: "codex_tui",
     revision: "tui-adapter-v1",
-    async available(context = {}) {
+    async availability(context = {}) {
       if (typeof availableFn === "function") return Boolean(await availableFn(context));
       return context.tuiAvailable !== false;
     },
     start,
     async resume(attempt, checkpoint, context = {}) {
       const controlSessionId = checkpoint?.control_session_id || null;
+      const nativeSessionId = checkpoint?.native_session_id || null;
+
+      // Resume priority:
+      // 1. Active tmux pane — just return the running session as-is
+      // 2. Known native session ID — try native codex resume
+      // 3. Checkpointed TUI attempt — send /resume to control session
+      // 4. Still failed — waiting_for_supervisor (signaled via returning empty to caller)
+
       if (controlSessionId) {
         try {
           const status = await getCodexTuiSessionStatusFn(controlSessionId, {
             workspaceRoot: context.workspaceRoot,
             candidateWorkspaceRoots: context.candidateWorkspaceRoots || [],
           });
-          if (["created", "running"].includes(status.status)) {
+
+          // Priority 1: session is already running — no resume needed
+          if (status.status === "running") {
+            return {
+              session_id: controlSessionId,
+              native_session_id: status.native_session_id || nativeSessionId || null,
+              cwd: status.cwd || checkpoint?.execution_cwd || context.executionCwd,
+              completion: null,
+            };
+          }
+
+          // Priority 2: known native session ID — try native codex resume
+          if (nativeSessionId) {
+            try {
+              await sendCodexTuiSessionInputFn(controlSessionId, `/resume ${nativeSessionId}\r`, {
+                workspaceRoot: context.workspaceRoot,
+                candidateWorkspaceRoots: context.candidateWorkspaceRoots || [],
+              });
+              return {
+                session_id: controlSessionId,
+                native_session_id: nativeSessionId,
+                cwd: status.cwd || checkpoint?.execution_cwd || context.executionCwd,
+                completion: null,
+              };
+            } catch {
+              // Fall through to checkpointed resume
+            }
+          }
+
+          // Priority 3: session is paused/checkpointed — send /resume
+          if (["created", "paused", "checkpointed"].includes(status.status)) {
             await sendCodexTuiSessionInputFn(controlSessionId, "/resume\r", {
               workspaceRoot: context.workspaceRoot,
               candidateWorkspaceRoots: context.candidateWorkspaceRoots || [],
             });
             return {
               session_id: controlSessionId,
-              native_session_id: status.native_session_id || checkpoint?.native_session_id || null,
+              native_session_id: status.native_session_id || nativeSessionId || null,
               cwd: status.cwd || checkpoint?.execution_cwd || context.executionCwd,
               completion: null,
             };
           }
+
+          // Session is in a terminal state (completed, failed, stopped)
+          // Fall through to start a new session
         } catch {
-          // Fall through to native Codex session resume.
+          // Session status check threw — fall through to start new session
         }
       }
+
+      // Priority 4: no viable recovery via existing session — start new
       return start(attempt, {
         ...context,
         checkpoint,
         executionCwd: checkpoint?.execution_cwd || context.executionCwd,
-        resumeNativeSessionId: checkpoint?.native_session_id || null,
+        resumeNativeSessionId: nativeSessionId,
       });
     },
     async observe(handle, context = {}) {

@@ -417,7 +417,7 @@ test("codex_tui_goal dirty ready evidence becomes a blocker instead of closing",
   assert.equal(finalized.taskResult.verification.passed, false);
 });
 
-test("codex_tui_goal falls back to exec only when TUI config is disabled", async () => {
+test("codex_tui_goal when TUI disabled does not auto-fallback to exec", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-disabled-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
   let execCalled = false;
@@ -443,10 +443,11 @@ test("codex_tui_goal falls back to exec only when TUI config is disabled", async
     startCodexTuiGoalSessionFn: async () => { tuiCalled = true; throw new Error("TUI should not start"); },
   }));
 
-  assert.equal(execCalled, true);
+  assert.equal(execCalled, false);
   assert.equal(tuiCalled, false);
-  assert.notEqual(result.status, "waiting_for_review");
-  assert.equal(result.result?.summary || result.summary, "exec availability fallback completed");
+  assert.equal(result.status, "waiting_for_supervisor");
+  // No exec fallback was done, so there is no summary
+  assert.equal(result.summary, undefined);
 });
 
 test("unknown provider metadata still routes to codex_exec", async () => {

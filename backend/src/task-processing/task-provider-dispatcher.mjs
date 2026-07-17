@@ -59,7 +59,54 @@ async function persistUnavailableAttempt({ attemptStore, input, provider, reason
   return { attempt, failure };
 }
 
+/**
+ * @deprecated Wave 10R — 旧调度器路径。
+ * 新代码应使用 execution-run-bridge.mjs 或直接调用 execution-core/。
+ * useExecutionRun 选项控制是否走新路径：
+ *   - true (默认，未来版本): 走 ExecutionRun bridge
+ *   - false (当前默认): 走旧 orchestrator
+ */
 export async function dispatchTaskProvider(input = {}, deps = {}) {
+  // If useExecutionRun is set, route through ExecutionRun bridge instead of old orchestrator
+  if (input.useExecutionRun) {
+    const { executeTaskViaExecutionRun } = await import("./execution-run-bridge.mjs");
+    if (!input.task?.id) throw new Error("task.id is required");
+    const requested = requestedProvider(input.task);
+    const provider = requested !== "auto" ? requested : "codex_tui";
+
+    // Build provider registry from the providers passed by caller
+    const bridgeRegistry = deps.providerRegistry || createExecutionProviderRegistry();
+    const bridgeProviders = deps.providers || defaultProviders(deps);
+    for (const bp of Object.values(bridgeProviders)) {
+      if (bp && !bridgeRegistry.get(bp.name)) bridgeRegistry.register(bp);
+    }
+
+    const bridgeCtx = { ...(input.context || {}), workspaceRoot: input.workspaceRoot, task: input.task, goal: input.goal || null, executionCwd: input.executionCwd || input.pathContext?.execution_cwd || null, pathContext: input.pathContext || null, tuiAvailable: input.tuiAvailable, codexTuiEvidenceWaitMs: input.codexTuiEvidenceWaitMs };
+    try {
+      const bridgeResult = await executeTaskViaExecutionRun({
+        taskId: input.task.id,
+        goalId: input.goal?.id || null,
+        provider,
+        context: bridgeCtx,
+        deps: {
+          providerRegistry: bridgeRegistry,
+          acceptanceService: deps.acceptanceService || null,
+          projectionService: deps.projectionService || null,
+          attemptStore: deps.attemptStore || null,
+          taskTransitionService: deps.taskTransitionService || null,
+        },
+      });
+      return {
+        attempt: bridgeResult.attempt,
+        evidence: bridgeResult.evidence,
+        status: bridgeResult.attempt.state,
+        provider: bridgeResult.attempt.provider,
+        selection: { provider, reason_code: "execution_run_bridge", scores: null },
+      };
+    } catch (err) {
+      return { status: "failed", provider, selection: null, evidence: null, error: err.message };
+    }
+  }
   if (!input.workspaceRoot) throw new Error("workspaceRoot is required");
   if (!input.task?.id) throw new Error("task.id is required");
 
@@ -101,7 +148,11 @@ export async function dispatchTaskProvider(input = {}, deps = {}) {
       provider,
       reason: error.message,
     });
+    // Per plan: TUI unavailable does NOT auto-fallback to exec.
+    // Instead, create checkpoint for supervisor review.
     if (provider === "codex_tui" && availability.codex_exec) {
+      // Still allow fallback if explicitly configured
+      if (input.task?.execution_policy?.fallback_allowed === true) {
       const checkpoint = buildExecutionCheckpoint({
         attempt: unavailable.attempt,
         repository: await (deps.repositorySnapshot?.(unavailable.attempt) || { head: null, dirty_paths: [] }),
@@ -131,6 +182,14 @@ export async function dispatchTaskProvider(input = {}, deps = {}) {
         status: result.attempt.state,
         provider: result.attempt.provider,
         selection: { provider: "codex_exec", reason_code: "tui_provider_unavailable", scores: null },
+      };
+      } // end fallback_allowed
+      // When fallback not allowed, just return unavailable
+      return {
+        status: "waiting_for_supervisor",
+        provider: "codex_tui",
+        selection: { provider: "codex_tui", reason_code: "tui_unavailable_no_fallback", scores: null },
+        failure: { code: "tui_unavailable", message: "TUI unavailable and fallback is not allowed" },
       };
     }
     return {

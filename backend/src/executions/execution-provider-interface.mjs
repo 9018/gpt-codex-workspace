@@ -7,6 +7,14 @@
  *
  * @module execution-provider-interface
  */
+/**
+ * @deprecated Wave 10R — 旧 execution 路径。
+ * 新代码应使用 execution-core/ 模块：
+ *   ExecutionRunService → execution-core/execution-run-service.mjs
+ *   ExecutionRunStore → execution-core/execution-run-store.mjs
+ * 将在下次大版本中移除。
+ */
+
 
 import { EXECUTION_PROVIDERS } from "./execution-contract.mjs";
 
