@@ -40,7 +40,7 @@ import {
   propagateRepairChildCompletion,
 } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
-import { runCompletedTaskVerificationPipeline, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
+import { runCompletedTaskVerificationPipeline, runFinalDecisionReconciliation, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
   attachAlreadyIntegratedCommitEvidence,
   attachResolvedWorktreeEvidence,
@@ -194,59 +194,27 @@ export async function finalizeCodexTaskRun({
     taskResult.warnings.push("Worktree retained: " + resolvedRepo.task_worktree_path + " (status=" + taskStatus + ")");
   }
 
-
-  // ---- P0: Auto-closure classification and consistency ----
-  // Classify the task type and closure path for auditing.
-  // This classification is persisted in the task result for downstream tools.
-  const _closureResult = classifyClosure(taskResult, task, null);
-  taskResult.closure_type = _closureResult.taskType.type;
-  taskResult.closure_path = _closureResult.closurePath.path;
-  taskResult.closure_summary = _closureResult.summary;
-  taskResult.needs_restart_check = _closureResult.needsRestartCheck;
-  taskResult.needs_integration = _closureResult.needsIntegration;
-  taskResult = applyNoChangeRepairCompletionSummary({ task, taskResult });
-  taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
-  taskResult = attachResolvedWorktreeEvidence(taskResult, resolvedRepo);
-  assertValidInputUnifiedDecision(taskResult);
-
-  const finalizerDecision = decideTaskFinalization(collectTaskFinalizerEvidence({
-    task,
-    goal,
+  const finalDecisionReconciliation = runFinalDecisionReconciliation({
     taskStatus,
     taskResult,
+    task,
+    goal,
     config,
-  }));
-  const finalizerApplied = applyTaskFinalStateDecision({ taskStatus, taskResult, finalizerDecision });
-  taskStatus = finalizerApplied.taskStatus;
-  taskResult = finalizerApplied.taskResult;
-
-
-  // ---- P0-MA12-G2: Auto Closure Reconciliation ----
-  // Reconcile closure_decision, finalizer_decision, and task.status so that
-  // verified + integrated tasks with all evidence close deterministically.
-  const reconciliationResult = reconcileTaskClosure({ taskStatus, taskResult, config });
-  // P0-AFC7: Continuation flow — when reconciliation returns a canonical
-  // goalStatus (from R0), the continuation hook is available for downstream
-  // consumers (goal convergence, queue auto-advance) to use directly.
-  let continuationFlow = null;
-  if (reconciliationResult.reconciled) {
-    taskStatus = reconciliationResult.taskStatus;
-    taskResult = reconciliationResult.taskResult;
-    taskResult.reconciled_at = new Date().toISOString();
-    taskResult.reconciliation_reason = reconciliationResult.reason;
-    const taskWarnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-    taskResult.warnings = taskWarnings;
-    taskResult.warnings.push("Reconciled: " + reconciliationResult.reason);
-
-    // Build continuation flow decision from canonical outcome.
-    // When reconciliation sets goalStatus, the completion is canonical and
-    // should drive goal convergence + queue auto-advance unconditionally.
-    continuationFlow = continueOnCompletedOutcome({
-      taskResult: reconciliationResult.taskResult,
-      task,
-      goal,
-    });
-  }
+    resolvedRepo,
+    classifyClosureFn: classifyClosure,
+    applyNoChangeRepairCompletionSummaryFn: applyNoChangeRepairCompletionSummary,
+    normalizeCompletedDeliveryStateFn: normalizeCompletedDeliveryState,
+    attachResolvedWorktreeEvidenceFn: attachResolvedWorktreeEvidence,
+    assertValidInputUnifiedDecisionFn: assertValidInputUnifiedDecision,
+    collectTaskFinalizerEvidenceFn: collectTaskFinalizerEvidence,
+    decideTaskFinalizationFn: decideTaskFinalization,
+    applyTaskFinalStateDecisionFn: applyTaskFinalStateDecision,
+    reconcileTaskClosureFn: reconcileTaskClosure,
+    continueOnCompletedOutcomeFn: continueOnCompletedOutcome,
+  });
+  taskStatus = finalDecisionReconciliation.taskStatus;
+  taskResult = finalDecisionReconciliation.taskResult;
+  const reconciliationResult = finalDecisionReconciliation.reconciliationResult;
 
   const progressionDecision = buildProgressionDecision({
     task,

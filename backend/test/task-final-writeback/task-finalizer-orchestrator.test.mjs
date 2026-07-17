@@ -2,11 +2,105 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  runFinalDecisionReconciliation,
   runCompletedTaskVerificationPipeline,
   runTaskClosureReview,
   runTaskCompletionVerification,
   runTaskFinalizerOrchestration,
 } from "../../src/task-finalization/task-finalizer-orchestrator.mjs";
+
+test("runFinalDecisionReconciliation annotates closure, applies final decision, and builds continuation", () => {
+  const calls = [];
+  const result = runFinalDecisionReconciliation({
+    taskStatus: "completed",
+    taskResult: { summary: "done" },
+    task: { id: "task_decision" },
+    goal: { id: "goal_decision" },
+    config: { defaultBranch: "main" },
+    resolvedRepo: { task_worktree_path: "/repo/.worktrees/task_decision" },
+    classifyClosureFn: (taskResult, task) => {
+      calls.push(["classify", task.id, taskResult.summary]);
+      return {
+        taskType: { type: "feature" },
+        closurePath: { path: "accepted" },
+        summary: "closure summary",
+        needsRestartCheck: false,
+        needsIntegration: true,
+      };
+    },
+    applyNoChangeRepairCompletionSummaryFn: ({ taskResult }) => {
+      calls.push(["no_change", taskResult.closure_type]);
+      return { ...taskResult, no_change_checked: true };
+    },
+    normalizeCompletedDeliveryStateFn: ({ taskStatus, taskResult }) => {
+      calls.push(["normalize", taskStatus]);
+      return { ...taskResult, normalized: true };
+    },
+    attachResolvedWorktreeEvidenceFn: (taskResult, resolvedRepo) => {
+      calls.push(["worktree", resolvedRepo.task_worktree_path]);
+      return { ...taskResult, worktree_path: resolvedRepo.task_worktree_path };
+    },
+    assertValidInputUnifiedDecisionFn: (taskResult) => {
+      calls.push(["validate", taskResult.normalized]);
+    },
+    collectTaskFinalizerEvidenceFn: ({ taskStatus, taskResult }) => {
+      calls.push(["facts", taskStatus]);
+      return { current_status: taskStatus, codex_result: taskResult };
+    },
+    decideTaskFinalizationFn: (facts) => {
+      calls.push(["decide", facts.current_status]);
+      return { status: "completed", reason: "terminal_evidence_satisfied" };
+    },
+    applyTaskFinalStateDecisionFn: ({ taskStatus, taskResult, finalizerDecision }) => {
+      calls.push(["apply", finalizerDecision.reason]);
+      return {
+        taskStatus,
+        taskResult: { ...taskResult, finalizer_decision: finalizerDecision },
+      };
+    },
+    reconcileTaskClosureFn: ({ taskStatus, taskResult }) => {
+      calls.push(["reconcile", taskResult.finalizer_decision.status]);
+      return {
+        reconciled: true,
+        taskStatus,
+        taskResult: { ...taskResult, reconciled_marker: true },
+        reason: "canonical_completion",
+      };
+    },
+    continueOnCompletedOutcomeFn: ({ taskResult, task, goal }) => {
+      calls.push(["continue", task.id, goal.id, taskResult.reconciled_marker]);
+      return { goalStatus: "completed", advanceQueue: true };
+    },
+  });
+
+  assert.equal(result.taskStatus, "completed");
+  assert.equal(result.taskResult.closure_type, "feature");
+  assert.equal(result.taskResult.closure_path, "accepted");
+  assert.equal(result.taskResult.closure_summary, "closure summary");
+  assert.equal(result.taskResult.needs_restart_check, false);
+  assert.equal(result.taskResult.needs_integration, true);
+  assert.equal(result.taskResult.no_change_checked, true);
+  assert.equal(result.taskResult.normalized, true);
+  assert.equal(result.taskResult.worktree_path, "/repo/.worktrees/task_decision");
+  assert.equal(result.taskResult.reconciled_at.length > 0, true);
+  assert.equal(result.taskResult.reconciliation_reason, "canonical_completion");
+  assert.deepEqual(result.taskResult.warnings, ["Reconciled: canonical_completion"]);
+  assert.equal(result.finalizerDecision.reason, "terminal_evidence_satisfied");
+  assert.equal(result.reconciliationResult.reconciled, true);
+  assert.deepEqual(result.continuationFlow, { goalStatus: "completed", advanceQueue: true });
+  assert.deepEqual(calls.map((call) => call[0]), [
+    "classify",
+    "no_change",
+    "normalize",
+    "worktree",
+    "validate",
+    "facts",
+    "decide",
+    "apply",
+    "reconcile",
+    "continue",
+  ]);
+});
 
 test("runTaskFinalizerOrchestration sequences integration finalization before delivery recovery", async () => {
   const result = await runTaskFinalizerOrchestration({

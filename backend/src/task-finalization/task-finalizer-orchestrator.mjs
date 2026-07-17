@@ -2,6 +2,69 @@ import { dirname, join } from "node:path";
 import { applyVerifiedDeliveryResultRecovery } from "./finalization-proofs.mjs";
 import { finalizeWaitingForIntegration } from "./integration-finalizer.mjs";
 
+export function runFinalDecisionReconciliation({
+  taskStatus,
+  taskResult = {},
+  task,
+  goal,
+  config = {},
+  resolvedRepo = null,
+  classifyClosureFn,
+  applyNoChangeRepairCompletionSummaryFn,
+  normalizeCompletedDeliveryStateFn,
+  attachResolvedWorktreeEvidenceFn,
+  assertValidInputUnifiedDecisionFn,
+  collectTaskFinalizerEvidenceFn,
+  decideTaskFinalizationFn,
+  applyTaskFinalStateDecisionFn,
+  reconcileTaskClosureFn,
+  continueOnCompletedOutcomeFn,
+} = {}) {
+  const closureResult = classifyClosureFn(taskResult, task, null);
+  taskResult = {
+    ...taskResult,
+    closure_type: closureResult.taskType.type,
+    closure_path: closureResult.closurePath.path,
+    closure_summary: closureResult.summary,
+    needs_restart_check: closureResult.needsRestartCheck,
+    needs_integration: closureResult.needsIntegration,
+  };
+
+  taskResult = applyNoChangeRepairCompletionSummaryFn({ task, taskResult });
+  taskResult = normalizeCompletedDeliveryStateFn({ taskStatus, taskResult });
+  taskResult = attachResolvedWorktreeEvidenceFn(taskResult, resolvedRepo);
+  assertValidInputUnifiedDecisionFn(taskResult);
+
+  const finalizerDecision = decideTaskFinalizationFn(collectTaskFinalizerEvidenceFn({
+    task,
+    goal,
+    taskStatus,
+    taskResult,
+    config,
+  }));
+  const finalizerApplied = applyTaskFinalStateDecisionFn({ taskStatus, taskResult, finalizerDecision });
+  taskStatus = finalizerApplied.taskStatus;
+  taskResult = finalizerApplied.taskResult;
+
+  const reconciliationResult = reconcileTaskClosureFn({ taskStatus, taskResult, config });
+  let continuationFlow = null;
+  if (reconciliationResult.reconciled) {
+    taskStatus = reconciliationResult.taskStatus;
+    taskResult = reconciliationResult.taskResult;
+    taskResult.reconciled_at = new Date().toISOString();
+    taskResult.reconciliation_reason = reconciliationResult.reason;
+    taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
+    taskResult.warnings.push("Reconciled: " + reconciliationResult.reason);
+    continuationFlow = continueOnCompletedOutcomeFn({
+      taskResult: reconciliationResult.taskResult,
+      task,
+      goal,
+    });
+  }
+
+  return { taskStatus, taskResult, finalizerDecision, reconciliationResult, continuationFlow };
+}
+
 function unresolvedBlockingFindings(findings = []) {
   return Array.isArray(findings)
     ? findings.filter((finding) => (finding?.severity === "blocker" || finding?.severity === "major") && finding?.resolved !== true)
