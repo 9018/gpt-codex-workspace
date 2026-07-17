@@ -182,3 +182,11 @@ it("time decay is applied before final top-k selection", async () => {
   });
   assert.strictEqual(results[0].id, "fresh");
 });
+
+it("legacy context-retrieval-policy path re-exports the canonical retrieval policy", async () => {
+  const legacy = await import("../src/context-retrieval-policy.mjs");
+  const canonical = await import("../src/context-index/retrieval-policy.mjs");
+
+  assert.strictEqual(legacy.analyzeRetrievalIntent, canonical.analyzeRetrievalIntent);
+  assert.strictEqual(legacy.rerankRetrievalCandidates, canonical.rerankRetrievalCandidates);
+});
