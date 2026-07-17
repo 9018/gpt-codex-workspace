@@ -23,6 +23,7 @@ import { releaseLockForTask } from "./repo-lock.mjs";
 import { createProgressionCommandActuator } from "./progression/progression-command-actuator.mjs";
 import { createProgressionCommandHandlers } from "./progression/progression-command-handlers.mjs";
 import { createProgressionCommandStore } from "./progression/progression-command-store.mjs";
+import { executeWorktreeCleanupCommand } from "./task-finalization/worktree-cleanup.mjs";
 import { existsSync, realpathSync } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { resolve } from "node:path";
@@ -697,6 +698,11 @@ function createWorkerProgressionHandlers(store, config) {
         throw progressionProjectionError(command, result.reason || `integration status=${result.status || "unknown"}`);
       }
       return result;
+    },
+
+    async cleanup_worktree(command) {
+      const { task } = await loadTask(command);
+      return executeWorktreeCleanupCommand(command, { config, task });
     },
   });
 }
