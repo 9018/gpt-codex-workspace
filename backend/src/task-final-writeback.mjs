@@ -33,7 +33,7 @@ import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalizat
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
-import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
+import { applyNoChangeRepairCompletionSummary, finalizeAcceptanceRepairCreation } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
 import { runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
@@ -472,55 +472,19 @@ export async function finalizeCodexTaskRun({
           verificationFailureRequiresReview: verification.passed === false && taskStatus === "waiting_for_review",
         },
       });
-    if (closureDecision.status === "waiting_for_repair" && !taskResult.repair_goal_id && !taskResult.repair_task_id) {
-      const repairableBlockers = Array.isArray(closureDecision.repairable_blockers) ? closureDecision.repairable_blockers : [];
-      const repairCheck = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
-      if (repairableBlockers.length > 0 && repairCheck.should_repair) {
-        const failureClass = repairableBlockers[0]?.code || "acceptance_blocker";
-        const repairGoal = await createRepairGoalFromFindingsFn({
-          task: taskWithRepairContext(task, resolvedRepo),
-          goal,
-          findings: repairableBlockers,
-          repairProposals: repairableBlockers.map((finding) => ({
-            title: `Repair ${finding.code || "acceptance blocker"}`,
-            proposed_action: finding.message || closureDecision.reason || "Fix the blocking acceptance finding and rerun verification.",
-          })),
-        });
-        try {
-          const created = await createGoalFn(store, config, applyRepairMetadata({
-            user_request: repairGoal.user_request,
-            goal_prompt: repairGoal.goal_prompt,
-            title: `Repair: ${task.title || task.id} (acceptance blocker)`,
-            project_id: task.project_id || goal?.project_id || "default",
-            workspace_id: repairGoal.workspace_id || task.workspace_id || goal?.workspace_id || "hosted-default",
-            mode: repairGoal.mode || task.mode || "full",
-            assign_to_codex: true,
-            skip_created_notification: false,
-            attempt: repairGoal.attempt,
-            repair_of_attempt: repairGoal.repair_of_attempt,
-          }, repairGoal));
-          taskResult.repair_goal = repairGoal;
-          taskResult.repair_attempt = repairGoal.repair_attempt;
-          taskResult.attempt = repairGoal.attempt;
-          taskResult.repair_of_attempt = repairGoal.repair_of_attempt;
-          taskResult.repair_goal_id = created.goal?.id || null;
-          taskResult.repair_task_id = created.task?.id || null;
-          taskResult.failure_class = taskResult.failure_class || failureClass;
-        } catch (err) {
-          closureDecision.status = "requires_review";
-          closureDecision.task_status = "waiting_for_review";
-          closureDecision.reason = "acceptance_repair_creation_failed";
-          taskResult.repair_denied_reason = "Acceptance repair task creation failed: " + (err?.message || String(err));
-          taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-          taskResult.warnings.push(taskResult.repair_denied_reason);
-        }
-      } else if (repairableBlockers.length > 0 && !repairCheck.should_repair) {
-        closureDecision.status = "requires_review";
-        closureDecision.task_status = "waiting_for_review";
-        closureDecision.reason = "acceptance_repair_budget_exhausted";
-        taskResult.repair_denied_reason = repairCheck.reason;
-      }
-    }
+    const acceptanceRepair = await finalizeAcceptanceRepairCreation({
+      closureDecision,
+      taskResult,
+      task,
+      goal,
+      store,
+      config,
+      resolvedRepo,
+      shouldAttemptRepairFn,
+      createRepairGoalFromFindingsFn,
+      createGoalFn,
+    });
+    taskResult = acceptanceRepair.taskResult;
     const plannedFollowups = planFollowupTasks({
       task,
       goal,
