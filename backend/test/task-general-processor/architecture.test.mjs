@@ -76,3 +76,10 @@ test("task finalization exposes Plan 08 final state decider entrypoint", async (
   assert.match(finalizerSource, /task-finalization\/task-final-state-decider\.mjs/);
   assert.doesNotMatch(finalizerSource, /from ['"]\.\/task-finalizer\.mjs['"]/);
 });
+
+test("task finalization exposes queue effect command builder", async () => {
+  const builderSource = await readFile(new URL("src/task-finalization/queue-effect-builder.mjs", backendRoot), "utf8");
+  const reconcilerSource = await readFile(new URL("src/progression/progression-command-reconciler.mjs", backendRoot), "utf8");
+  assert.match(builderSource, /export\s+function\s+buildFinalizationCommands\s*\(/);
+  assert.match(reconcilerSource, /task-finalization\/queue-effect-builder\.mjs/);
+});
