@@ -23,17 +23,17 @@ export const PROGRESSION_COMMAND_STATUSES = Object.freeze([
 ]);
 
 const ACTION_SCHEMAS = Object.freeze({
-  complete_task: ["task_id", "unified_decision"],
-  propagate_goal: ["task_id", "goal_id"],
-  advance_queue: ["task_id"],
-  create_repair_task: ["parent_task_id", "blockers", "repair_budget_revision"],
-  queue_repair_task: ["repair_task_id"],
-  inherit_repair_result: ["parent_task_id", "repair_task_id"],
-  integrate_change: ["task_id", "source_commit", "target_branch"],
-  restart_runtime: ["task_id", "restart_marker"],
-  create_successor_task: ["parent_task_id", "successor_spec"],
-  reconcile_workstream: ["workstream_id"],
-  cleanup_worktree: ["task_id", "worktree_path"],
+  complete_task: { required: ["task_id", "unified_decision"] },
+  propagate_goal: { required: ["task_id", "goal_id"] },
+  advance_queue: { required: ["task_id"] },
+  create_repair_task: { required: ["parent_task_id", "blockers", "repair_budget_revision"] },
+  queue_repair_task: { required: ["repair_task_id"] },
+  inherit_repair_result: { required: ["parent_task_id", "repair_task_id"] },
+  integrate_change: { required: ["task_id", "source_commit", "target_branch"] },
+  restart_runtime: { required: ["task_id", "restart_marker"] },
+  create_successor_task: { required: ["parent_task_id", "successor_spec"] },
+  reconcile_workstream: { required: ["workstream_id"] },
+  cleanup_worktree: { required: ["task_id", "worktree_path"] },
 });
 
 function invalid(message, details) {
@@ -45,7 +45,15 @@ export function validateProgressionPayload(action, payload) {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     invalid("payload must be an object", { action });
   }
-  for (const field of ACTION_SCHEMAS[action]) {
+  const schema = ACTION_SCHEMAS[action];
+  const required = schema.required;
+  const allowed = new Set(schema.allowed || required);
+  for (const field of Object.keys(payload)) {
+    if (!allowed.has(field)) {
+      invalid(`payload.${field} is not allowed for ${action}`, { action, field });
+    }
+  }
+  for (const field of required) {
     if (payload[field] === undefined || payload[field] === null || payload[field] === "") {
       invalid(`payload.${field} is required for ${action}`, { action, field });
     }

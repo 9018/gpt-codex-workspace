@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { createProgressionCommandStore } from "../src/progression/progression-command-store.mjs";
+import { PROGRESSION_ERROR_CODES, ProgressionCommandError } from "../src/progression/progression-errors.mjs";
 
 function createStore(initial = {}) {
   const state = { progression_commands: {}, ...initial };
@@ -43,4 +44,25 @@ test("progression command store creates, claims, and applies a command atomicall
   assert.equal(applied.status, "applied");
   assert.deepEqual(applied.result, { advanced: true });
   assert.equal(applied.lease, null);
+});
+
+test("progression command store rejects action payloads with undeclared fields", async () => {
+  const commands = createProgressionCommandStore({ store: createStore() });
+
+  await assert.rejects(
+    () => commands.createCommand({
+      task_id: "task_extra_payload",
+      decision_revision: 1,
+      action: "integrate_change",
+      payload: {
+        task_id: "task_extra_payload",
+        source_commit: "abc123",
+        target_branch: "main",
+        freeform_blob: { arbitrary: true },
+      },
+    }),
+    (error) => error instanceof ProgressionCommandError
+      && error.code === PROGRESSION_ERROR_CODES.INVALID_COMMAND
+      && error.details?.field === "freeform_blob",
+  );
 });
