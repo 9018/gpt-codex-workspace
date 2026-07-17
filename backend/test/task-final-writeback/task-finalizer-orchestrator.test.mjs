@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { runTaskFinalizerOrchestration } from "../../src/task-finalization/task-finalizer-orchestrator.mjs";
+import {
+  runTaskCompletionVerification,
+  runTaskFinalizerOrchestration,
+} from "../../src/task-finalization/task-finalizer-orchestrator.mjs";
 
 test("runTaskFinalizerOrchestration sequences integration finalization before delivery recovery", async () => {
   const result = await runTaskFinalizerOrchestration({
@@ -40,4 +43,27 @@ test("runTaskFinalizerOrchestration sequences integration finalization before de
   assert.equal(result.taskResult.integration.status, "merged");
   assert.equal(result.taskResult.delivery_result_recovery.passed, true);
   assert.equal(result.taskResult.commit, "abc123");
+});
+
+test("runTaskCompletionVerification captures verifier errors and merges findings", async () => {
+  const result = await runTaskCompletionVerification({
+    taskStatus: "completed",
+    taskResult: { summary: "done", acceptance_findings: [{ code: "existing", message: "keep" }] },
+    summary: "done",
+    task: { id: "task_verify" },
+    goal: { id: "goal_verify" },
+    verifierRepoPath: "/repo/main",
+    resultJsonPath: "/tmp/result.json",
+    config: {},
+    verifyTaskCompletionFn: async () => {
+      throw new Error("verifier exploded");
+    },
+  });
+
+  assert.equal(result.verification.passed, false);
+  assert.equal(result.verification.failure_class, "verifier_error");
+  assert.equal(result.taskResult.verification.failure_class, "verifier_error");
+  assert.equal(result.taskResult.failure_class, "verifier_error");
+  assert.equal(result.taskResult.acceptance_findings.length, 2);
+  assert.equal(result.taskResult.acceptance_findings[1].code, "verifier_error");
 });
