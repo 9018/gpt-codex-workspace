@@ -46,6 +46,7 @@ import {
   buildFallbackResultJson,
   normalizeCompletedDeliveryState,
 } from "./task-finalization/finalization-proofs.mjs";
+import { releaseFinalizationRepoLock } from "./task-finalization/worktree-cleanup.mjs";
 
 function unresolvedBlockingFindings(findings = []) {
   return Array.isArray(findings)
@@ -145,8 +146,6 @@ function isGoalDependencyReasonFor(goalId, reason = "") {
   const text = String(reason || "");
   return text.includes(`depends_on_goal ${goalId}`) || text.includes(`depends_on_goal_id ${goalId}`);
 }
-
-const ACTIVE_RESTART_MARKER_STATUSES = new Set(["pending", "scheduled", "restarted"]);
 
 export async function finalizeCodexTaskRun({
   store,
@@ -424,21 +423,13 @@ export async function finalizeCodexTaskRun({
     taskResult.workstream_context_update = outcomeUpdate;
   }
 
-  if (repoLockPath) {
-    let keptForRestart = false;
-    try {
-      const marker = await loadRestartMarkerFn(config.defaultWorkspaceRoot, task.id);
-      if (marker && ACTIVE_RESTART_MARKER_STATUSES.has(marker.status)) {
-        await releaseRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id, {
-          restartState: "scheduled",
-        });
-        keptForRestart = true;
-      }
-    } catch {}
-    if (!keptForRestart) {
-      await releaseRepoLockFn(config.defaultWorkspaceRoot, repoLockPath, task.id);
-    }
-  }
+  await releaseFinalizationRepoLock({
+    config,
+    task,
+    repoLockPath,
+    loadRestartMarkerFn,
+    releaseRepoLockFn,
+  });
 
   if (goal) {
     // P0-AFC7: Consume reconciliation goalStatus when available (from R0 canonical outcome)
