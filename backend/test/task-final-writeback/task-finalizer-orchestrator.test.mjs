@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  runCompletedTaskVerificationPipeline,
   runTaskClosureReview,
   runTaskCompletionVerification,
   runTaskFinalizerOrchestration,
@@ -104,4 +105,60 @@ test("runTaskClosureReview applies acceptance gate closure and planned followups
   assert.equal(result.taskResult.contract_verification.non_blocking_followups[0].code, "docs");
   assert.deepEqual(result.taskResult.followups, [{ title: "Write docs" }]);
   assert.equal(result.taskResult.followup_processing.status, "queued");
+});
+
+test("runCompletedTaskVerificationPipeline writes verification, repairs failures, and runs closure review", async () => {
+  const writes = [];
+  const result = await runCompletedTaskVerificationPipeline({
+    taskStatus: "completed",
+    taskResult: { summary: "done", acceptance_findings: [] },
+    summary: "done",
+    task: { id: "task_pipeline", title: "Pipeline helper" },
+    goal: { id: "goal_pipeline" },
+    store: { state: { tasks: [] } },
+    config: {},
+    resolvedRepo: { canonical_repo_path: "/repo/main" },
+    verifierRepoPath: "/repo/main",
+    resultJsonPath: "/workspace/.gptwork/goals/goal_pipeline/result.json",
+    verifyTaskCompletionFn: async () => ({
+      passed: false,
+      failure_class: "tests_failed",
+      findings: [{ severity: "blocker", code: "tests_failed", message: "tests failed" }],
+      contract_verification: { blocking_passed: false },
+    }),
+    autoIntegrationVerificationFromReportFn: () => ({ passed: true, findings: [] }),
+    mkdirFn: async (path) => writes.push(["mkdir", path]),
+    writeFileFn: async (path, content) => writes.push(["write", path, JSON.parse(content)]),
+    classifyTaskFailureFn: () => ({ failure_class: "tests_failed" }),
+    finalizeVerificationRepairAttemptFn: async ({ taskStatus, taskResult, verification }) => ({
+      taskStatus: "waiting_for_repair",
+      taskResult: { ...taskResult, repair_task_id: "repair_pipeline" },
+      verification,
+    }),
+    canRetryTaskFn: () => true,
+    scheduleRepairAttemptFn: async () => null,
+    createGoalFn: async () => null,
+    runTaskClosureReviewFn: async ({ taskStatus, taskResult, verification }) => ({
+      taskStatus,
+      taskResult: { ...taskResult, closure_checked: true },
+      verification,
+    }),
+    runAcceptanceGateFn: async () => null,
+    decideTaskClosureFn: () => null,
+    finalizeAcceptanceRepairCreationFn: async ({ taskResult }) => ({ taskResult }),
+    shouldAttemptRepairFn: () => false,
+    createRepairGoalFromFindingsFn: async () => null,
+    planFollowupTasksFn: () => [],
+    planUnacceptedTaskFollowupFn: () => null,
+    applyClosureDecisionToTaskResultFn: ({ taskStatus, taskResult }) => ({ taskStatus, taskResult }),
+  });
+
+  assert.equal(result.taskStatus, "waiting_for_repair");
+  assert.equal(result.taskResult.repair_task_id, "repair_pipeline");
+  assert.equal(result.taskResult.closure_checked, true);
+  assert.equal(result.verification.failure_class, "tests_failed");
+  assert.deepEqual(writes[0], ["mkdir", "/workspace/.gptwork/goals/goal_pipeline"]);
+  assert.equal(writes[1][0], "write");
+  assert.equal(writes[1][1], "/workspace/.gptwork/goals/goal_pipeline/verification.json");
+  assert.equal(writes[1][2].failure_class, "tests_failed");
 });

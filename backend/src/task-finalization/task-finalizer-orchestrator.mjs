@@ -1,3 +1,4 @@
+import { dirname, join } from "node:path";
 import { applyVerifiedDeliveryResultRecovery } from "./finalization-proofs.mjs";
 import { finalizeWaitingForIntegration } from "./integration-finalizer.mjs";
 
@@ -239,6 +240,112 @@ export async function runTaskClosureReview({
     config,
   });
   return { taskStatus: closureApplied.taskStatus, taskResult: closureApplied.taskResult, verification, acceptanceGate, closureDecision };
+}
+
+export async function runCompletedTaskVerificationPipeline({
+  taskStatus,
+  taskResult = {},
+  summary = "",
+  resultJsonForVerification,
+  resultJsonPath,
+  task,
+  goal,
+  store,
+  config = {},
+  resolvedRepo,
+  verifierRepoPath,
+  verifyTaskCompletionFn,
+  autoIntegrationVerificationFromReportFn,
+  mkdirFn,
+  writeFileFn,
+  classifyTaskFailureFn,
+  finalizeVerificationRepairAttemptFn,
+  canRetryTaskFn,
+  scheduleRepairAttemptFn,
+  createGoalFn,
+  runTaskClosureReviewFn = runTaskClosureReview,
+  runAcceptanceGateFn,
+  decideTaskClosureFn,
+  finalizeAcceptanceRepairCreationFn,
+  shouldAttemptRepairFn,
+  createRepairGoalFromFindingsFn,
+  planFollowupTasksFn,
+  planUnacceptedTaskFollowupFn,
+  applyClosureDecisionToTaskResultFn,
+} = {}) {
+  if (taskStatus !== "completed") return { taskStatus, taskResult, verification: null };
+
+  const completionVerification = await runTaskCompletionVerification({
+    taskStatus,
+    taskResult,
+    resultJsonForVerification,
+    resultJsonPath,
+    task,
+    goal,
+    verifierRepoPath,
+    config,
+    verifyTaskCompletionFn,
+    autoIntegrationVerificationFromReportFn,
+  });
+  taskStatus = completionVerification.taskStatus;
+  taskResult = completionVerification.taskResult;
+  let verification = completionVerification.verification;
+
+  if (resultJsonPath) {
+    const verificationPath = join(dirname(resultJsonPath), "verification.json");
+    await mkdirFn(dirname(verificationPath), { recursive: true }).catch(() => {});
+    await writeFileFn(verificationPath, JSON.stringify(verification, null, 2) + "\n", "utf8").catch(() => {});
+  }
+  if (verification.passed !== true) {
+    const failure = classifyTaskFailureFn({ task, codexResult: taskResult, verification });
+    const repairAttempt = await finalizeVerificationRepairAttemptFn({
+      taskStatus,
+      taskResult,
+      task,
+      goal,
+      store,
+      config,
+      resolvedRepo,
+      failure,
+      verification,
+      canRetryTaskFn,
+      scheduleRepairAttemptFn,
+      createGoalFn,
+    });
+    taskStatus = repairAttempt.taskStatus;
+    taskResult = repairAttempt.taskResult;
+    verification = repairAttempt.verification;
+    taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
+  }
+
+  const closureReview = await runTaskClosureReviewFn({
+    taskStatus,
+    taskResult,
+    task,
+    goal,
+    store,
+    config,
+    resolvedRepo,
+    verifierRepoPath,
+    resultJsonPath,
+    verification,
+    runAcceptanceGateFn,
+    decideTaskClosureFn,
+    finalizeAcceptanceRepairCreationFn,
+    shouldAttemptRepairFn,
+    createRepairGoalFromFindingsFn,
+    createGoalFn,
+    planFollowupTasksFn,
+    planUnacceptedTaskFollowupFn,
+    applyClosureDecisionToTaskResultFn,
+  });
+  return {
+    taskStatus: closureReview.taskStatus,
+    taskResult: closureReview.taskResult,
+    verification: closureReview.verification,
+    acceptanceGate: closureReview.acceptanceGate,
+    closureDecision: closureReview.closureDecision,
+  };
 }
 
 export async function runTaskFinalizerOrchestration({
