@@ -153,3 +153,39 @@ export async function finalizeVerificationRepairAttempt({
   taskResult.requires_review = true;
   return { taskStatus, taskResult, verification };
 }
+
+export async function propagateRepairChildCompletion({
+  task = {},
+  taskStatus,
+  taskResult = {},
+  finalTask,
+  store,
+  config,
+  handleRepairCompletionFn,
+  logFn = () => {},
+} = {}) {
+  if (!task.parent_task_id && !task.repair_of_task_id) return null;
+  const terminalStatuses = new Set(["completed", "failed", "cancelled"]);
+  if (!terminalStatuses.has(String(taskStatus || "").toLowerCase())) return null;
+
+  const verificationPassed = taskResult.verification?.passed === true;
+  const findings = Array.isArray(taskResult.acceptance_findings) ? taskResult.acceptance_findings : [];
+  const blockerFindings = findings.filter((finding) => finding?.resolved !== true && (finding?.severity === "blocker" || finding?.severity === "major"));
+  const passed = taskStatus === "completed" && verificationPassed && blockerFindings.length === 0;
+
+  try {
+    const repairResult = await handleRepairCompletionFn({
+      store,
+      config,
+      completedTask: finalTask,
+      passed,
+    });
+    if (repairResult?.parent_updated) {
+      logFn("[gptwork-worker] repair completion: parent " + repairResult.parent_task_id + " updated to " + repairResult.parent_status + "\n");
+    }
+    return repairResult;
+  } catch (repairErr) {
+    logFn("[gptwork-worker] repair completion handler error: " + (repairErr?.message || String(repairErr)) + "\n");
+    return { ok: false, error: repairErr?.message || String(repairErr) };
+  }
+}

@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   applyNoChangeRepairCompletionSummary,
   finalizeAcceptanceRepairCreation,
+  propagateRepairChildCompletion,
   finalizeVerificationRepairAttempt,
 } from "../../src/task-finalization/repair-finalizer.mjs";
 
@@ -126,4 +127,37 @@ test("finalizeVerificationRepairAttempt schedules repair and annotates verificat
   assert.equal(result.taskResult.kind, "verification_failed");
   assert.match(result.taskResult.reason, /scheduled repair attempt 1\/2/);
   assert.equal(scheduledTask.repo_id, "github.com/acme/repo");
+});
+
+test("propagateRepairChildCompletion reports parent repair completion only for terminal repair children", async () => {
+  const calls = [];
+  const result = await propagateRepairChildCompletion({
+    task: { id: "repair_child", parent_task_id: "parent_task" },
+    taskStatus: "completed",
+    taskResult: { verification: { passed: true }, acceptance_findings: [] },
+    finalTask: { id: "repair_child", status: "completed" },
+    store: { state: { tasks: [] } },
+    config: {},
+    handleRepairCompletionFn: async (payload) => {
+      calls.push(payload);
+      return { parent_updated: true, parent_task_id: "parent_task", parent_status: "completed" };
+    },
+    logFn: () => {},
+  });
+
+  assert.equal(result?.parent_updated, true);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].completedTask.id, "repair_child");
+  assert.equal(calls[0].passed, true);
+
+  const skipped = await propagateRepairChildCompletion({
+    task: { id: "normal_task" },
+    taskStatus: "completed",
+    taskResult: { verification: { passed: true } },
+    finalTask: { id: "normal_task" },
+    handleRepairCompletionFn: async () => {
+      throw new Error("should not run");
+    },
+  });
+  assert.equal(skipped, null);
 });
