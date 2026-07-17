@@ -30,9 +30,10 @@ import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writ
 import { writeFinalizationAgentRuns } from "./task-finalization/finalization-notifier.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
-import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
+import { projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import {
   buildProgressionDecision,
+  mutateFinalTaskState,
   runCompletedTaskAutoStart,
   runPostFinalizationEffects,
   writeGoalFinalizationArtifacts,
@@ -52,105 +53,6 @@ import {
   normalizeCompletedDeliveryState,
 } from "./task-finalization/finalization-proofs.mjs";
 import { releaseFinalizationRepoLock } from "./task-finalization/worktree-cleanup.mjs";
-
-function unresolvedBlockingFindings(findings = []) {
-  return Array.isArray(findings)
-    ? findings.filter((finding) => (finding?.severity === "blocker" || finding?.severity === "major") && finding?.resolved !== true)
-    : [];
-}
-
-function acceptedByAcceptanceAgent(taskResult = {}) {
-  const decision = taskResult.reviewer_decision || {};
-  if (decision.passed === true) return true;
-  if (decision.status === "accepted" || decision.decision === "accepted") return true;
-  if (decision.decision?.passed === true) return true;
-  if (decision.decision?.status === "accepted" || decision.decision?.decision === "accepted") return true;
-  return false;
-}
-
-function closureAllowsQueuePropagation(taskResult = {}) {
-  // P0-AFC3: Check unified_decision first as canonical source of truth
-  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
-  if (unifiedDecision.queue_effect?.unblock_dependents === true) return true;
-  if (unifiedDecision.safe_to_auto_advance === true) return true;
-  if (unifiedDecision.integration_effect?.satisfied === true) return true;
-
-  // Fallback to closure_decision status
-  const status = taskResult.closure_decision?.status;
-  return status === "auto_completed_clean" || status === "auto_completed_with_followups";
-}
-
-function integrationVerifiedForQueuePropagation(taskResult = {}) {
-  const integration = taskResult.integration || {};
-  const autoCompletion = taskResult.auto_integration_completion || {};
-  const report = autoCompletion.verification_report || {};
-  if (autoCompletion.attempted === true && (report.dirty === true || autoCompletion.canonical_clean_after === false)) return false;
-
-  // P0-AFC3: Check unified_decision after explicit dirty auto-integration evidence is ruled out.
-  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
-  if (unifiedDecision.integration_effect?.satisfied === true) return true;
-
-  // P0-AFC3: Include already_integrated, not_required in terminal integration statuses
-  const merged = integration.merged === true
-    || integration.satisfied === true
-    || ["merged", "ff_only_merged", "skipped", "already_integrated", "not_required"].includes(String(integration.status || ""));
-  const autoCompleted = autoCompletion.completed === true
-    && report.passed !== false
-    && report.dirty !== true
-    && autoCompletion.canonical_clean_after !== false;
-
-  // P0-AFC3: For satisfied integration (not_required, already_integrated, skipped), bypass auto-completion check
-  if (integration.satisfied === true || ["already_integrated", "not_required", "skipped"].includes(String(integration.status || ""))) return true;
-  return merged && autoCompleted;
-}
-
-function shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult = {} } = {}) {
-  if (taskStatus !== "completed") return false;
-
-  // AFC-P3: When unified_decision.queue_effect.unblock_dependents is true,
-  // trust it as the canonical signal and skip individual evidence re-checks.
-  const ud = taskResult.unified_decision || {};
-  if (taskResult.requires_review === true) return false;
-  if (!acceptedByAcceptanceAgent(taskResult)) return false;
-  if (taskResult.contract_verification?.blocking_passed === false) return false;
-  if (taskResult.contract_verification?.completion_eligible === false) return false;
-  if (taskResult.contract_verification?.requires_review === true) return false;
-  if (!integrationVerifiedForQueuePropagation(taskResult)) return false;
-  if (ud.queue_effect?.unblock_dependents === true) {
-    return true;
-  }
-
-  // When unified_decision explicitly says hold_queue, do not propagate.
-  if (ud.queue_effect?.hold_queue === true) {
-    return false;
-  }
-
-  // When unified_decision status is terminal-non-completed, do not propagate.
-  if (ud.status === "failed" || ud.status === "timed_out" || ud.status === "blocked") {
-    return false;
-  }
-
-  // Fallback: individual evidence checks (backward compat for tasks without unified_decision).
-  if (taskResult.requires_review === true) return false;
-  if (!acceptedByAcceptanceAgent(taskResult)) return false;
-
-  // P0-AFC3: Check unified_decision as canonical source of truth
-  const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision || {};
-  if (unifiedDecision.queue_effect?.unblock_dependents === true) return true;
-  if (unifiedDecision.safe_to_auto_advance === true) return true;
-
-  if (!closureAllowsQueuePropagation(taskResult)) return false;
-  if (!integrationVerifiedForQueuePropagation(taskResult)) return false;
-  if (taskResult.contract_verification?.blocking_passed === false) return false;
-  if (taskResult.contract_verification?.completion_eligible === false) return false;
-  if (taskResult.contract_verification?.requires_review === true) return false;
-  return unresolvedBlockingFindings(taskResult.acceptance_findings).length === 0;
-}
-
-function isGoalDependencyReasonFor(goalId, reason = "") {
-  const text = String(reason || "");
-  return text.includes(`depends_on_goal ${goalId}`) || text.includes(`depends_on_goal_id ${goalId}`);
-}
 
 export async function finalizeCodexTaskRun({
   store,
@@ -527,103 +429,5 @@ async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorkt
       error: error?.message || String(error || "git worktree remove failed"),
       worktree_path: resolvedRepo.task_worktree_path,
     };
-  }
-}
-
-async function mutateFinalTaskState({
-  store,
-  task,
-  taskStatus,
-  taskResult,
-  doneAt,
-  cr,
-  config,
-  goal,
-  progressionDecision,
-  reconcileProgressionCommandsInStateFn,
-}) {
-  return store.mutate(async (state) => {
-    state.tasks ||= [];
-    state.goals ||= [];
-    state.activities ||= [];
-    const item = state.tasks.find((candidate) => candidate.id === task.id);
-    if (!item) throw new Error(`task not found: ${task.id}`);
-    applyTaskStateProjection(item, { taskStatus, taskResult, doneAt, cr, config });
-    if (progressionDecision?.revision !== undefined && progressionDecision?.revision !== null) {
-      item.decision_revision = progressionDecision.revision;
-    }
-    item.updated_at = new Date().toISOString();
-    state.activities.push({ time: item.updated_at, type: "task.updated", task_id: task.id, status: item.status });
-
-    let goalStatus = null;
-    if (goal) {
-      const goalItem = state.goals.find((candidate) => candidate.id === goal.id);
-      if (goalItem) {
-        goalStatus = applyGoalStateProjection(goalItem, { task: item, taskStatus, taskResult: item.result || taskResult, state, doneAt });
-        state.activities.push({ time: doneAt, type: `goal.${goalStatus}`, goal_id: goalItem.id, title: goalItem.title });
-      }
-    }
-
-    if (Array.isArray(state.goal_queue)) {
-      const queueItem = state.goal_queue.find((candidate) => candidate.task_id === task.id || (goal && candidate.goal_id === goal.id && candidate.status === "running"));
-      if (queueItem) {
-        queueItem.status = taskStatus;
-        queueItem.failure_class = taskResult.failure_class || taskResult.verification?.failure_class || null;
-        queueItem.completed_task_id = task.id;
-        queueItem.updated_at = doneAt;
-        if (taskStatus !== "completed") {
-          queueItem.blocked_reason = taskResult.reason || taskResult.repair_denied_reason || taskResult.summary || null;
-        } else {
-          queueItem.blocked_reason = null;
-        }
-      }
-    }
-    reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt });
-    const progressionReport = progressionDecision
-      ? reconcileProgressionCommandsInStateFn({
-          state,
-          decisions: [progressionDecision],
-          now: () => doneAt,
-        })
-      : null;
-    return { task: item, progression_commands: progressionReport };
-  });
-}
-
-function reconcileAcceptedQueuePropagation(state, { task, item, goal, goalStatus, taskStatus, taskResult, doneAt }) {
-  if (!Array.isArray(state.goal_queue)) return;
-  if (!goal || !shouldPropagateAcceptedQueueCompletion({ taskStatus, taskResult })) return;
-
-  const goalId = goal.id;
-  if (goalStatus !== "completed") {
-    const goalItem = Array.isArray(state.goals) ? state.goals.find((candidate) => candidate.id === goalId) : null;
-    if (!goalItem || goalItem.status !== "completed") return;
-  }
-
-  const current = state.goal_queue.find((candidate) => candidate.task_id === task.id || candidate.goal_id === goalId);
-  if (current && current.status !== "completed") {
-    current.status = "completed";
-    current.completed_task_id = task.id;
-    current.failure_class = null;
-    current.blocked_reason = null;
-    current.updated_at = doneAt;
-  }
-
-  for (const candidate of state.goal_queue) {
-    if (candidate.depends_on_goal_id !== goalId) continue;
-    if (candidate.status !== "blocked") continue;
-    if (!isGoalDependencyReasonFor(goalId, candidate.blocked_reason)) continue;
-    candidate.status = candidate.auto_start === false ? "waiting" : "ready";
-    candidate.blocked_reason = null;
-    candidate.updated_at = doneAt;
-    state.activities ||= [];
-    state.activities.push({
-      time: doneAt,
-      type: "queue.dependency_reconciled",
-      queue_id: candidate.queue_id,
-      goal_id: candidate.goal_id,
-      depends_on_goal_id: goalId,
-      completed_task_id: item.id,
-    });
   }
 }

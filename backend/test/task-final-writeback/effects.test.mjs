@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { normalizeToUnifiedDecision } from "../../src/codex-unified-decision.mjs";
 import {
   buildProgressionDecision,
+  mutateFinalTaskState,
   runCompletedTaskAutoStart,
   runPostFinalizationEffects,
   writeGoalFinalizationArtifacts,
@@ -157,4 +158,58 @@ test("writeGoalFinalizationArtifacts writes result md, goal message, and fallbac
   assert.match(messages[0][2].content, /Waiting for review task task_artifacts/);
   assert.equal(files[0][0], "/workspace/.gptwork/goals/goal_artifacts/result.json");
   assert.equal(JSON.parse(files[0][1]).taskStatus, "waiting_for_review");
+});
+
+test("mutateFinalTaskState projects task, goal, queue, and progression commands atomically", async () => {
+  const reconciled = [];
+  const store = {
+    state: {
+      tasks: [{ id: "task_mutate", status: "running", logs: [] }],
+      goals: [{ id: "goal_mutate", status: "running", title: "Goal mutate" }],
+      goal_queue: [
+        { queue_id: "current", task_id: "task_mutate", goal_id: "goal_mutate", status: "running" },
+        {
+          queue_id: "dependent",
+          goal_id: "goal_next",
+          depends_on_goal_id: "goal_mutate",
+          status: "blocked",
+          blocked_reason: "depends_on_goal goal_mutate",
+        },
+      ],
+      activities: [],
+    },
+    async mutate(fn) {
+      return fn(this.state);
+    },
+  };
+
+  const result = await mutateFinalTaskState({
+    store,
+    task: { id: "task_mutate", decision_revision: 3 },
+    taskStatus: "completed",
+    taskResult: {
+      reviewer_decision: { status: "accepted" },
+      integration: { status: "already_integrated" },
+      closure_decision: { status: "auto_completed_clean" },
+      unified_decision: { queue_effect: { unblock_dependents: true } },
+    },
+    doneAt: "2026-07-17T13:00:00.000Z",
+    cr: {},
+    config: {},
+    goal: { id: "goal_mutate" },
+    progressionDecision: { revision: 7 },
+    reconcileProgressionCommandsInStateFn: ({ state, decisions, now }) => {
+      reconciled.push({ state, decisions, at: now() });
+      return { applied: decisions.length };
+    },
+  });
+
+  assert.equal(result.task.status, "completed");
+  assert.equal(result.task.decision_revision, 7);
+  assert.equal(store.state.goals[0].status, "completed");
+  assert.equal(store.state.goal_queue[0].status, "completed");
+  assert.equal(store.state.goal_queue[1].status, "ready");
+  assert.equal(store.state.activities.at(-1).type, "queue.dependency_reconciled");
+  assert.deepEqual(result.progression_commands, { applied: 1 });
+  assert.equal(reconciled[0].at, "2026-07-17T13:00:00.000Z");
 });
