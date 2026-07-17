@@ -100,6 +100,27 @@ test('session inventory treats codexHome as CODEX_HOME and reads its sessions di
   }
 });
 
+test('session inventory falls back to legacy CODEX_HOME/.codex/sessions when sessions is absent', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-codex-home-legacy-'));
+  try {
+    const sessionsRoot = join(codexHome, '.codex', 'sessions', '2026', '07', '17');
+    await mkdir(sessionsRoot, { recursive: true });
+    await writeFile(join(sessionsRoot, 'legacy.jsonl'), '{}\n');
+
+    const result = await listCodexSessionsMetadata(
+      { codexHome },
+      { year: '2026', month: '07', day: '17' },
+      { user_id: 'test', scopes: ['workspace:read'] },
+    );
+
+    assert.equal(result.root, join(codexHome, '.codex', 'sessions'));
+    assert.equal(result.count, 1);
+    assert.equal(result.sessions[0].relative_path, '2026/07/17/legacy.jsonl');
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('create_codex_session_inventory_task handler calls createTask with readonly mode', async () => {
   let createTaskCalled = false;
 

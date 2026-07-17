@@ -11,6 +11,16 @@ function firstPath(...values) {
   return null;
 }
 
+function firstContainerPath(projectRoot, ...values) {
+  const resolvedProjectRoot = resolve(projectRoot);
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    const candidate = resolve(value.trim());
+    if (candidate !== resolvedProjectRoot) return candidate;
+  }
+  return resolve(resolvedProjectRoot, "..");
+}
+
 function taskCanonicalRepoPath(task = {}) {
   return firstPath(
     task.canonical_repo_path,
@@ -61,7 +71,7 @@ export async function resolvePathContext({
 
   return validatePathContext({
     mcpRoot: firstPath(mcpRoot, config.mcpRoot, projectParent),
-    projectsRoot: firstPath(projectsRoot, config.projectsRoot, workspaceRoot, projectParent),
+    projectsRoot: firstContainerPath(canonicalRepoPath, projectsRoot, config.projectsRoot, workspaceRoot, projectParent),
     workspaceRoot: firstPath(workspaceRoot, config.defaultWorkspaceRoot, config.workspaceRoot, projectParent),
     projectRoot: canonicalRepoPath,
     canonicalRepoPath,

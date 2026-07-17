@@ -68,6 +68,12 @@ test('refactor goals: queue-created deploy task defaults to canonical execution'
 test('refactor goals: deploy worker does not materialize worktree and locks canonical repo', async (t) => {
   const root = await mkdtemp(join(tmpdir(), 'gptwork-refactor-deploy-worker-'));
   t.after(async () => { try { await rm(root, { recursive: true, force: true }); } catch (e) { if (e.code === 'ENOTEMPTY') execSync(`rm -rf "${root}"`, { stdio: 'ignore' }); } });
+  const canonicalRepo = join(root, 'canonical');
+  await mkdir(canonicalRepo, { recursive: true });
+  execFileSync('git', ['init', '-b', 'main'], { cwd: canonicalRepo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.email', 'refactor@example.test'], { cwd: canonicalRepo, stdio: 'ignore' });
+  execFileSync('git', ['config', 'user.name', 'Refactor Test'], { cwd: canonicalRepo, stdio: 'ignore' });
+  execFileSync('git', ['commit', '--allow-empty', '-m', 'initial'], { cwd: canonicalRepo, stdio: 'ignore' });
   const store = await makeStore(root);
   const now = new Date().toISOString();
   const goal = { id: 'goal_deploy_worker', project_id: 'default', workspace_id: 'hosted-default', conversation_id: 'conv_deploy_worker', title: 'Deploy', user_request: 'Deploy', goal_prompt: 'Deploy', context_summary: '', mode: 'deploy', status: 'assigned', created_at: now, updated_at: now };
@@ -82,8 +88,8 @@ test('refactor goals: deploy worker does not materialize worktree and locks cano
   let materialized = false;
   let lockedPath = null;
   let executionCwd = null;
-  await processGeneralTaskWithDeps(store, { defaultWorkspaceRoot: root, defaultRepoPath: join(root, 'canonical'), enableTaskWorktrees: true }, task, defaultTokenContext('test'), { syncTask: async () => {} }, {
-    resolveTaskRepositoryPlanFn: async () => ({ repo_id: 'repo', canonical_repo_path: join(root, 'canonical'), task_worktree_path: join(root, '.gptwork/worktrees/repo/task_deploy_worker'), task_branch: 'gptwork/task/task_deploy_worker', base_ref: 'HEAD', uses_default_fallback: false, worktree_lifecycle: null }),
+  await processGeneralTaskWithDeps(store, { defaultWorkspaceRoot: root, defaultRepoPath: canonicalRepo, enableTaskWorktrees: true }, task, defaultTokenContext('test'), { syncTask: async () => {} }, {
+    resolveTaskRepositoryPlanFn: async () => ({ repo_id: 'repo', canonical_repo_path: canonicalRepo, task_worktree_path: join(root, '.gptwork/worktrees/repo/task_deploy_worker'), task_branch: 'gptwork/task/task_deploy_worker', base_ref: 'HEAD', uses_default_fallback: false, worktree_lifecycle: null }),
     materializeTaskWorktreeFn: async () => { materialized = true; return {}; },
     acquireRepoLockFn: async (_workspaceRoot, path) => { lockedPath = path; return { acquired: true }; },
     releaseLockForTaskFn: async () => {},
@@ -98,8 +104,8 @@ test('refactor goals: deploy worker does not materialize worktree and locks cano
   });
 
   assert.equal(materialized, false);
-  assert.equal(lockedPath, join(root, 'canonical'));
-  assert.equal(executionCwd, join(root, 'canonical'));
+  assert.equal(lockedPath, canonicalRepo);
+  assert.equal(executionCwd, canonicalRepo);
 });
 
 test('refactor goals: finalizer synchronizes current queue item and creates repair on verifier failure', async (t) => {

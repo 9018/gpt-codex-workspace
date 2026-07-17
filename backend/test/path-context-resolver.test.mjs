@@ -87,6 +87,19 @@ test("resolvePathContext uses repository then explicit config then default repos
   assert.equal(defaultContext.projectRoot, defaultRoot);
 });
 
+test("resolvePathContext treats projectRoot-shaped projectsRoot as a container", async () => {
+  const projectRoot = await makeRepo();
+
+  const context = await resolvePathContext({
+    projectsRoot: projectRoot,
+    repository: { canonical_path: projectRoot },
+    config: {},
+  });
+
+  assert.equal(context.projectRoot, projectRoot);
+  assert.equal(context.projectsRoot, join(projectRoot, ".."));
+});
+
 test("resolvePathContext fails closed instead of falling back to cwd or workspaceRoot", async () => {
   await assert.rejects(
     () => resolvePathContext({ workspaceRoot: process.cwd(), config: {} }),

@@ -1,3 +1,4 @@
+import { existsSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { readdir, stat } from 'node:fs/promises';
 import { requireScope, defaultTokenContext } from '../auth-context.mjs';
@@ -12,7 +13,11 @@ function validateDateSegment(value) {
 
 export async function listCodexSessionsMetadata(config, { year = "", month = "", day = "", limit = 50 }, context) {
   requireScope(context, "workspace:read");
-  const sessionsRoot = join(config.codexHome, "sessions");
+  const explicitSessionsRoot = join(config.codexHome, "sessions");
+  const legacySessionsRoot = join(config.codexHome, ".codex", "sessions");
+  const sessionsRoot = !existsSync(explicitSessionsRoot) && existsSync(legacySessionsRoot)
+    ? legacySessionsRoot
+    : explicitSessionsRoot;
   const parts = [year, month, day].filter(Boolean).map(validateDateSegment);
   const targetRoot = join(sessionsRoot, ...parts);
   const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
