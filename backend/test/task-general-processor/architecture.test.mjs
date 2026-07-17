@@ -68,3 +68,11 @@ test("task finalization exposes extracted facts collector", async () => {
   assert.match(finalizerSource, /task-finalization\/task-finalization-facts\.mjs/);
   assert.match(factsSource, /export\s+function\s+collectTaskFinalizationFacts\s*\(/);
 });
+
+test("task finalization exposes Plan 08 final state decider entrypoint", async () => {
+  const deciderSource = await readFile(new URL("src/task-finalization/task-final-state-decider.mjs", backendRoot), "utf8");
+  const finalizerSource = await readFile(new URL("src/task-final-writeback.mjs", backendRoot), "utf8");
+  assert.match(deciderSource, /export\s+function\s+decideTaskFinalization\s*\(/);
+  assert.match(finalizerSource, /task-finalization\/task-final-state-decider\.mjs/);
+  assert.doesNotMatch(finalizerSource, /from ['"]\.\/task-finalizer\.mjs['"]/);
+});

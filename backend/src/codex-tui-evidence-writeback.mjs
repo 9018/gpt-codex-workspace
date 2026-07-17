@@ -11,7 +11,7 @@
  *   - All evidence fields (summary, changed_files, commit, tests,
  *     artifacts, integration) are written in a format compatible with
  *     normalizeOperationEvidence().
- *   - The result is fed through decideTaskFinalState() so that TUI sessions
+ *   - The result is fed through decideTaskFinalization() so that TUI sessions
  *     reach the same finalizer/unified_decision as codex_exec.
  *   - Missing evidence produces structured blockers (not silent failures).
  *   - Integration evidence is explicitly set (not_required when no changed
@@ -24,7 +24,7 @@ import { constants as fsConstants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { collectCodexTuiCompletion } from "./codex-tui-completion-collector.mjs";
 import { normalizeOperationEvidence } from "./evidence/evidence-normalizer.mjs";
-import { decideTaskFinalState, applyTaskFinalStateDecision } from "./task-finalizer.mjs";
+import { decideTaskFinalization, applyTaskFinalStateDecision } from "./task-finalization/task-final-state-decider.mjs";
 import { normalizeToUnifiedDecision } from "./codex-unified-decision.mjs";
 
 // ---------------------------------------------------------------------------
@@ -211,7 +211,7 @@ export async function writebackTuiEvidence({
   };
 
   // --- Step 5: Pass through the standard finalizer ---
-  const finalizerDecision = decideTaskFinalState(finalizerEvidence);
+  const finalizerDecision = decideTaskFinalization(finalizerEvidence);
 
   // Apply the finalizer decision to get the applied state
   const applied = applyTaskFinalStateDecision({

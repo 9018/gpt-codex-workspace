@@ -23,7 +23,7 @@ import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followu
 import { reconcileTaskClosure } from './closure/task-closure-reconciler.mjs';
 import { continueOnCompletedOutcome, convergeGoalFromContinuation, goalStatusFromReconciliation } from './closure/continuation-flow.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
-import { applyTaskFinalStateDecision, decideTaskFinalState } from './task-finalizer.mjs';
+import { applyTaskFinalStateDecision, decideTaskFinalization } from './task-finalization/task-final-state-decider.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
 
@@ -726,7 +726,7 @@ export async function finalizeCodexTaskRun({
   taskResult = applyNoChangeRepairCompletionSummary({ task, taskResult });
   taskResult = normalizeCompletedDeliveryState({ taskStatus, taskResult });
 
-  const finalizerDecision = decideTaskFinalState(collectTaskFinalizerEvidence({
+  const finalizerDecision = decideTaskFinalization(collectTaskFinalizerEvidence({
     task,
     goal,
     taskStatus,
