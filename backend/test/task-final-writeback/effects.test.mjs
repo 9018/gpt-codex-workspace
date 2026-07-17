@@ -2,7 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import { normalizeToUnifiedDecision } from "../../src/codex-unified-decision.mjs";
-import { buildProgressionDecision } from "../../src/task-finalization/task-finalization-effects.mjs";
+import { buildProgressionDecision, runPostFinalizationEffects } from "../../src/task-finalization/task-finalization-effects.mjs";
 
 test("buildProgressionDecision normalizes unified decision revisions and integration target", () => {
   const unifiedDecision = normalizeToUnifiedDecision({
@@ -56,4 +56,34 @@ test("buildProgressionDecision normalizes unified decision revisions and integra
 
 test("buildProgressionDecision returns null without a unified decision", () => {
   assert.equal(buildProgressionDecision({ task: { id: "task_none" }, taskResult: {} }), null);
+});
+
+test("runPostFinalizationEffects records github sync and non-blocking stale sweep", async () => {
+  const logs = [];
+  const taskResult = {};
+  const result = await runPostFinalizationEffects({
+    store: { state: {} },
+    task: { id: "task_effect_post" },
+    taskResult,
+    github: {
+      syncTask: async (task) => ({ ok: true, issue: 42, updated: true, comment_posted: task.id === "task_effect_post" }),
+    },
+    convergeStaleGoalStatusesFn: async () => [{ goal_id: "goal_stale" }],
+    logFn: (line) => logs.push(line),
+  });
+
+  assert.deepEqual(taskResult.github_sync, { ok: true, issue: 42, updated: true, comment_posted: true });
+  assert.equal(result.github_sync.ok, true);
+  assert.equal(result.goal_sweep.count, 1);
+  assert.match(logs[0], /goal sweep: converged 1 stale goal/);
+
+  const failed = await runPostFinalizationEffects({
+    store: { state: {} },
+    task: { id: "task_failed_post" },
+    taskResult: {},
+    github: { syncTask: async () => { throw new Error("github down"); } },
+    convergeStaleGoalStatusesFn: async () => { throw new Error("sweep down"); },
+  });
+  assert.equal(failed.github_sync.ok, false);
+  assert.equal(failed.goal_sweep.ok, false);
 });

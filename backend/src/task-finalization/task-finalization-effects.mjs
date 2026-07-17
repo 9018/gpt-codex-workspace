@@ -40,3 +40,39 @@ export function buildProgressionDecision({ task = {}, goal = null, taskResult = 
   assertValidUnifiedDecision(progressionDecision);
   return progressionDecision;
 }
+
+export async function runPostFinalizationEffects({
+  store,
+  task,
+  taskResult = {},
+  github,
+  convergeStaleGoalStatusesFn,
+  logFn = () => {},
+} = {}) {
+  const report = {};
+
+  try {
+    const syncResult = await github.syncTask(task);
+    taskResult.github_sync = {
+      ok: syncResult?.ok === true,
+      issue: syncResult?.issue || null,
+      updated: syncResult?.updated === true || syncResult?.created === true || false,
+      comment_posted: syncResult?.comment_posted === true,
+    };
+  } catch (error) {
+    taskResult.github_sync = { ok: false, error: error?.message || String(error) };
+  }
+  report.github_sync = taskResult.github_sync;
+
+  try {
+    const sweepChanges = await convergeStaleGoalStatusesFn(store);
+    report.goal_sweep = { ok: true, count: Array.isArray(sweepChanges) ? sweepChanges.length : 0 };
+    if (report.goal_sweep.count > 0) {
+      logFn(`[gptwork-worker] goal sweep: converged ${report.goal_sweep.count} stale goal(s)\n`);
+    }
+  } catch (error) {
+    report.goal_sweep = { ok: false, error: error?.message || String(error) };
+  }
+
+  return report;
+}

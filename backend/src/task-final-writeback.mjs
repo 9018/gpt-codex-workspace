@@ -31,7 +31,7 @@ import { writeFinalizationAgentRuns } from "./task-finalization/finalization-not
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
-import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
+import { buildProgressionDecision, runPostFinalizationEffects } from "./task-finalization/task-finalization-effects.mjs";
 import {
   applyNoChangeRepairCompletionSummary,
   finalizeAcceptanceRepairCreation,
@@ -504,23 +504,17 @@ export async function finalizeCodexTaskRun({
     },
   });
 
-  try {
-    const _gs = await github.syncTask(result.task);
-    taskResult.github_sync = { ok: _gs?.ok === true, issue: _gs?.issue || null, updated: _gs?.updated === true || _gs?.created === true || false, comment_posted: _gs?.comment_posted === true };
-  } catch (_ge) {
-    taskResult.github_sync = { ok: false, error: _ge?.message || String(_ge) };
-    // Non-critical — do not fail finalization
-  }
-
-  try {
-    const sweepChanges = await convergeStaleGoalStatuses(store);
-    if (sweepChanges.length > 0) {
+  await runPostFinalizationEffects({
+    store,
+    task: result.task,
+    taskResult,
+    github,
+    convergeStaleGoalStatusesFn: convergeStaleGoalStatuses,
+    logFn: (line) => {
       const logPath = process.env.GPTWORK_LOG_PATH;
-      if (logPath) appendFileSync(logPath, `[gptwork-worker] goal sweep: converged ${sweepChanges.length} stale goal(s)\n`);
-    }
-  } catch {
-    // Non-critical — goal sweep must not fail finalization.
-  }
+      if (logPath) appendFileSync(logPath, line);
+    },
+  });
   return {
     task_id: result.task.id,
     status: taskStatus,
