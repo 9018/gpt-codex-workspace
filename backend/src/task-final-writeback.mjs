@@ -24,7 +24,6 @@ import { reconcileTaskClosure } from './closure/task-closure-reconciler.mjs';
 import { continueOnCompletedOutcome, convergeGoalFromContinuation, goalStatusFromReconciliation } from './closure/continuation-flow.mjs';
 import { runAcceptanceGate } from './acceptance-gate-engine.mjs';
 import { applyTaskFinalStateDecision, decideTaskFinalization } from './task-finalization/task-final-state-decider.mjs';
-import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
 import { reconcileProgressionCommandsInState } from './progression/progression-command-reconciler.mjs';
 import { assertValidUnifiedDecision } from './domain/unified-decision-validator.mjs';
 
@@ -36,6 +35,7 @@ import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalizat
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
+import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
 import {
   applyVerifiedDeliveryResultRecovery,
   attachResolvedWorktreeEvidence,
@@ -894,26 +894,6 @@ function assertValidInputUnifiedDecision(taskResult = {}) {
   const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
   if (!unifiedDecision || typeof unifiedDecision !== "object") return;
   assertValidUnifiedDecision(unifiedDecision);
-}
-
-function applyNoChangeRepairCompletionSummary({ task = {}, taskResult = {} } = {}) {
-  const classification = classifyNoChangeRepairOutcome({ task, taskResult });
-  if (!classification.is_no_change_repair) return taskResult;
-  return {
-    ...taskResult,
-    no_change_repair_completion: classification,
-    no_change_repair_completion_summary: {
-      kind: classification.kind,
-      completion_eligible: classification.completion_eligible,
-      reason: classification.reason,
-      changed_files_empty_acceptable: classification.completion_eligible === true,
-      explanation: classification.completion_eligible === true
-        ? "changed_files=[] is acceptable for this repair because existing canonical state already satisfies the target, verification passed, acceptance passed, no unresolved blocker remains, and integration is not required or already satisfied."
-        : "changed_files=[] remains blocked until repair/noop, target-state, verification, acceptance, blocker, and integration evidence are all present.",
-      evidence: classification.evidence,
-      blockers: classification.blockers,
-    },
-  };
 }
 
 async function cleanupTaskWorktree({ task, config, resolvedRepo, removeTaskWorktreeFn }) {
