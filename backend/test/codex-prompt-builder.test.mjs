@@ -206,7 +206,7 @@ test("processGeneralTask no longer contains inline prompt template", async () =>
   const { readFile } = await import("node:fs/promises");
   const { join } = await import("node:path");
   const serverSource = await readFile(join(process.cwd(), "src/gptwork-server.mjs"), "utf8");
-  const processorSource = await readFile(join(process.cwd(), "src/task-general-processor.mjs"), "utf8");
+  const processorSource = await readFile(join(process.cwd(), "src/task-processing/task-execution-runner.mjs"), "utf8");
 
   // The inline separator definition should not exist in processGeneralTask anymore
   // The separator should only be in codex-prompt-builder.mjs

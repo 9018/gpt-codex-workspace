@@ -89,7 +89,7 @@ test("P0-5: recovery runtime_status probes bounded JSON health endpoint", (t) =>
 });
 
 test("P0-6: repair metadata in processor", (t) => {
-  const source = readFileSync("./src/task-general-processor.mjs", "utf8");
+  const source = readFileSync("./src/task-processing/task-repair-context.mjs", "utf8");
   assert.ok(source.includes("repair_attempt"));
   assert.ok(source.includes("repair_of_goal_id"));
   assert.ok(source.includes("repair_of_worktree"));
