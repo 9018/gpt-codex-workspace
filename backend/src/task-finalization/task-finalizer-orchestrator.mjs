@@ -2,6 +2,68 @@ import { dirname, join } from "node:path";
 import { applyVerifiedDeliveryResultRecovery } from "./finalization-proofs.mjs";
 import { finalizeWaitingForIntegration } from "./integration-finalizer.mjs";
 
+export async function runCompletedTaskFinalizationStage({
+  taskStatus,
+  taskResult = {},
+  summary = "",
+  resultJsonPath,
+  task,
+  goal,
+  store,
+  config = {},
+  workspace,
+  resolvedRepo = null,
+  attachAlreadyIntegratedCommitEvidenceFn,
+  buildFallbackResultJsonFn,
+  runCompletedTaskVerificationPipelineFn = runCompletedTaskVerificationPipeline,
+  ...verificationFns
+} = {}) {
+  const verifierRepoPath = taskResult?.auto_integration_completion?.completed === true
+    ? (resolvedRepo?.canonical_repo_path || taskResult?.execution_cwd || resolvedRepo?.task_worktree_path || workspace?.root || config.defaultRepoPath || config.defaultWorkspaceRoot)
+    : taskResult?.execution_cwd
+    || resolvedRepo?.task_worktree_path
+    || resolvedRepo?.canonical_repo_path
+    || workspace?.root
+    || config.defaultRepoPath
+    || config.defaultWorkspaceRoot;
+
+  taskResult = attachAlreadyIntegratedCommitEvidenceFn({
+    taskStatus,
+    taskResult,
+    candidatePaths: [
+      verifierRepoPath,
+      resolvedRepo?.canonical_repo_path,
+      workspace?.root,
+      config.defaultRepoPath,
+      config.defaultWorkspaceRoot,
+    ],
+  });
+
+  if (taskStatus !== "completed") return { taskStatus, taskResult, verifierRepoPath };
+
+  const resultJsonForVerification = buildFallbackResultJsonFn({ taskStatus, taskResult, summary });
+  const completionPipeline = await runCompletedTaskVerificationPipelineFn({
+    taskStatus,
+    taskResult,
+    summary,
+    resultJsonForVerification,
+    resultJsonPath,
+    task,
+    goal,
+    store,
+    config,
+    resolvedRepo,
+    verifierRepoPath,
+    ...verificationFns,
+  });
+  return {
+    taskStatus: completionPipeline.taskStatus,
+    taskResult: completionPipeline.taskResult,
+    verifierRepoPath,
+    completionPipeline,
+  };
+}
+
 export function runFinalDecisionReconciliation({
   taskStatus,
   taskResult = {},

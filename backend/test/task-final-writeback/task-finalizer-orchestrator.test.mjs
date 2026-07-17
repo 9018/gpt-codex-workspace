@@ -2,12 +2,60 @@ import test from "node:test";
 import assert from "node:assert/strict";
 
 import {
+  runCompletedTaskFinalizationStage,
   runFinalDecisionReconciliation,
   runCompletedTaskVerificationPipeline,
   runTaskClosureReview,
   runTaskCompletionVerification,
   runTaskFinalizerOrchestration,
 } from "../../src/task-finalization/task-finalizer-orchestrator.mjs";
+
+test("runCompletedTaskFinalizationStage attaches integrated proof and runs completed verification", async () => {
+  const calls = [];
+  const result = await runCompletedTaskFinalizationStage({
+    taskStatus: "completed",
+    taskResult: {
+      execution_cwd: "/repo/worktree",
+      auto_integration_completion: { completed: true },
+    },
+    summary: "done",
+    resultJsonPath: "/workspace/.gptwork/goals/goal_stage/result.json",
+    task: { id: "task_stage" },
+    goal: { id: "goal_stage" },
+    store: { state: {} },
+    config: { defaultRepoPath: "/repo/default" },
+    workspace: { root: "/workspace" },
+    resolvedRepo: {
+      canonical_repo_path: "/repo/main",
+      task_worktree_path: "/repo/worktree",
+    },
+    attachAlreadyIntegratedCommitEvidenceFn: ({ taskResult, candidatePaths }) => {
+      calls.push(["attach", candidatePaths]);
+      return { ...taskResult, attached: true };
+    },
+    buildFallbackResultJsonFn: ({ taskStatus, taskResult, summary }) => {
+      calls.push(["fallback", taskStatus, taskResult.attached, summary]);
+      return { taskStatus, taskResult, summary };
+    },
+    runCompletedTaskVerificationPipelineFn: async ({ taskStatus, taskResult, verifierRepoPath, resultJsonForVerification }) => {
+      calls.push(["pipeline", taskStatus, verifierRepoPath, resultJsonForVerification.taskResult.attached]);
+      return {
+        taskStatus: "waiting_for_review",
+        taskResult: { ...taskResult, verified: true },
+      };
+    },
+  });
+
+  assert.equal(result.taskStatus, "waiting_for_review");
+  assert.equal(result.taskResult.attached, true);
+  assert.equal(result.taskResult.verified, true);
+  assert.equal(result.verifierRepoPath, "/repo/main");
+  assert.deepEqual(calls, [
+    ["attach", ["/repo/main", "/repo/main", "/workspace", "/repo/default", undefined]],
+    ["fallback", "completed", true, "done"],
+    ["pipeline", "completed", "/repo/main", true],
+  ]);
+});
 
 test("runFinalDecisionReconciliation annotates closure, applies final decision, and builds continuation", () => {
   const calls = [];

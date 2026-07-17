@@ -37,7 +37,7 @@ import {
   propagateRepairChildCompletion,
 } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
-import { runCompletedTaskVerificationPipeline, runFinalDecisionReconciliation, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
+import { runCompletedTaskFinalizationStage, runCompletedTaskVerificationPipeline, runFinalDecisionReconciliation, runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
   attachAlreadyIntegratedCommitEvidence,
   attachResolvedWorktreeEvidence,
@@ -120,62 +120,40 @@ export async function finalizeCodexTaskRun({
   taskResult = orchestration.taskResult;
   summary = orchestration.summary;
 
-  const verifierRepoPath = taskResult?.auto_integration_completion?.completed === true
-    ? (resolvedRepo?.canonical_repo_path || taskResult?.execution_cwd || resolvedRepo?.task_worktree_path || workspace?.root || config.defaultRepoPath || config.defaultWorkspaceRoot)
-    : taskResult?.execution_cwd
-    || resolvedRepo?.task_worktree_path
-    || resolvedRepo?.canonical_repo_path
-    || workspace?.root
-    || config.defaultRepoPath
-    || config.defaultWorkspaceRoot;
-
-  taskResult = attachAlreadyIntegratedCommitEvidence({
+  const completedStage = await runCompletedTaskFinalizationStage({
     taskStatus,
     taskResult,
-    candidatePaths: [
-      verifierRepoPath,
-      resolvedRepo?.canonical_repo_path,
-      workspace?.root,
-      config.defaultRepoPath,
-      config.defaultWorkspaceRoot,
-    ],
+    summary,
+    resultJsonPath,
+    task,
+    goal,
+    store,
+    config,
+    workspace,
+    resolvedRepo,
+    attachAlreadyIntegratedCommitEvidenceFn: attachAlreadyIntegratedCommitEvidence,
+    buildFallbackResultJsonFn: buildFallbackResultJson,
+    runCompletedTaskVerificationPipelineFn: runCompletedTaskVerificationPipeline,
+    verifyTaskCompletionFn,
+    autoIntegrationVerificationFromReportFn: autoIntegrationVerificationFromReport,
+    mkdirFn: mkdir,
+    writeFileFn,
+    classifyTaskFailureFn: classifyTaskFailure,
+    finalizeVerificationRepairAttemptFn: finalizeVerificationRepairAttempt,
+    canRetryTaskFn: canRetryTask,
+    scheduleRepairAttemptFn,
+    createGoalFn,
+    runAcceptanceGateFn,
+    decideTaskClosureFn: decideTaskClosure,
+    finalizeAcceptanceRepairCreationFn: finalizeAcceptanceRepairCreation,
+    shouldAttemptRepairFn,
+    createRepairGoalFromFindingsFn,
+    planFollowupTasksFn: planFollowupTasks,
+    planUnacceptedTaskFollowupFn: planUnacceptedTaskFollowup,
+    applyClosureDecisionToTaskResultFn: applyClosureDecisionToTaskResult,
   });
-
-  if (taskStatus === "completed") {
-    const resultJsonForVerification = buildFallbackResultJson({ taskStatus, taskResult, summary });
-    const completionPipeline = await runCompletedTaskVerificationPipeline({
-      taskStatus,
-      taskResult,
-      summary,
-      resultJsonForVerification,
-      resultJsonPath,
-      task,
-      goal,
-      store,
-      config,
-      resolvedRepo,
-      verifierRepoPath,
-      verifyTaskCompletionFn,
-      autoIntegrationVerificationFromReportFn: autoIntegrationVerificationFromReport,
-      mkdirFn: mkdir,
-      writeFileFn,
-      classifyTaskFailureFn: classifyTaskFailure,
-      finalizeVerificationRepairAttemptFn: finalizeVerificationRepairAttempt,
-      canRetryTaskFn: canRetryTask,
-      scheduleRepairAttemptFn,
-      createGoalFn,
-      runAcceptanceGateFn,
-      decideTaskClosureFn: decideTaskClosure,
-      finalizeAcceptanceRepairCreationFn: finalizeAcceptanceRepairCreation,
-      shouldAttemptRepairFn,
-      createRepairGoalFromFindingsFn,
-      planFollowupTasksFn: planFollowupTasks,
-      planUnacceptedTaskFollowupFn: planUnacceptedTaskFollowup,
-      applyClosureDecisionToTaskResultFn: applyClosureDecisionToTaskResult,
-    });
-    taskStatus = completionPipeline.taskStatus;
-    taskResult = completionPipeline.taskResult;
-  }
+  taskStatus = completedStage.taskStatus;
+  taskResult = completedStage.taskResult;
   await writeDefaultFinalizationAgentRuns({
     store,
     task,
