@@ -17,7 +17,7 @@ import { runIntegrationQueue } from './integration-queue.mjs';
 import { createRepairGoalFromFindings, shouldAttemptRepair, handleRepairCompletion, scheduleRepairAttempt } from './repair-loop.mjs';
 import { createGoal } from './goal-task-goals.mjs';
 import { classifyClosure, checkNotificationConsistency } from './auto-closure-classifier.mjs';
-import { applyFailedAutoIntegrationCompletion, applySuccessfulAutoIntegrationCompletion, classifyIntegrationQueueResult, runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
+import { runAutoIntegrationCompletion, autoIntegrationVerificationFromReport } from './auto-integration-completion.mjs';
 import { applyClosureDecisionToTaskResult, decideTaskClosure } from './closure/task-closure-decider.mjs';
 import { planFollowupTasks, planUnacceptedTaskFollowup } from './closure/followup-task-planner.mjs';
 import { reconcileTaskClosure } from './closure/task-closure-reconciler.mjs';
@@ -36,6 +36,11 @@ import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./t
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
 import { applyNoChangeRepairCompletionSummary } from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
+import {
+  applyFailedIntegrationCompletion,
+  applySuccessfulIntegrationCompletion,
+  classifyFinalizationIntegrationResult,
+} from "./task-finalization/integration-finalizer.mjs";
 import {
   applyVerifiedDeliveryResultRecovery,
   attachResolvedWorktreeEvidence,
@@ -301,7 +306,7 @@ export async function finalizeCodexTaskRun({
 
         if (integrationResult.ok) {
           taskResult.integration = { ...integrationResult };
-          const integrationDecision = classifyIntegrationQueueResult(integrationResult);
+          const integrationDecision = classifyFinalizationIntegrationResult(integrationResult);
           if (integrationDecision.kind === 'terminal_completed') {
             taskStatus = integrationDecision.task_status;
           } else if (integrationDecision.should_attempt_auto_completion) {
@@ -316,15 +321,15 @@ export async function finalizeCodexTaskRun({
             taskResult.auto_integration_completion = autoCompletion;
             if (autoCompletion.completed === true) {
               taskStatus = "completed";
-              taskResult = applySuccessfulAutoIntegrationCompletion({ taskResult, integrationResult, autoCompletion });
+              taskResult = applySuccessfulIntegrationCompletion({ taskResult, integrationResult, autoCompletion });
             } else {
               taskStatus = "waiting_for_review";
-              taskResult = applyFailedAutoIntegrationCompletion({ taskResult, autoCompletion });
+              taskResult = applyFailedIntegrationCompletion({ taskResult, autoCompletion });
             }
           } else {
             taskStatus = integrationDecision.task_status;
           }
-        } else if (classifyIntegrationQueueResult(integrationResult).should_attempt_repair) {
+        } else if (classifyFinalizationIntegrationResult(integrationResult).should_attempt_repair) {
           // Integration failed — create repair or escalate
           const intCanRepair = await shouldAttemptRepairFn({ task, tasks: store.state?.tasks || [], maxAttempts: config.maxRepairAttempts || task.max_attempts || 2 });
           if (intCanRepair.should_repair) {
