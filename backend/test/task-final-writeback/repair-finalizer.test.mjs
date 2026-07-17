@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import {
   applyNoChangeRepairCompletionSummary,
   finalizeAcceptanceRepairCreation,
+  finalizeVerificationRepairAttempt,
 } from "../../src/task-finalization/repair-finalizer.mjs";
 
 test("applyNoChangeRepairCompletionSummary annotates eligible no-change repair completion", () => {
@@ -85,4 +86,44 @@ test("finalizeAcceptanceRepairCreation creates repair goal for repairable accept
   assert.equal(result.taskResult.failure_class, "missing_test");
   assert.equal(result.closureDecision.status, "waiting_for_repair");
   assert.equal(createdPayload.repair_of_task_id, "task_acceptance_repair_boundary");
+});
+
+test("finalizeVerificationRepairAttempt schedules repair and annotates verification failure", async () => {
+  let scheduledTask = null;
+  const task = { id: "task_verify_repair", title: "Verify repair", max_attempts: 2 };
+  const failure = {
+    failure_class: "verification_failed",
+    reason: "Tests failed",
+    repair_strategy: "repair",
+    repairable: true,
+  };
+  const result = await finalizeVerificationRepairAttempt({
+    taskStatus: "completed",
+    taskResult: {},
+    task,
+    goal: { id: "goal_verify_repair" },
+    store: { state: { tasks: [task] } },
+    config: { maxRepairAttempts: 2 },
+    resolvedRepo: { repo_id: "github.com/acme/repo", task_worktree_path: "/tmp/worktree" },
+    failure,
+    verification: { passed: false, findings: [] },
+    canRetryTaskFn: () => true,
+    scheduleRepairAttemptFn: async ({ task: repairTask }) => {
+      scheduledTask = repairTask;
+      return {
+        repair_goal: { id: "repair_goal" },
+        attempt: 1,
+        repair_of_attempt: 0,
+        repair_goal_id: "goal_verify_repair_created",
+        repair_task_id: "task_verify_repair_created",
+      };
+    },
+  });
+
+  assert.equal(result.taskStatus, "waiting_for_repair");
+  assert.equal(result.taskResult.repair_goal_id, "goal_verify_repair_created");
+  assert.equal(result.taskResult.repair_task_id, "task_verify_repair_created");
+  assert.equal(result.taskResult.kind, "verification_failed");
+  assert.match(result.taskResult.reason, /scheduled repair attempt 1\/2/);
+  assert.equal(scheduledTask.repo_id, "github.com/acme/repo");
 });

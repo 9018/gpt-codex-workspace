@@ -28,12 +28,15 @@ import { reconcileProgressionCommandsInState } from './progression/progression-c
 import { writeVerifierAgentRun, writeReviewerAgentRun, writeFinalizerAgentRun, writeBuilderAgentRun, writeIntegratorAgentRun } from "./agent-run-writeback.mjs";
 import { updateWorkstreamContextFromCompletedTask } from "./workstream/task-outcome-summary.mjs";
 import { recordAgentRunWritebackFailure } from "./task-processing/agent-run-writeback-failure.mjs";
-import { applyRepairMetadata, taskWithRepairContext } from "./task-processing/task-repair-context.mjs";
 import { collectTaskFinalizerEvidence } from "./task-finalization/task-finalization-facts.mjs";
 import { applyTaskStateProjection } from "./task-finalization/task-state-projection.mjs";
 import { applyGoalStateProjection, projectGoalStatusForFinalizedTask } from "./task-finalization/goal-state-projection.mjs";
 import { buildProgressionDecision } from "./task-finalization/task-finalization-effects.mjs";
-import { applyNoChangeRepairCompletionSummary, finalizeAcceptanceRepairCreation } from "./task-finalization/repair-finalizer.mjs";
+import {
+  applyNoChangeRepairCompletionSummary,
+  finalizeAcceptanceRepairCreation,
+  finalizeVerificationRepairAttempt,
+} from "./task-finalization/repair-finalizer.mjs";
 import { assertValidInputUnifiedDecision } from "./task-finalization/finalization-errors.mjs";
 import { runTaskFinalizerOrchestration } from "./task-finalization/task-finalizer-orchestrator.mjs";
 import {
@@ -389,49 +392,23 @@ export async function finalizeCodexTaskRun({
     }
     if (verification.passed !== true) {
       const failure = classifyTaskFailure({ task, codexResult: taskResult, verification });
-      const retryTask = {
-        ...task,
-        max_attempts: config.maxRepairAttempts || task.max_attempts || task.maxAttempts || 2,
-      };
-      taskResult.failure_class = failure.failure_class;
-      taskResult.failure_reason = failure.reason;
-      taskResult.repair_strategy = failure.repair_strategy;
-      verification.failure_class = failure.failure_class;
-
-      if (canRetryTask(retryTask, failure)) {
-        try {
-          const repairResult = await scheduleRepairAttemptFn({
-            store,
-            task: taskWithRepairContext(retryTask, resolvedRepo),
-            goal,
-            failure,
-            verification,
-            config: { ...config, createGoalFn },
-          });
-          taskStatus = "waiting_for_repair";
-          taskResult.repair_goal = repairResult.repair_goal;
-          taskResult.attempt = repairResult.attempt;
-          taskResult.repair_attempt = repairResult.attempt;
-          taskResult.repair_of_attempt = repairResult.repair_of_attempt;
-          taskResult.repair_goal_id = repairResult.repair_goal_id;
-          taskResult.repair_task_id = repairResult.repair_task_id;
-          taskResult.reason = `verification_failed: scheduled repair attempt ${repairResult.attempt}/${retryTask.max_attempts}`;
-        } catch (err) {
-          taskStatus = "waiting_for_review";
-          taskResult.repair_denied_reason = "Repair attempt creation failed: " + (err?.message || String(err));
-          taskResult.reason = taskResult.repair_denied_reason;
-          taskResult.warnings = Array.isArray(taskResult.warnings) ? taskResult.warnings : [];
-          taskResult.warnings.push(taskResult.repair_denied_reason);
-        }
-      } else {
-        taskStatus = "waiting_for_review";
-        taskResult.repair_denied_reason = failure.repairable
-          ? `Max attempts reached for ${failure.failure_class}; waiting for review.`
-          : `${failure.failure_class} is not repairable automatically; waiting for review.`;
-        taskResult.reason = taskResult.repair_denied_reason;
-      }
-      taskResult.kind = taskResult.kind || "verification_failed";
-      taskResult.requires_review = true;
+      const repairAttempt = await finalizeVerificationRepairAttempt({
+        taskStatus,
+        taskResult,
+        task,
+        goal,
+        store,
+        config,
+        resolvedRepo,
+        failure,
+        verification,
+        canRetryTaskFn: canRetryTask,
+        scheduleRepairAttemptFn,
+        createGoalFn,
+      });
+      taskStatus = repairAttempt.taskStatus;
+      taskResult = repairAttempt.taskResult;
+      verification = repairAttempt.verification;
       taskResult.summary = taskResult.summary || summary || "Task requires review after verification failed.";
     }
 
