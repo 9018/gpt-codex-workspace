@@ -11,6 +11,7 @@ import { constants as fsConstants } from "node:fs";
 import { execFileSync } from "node:child_process";
 import { join } from "node:path";
 import { createCodexTuiSessionStore } from "./codex-tui-session-store.mjs";
+import { codexTuiGoalArtifactCandidates, firstExistingArtifactPath, firstMatchingJsonArtifact } from "./codex-tui/result-locator.mjs";
 
 function gitLines(cwd, args) {
   try {
@@ -166,17 +167,17 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   // <workspaceRoot>/.gptwork/goals/<goalId>. Keep a worktree-local fallback so
   // older sessions remain collectible.
   const canonicalGoalDir = goalId ? join(root, ".gptwork", "goals", goalId) : null;
-  const worktreeGoalDir = goalId ? join(cwd, ".gptwork", "goals", goalId) : null;
-  const canonicalResultJsonPath = canonicalGoalDir ? join(canonicalGoalDir, "result.json") : null;
-  const canonicalResultMdPath = canonicalGoalDir ? join(canonicalGoalDir, "result.md") : null;
-  const worktreeResultJsonPath = worktreeGoalDir ? join(worktreeGoalDir, "result.json") : null;
-  const worktreeResultMdPath = worktreeGoalDir ? join(worktreeGoalDir, "result.md") : null;
-  const resultJsonPath = canonicalResultJsonPath && await fileExists(canonicalResultJsonPath)
-    ? canonicalResultJsonPath
-    : worktreeResultJsonPath;
-  const resultMdPath = canonicalResultMdPath && await fileExists(canonicalResultMdPath)
-    ? canonicalResultMdPath
-    : worktreeResultMdPath;
+  const resultJsonCandidates = codexTuiGoalArtifactCandidates({ workspaceRoot: root, cwd, goalId, filename: "result.json" });
+  const terminalJson = await firstMatchingJsonArtifact(resultJsonCandidates, (value) =>
+    ["completed", "failed", "timed_out", "verified"].includes(value?.status));
+  const resultJsonPath = terminalJson?.path || await firstExistingArtifactPath(resultJsonCandidates);
+  const resultMdCandidates = codexTuiGoalArtifactCandidates({ workspaceRoot: root, cwd, goalId, filename: "result.md" });
+  const preferredResultMdPath = terminalJson?.path?.endsWith("/result.json")
+    ? terminalJson.path.slice(0, -"result.json".length) + "result.md"
+    : null;
+  const resultMdPath = preferredResultMdPath && await fileExists(preferredResultMdPath)
+    ? preferredResultMdPath
+    : await firstExistingArtifactPath(resultMdCandidates);
   const resultJsonPresent = resultJsonPath ? await fileExists(resultJsonPath) : false;
   const resultMdPresent = resultMdPath ? await fileExists(resultMdPath) : false;
   const resultJsonText = resultJsonPresent ? await readFile(resultJsonPath, "utf8") : "";

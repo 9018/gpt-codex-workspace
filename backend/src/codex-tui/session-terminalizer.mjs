@@ -9,6 +9,7 @@
 
 import { join } from "node:path";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./result-locator.mjs";
 import { randomUUID } from "node:crypto";
 import { releaseLockForTask } from "../repo-lock.mjs";
 import { cleanupIsolatedWorktreeProcesses } from "./session-process-cleanup.mjs";
@@ -64,10 +65,31 @@ export function isContractValidTerminalResult(result) {
  * @param {string} resultPath
  * @returns {Promise<object|null>}
  */
+
+export function normalizeTerminalResultCandidate(result) {
+  if (isContractValidTerminalResult(result)) return result;
+  if (!result || typeof result !== "object") return null;
+  if (!TERMINAL_RESULT_STATUSES.has(result.status)) return null;
+  if (typeof result.summary !== "string" || !Array.isArray(result.changed_files)) return null;
+  if (typeof result.verification?.passed !== "boolean") return null;
+  const commands = Array.isArray(result.verification.commands)
+    ? result.verification.commands
+    : (Array.isArray(result.verification.steps) ? result.verification.steps : []);
+  return {
+    ...result,
+    tests: Object.hasOwn(result, "tests") ? result.tests : "none",
+    commit: Object.hasOwn(result, "commit") ? result.commit : "none",
+    remote_head: Object.hasOwn(result, "remote_head") ? result.remote_head : "none",
+    warnings: Array.isArray(result.warnings) ? result.warnings : [],
+    followups: Array.isArray(result.followups) ? result.followups : [],
+    verification: { ...result.verification, commands },
+  };
+}
+
 export async function readTerminalResult(resultPath) {
   try {
     const parsed = JSON.parse(await readFile(resultPath, "utf8"));
-    return isContractValidTerminalResult(parsed) ? parsed : null;
+    return normalizeTerminalResultCandidate(parsed);
   } catch {
     return null;
   }
@@ -156,11 +178,26 @@ export async function terminalizeCodexTuiSession({ sessionId, store, event = {},
     const terminalEvent = normalizeTerminalEvent(event);
     const workspaceRoot = current.metadata?.session_store_root || current.metadata?.workspace_root;
     const resultPath = join(workspaceRoot, ".gptwork", "goals", current.goal_id, "result.json");
+    const resultCandidates = codexTuiGoalArtifactCandidates({
+      workspaceRoot,
+      cwd: current.cwd,
+      goalId: current.goal_id,
+      filename: "result.json",
+    });
     const configuredWaitMs = Number(current.metadata?.evidence_wait_ms);
     const evidenceWaitMs = terminalEvent.exit_code === 0
       ? (Number.isFinite(configuredWaitMs) && configuredWaitMs >= 0 ? configuredWaitMs : 1_500)
       : 0;
-    let result = await readTerminalResultWithRetry(resultPath, { waitMs: evidenceWaitMs });
+    let located = await firstMatchingJsonArtifact(resultCandidates, (value) => Boolean(normalizeTerminalResultCandidate(value)));
+    let result = normalizeTerminalResultCandidate(located?.value) || null;
+    if (!result && evidenceWaitMs > 0) {
+      const deadline = Date.now() + evidenceWaitMs;
+      while (!result && Date.now() < deadline) {
+        await new Promise((resolve) => setTimeout(resolve, Math.min(50, Math.max(1, deadline - Date.now()))));
+        located = await firstMatchingJsonArtifact(resultCandidates, (value) => Boolean(normalizeTerminalResultCandidate(value)));
+        result = normalizeTerminalResultCandidate(located?.value) || null;
+      }
+    }
     if (!result) {
       result = failClosedResult(terminalEvent);
       await writeJsonAtomic(resultPath, result);

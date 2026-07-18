@@ -623,3 +623,77 @@ test("code-0 PTY exit waits for delayed contract-valid result before failing clo
   assert.equal(result.commit, "abc123");
   assert.equal(result.verification.passed, true);
 });
+
+test("status terminalizes from contract-valid runtime-goals result while PTY remains alive", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-runtime-result-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-runtime-result-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_runtime_result", title: "Runtime result projection" },
+    goal: { id: "goal_runtime_result" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: fakeAdapter,
+  });
+  const runtimeDir = join(workspaceRoot, ".gptwork", "runtime-goals", "goal_runtime_result");
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(runtimeDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "runtime durable completion",
+    changed_files: [],
+    tests: "canary passed",
+    commit: "none",
+    remote_head: "none",
+    warnings: [],
+    followups: [],
+    verification: { commands: [], passed: true },
+  }));
+
+  const status = await getCodexTuiSessionStatus(session.id, { workspaceRoot });
+
+  assert.equal(status.status, "completed");
+  const durable = await readCodexTuiSession(session.id, { workspaceRoot, maxChars: 0 });
+  assert.equal(durable.active, false);
+  assert.equal(durable.result_status, "completed");
+  const canonical = JSON.parse(await readFile(join(workspaceRoot, ".gptwork", "goals", "goal_runtime_result", "result.json"), "utf8"));
+  assert.equal(canonical.summary, "runtime durable completion");
+});
+
+test("status normalizes semantic runtime completion into terminal contract", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-semantic-result-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-semantic-result-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_semantic_result", title: "Semantic runtime result" },
+    goal: { id: "goal_semantic_result" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: fakeAdapter,
+  });
+  const runtimeDir = join(workspaceRoot, ".gptwork", "runtime-goals", "goal_semantic_result");
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(runtimeDir, "result.json"), JSON.stringify({
+    goal_id: "goal_semantic_result",
+    task_id: "task_semantic_result",
+    status: "completed",
+    active_delta_revision: 1,
+    content_match: true,
+    changed_files: [".gptwork/canaries/example.txt"],
+    tests: [{ name: "content match", passed: true }],
+    verification: { passed: true, steps: ["read back expected content"] },
+    blockers: [],
+    summary: "semantic completion",
+  }));
+
+  const status = await getCodexTuiSessionStatus(session.id, { workspaceRoot });
+
+  assert.equal(status.status, "completed");
+  const canonical = JSON.parse(await readFile(join(workspaceRoot, ".gptwork", "goals", "goal_semantic_result", "result.json"), "utf8"));
+  assert.equal(canonical.status, "completed");
+  assert.equal(canonical.commit, "none");
+  assert.equal(canonical.remote_head, "none");
+  assert.deepEqual(canonical.warnings, []);
+  assert.deepEqual(canonical.followups, []);
+  assert.deepEqual(canonical.verification.commands, ["read back expected content"]);
+  assert.equal(canonical.verification.passed, true);
+});

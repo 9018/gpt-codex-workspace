@@ -309,3 +309,33 @@ test("collect allows clean diagnostic evidence without a commit when the accepta
   assert.equal(snapshot.ready_for_review, true);
   assert.deepEqual(snapshot.findings, []);
 });
+
+test("collect prefers completed runtime-goals evidence over pending canonical result", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+  const canonicalDir = join(repo, ".gptwork", "goals", "goal_1");
+  const runtimeDir = join(repo, ".gptwork", "runtime-goals", "goal_1");
+  await mkdir(canonicalDir, { recursive: true });
+  await mkdir(runtimeDir, { recursive: true });
+  await writeFile(join(canonicalDir, "acceptance.contract.json"), JSON.stringify({
+    requirements: { requires_commit: false, requires_integration: false },
+  }));
+  await writeFile(join(canonicalDir, "result.json"), JSON.stringify({ status: "pending" }));
+  await writeFile(join(canonicalDir, "result.md"), "# Result\n\nPending.\n");
+  await writeFile(join(runtimeDir, "result.json"), JSON.stringify({
+    status: "completed",
+    summary: "runtime completion",
+    changed_files: [],
+    tests: [{ name: "canary", passed: true }],
+    verification: { passed: true, steps: ["verified"] },
+    blockers: [],
+  }));
+  await writeFile(join(runtimeDir, "result.md"), "# Runtime Result\n\nCompleted.\n");
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+
+  assert.equal(snapshot.result_json_path, join(runtimeDir, "result.json"));
+  assert.equal(snapshot.result_md_path, join(runtimeDir, "result.md"));
+  assert.equal(snapshot.result_json.status, "completed");
+  assert.equal(snapshot.ready_for_review, true);
+});

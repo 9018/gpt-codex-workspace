@@ -20,8 +20,9 @@ import {
 import { normalizeRecoveredSessionRecord } from "./session-recovery.mjs";
 import {
   terminalizeCodexTuiSession,
-  readTerminalResult,
+  normalizeTerminalResultCandidate,
 } from "./session-terminalizer.mjs";
+import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./result-locator.mjs";
 import { isProcessAlive, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";
 
 /**
@@ -110,8 +111,11 @@ export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null
 
   if (["created", "running"].includes(record.status)) {
     const root = record.metadata?.session_store_root || record.metadata?.workspace_root;
-    const resultPath = root && record.goal_id ? join(root, ".gptwork", "goals", record.goal_id, "result.json") : null;
-    const terminalResult = resultPath ? await readTerminalResult(resultPath) : null;
+    const resultCandidates = root && record.goal_id
+      ? codexTuiGoalArtifactCandidates({ workspaceRoot: root, cwd: record.cwd, goalId: record.goal_id, filename: "result.json" })
+      : [];
+    const locatedTerminalResult = await firstMatchingJsonArtifact(resultCandidates, (value) => Boolean(normalizeTerminalResultCandidate(value)));
+    const terminalResult = normalizeTerminalResultCandidate(locatedTerminalResult?.value);
     if (terminalResult) {
       record = await terminalizeCodexTuiSession({
         sessionId, store,
