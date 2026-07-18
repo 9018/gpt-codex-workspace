@@ -210,9 +210,9 @@ test('native attach resumes with deterministic control session and send/status/d
     assert.equal((await tools.codex_native_session_send.handler({ control_session_id: 'native_123', text: 'continue' }, write)).sent, true);
     assert.equal((await tools.codex_native_goal_pause.handler({ control_session_id: 'native_123' }, write)).goal_action, 'pause_requested');
     assert.equal(calls.at(-1)[0], 'send');
-    assert.equal(calls.at(-1)[2], '/goal pause');
+    assert.equal(calls.at(-1)[2], '/goal pause\r');
     assert.equal((await tools.codex_native_goal_clear.handler({ control_session_id: 'native_123' }, write)).goal_action, 'clear_requested');
-    assert.equal(calls.at(-1)[2], '/goal clear');
+    assert.equal(calls.at(-1)[2], '/goal clear\r');
     assert.equal((await tools.codex_native_session_detach.handler({ control_session_id: 'native_123' }, write)).status, 'detached');
   } finally { await rm(codexHome, { recursive: true, force: true }); }
 });

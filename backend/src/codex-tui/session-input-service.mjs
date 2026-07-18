@@ -17,6 +17,34 @@ export async function sendCodexTuiSessionInput(sessionId, text, options = {}) {
   return store.readSession(sessionId);
 }
 
+
+export async function sendCodexTuiSlashCommand(sessionId, command, options = {}) {
+  const store = await findStoreForSession(sessionId, options);
+  const { ptySession } = activeManagerForSession(sessionId);
+  const before = await store.readSession(sessionId, { maxChars: 0 });
+  const text = String(command || "").trim();
+  if (!text.startsWith("/")) throw new Error("slash command must start with /");
+  ptySession.write(`${text}\r`);
+  await store.appendSessionLog(sessionId, `[input] ${text}\n`);
+  const sleep = options.sleep_fn || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+  const timeoutMs = Math.max(0, Number(options.ack_timeout_ms ?? 5_000));
+  const deadline = Date.now() + timeoutMs;
+  let current = before;
+  do {
+    current = await store.readSession(sessionId, { maxChars: 0 });
+    if (current.last_output_at && current.last_output_at !== before.last_output_at) break;
+    if (Date.now() >= deadline) break;
+    await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+  } while (true);
+  return {
+    ...current,
+    command: text,
+    command_submitted: true,
+    ack_received: Boolean(current.last_output_at && current.last_output_at !== before.last_output_at),
+    ack_status: current.last_output_at && current.last_output_at !== before.last_output_at ? "output_observed" : "timeout",
+  };
+}
+
 export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
   const store = await findStoreForSession(sessionId, options);
   const session = await store.readSession(sessionId, { maxChars: 0 });

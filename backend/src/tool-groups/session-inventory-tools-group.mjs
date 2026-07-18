@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
-import { startCodexTuiGoalSession, getCodexTuiSessionStatus, sendCodexTuiSessionInput, stopCodexTuiSession } from '../codex-tui-session-manager.mjs';
+import { startCodexTuiGoalSession, getCodexTuiSessionStatus, sendCodexTuiSessionInput, sendCodexTuiSlashCommand, stopCodexTuiSession } from '../codex-tui-session-manager.mjs';
 import { activeSessions } from '../codex-tui/active-session-registry.mjs';
 import { requireScope, defaultTokenContext } from '../auth-context.mjs';
 import { extractTaskLimit } from '../task-status.mjs';
@@ -238,6 +238,9 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
   const startSession = sessionApi.start || startCodexTuiGoalSession;
   const statusSession = sessionApi.status || getCodexTuiSessionStatus;
   const sendSession = sessionApi.send || sendCodexTuiSessionInput;
+  const sendSlashCommand = sessionApi.sendSlashCommand || (sessionApi.send
+    ? (id, command, options) => sessionApi.send(id, `${command}\r`, options)
+    : sendCodexTuiSlashCommand);
   const stopSession = sessionApi.stop || stopCodexTuiSession;
 
   async function audit(action, details = {}) {
@@ -326,19 +329,19 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
     codex_native_goal_pause: tool(
       "Pause the persistent Goal in an attached native Codex session. The control channel remains attached.",
       schema({ control_session_id: "string" }, ["control_session_id"]),
-      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, "/goal pause", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_pause', { control_session_id }); return { ...result, goal_command: "/goal pause", goal_action: "pause_requested" }; },
+      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSlashCommand(control_session_id, "/goal pause", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_pause', { control_session_id }); return { ...result, goal_command: "/goal pause", goal_action: "pause_requested" }; },
     ),
     codex_native_goal_clear: tool(
       "Clear the persistent Goal in an attached native Codex session. The control channel remains attached for confirmation or later detach.",
       schema({ control_session_id: "string" }, ["control_session_id"]),
-      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_clear', { control_session_id }); return { ...result, goal_command: "/goal clear", goal_action: "clear_requested" }; },
+      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSlashCommand(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_clear', { control_session_id }); return { ...result, goal_command: "/goal clear", goal_action: "clear_requested" }; },
     ),
     codex_native_goal_stop: tool(
       "Stop the persistent Goal by sending /goal clear before detaching the control channel.",
       schema({ control_session_id: "string" }, ["control_session_id"]),
       async ({ control_session_id }, context) => {
         requireScope(context, "workspace:write");
-        await sendSession(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] });
+        await sendSlashCommand(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] });
         const result = await stopSession(control_session_id, { reason: "native_detach", workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] });
         await audit('goal_stop', { control_session_id });
         return { ...result, goal_command: "/goal clear", goal_action: "clear_requested_then_detached" };

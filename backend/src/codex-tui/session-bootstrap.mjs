@@ -208,6 +208,7 @@ export async function startCodexTuiGoalSessionImpl({
   let ptySession;
   let earlyTerminalization = null;
   let bootstrapOutput = "";
+  let lastBootstrapOutputAt = 0;
   const pendingAutopilotInputs = [];
   const writeAutopilotInput = async (input) => {
     const text = String(input ?? "");
@@ -239,6 +240,7 @@ export async function startCodexTuiGoalSessionImpl({
       onData: (chunk) => {
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
+        lastBootstrapOutputAt = Date.now();
         store.appendSessionLog(sessionId, text).catch(() => {});
         store.updateSession(sessionId, { last_output_at: new Date().toISOString() }).catch(() => {});
         const progress = detectMeaningfulOutput(text);
@@ -281,8 +283,15 @@ export async function startCodexTuiGoalSessionImpl({
   for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
   activeSessions.set(sessionId, { store, ptySession, autopilot, releaseLockFn, onTerminalized });
 
-  // Wait for the interactive TUI, then dispatch the real slash command through PTY.
-  const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
+  // Wait for the interactive TUI and allow MCP servers to finish booting before dispatch.
+  const firstOutputAt = await waitForTuiOutput(store, sessionId, 15_000);
+  const startupQuietMs = ptyAdapter ? 0 : 1_500;
+  const startupDeadline = Date.now() + (ptyAdapter ? 0 : 60_000);
+  while (startupQuietMs > 0 && Date.now() < startupDeadline) {
+    const quietForMs = lastBootstrapOutputAt ? Date.now() - lastBootstrapOutputAt : 0;
+    if (quietForMs >= startupQuietMs) break;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(250, startupQuietMs - quietForMs)));
+  }
   const afterBootstrapWait = await store.readSession(sessionId, { maxChars: 0 });
   if (Number(afterBootstrapWait.terminal_event_count || 0) >= 1) return afterBootstrapWait;
 

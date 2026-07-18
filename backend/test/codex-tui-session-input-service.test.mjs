@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sendCodexTuiTaskDelta } from "../src/codex-tui/session-input-service.mjs";
+import { sendCodexTuiSlashCommand, sendCodexTuiTaskDelta } from "../src/codex-tui/session-input-service.mjs";
 import { activeSessions, sessionStores } from "../src/codex-tui/active-session-registry.mjs";
 
 async function runCorrection(kind) {
@@ -62,4 +62,29 @@ test("supervisor_correction uses the same active-goal correction path", async ()
   assert.equal(writes[0], "\u001b");
   assert.match(writes[2], /kind=correction/);
   assert.equal(result.last_delta_kind, "correction");
+});
+
+
+test("slash command appends Enter and reports output acknowledgement", async () => {
+  const sessionId = "session_slash_ack";
+  const writes = [];
+  const session = { id: sessionId, status: "running", last_output_at: "2026-01-01T00:00:00.000Z" };
+  const store = {
+    async readSession() { return { ...session }; },
+    async appendSessionLog() {},
+  };
+  sessionStores.set(sessionId, store);
+  activeSessions.set(sessionId, {
+    store,
+    ptySession: { write(text) { writes.push(text); session.last_output_at = "2026-01-01T00:00:01.000Z"; } },
+  });
+  try {
+    const result = await sendCodexTuiSlashCommand(sessionId, "/goal pause", { sleep_fn: async () => {}, ack_timeout_ms: 10 });
+    assert.deepEqual(writes, ["/goal pause\r"]);
+    assert.equal(result.command_submitted, true);
+    assert.equal(result.ack_received, true);
+  } finally {
+    sessionStores.delete(sessionId);
+    activeSessions.delete(sessionId);
+  }
 });

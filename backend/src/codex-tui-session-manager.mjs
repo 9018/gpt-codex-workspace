@@ -12,7 +12,7 @@
 
 export { startCodexTuiGoalSession } from "./codex-tui/session-service.mjs";
 export { readCodexTuiSession, stopCodexTuiSession, getCodexTuiSessionStatus } from "./codex-tui/session-service.mjs";
-export { sendCodexTuiSessionInput, sendCodexTuiTaskDelta } from "./codex-tui/session-input-service.mjs";
+export { sendCodexTuiSessionInput, sendCodexTuiSlashCommand, sendCodexTuiTaskDelta } from "./codex-tui/session-input-service.mjs";
 export { resetCodexTuiSessionRegistryForTests as resetCodexTuiSessionManagerForTests } from "./codex-tui/active-session-registry.mjs";
 export { findStoreForSession as storeForSession } from "./codex-tui/session-bootstrap.mjs";
 export { cleanupIsolatedWorktreeProcesses, isProcessAlive } from "./codex-tui/session-process-cleanup.mjs";
