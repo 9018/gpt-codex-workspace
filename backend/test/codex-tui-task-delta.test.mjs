@@ -34,6 +34,14 @@ describe("validateTaskDelta", () => {
     assert.doesNotThrow(() => validateTaskDelta(delta, session));
   });
 
+  it("accepts correction and instruction deltas", () => {
+    for (const kind of ["correction", "instruction"]) {
+      const delta = makeDelta({ kind, instruction: "Write CORRECTED and continue." });
+      assert.doesNotThrow(() => validateTaskDelta(delta, makeSession()));
+      assert.match(renderDeltaInstruction(delta), /Write CORRECTED and continue\./);
+    }
+  });
+
   it("rejects unsupported delta kind", () => {
     const delta = makeDelta({ kind: "unknown" });
     assert.throws(() => validateTaskDelta(delta, makeSession()), /unsupported delta kind/);

@@ -12,6 +12,8 @@ const ALLOWED_KINDS = Object.freeze(
     "rerun_verification",
     "operator_note",
     "context_refresh",
+    "correction",
+    "instruction",
   ])
 );
 
@@ -90,6 +92,7 @@ export function renderDeltaInstruction(delta) {
         allowed_scope: delta.allowed_scope || [],
         evidence_refs: delta.evidence_refs || [],
         repair_round: delta.repair_round || null,
+        instruction: delta.instruction || delta.text || null,
       },
       null,
       2

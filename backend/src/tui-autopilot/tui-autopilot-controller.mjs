@@ -39,6 +39,12 @@ export function createTuiAutopilotController({
   let active = initiallyActive !== false;
   return {
     activate() { active = true; },
+    resetForExternalInput() {
+      active = true;
+      actionAttempts = 0;
+      repairAttempts = 0;
+      progressTracker.reset?.();
+    },
     async ingest(chunk, context = {}) {
       transcript.append(chunk);
       const frame = parseTuiScreen(transcript.snapshot().text, { sequence: ++sequence });

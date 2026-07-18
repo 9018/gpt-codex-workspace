@@ -283,7 +283,7 @@ export async function startCodexTuiGoalSessionImpl({
   }
 
   for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
-  activeSessions.set(sessionId, { store, ptySession, releaseLockFn, onTerminalized });
+  activeSessions.set(sessionId, { store, ptySession, autopilot, releaseLockFn, onTerminalized });
 
   // First output wait + ENTER submission
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);

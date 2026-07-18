@@ -42,10 +42,23 @@ export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
   if (!workspaceRoot) throw new Error("workspace root unavailable for task delta");
   const contextStore = createTaskContextStore({ workspaceRoot });
   await contextStore.appendDelta(`.gptwork/goals/${session.goal_id}`, delta);
-  await sendCodexTuiSessionInput(sessionId, `${instruction}\n`, options);
+  const { autopilot } = activeManagerForSession(sessionId);
+  autopilot?.resetForExternalInput?.();
+  await sendCodexTuiSessionInput(sessionId, `${instruction}\r`, options);
   return store.updateSession(sessionId, {
+    status: "running",
+    checkpoint: null,
+    action_attempts: 0,
+    repair_attempts: 0,
     active_delta_revision: delta.revision,
     last_delta_kind: delta.kind,
     last_delta_at: new Date().toISOString(),
+    delta_delivery: {
+      delivered: true,
+      input_acknowledged: true,
+      model_observed: false,
+      execution_started: false,
+      effect_verified: false,
+    },
   });
 }
