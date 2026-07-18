@@ -316,8 +316,13 @@ export async function startCodexTuiGoalSessionImpl({
     bootstrapMethod = "pty_goal_slash_command";
 
     const outputBeforeDispatch = bootstrapOutput;
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    ackReceived = bootstrapOutput !== outputBeforeDispatch
+    const outputAtDispatch = lastBootstrapOutputAt;
+    const ackDeadline = Date.now() + (ptyAdapter ? 250 : 5_000);
+    while (Date.now() < ackDeadline && lastBootstrapOutputAt <= outputAtDispatch) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(100, ackDeadline - Date.now())));
+    }
+    ackReceived = lastBootstrapOutputAt > outputAtDispatch
+      || bootstrapOutput !== outputBeforeDispatch
       || /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt|goal)/iu.test(bootstrapOutput);
     goalDispatchEvidence = {
       command_type: "slash_command",
