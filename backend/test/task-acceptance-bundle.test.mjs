@@ -155,3 +155,27 @@ test('getTaskAcceptanceBundle reports missing_evidence instead of throwing for u
   assert.ok(bundle.missing_evidence.some((item) => item.code === 'result_missing'));
   assert.ok(bundle.missing_evidence.some((item) => item.code === 'verification_missing'));
 });
+
+
+test('getTaskAcceptanceBundle merges durable result.json when task.result only contains provider metadata', async (t) => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-review-provider-result-'));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const goalDir = join(root, '.gptwork', 'goals', 'goal_provider');
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, 'result.json'), JSON.stringify({
+    status: 'completed', summary: 'Durable completion evidence', commit: 'abc123',
+    changed_files: ['src/fix.mjs'], verification: { passed: true, commands: ['node --test'] },
+    contract_verification: { contract_valid: true, blocking_passed: true, acceptance_status: 'satisfied', completion_eligible: true, blockers: [] },
+  }), 'utf8');
+  const state = {
+    tasks: [{ id: 'task_provider', goal_id: 'goal_provider', title: 'Provider task', status: 'completed', result: { provider: 'codex_tui_goal', session_id: 'sess_1' } }],
+    goals: [{ id: 'goal_provider', task_id: 'task_provider', title: 'Provider goal', status: 'completed' }],
+  };
+  const bundle = await getTaskAcceptanceBundle({ store: makeStore(state), config: { defaultWorkspaceRoot: root }, task_id: 'task_provider' });
+  assert.equal(bundle.result_summary.status, 'completed');
+  assert.equal(bundle.result_summary.commit, 'abc123');
+  assert.equal(bundle.verification.passed, true);
+  assert.equal(bundle.contract_verification.contract_valid, true);
+  assert.deepEqual(bundle.changed_files, ['src/fix.mjs']);
+  assert.deepEqual(bundle.missing_evidence, []);
+});

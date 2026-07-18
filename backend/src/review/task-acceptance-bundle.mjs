@@ -246,7 +246,14 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
   const contractJsonPath = files.acceptance_contract_json ? resolveWorkspacePath(config, files.acceptance_contract_json) : null;
   const fileResult = await readJsonIfExists(resultJsonPath);
   const fileContract = await readJsonIfExists(contractJsonPath);
-  const result = task.result && typeof task.result === 'object' ? task.result : fileResult;
+  const stateResult = task.result && typeof task.result === 'object' ? task.result : null;
+  const result = fileResult || stateResult
+    ? { ...(fileResult || {}), ...(stateResult || {}),
+        verification: stateResult?.verification || fileResult?.verification || null,
+        contract_verification: stateResult?.contract_verification || fileResult?.contract_verification || null,
+        changed_files: stateResult?.changed_files || fileResult?.changed_files || [],
+      }
+    : null;
   const contract = goal?.acceptance_contract || result?.acceptance_contract || fileContract;
   const verification = compactVerification(result?.verification || null);
   const contractVerification = compactContractVerification(result?.contract_verification || null);
