@@ -385,3 +385,28 @@ test("normalizeLegacyModes normalizes standard goal mode to builder", async () =
   assert.equal(goal.mode, "full");
   assert.equal(goal.legacy_mode, "standard");
 });
+
+test("taskPayloadFromTask preserves explicit acceptance contract metadata", () => {
+  const acceptanceContract = {
+    schema_version: 2,
+    intent: { operation_kind: "file_write", mutation_scope: "filesystem", execution_mode: "full", semantic_confidence: "high" },
+    requirements: { requires_commit: false, requires_integration: false, requires_restart: false, requires_deployment_check: false },
+    blocking_requirements: [{ id: "file_written", description: "file written", evidence: ["changed_files"] }],
+  };
+  const payload = taskPayloadFromTask({
+    id: "task_contract",
+    title: "filesystem canary",
+    description: "write a canary file",
+    project_id: "default",
+    workspace_id: "hosted-default",
+    metadata: {
+      operation_kind: "file_write",
+      mutation_scope: "filesystem",
+      acceptance_contract: acceptanceContract,
+    },
+  });
+
+  assert.deepEqual(payload.acceptance_contract, acceptanceContract);
+  assert.equal(payload.operation_kind, "file_write");
+  assert.equal(payload.mutation_scope, "filesystem");
+});

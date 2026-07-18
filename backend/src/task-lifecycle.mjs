@@ -61,6 +61,17 @@ export function taskPayloadFromTask(task) {
     ],
     memories: []
   };
+  const metadata = task.metadata && typeof task.metadata === "object" && !Array.isArray(task.metadata)
+    ? task.metadata
+    : {};
+  const explicitContract = task.acceptance_contract || metadata.acceptance_contract;
+  if (explicitContract && typeof explicitContract === "object" && !Array.isArray(explicitContract)) {
+    payload.acceptance_contract = structuredClone(explicitContract);
+  }
+  for (const key of ["operation_kind", "mutation_scope"]) {
+    const value = task[key] ?? metadata[key];
+    if (value !== undefined) payload[key] = value;
+  }
   for (const key of WORKSTREAM_IDENTITY_FIELDS) {
     if (task[key] !== undefined) payload[key] = task[key];
   }
