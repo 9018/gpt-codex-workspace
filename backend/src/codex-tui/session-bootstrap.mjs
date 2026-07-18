@@ -123,10 +123,6 @@ export async function startCodexTuiGoalSessionImpl({
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
 
-  if (pathContext?.codexHome) {
-    await mkdir(pathContext.codexHome, { recursive: true });
-    if (pathContext.nativeSessionsRoot) await mkdir(pathContext.nativeSessionsRoot, { recursive: true });
-  }
 
   const nativeSessionsBefore = pathContext
     ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
@@ -189,7 +185,7 @@ export async function startCodexTuiGoalSessionImpl({
       tui_no_progress_seconds: Number(tuiNoProgressSeconds || 120),
       tui_classifier_enabled: tuiClassifierEnabled !== false,
       resume_native_session_id: resumeNativeSessionId || null,
-      codex_home: pathContext?.codexHome || null,
+      codex_home: null,
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
   });
@@ -354,7 +350,7 @@ export async function startCodexTuiGoalSessionImpl({
         goal_id: goal?.id || null,
         execution_id: executionId || null,
         cwd,
-        codex_home: pathContext.codexHome,
+        codex_home: null,
         provider: "codex_tui_goal",
         status: "running",
       });

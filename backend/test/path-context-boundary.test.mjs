@@ -35,10 +35,7 @@ function validContext(projectRoot, overrides = {}) {
     canonicalRepoPath: projectRoot,
     executionCwd: projectRoot,
     worktreePath: null,
-    codexHome: join(projectRoot, ".codex-runtime"),
-    nativeSessionsRoot: join(projectRoot, ".codex-runtime", "sessions"),
     controlSessionsRoot: join(projectRoot, ".gptwork", "codex-sessions"),
-    codexHomeMode: "project",
     ...overrides,
   };
 }
@@ -48,31 +45,6 @@ test("validatePathContext rejects non-git canonical repositories", async () => {
   assert.throws(
     () => validatePathContext(validContext(root)),
     (error) => error?.code === "canonical_repo_not_git",
-  );
-});
-
-test("validatePathContext rejects unrelated worktrees and project-mode CODEX_HOME escape", async () => {
-  const projectRoot = await makeRepo("gptwork-boundary-project-");
-  const unrelatedRoot = await makeRepo("gptwork-boundary-other-");
-
-  assert.throws(
-    () => validatePathContext(validContext(projectRoot, { worktreePath: unrelatedRoot, executionCwd: unrelatedRoot })),
-    (error) => error?.code === "worktree_repo_mismatch",
-  );
-  assert.throws(
-    () => validatePathContext(validContext(projectRoot, {
-      codexHome: join(dirname(projectRoot), "escaped-codex-home"),
-      nativeSessionsRoot: join(dirname(projectRoot), "escaped-codex-home", "sessions"),
-    })),
-    (error) => error?.code === "project_codex_home_escape",
-  );
-});
-
-test("validatePathContext requires the native session root to be CODEX_HOME/sessions", async () => {
-  const projectRoot = await makeRepo("gptwork-boundary-session-");
-  assert.throws(
-    () => validatePathContext(validContext(projectRoot, { nativeSessionsRoot: join(projectRoot, "sessions") })),
-    (error) => error?.code === "native_sessions_root_invalid",
   );
 });
 

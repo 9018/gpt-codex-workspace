@@ -5,7 +5,6 @@ import { mkdir, mkdtemp } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { resolveCodexHome } from "../src/path-context/codex-home-resolver.mjs";
 import { resolvePathContext } from "../src/path-context/path-context-resolver.mjs";
 import { track, afterEachHook } from "./helpers/temp-cleanup.mjs";
 
@@ -26,17 +25,6 @@ async function makeRepo() {
   return root;
 }
 
-test("resolveCodexHome supports project, user, and explicit modes", async () => {
-  const projectRoot = await makeRepo();
-  assert.equal(resolveCodexHome({ projectRoot, mode: "project" }), join(projectRoot, ".codex-runtime"));
-  assert.equal(resolveCodexHome({ projectRoot, mode: "user" }), join(homedir(), ".codex"));
-  assert.equal(resolveCodexHome({ projectRoot, mode: "explicit", explicitPath: "/tmp/codex-explicit" }), "/tmp/codex-explicit");
-  assert.throws(
-    () => resolveCodexHome({ projectRoot, mode: "explicit" }),
-    (error) => error?.code === "codex_home_explicit_path_required",
-  );
-});
-
 test("resolvePathContext prefers task bindings and validates a linked worktree", async () => {
   const projectRoot = await makeRepo();
   const worktreePath = `${projectRoot}-worktree`;
@@ -53,15 +41,13 @@ test("resolvePathContext prefers task bindings and validates a linked worktree",
       result: { repo_resolution: { canonical_repo_path: projectRoot } },
     },
     repository: { canonical_path: "/must/not/win" },
-    config: { defaultRepoPath: "/also/must/not/win", codexHomeMode: "project" },
+    config: { defaultRepoPath: "/also/must/not/win" },
   });
 
   assert.equal(context.projectRoot, projectRoot);
   assert.equal(context.canonicalRepoPath, projectRoot);
   assert.equal(context.worktreePath, worktreePath);
   assert.equal(context.executionCwd, worktreePath);
-  assert.equal(context.codexHome, join(projectRoot, ".codex-runtime"));
-  assert.equal(context.nativeSessionsRoot, join(projectRoot, ".codex-runtime", "sessions"));
   assert.equal(context.controlSessionsRoot, join(projectRoot, ".gptwork", "codex-sessions"));
 });
 

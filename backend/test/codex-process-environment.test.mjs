@@ -9,7 +9,6 @@ const pathContext = {
   projectRoot: "/repos/project",
   canonicalRepoPath: "/repos/project",
   executionCwd: "/worktrees/task-1",
-  codexHome: "/repos/project/.codex-runtime",
 };
 
 test("buildCodexProcessEnvironment binds project and execution identifiers", () => {
@@ -21,7 +20,7 @@ test("buildCodexProcessEnvironment binds project and execution identifiers", () 
   }, { PATH: "/bin", CODEX_HOME: "/wrong" });
 
   assert.equal(env.PATH, "/bin");
-  assert.equal(env.CODEX_HOME, "/repos/project/.codex-runtime");
+  assert.equal("CODEX_HOME" in env, false);
   assert.equal(env.GPTWORK_PROJECT_ROOT, "/repos/project");
   assert.equal(env.GPTWORK_CANONICAL_REPO_PATH, "/repos/project");
   assert.equal(env.GPTWORK_EXECUTION_CWD, "/worktrees/task-1");
@@ -31,7 +30,7 @@ test("buildCodexProcessEnvironment binds project and execution identifiers", () 
   assert.equal(env.GPTWORK_CONTROL_SESSION_ID, "control_1");
 });
 
-test("exec and TUI receive the same constructed CODEX_HOME", async () => {
+test("exec and TUI both omit CODEX_HOME and use the resolved execution cwd", async () => {
   let execEnv = null;
   await executeCodexTaskRun({
     config: { codexExecArgs: "", codexExecTimeout: 5, defaultWorkspaceRoot: "/workspace" },
@@ -60,7 +59,8 @@ test("exec and TUI receive the same constructed CODEX_HOME", async () => {
   const tuiEnv = buildCodexProcessEnvironment(pathContext, { taskId: "task_1", goalId: "goal_1" }, { PATH: "/bin" });
   await adapter.spawn({ cwd: pathContext.executionCwd, env: tuiEnv });
 
-  assert.equal(execEnv.CODEX_HOME, pathContext.codexHome);
-  assert.equal(calls[0].options.env.CODEX_HOME, pathContext.codexHome);
+  assert.equal("CODEX_HOME" in execEnv, false);
+  assert.equal("CODEX_HOME" in calls[0].options.env, false);
+  assert.equal(calls[0].options.cwd, pathContext.executionCwd);
   assert.equal(execEnv.GPTWORK_PROJECT_ROOT, calls[0].options.env.GPTWORK_PROJECT_ROOT);
 });

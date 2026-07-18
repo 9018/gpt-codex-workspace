@@ -1,6 +1,5 @@
 import { join, resolve } from "node:path";
 
-import { resolveCodexHome, normalizeCodexHomeMode } from "./codex-home-resolver.mjs";
 import { PathContextError } from "./path-context-schema.mjs";
 import { validatePathContext } from "./path-context-validator.mjs";
 
@@ -61,12 +60,6 @@ export async function resolvePathContext({
   }
 
   const worktreePath = taskWorktreePath(task);
-  const codexHomeMode = normalizeCodexHomeMode(config.codexHomeMode || config.codex_home_mode || "project");
-  const codexHome = resolveCodexHome({
-    projectRoot: canonicalRepoPath,
-    mode: codexHomeMode,
-    explicitPath: config.codexHome,
-  });
   const projectParent = resolve(canonicalRepoPath, "..");
 
   return validatePathContext({
@@ -77,9 +70,6 @@ export async function resolvePathContext({
     canonicalRepoPath,
     executionCwd: worktreePath || canonicalRepoPath,
     worktreePath,
-    codexHome,
-    nativeSessionsRoot: join(codexHome, "sessions"),
     controlSessionsRoot: join(canonicalRepoPath, ".gptwork", "codex-sessions"),
-    codexHomeMode,
   });
 }

@@ -4,6 +4,7 @@ import { goalWorkspaceFiles, renderGoalMarkdown, renderTranscriptMarkdown, rende
 import { workspaceUploadBundleBase64, writeWorkspaceTextInternal } from "./workspace-service.mjs";
 import { taskContextContractDigest } from "./context-contract/task-context-canonicalizer.mjs";
 import { validateTaskContextPacket } from "./context-contract/task-context-schema.mjs";
+import { humanReadableWorkspaceView, humanStatusText } from "./human-readable-identity.mjs";
 
 /**
  * Write initial workspace files for a goal/task.
@@ -17,6 +18,7 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
   const workspaceFiles = goalWorkspaceFiles(goal);
   const appendTranscript = extras.append_transcript === true;
   const skipPayload = extras.skip_payload === true;
+  const humanView = humanReadableWorkspaceView(goal, task);
 
   // Always write goal.md for compatibility
   const files = [
@@ -83,6 +85,17 @@ export async function writeGoalWorkspaceFiles(store, config, goal, conversation,
   if (extras.initialize_result || typeof extras.result_content === "string") {
     files.push({ path: workspaceFiles.result_md, content: typeof extras.result_content === "string" ? extras.result_content : "# Result\n\nPending.\n" });
   }
+  files.push({
+    path: `${humanView.goal_dir}/README.md`,
+    content: [`# ${humanView.goal_title}`, "", `${humanView.goal_short_id} · ${humanStatusText(goal.status)}`, "", `内部 Goal ID: ${goal.id}`].join("\n") + "\n",
+  });
+  if (humanView.task_dir) {
+    files.push({
+      path: `${humanView.task_dir}/README.md`,
+      content: [`# ${humanView.task_title}`, "", humanStatusText(task?.status, { provider: task?.assignee === "codex" ? "Codex" : "任务" }), "", `内部 Task ID: ${task.id}`, `所属目标: ${humanView.goal_title}`].join("\n") + "\n",
+    });
+  }
+  workspaceFiles.human_view = humanView;
   for (const file of files) {
     await writeWorkspaceTextInternal(store, config, goal.workspace_id, file.path, file.content, context);
   }

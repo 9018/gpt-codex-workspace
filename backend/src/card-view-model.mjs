@@ -1,3 +1,4 @@
+import { humanStatusText, shortEntityId } from "./human-readable-identity.mjs";
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
 import {
   ACTIVE_EXECUTION_STATUSES,
@@ -333,9 +334,9 @@ function buildListTasksCard(tool, data, meta) {
     type: "table",
     rows: tasks.slice(0, 10).map((task) => {
       const row = {
-        id: task.id,
-        title: truncate(task.title || "", 60),
-        status: task.status || "-",
+        title: truncate(task.title || task.description || "未命名任务", 60),
+        status: humanStatusText(task.status, { provider: task.assignee === "codex" ? "Codex" : "任务" }),
+        short_id: shortEntityId(task.id, "T"),
         assignee: task.assignee || "-",
         mode: task.mode || "-",
       };
@@ -519,7 +520,7 @@ function buildTaskCard(tool, data, meta) {
   const result = task.result || {};
   const card = baseCard(tool, data, { ...meta, title: task.title ? `Task: ${truncate(task.title, 64)}` : "Task" });
   card.card_type = "task_execution";
-  card.subtitle = task.id || "";
+  card.subtitle = task.goal_title ? `${task.goal_title} · ${shortEntityId(task.id, "T")}` : shortEntityId(task.id, "T");
   card.status = task.status || "unknown";
   card.severity = severityFromStatus(task.status, "info");
   card.summary = result.summary || `${task.status || "unknown"} task${task.assignee ? ` assigned to ${task.assignee}` : ""}`;

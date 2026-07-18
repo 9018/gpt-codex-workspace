@@ -1,6 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { isAbsolute, join, relative, resolve } from "node:path";
+import { join, resolve } from "node:path";
 
 import { PathContextError } from "./path-context-schema.mjs";
 
@@ -10,11 +10,6 @@ function realpathOrResolved(path) {
   } catch {
     return resolve(path);
   }
-}
-
-function isInside(parent, child) {
-  const rel = relative(realpathOrResolved(parent), realpathOrResolved(child));
-  return rel === "" || (!rel.startsWith("..") && !isAbsolute(rel));
 }
 
 function gitCommonDir(path) {
@@ -65,17 +60,6 @@ export function validatePathContext(input = {}) {
   if (!validExecutionCwd) {
     throw new PathContextError("execution_cwd_invalid", "executionCwd must be the canonical repository or validated worktree");
   }
-
-  context.codexHome = resolve(context.codexHome || "");
-  if (context.codexHomeMode === "project" && !isInside(context.projectRoot, context.codexHome)) {
-    throw new PathContextError("project_codex_home_escape", "project CODEX_HOME must be inside projectRoot");
-  }
-
-  const expectedNativeSessionsRoot = join(context.codexHome, "sessions");
-  if (resolve(context.nativeSessionsRoot || "") !== expectedNativeSessionsRoot) {
-    throw new PathContextError("native_sessions_root_invalid", "nativeSessionsRoot must equal CODEX_HOME/sessions");
-  }
-  context.nativeSessionsRoot = expectedNativeSessionsRoot;
 
   const expectedControlSessionsRoot = join(context.projectRoot, ".gptwork", "codex-sessions");
   if (context.controlSessionsRoot && resolve(context.controlSessionsRoot) !== expectedControlSessionsRoot) {

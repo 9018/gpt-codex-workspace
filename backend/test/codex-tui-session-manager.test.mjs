@@ -152,7 +152,7 @@ test("start binds TUI environment and native Codex session to the project manife
     ptyAdapter: fakeAdapter,
   });
 
-  assert.equal(fakeAdapter.spawns[0].env.CODEX_HOME, codexHome);
+  assert.equal("CODEX_HOME" in fakeAdapter.spawns[0].env, false);
   assert.equal(fakeAdapter.spawns[0].env.GPTWORK_CONTROL_SESSION_ID, session.id);
   assert.equal(session.native_session_id, "native-tui-1");
   assert.equal(session.native_session_binding_source, "process_output");
@@ -538,7 +538,7 @@ test("process cleanup refuses non-isolated cwd", async () => {
   assert.deepEqual(kills, []);
 });
 
-test("creates project CODEX_HOME before spawning Codex TUI", async () => {
+test("does not create or inject project CODEX_HOME before spawning Codex TUI", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-home-")));
   const codexHome = join(cwd, ".codex-runtime");
   const fakeAdapter = makeFakeAdapter();
@@ -557,7 +557,7 @@ test("creates project CODEX_HOME before spawning Codex TUI", async () => {
       nativeSessionsRoot: join(codexHome, "sessions"),
     },
   });
-  assert.equal((await stat(codexHome)).isDirectory(), true);
+  await assert.rejects(stat(codexHome));
 });
 
 test("status reconciles terminal result evidence even while PTY remains alive", async () => {
