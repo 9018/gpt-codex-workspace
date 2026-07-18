@@ -16,6 +16,8 @@ export const DECISION_ACTIONS = Object.freeze([
   "send_correction",
   "pause_codex",
   "chatgpt_takeover",
+  "handoff_to_codex",
+  "resume_and_send_correction",
   "wait",
   "evaluate_terminal",
 ]);

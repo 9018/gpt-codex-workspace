@@ -133,6 +133,10 @@ export async function createGptWorkServer(options = {}) {
     retentionDryRunDefault: rcc.retentionDryRunDefault,
     retentionArchiveBeforeDelete: rcc.retentionArchiveBeforeDelete,
 
+    // Supervisor review worker
+    supervisorWorkerEnabled: rcc.supervisorWorkerEnabled,
+    supervisorWorkerIntervalMs: rcc.supervisorWorkerIntervalMs,
+
     _recoveryAllowedRootsArr: rcc._recoveryAllowedRootsArr,
 
     // Config sources for diagnostics

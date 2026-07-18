@@ -142,6 +142,72 @@ export function createCheckpointAcceptanceService(deps) {
    * Internal: decide the action based on trigger and evidence.
    * Maps triggers to appropriate actions.
    */
+  /**
+   * Project a decision from an existing checkpoint and evidence without
+   * re-collecting evidence or creating a new checkpoint.
+   *
+   * This is the "deterministic acceptance projection" that should be used
+   * when the caller (e.g. checkpoint-supervisor-loop) has already collected
+   * evidence and created the checkpoint. It only:
+   * 1. Decides action based on trigger and evidence
+   * 2. Creates verdict
+   * 3. Records history
+   * 4. Updates run checkpoint ids
+   *
+   * @param {object} options
+   * @param {object} options.run - The ExecutionRun
+   * @param {object} options.checkpoint - Already-created checkpoint
+   * @param {object} options.evidence - Already-collected evidence
+   * @param {object} options.triggerResult - Result from triggerPolicy.evaluate
+   * @returns {Promise<{ verdict: object|null, action: string|null }>}
+   */
+  async function projectCheckpoint({ run, checkpoint, evidence, triggerResult } = {}) {
+    // Decide action based on trigger and evidence
+    const decision = await decideAction({
+      triggerSource: triggerResult.triggerSource,
+      run,
+      evidence,
+      checkpoint,
+    });
+
+    // Create verdict
+    const verdict = createCheckpointVerdict({
+      checkpoint_id: checkpoint.id,
+      run_id: run.id,
+      trigger_source: triggerResult.triggerSource,
+      verdict: decision.verdict,
+      reason: decision.reason,
+      evidence_snapshot: evidence,
+      correction: decision.correction || null,
+    });
+
+    // Record history
+    await deps.historyStore.recordVerdict(verdict);
+
+    // Update run checkpoint ids if needed
+    if (checkpoint.id && !run.checkpoint_ids?.includes(checkpoint.id)) {
+      try {
+        await deps.runStore.updateRun(run.id, {
+          active_checkpoint_id: checkpoint.id,
+          checkpoint_ids: [...(run.checkpoint_ids || []), checkpoint.id],
+        });
+      } catch {
+        // Non-fatal
+      }
+    }
+
+    return {
+      triggered: true,
+      verdict: {
+        id: verdict.id,
+        verdict: verdict.verdict,
+        reason: verdict.reason,
+        trigger_source: verdict.trigger_source,
+      },
+      action: verdict.verdict,
+    };
+  }
+
   async function decideAction({ triggerSource, run, evidence, checkpoint }) {
     const supervision = run.supervision || {};
     const correctionCycles = supervision.correction_cycles || 0;
@@ -172,5 +238,5 @@ export function createCheckpointAcceptanceService(deps) {
     }
   }
 
-  return { evaluateCheckpoint };
+  return { evaluateCheckpoint, projectCheckpoint };
 }

@@ -83,6 +83,8 @@ test("no change returns waiting status", async () => {
         progress_revision: 0,
       }),
     },
+    ackTimeoutMs: 3600000, // 1 hour — avoids clock-dependent failure
+    now: () => new Date("2026-07-18T00:01:00.000Z").toISOString(),
   });
   const result = await reconciler.reconcile(baseCommand, baseRun);
   assert.equal(result.status, "waiting");

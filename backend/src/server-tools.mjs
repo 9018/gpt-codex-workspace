@@ -53,6 +53,7 @@ import { resolveToolDiscoveryConfig } from "./tool-discovery/tool-discovery-conf
 import { createToolDiscoveryToolsGroup } from "./tool-groups/tool-discovery-tools-group.mjs";
 import { createCodeNavigationToolsGroup } from "./tool-groups/code-navigation-tools-group.mjs";
 import * as goalQueue from "./goal-queue.mjs";
+import { ensureSupervisorRuntime, getReviewTools, getDecisionTools, startReviewWorker } from "./supervisor-review/supervisor-runtime.mjs";
 
 export const VALID_TOOL_MODES = new Set(["minimal", "standard", "operator", "codex", "full"]);
 
@@ -62,6 +63,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "runtime_status",
     "worker_status",
     "list_actionable_reviews",
+    "supervisor_review_active_runs",
+    "supervisor_submit_decisions",
     "product_status",
     "open_project_context",
     "tool_search",
@@ -76,6 +79,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "runtime_status",
     "worker_status",
     "list_actionable_reviews",
+    "supervisor_review_active_runs",
+    "supervisor_submit_decisions",
     "product_status",
     "gptwork_doctor",
     "github_status",
@@ -173,6 +178,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "runtime_status",
     "worker_status",
     "list_actionable_reviews",
+    "supervisor_review_active_runs",
+    "supervisor_submit_decisions",
     "product_status",
     "gptwork_doctor",
     "github_status",
@@ -215,6 +222,8 @@ export const TOOL_MODE_ALLOWLISTS = {
     "runtime_status",
     "worker_status",
     "list_actionable_reviews",
+    "supervisor_review_active_runs",
+    "supervisor_submit_decisions",
     "product_status",
     "open_project_context",
     "get_goal_context",
@@ -299,6 +308,13 @@ export function filterToolsForMode(tools, mode) {
 }
 
 export function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt, notifyCreatedTaskIfNeeded, eventLogger, hookBus }) {
+  // Initialize supervisor runtime with shared state store
+  if (store && !process.env.SUPERVISOR_RUNTIME_DISABLED) {
+    ensureSupervisorRuntime(store);
+    if (config?.supervisorWorkerEnabled !== false) {
+      startReviewWorker(config?.supervisorWorkerIntervalMs || 10000);
+    }
+  }
   const repoDir = resolveRepoDir();
   const tool = createTool;
 
@@ -368,6 +384,9 @@ export function createTools({ store, config, browser, github, bark, envLoadResul
   ...createRetentionToolsGroup({ tool, schema, store, config }),
   ...createReviewToolsGroup({ tool, schema, store, config }),
   ...createRecoveryToolsGroup({ tool, schema, store, config, envLoadResult, sources, registry, workerState, collectWorkerQueueCounts, repoDir, gitInfo: {}, PROCESS_STARTED_AT: processStartedAt }),
+   // Supervisor review tools — wiring via supervisor-runtime singleton
+   ...(getReviewTools ? getReviewTools() : {}),
+   ...(getDecisionTools ? getDecisionTools() : {}),
    read_events: tool({
       name: "read_events",
       description: "Read recent event log entries for monitoring and debugging.",

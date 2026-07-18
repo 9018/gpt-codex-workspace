@@ -46,6 +46,7 @@ export function createCheckpointSupervisorLoop(deps) {
   let _stopped = false;
   let _loopCount = 0;
   let _timer = null;
+  let _resolveStart = null;
 
   const pollIntervalMs = Math.max(1000, deps.pollIntervalMs || 5000);
   const maxLoops = deps.maxLoops || 0;
@@ -126,22 +127,13 @@ export function createCheckpointSupervisorLoop(deps) {
       }
     }
 
-    // 5. Evaluate through acceptance service
-    const acceptanceResult = await deps.acceptanceService.evaluateCheckpoint({
-      runId,
-      sessionId,
-      progress,
+    // 5. Deterministic acceptance projection (no duplicate evidence/checkpoint creation)
+    const acceptanceResult = await deps.acceptanceService.projectCheckpoint({
+      run,
+      checkpoint,
+      evidence,
+      triggerResult,
     });
-
-    // 6. Update run checkpoint ids
-    try {
-      await deps.runStore.updateRun(runId, {
-        active_checkpoint_id: checkpoint.id,
-        checkpoint_ids: [...(run.checkpoint_ids || []), checkpoint.id],
-      });
-    } catch {
-      // Non-fatal
-    }
 
     return {
       triggered: true,
@@ -161,24 +153,26 @@ export function createCheckpointSupervisorLoop(deps) {
    */
   async function start(runId, options = {}) {
     if (_running) return;
+
     _running = true;
     _stopped = false;
     _loopCount = 0;
 
     return new Promise((resolve) => {
+      _resolveStart = resolve;
+
       const poll = async () => {
         if (_stopped || (maxLoops > 0 && _loopCount >= maxLoops)) {
-          _running = false;
-          resolve();
+          finish();
           return;
         }
 
         _loopCount++;
+        await safeTick(runId, options);
 
-        try {
-          await tick(runId, options);
-        } catch {
-          // Individual tick failures should not stop the loop
+        if (_stopped) {
+          finish();
+          return;
         }
 
         _timer = setTimeout(poll, pollIntervalMs);
@@ -193,11 +187,7 @@ export function createCheckpointSupervisorLoop(deps) {
    */
   function stop() {
     _stopped = true;
-    _running = false;
-    if (_timer) {
-      clearTimeout(_timer);
-      _timer = null;
-    }
+    finish();
   }
 
   /**
@@ -206,6 +196,32 @@ export function createCheckpointSupervisorLoop(deps) {
    */
   function isRunning() {
     return _running;
+  }
+
+  /**
+   * Finish the loop: clear timer, mark not running, resolve the start promise.
+   */
+  function finish() {
+    _running = false;
+    if (_timer) {
+      clearTimeout(_timer);
+      _timer = null;
+    }
+    const resolve = _resolveStart;
+    _resolveStart = null;
+    resolve?.();
+  }
+
+  /**
+   * Safe tick wrapper — individual tick failures should not stop the loop.
+   * Also checks stop flag after tick.
+   */
+  async function safeTick(runId, options) {
+    try {
+      await tick(runId, options);
+    } catch {
+      // Individual tick failures should not stop the loop
+    }
   }
 
   return { tick, start, stop, isRunning };

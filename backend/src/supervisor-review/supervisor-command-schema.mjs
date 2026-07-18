@@ -50,6 +50,23 @@ function buildCommandPayload(decision) {
         return_conditions: decision.takeover.return_conditions,
       };
 
+    case "handoff_to_codex":
+      return {
+        action: "handoff_to_codex",
+        handoff_receipt: decision.payload?.handoff_receipt || {},
+      };
+
+    case "resume_and_send_correction":
+      return decision.correction ? {
+        objective: decision.correction.objective,
+        observed_drift: decision.correction.observed_drift,
+        required_changes: decision.correction.required_changes,
+        forbidden_changes: decision.correction.forbidden_changes,
+        allowed_files: decision.correction.allowed_files,
+        required_commands: decision.correction.required_commands,
+        completion_evidence: decision.correction.completion_evidence,
+      } : { action: "resume_and_send_correction" };
+
     case "wait":
       return { no_op: true };
 
