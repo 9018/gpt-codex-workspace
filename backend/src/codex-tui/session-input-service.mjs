@@ -43,13 +43,19 @@ export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
   const contextStore = createTaskContextStore({ workspaceRoot });
   await contextStore.appendDelta(`.gptwork/goals/${session.goal_id}`, delta);
   const { autopilot, ptySession } = activeManagerForSession(sessionId);
+  const sleep = options.sleep_fn || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   autopilot?.resetForExternalInput?.();
   if (delta.kind === "correction") {
     ptySession.write("\u001b");
-    await new Promise((resolve) => setTimeout(resolve, options.interrupt_settle_ms ?? 150));
+    await sleep(options.interrupt_settle_ms ?? 250);
   }
+  // Codex TUI coalesces multiline input as a paste burst. Delimiting the
+  // payload explicitly prevents the following Enter from being absorbed into
+  // that burst and left visible-but-unsubmitted in the composer.
+  ptySession.write("\u001b[200~");
   await sendCodexTuiSessionInput(sessionId, instruction, options);
-  await new Promise((resolve) => setTimeout(resolve, options.submit_settle_ms ?? 100));
+  ptySession.write("\u001b[201~");
+  await sleep(options.submit_settle_ms ?? 500);
   ptySession.write("\r");
   return store.updateSession(sessionId, {
     status: "running",

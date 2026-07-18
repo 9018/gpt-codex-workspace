@@ -34,13 +34,15 @@ test("structured correction submits with Enter and resumes exhausted autopilot",
     kind: "correction", task_id: "task_1", goal_id: "goal_1",
     base_context_digest: "sha256:abc", revision: 1,
     instruction: "Write CORRECTED and continue.",
-  });
+  }, { sleep_fn: async () => {} });
 
   assert.equal(resetCount, 1);
-  assert.equal(writes.length, 3);
+  assert.equal(writes.length, 5);
   assert.equal(writes[0], "\u001b");
-  assert.match(writes[1], /Write CORRECTED and continue\./);
-  assert.equal(writes[2], "\r");
+  assert.equal(writes[1], "\u001b[200~");
+  assert.match(writes[2], /Write CORRECTED and continue\./);
+  assert.equal(writes[3], "\u001b[201~");
+  assert.equal(writes[4], "\r");
   assert.equal(result.status, "running");
   assert.equal(result.active_delta_revision, 1);
   assert.equal(result.delta_delivery.delivered, true);
