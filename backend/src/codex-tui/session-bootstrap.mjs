@@ -287,40 +287,54 @@ export async function startCodexTuiGoalSessionImpl({
   if (Number(afterBootstrapWait.terminal_event_count || 0) >= 1) return afterBootstrapWait;
 
   const bootstrapSentAt = new Date().toISOString();
-  const goalCommand = `/goal ${initialPrompt}`;
-  ptySession.write(`${goalCommand}\r`);
-  await store.appendSessionLog(sessionId, `[bootstrap-input] /goal dispatched\n`).catch(() => {});
-  const bootstrapMethod = "pty_goal_slash_command";
+  let bootstrapMethod;
+  let ackReceived = false;
+  let goalDispatchEvidence = null;
+  let nativeBinding = null;
 
-  // Fail closed unless the TUI emits post-dispatch activity.
-  const outputBeforeDispatch = bootstrapOutput;
-  await new Promise((resolve) => setTimeout(resolve, 250));
-  const ackReceived = bootstrapOutput !== outputBeforeDispatch
-    || /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt|goal)/iu.test(bootstrapOutput);
-  const goalDispatchEvidence = {
-    command_type: "slash_command",
-    command: "/goal",
-    dispatched_at: bootstrapSentAt,
-    ack_received: ackReceived,
-    ack_status: ackReceived ? "active" : "no_ack",
-    ack_at: ackReceived ? new Date().toISOString() : null,
-    method: bootstrapMethod,
-    error: ackReceived ? null : "TUI did not acknowledge /goal command",
-  };
-  autopilot?.activate();
+  if (resumeNativeSessionId) {
+    bootstrapMethod = "native_resume";
+    nativeBinding = {
+      nativeSessionId: String(resumeNativeSessionId),
+      source: "native_resume",
+      reason: "Codex CLI resumed the requested native session directly.",
+    };
+    await store.appendSessionLog(sessionId, `[bootstrap] native session resumed without /goal dispatch\n`).catch(() => {});
+  } else {
+    const goalCommand = `/goal ${initialPrompt}`;
+    ptySession.write(`${goalCommand}\r`);
+    await store.appendSessionLog(sessionId, `[bootstrap-input] /goal dispatched\n`).catch(() => {});
+    bootstrapMethod = "pty_goal_slash_command";
 
-  const nativeSessionsAfter = pathContext
-    ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
-    : [];
-  const nativeBinding = pathContext
-    ? resolveNativeSessionBinding({
-      output: bootstrapOutput,
-      before: nativeSessionsBefore,
-      after: nativeSessionsAfter,
-      cwd,
-      pid: ptySession.pid ?? null,
-    })
-    : null;
+    const outputBeforeDispatch = bootstrapOutput;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    ackReceived = bootstrapOutput !== outputBeforeDispatch
+      || /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt|goal)/iu.test(bootstrapOutput);
+    goalDispatchEvidence = {
+      command_type: "slash_command",
+      command: "/goal",
+      dispatched_at: bootstrapSentAt,
+      ack_received: ackReceived,
+      ack_status: ackReceived ? "active" : "no_ack",
+      ack_at: ackReceived ? new Date().toISOString() : null,
+      method: bootstrapMethod,
+      error: ackReceived ? null : "TUI did not acknowledge /goal command",
+    };
+    autopilot?.activate();
+
+    const nativeSessionsAfter = pathContext
+      ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
+      : [];
+    nativeBinding = pathContext
+      ? resolveNativeSessionBinding({
+        output: bootstrapOutput,
+        before: nativeSessionsBefore,
+        after: nativeSessionsAfter,
+        cwd,
+        pid: ptySession.pid ?? null,
+      })
+      : null;
+  }
 
   record = await store.updateSession(sessionId, {
     status: "running",
@@ -330,8 +344,8 @@ export async function startCodexTuiGoalSessionImpl({
     bootstrap_sent_at: bootstrapSentAt,
     bootstrap_method: bootstrapMethod,
     first_output_at: firstOutputAt,
-    submitted: true,
-    goal_mode_active: ackReceived,
+    submitted: !resumeNativeSessionId,
+    goal_mode_active: resumeNativeSessionId ? false : ackReceived,
     goal_dispatch_evidence: goalDispatchEvidence,
     native_session_id: nativeBinding?.nativeSessionId || null,
     native_session_binding_source: nativeBinding?.source || null,

@@ -80,10 +80,12 @@ export async function stopCodexTuiSession(sessionId, { reason = "stopped", works
     releaseLockFn: releaseLockFn || active?.releaseLockFn || null,
     onTerminalized: active?.onTerminalized || null,
     event: {
-      source: reason === "evidence_timeout" ? "evidence_timeout" : "explicit-stop",
+      source: reason === "evidence_timeout"
+        ? "evidence_timeout"
+        : (reason === "native_detach" ? "native-detach" : "explicit-stop"),
       exit_code: null,
       signal: "SIGTERM",
-      error: reason,
+      error: reason === "native_detach" ? null : reason,
       error_code: null,
     },
   });

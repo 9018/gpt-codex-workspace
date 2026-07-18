@@ -209,8 +209,11 @@ test("start uses native Codex resume arguments when a persisted native session i
   assert.equal(fakeAdapter.spawns[0].args[0], "resume");
   assert.equal(fakeAdapter.spawns[0].args[1], "native-persisted");
   assert.equal(fakeAdapter.spawns[0].args.length, 2);
-  assert.match(fakeAdapter.writes[0], /^\/goal /);
-  assert.match(fakeAdapter.writes[0], /goal_id=goal_native_resume/);
+  assert.deepEqual(fakeAdapter.writes, []);
+  assert.equal(session.bootstrap_method, "native_resume");
+  assert.equal(session.submitted, false);
+  assert.equal(session.goal_mode_active, false);
+  assert.equal(session.goal_dispatch_evidence, null);
   assert.equal(session.resume_native_session_id, "native-persisted");
 });
 
@@ -258,6 +261,31 @@ test("session persists the complete autonomous runtime policy", async () => {
   assert.equal(stored.metadata.tui_frame_stable_ms, 750);
   assert.equal(stored.metadata.tui_no_progress_seconds, 33);
   assert.equal(stored.metadata.tui_classifier_enabled, false);
+});
+
+
+
+test("native detach stops the control channel without recording task failure", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-native-detach-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "native_detach_task", title: "Native detach" },
+    goal: { id: "native_detach_goal" },
+    cwd,
+    ptyAdapter: fakeAdapter,
+    resumeNativeSessionId: "native-detach-session",
+  });
+
+  const stopped = await stopCodexTuiSession(session.id, { reason: "native_detach" });
+
+  assert.equal(stopped.status, "stopped");
+  assert.equal(stopped.result_status, "stopped");
+  assert.equal(stopped.error, undefined);
+  assert.equal(stopped.failed_at, undefined);
+  assert.equal(stopped.terminal_event.source, "native-detach");
+  const result = await readResult(cwd, "native_detach_goal");
+  assert.equal(result.status, "stopped");
+  assert.equal(result.summary, "Native Codex session control channel detached.");
 });
 
 test("manager sends input, reads status, and stops sessions safely", async () => {
