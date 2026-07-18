@@ -74,7 +74,7 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
   ]);
   assert.equal(bundle.operation_kind, 'code_change');
   assert.equal(bundle.acceptance_contract_summary.operation_kind, 'code_change');
-  assert.equal(bundle.result_summary.summary, 'Task result summary from state');
+  assert.equal(bundle.result_summary.summary, 'Implemented compact review packets');
   assert.equal(bundle.verification.passed, true);
   assert.equal(bundle.contract_verification.acceptance_status, 'satisfied');
   assert.deepEqual(bundle.changed_files, ['backend/src/review/task-acceptance-bundle.mjs']);
