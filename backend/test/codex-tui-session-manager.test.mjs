@@ -758,3 +758,22 @@ test("terminal result evidence overrides waiting_for_supervisor checkpoint", asy
   assert.equal(status.status, "completed");
   assert.equal(status.pid_alive, false);
 });
+
+
+test("start automatically trusts the working directory before dispatching /goal", async () => {
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-trust-")));
+  const writes = [];
+  let onData;
+  const adapter = {
+    async spawn(options) {
+      onData = options.onData;
+      setTimeout(() => onData("Do you trust the contents of this directory?\n› 1. Yes, continue\n2. No, quit"), 10);
+      setTimeout(() => onData("› Explain this codebase"), 30);
+      return { pid: 101, write(text) { writes.push(text); }, stop() {} };
+    },
+  };
+  await startCodexTuiGoalSession({ task: { id: "task_trust", title: "Trust" }, goal: { id: "goal_trust" }, cwd, ptyAdapter: adapter });
+  assert.equal(writes[0], "\r");
+  assert.equal(writes[1], "\u0015");
+  assert.match(writes.slice(2, -1).join(""), /^\/goal /);
+});

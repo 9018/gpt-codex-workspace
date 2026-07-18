@@ -28,6 +28,7 @@ import {
 import { waitForTuiOutput } from "./session-recovery.mjs";
 import { terminalizeCodexTuiSession } from "./session-terminalizer.mjs";
 import { submitTuiText } from "./tui-safe-input.mjs";
+import { normalizeTuiText } from "../tui-autopilot/tui-screen-parser.mjs";
 import { uniqueStrings, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";
 
 /**
@@ -210,6 +211,8 @@ export async function startCodexTuiGoalSessionImpl({
   let earlyTerminalization = null;
   let bootstrapOutput = "";
   let lastBootstrapOutputAt = 0;
+  let trustPromptAccepted = false;
+  let pendingTrustAccept = false;
   const pendingAutopilotInputs = [];
   const writeAutopilotInput = async (input) => {
     const text = String(input ?? "");
@@ -242,6 +245,13 @@ export async function startCodexTuiGoalSessionImpl({
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
         lastBootstrapOutputAt = Date.now();
+        const normalizedBootstrap = trustPromptAccepted ? "" : normalizeTuiText(bootstrapOutput);
+        if (!trustPromptAccepted && /(?:trust[\s\S]{0,160}contents[\s\S]{0,160}directory|yes,\s*continue)/iu.test(normalizedBootstrap)) {
+          trustPromptAccepted = true;
+          if (ptySession) ptySession.write("\r");
+          else pendingTrustAccept = true;
+          store.appendSessionLog(sessionId, "[bootstrap-input] trusted working directory\n").catch(() => {});
+        }
         store.appendSessionLog(sessionId, text).catch(() => {});
         store.updateSession(sessionId, { last_output_at: new Date().toISOString() }).catch(() => {});
         const progress = detectMeaningfulOutput(text);
@@ -281,16 +291,18 @@ export async function startCodexTuiGoalSessionImpl({
     return earlyTerminalization;
   }
 
+  if (pendingTrustAccept) { ptySession.write("\r"); pendingTrustAccept = false; }
   for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
   activeSessions.set(sessionId, { store, ptySession, autopilot, releaseLockFn, onTerminalized });
 
   // Wait for the interactive TUI and allow MCP servers to finish booting before dispatch.
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 15_000);
   const startupQuietMs = ptyAdapter ? 0 : 1_500;
+  const startupMinReadyAt = Date.now() + (ptyAdapter ? 0 : 5_000);
   const startupDeadline = Date.now() + (ptyAdapter ? 0 : 60_000);
   while (startupQuietMs > 0 && Date.now() < startupDeadline) {
     const quietForMs = lastBootstrapOutputAt ? Date.now() - lastBootstrapOutputAt : 0;
-    if (quietForMs >= startupQuietMs) break;
+    if (Date.now() >= startupMinReadyAt && quietForMs >= startupQuietMs) break;
     await new Promise((resolve) => setTimeout(resolve, Math.min(250, startupQuietMs - quietForMs)));
   }
   const afterBootstrapWait = await store.readSession(sessionId, { maxChars: 0 });
