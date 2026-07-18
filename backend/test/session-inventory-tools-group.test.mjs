@@ -285,3 +285,40 @@ test('listCodexNativeSessions filters tests, isolates malformed files, sorts, an
     assert.equal(included.sessions[0].is_test_session, true);
   } finally { await rm(codexHome, { recursive: true, force: true }); }
 });
+
+test('codex_native_sessions_list exposes enriched schema, enforces scope, and maps test-session option', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-native-tool-'));
+  try {
+    const dir = join(codexHome, 'sessions'); await mkdir(dir, { recursive: true });
+    const file = join(dir, 'rollout-44444444-4444-4444-4444-444444444444.jsonl');
+    await writeFile(file, JSON.stringify({ type:'response_item', payload:{ type:'message', role:'user', content:[{type:'input_text',text:'__gptwork_test_invalid_arg__'}] } })+'\n');
+    const tools = createSessionInventoryToolsGroup({
+      tool: fakeTool, schema: fakeSchema, config: { codexHome }, store: {},
+      github: { syncTask: async () => {} }, createTask: async () => ({}),
+    });
+    assert.deepEqual(tools.codex_native_sessions_list.inputSchema.properties, { limit: 'integer', include_test_sessions: 'boolean' });
+    await assert.rejects(() => tools.codex_native_sessions_list.handler({}, { user_id:'test', scopes:[] }), /workspace:read/);
+    const result = await tools.codex_native_sessions_list.handler(
+      { limit: 10, include_test_sessions: true },
+      { user_id:'test', scopes:['workspace:read'] },
+    );
+    assert.equal(result.sessions.length, 1);
+    assert.equal(result.sessions[0].is_test_session, true);
+  } finally { await rm(codexHome, { recursive: true, force: true }); }
+});
+
+test('summarizeCodexNativeSession prefers the original goal objective for Resume title', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-native-objective-'));
+  try {
+    const relativePath = 'rollout-55555555-5555-5555-5555-555555555555.jsonl';
+    const absolutePath = join(root, relativePath);
+    const lines = [
+      { type:'response_item', payload:{ type:'message', role:'user', content:[{type:'input_text',text:'<codex_internal_context source="goal">\n<objective>\n分析项目代码，做实验测试项目执行能力，调用项目接口测试，链路测试\n</objective>\n</codex_internal_context>'}] } },
+      { type:'response_item', payload:{ type:'message', role:'user', content:[{type:'input_text',text:'你不用挨个做后端测试，可以先跳过'}] } },
+    ];
+    await writeFile(absolutePath, lines.map(JSON.stringify).join('\n')+'\n');
+    const info = await (await import('node:fs/promises')).stat(absolutePath);
+    const result = await summarizeCodexNativeSession({ absolutePath, relativePath, stat: info, activeNativeSessionIds:new Set() });
+    assert.equal(result.title, '分析项目代码，做实验测试项目执行能力，调用项目接口测试，链路测试');
+  } finally { await rm(root, { recursive:true, force:true }); }
+});

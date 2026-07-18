@@ -68,6 +68,11 @@ function normalizedPreview(value, maxLength) {
   return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
 }
 
+function objectiveFromInternalContext(text) {
+  const match = String(text || '').match(/<objective>\s*([\s\S]*?)\s*<\/objective>/i);
+  return match ? normalizedPreview(match[1], 160) : '';
+}
+
 function isIgnoredUserText(text) {
   const value = String(text || '').trim();
   return !value || value.startsWith('<environment_context>') || value.startsWith('<codex_internal_context') || value.includes('__gptwork_test_invalid_arg__');
@@ -105,6 +110,8 @@ export async function summarizeCodexNativeSession({ absolutePath, relativePath, 
     if (role === 'user' || role === 'assistant') messageCount += 1;
     if (role === 'user') {
       if (text.includes('__gptwork_test_invalid_arg__')) isTestSession = true;
+      const objective = objectiveFromInternalContext(text);
+      if (!title && objective) title = objective;
       if (!title && !isIgnoredUserText(text)) title = normalizedPreview(text, 160);
     }
     if (role === 'assistant' && text.trim()) lastAssistantMessage = normalizedPreview(text, 500);
