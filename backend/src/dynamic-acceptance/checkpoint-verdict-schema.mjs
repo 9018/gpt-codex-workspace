@@ -17,6 +17,7 @@ export const CHECKPOINT_VERDICT_TYPES = Object.freeze([
   "chatgpt_takeover",         // Escalate to ChatGPT
   "wait_for_chatgpt",         // Wait for ChatGPT response
   "evaluate_terminal",        // Check if the run reached a terminal state
+  "start_repair_cycle",  // Goal completed with remaining work – create repair + new cycle
 ]);
 
 /** Allowed trigger sources matching the policy. */

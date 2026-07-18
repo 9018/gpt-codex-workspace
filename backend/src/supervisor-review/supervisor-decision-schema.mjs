@@ -20,6 +20,7 @@ export const DECISION_ACTIONS = Object.freeze([
   "resume_and_send_correction",
   "wait",
   "evaluate_terminal",
+  "start_repair_cycle",
 ]);
 
 /** Allowed verdict labels. */

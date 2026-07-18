@@ -122,6 +122,23 @@ export function createSupervisorCommandExecutor(deps) {
           receipt: command.payload,
         });
 
+      case "start_repair_cycle":
+        if (!deps.goalRelayService) {
+          // If no relay service configured, return basic result
+          return {
+            action: "start_repair_cycle",
+            reason: command.payload?.remaining_work_summary || "Remaining work detected",
+          };
+        }
+        return deps.goalRelayService.applyRelayDecision({
+          run,
+          decision: {
+            decision: "start_repair_cycle",
+            reason: command.payload?.remaining_work_summary || "Remaining work",
+          },
+          executionResult: command.result,
+        });
+
       case "wait":
         return { no_op: true };
 

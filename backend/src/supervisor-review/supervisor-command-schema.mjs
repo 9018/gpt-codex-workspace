@@ -67,6 +67,13 @@ function buildCommandPayload(decision) {
         completion_evidence: decision.correction.completion_evidence,
       } : { action: "resume_and_send_correction" };
 
+    case "start_repair_cycle":
+      return {
+        action: "start_repair_cycle",
+        repair_plan: decision.repair_plan || null,
+        remaining_work_summary: decision.analysis_summary || "",
+      };
+
     case "wait":
       return { no_op: true };
 
