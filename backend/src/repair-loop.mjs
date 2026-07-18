@@ -193,6 +193,10 @@ export function createRepairGoalFromFindings({ task, goal, findings, repairPropo
 }
 
 export async function scheduleRepairAttempt({ store, task = {}, goal = {}, failure = {}, verification = {}, config = {}, diff = '', logs = '' } = {}) {
+  // P0: auto_retry_disabled — do not create any repair Goal/Task
+  if (config.autoRetryEnabled === false) {
+    return { scheduled: false, reason: 'auto_retry_disabled' };
+  }
   const previousAttempt = Number.isInteger(task.attempt) ? task.attempt : Number(task.repair_attempt || 0);
   const attempt = previousAttempt + 1;
   const maxAttempts = Number.isInteger(task.max_attempts) ? task.max_attempts : Number(task.maxAttempts || config.maxRepairAttempts || 2);
@@ -387,6 +391,21 @@ export async function handleRepairCompletion({ store, config, completedTask, pas
         parent.result = parent.result || {};
 
         if (budgetRemaining_) {
+          // P0: auto_retry_disabled — do not auto-schedule next repair attempt
+          if (config?.autoRetryEnabled === false) {
+            parent.status = "waiting_for_review";
+            parent.result.kind = "repair_disabled";
+            parent.result.repair_outcome = "auto_retry_disabled";
+            parent.result.repair_attempts = (parent.result.repair_attempts || 0) + 1;
+            parent.result.summary = `Repair task ${completedTask.id} failed; auto-retry disabled. Requires review.`;
+            delete parent.result.repair_goal_id;
+            delete parent.result.repair_task_id;
+            delete parent.result.repair_goal;
+            parent.updated_at = new Date().toISOString();
+            if (!Array.isArray(parent.logs)) parent.logs = [];
+            parent.logs.push({ time: new Date().toISOString(), message: `[repair-loop] Repair task ${completedTask.id} failed; auto-retry disabled. Parent ${parentTaskId} moved to waiting_for_review.` });
+            return { parent_updated: true, parent_task_id: parentTaskId, parent_status: "waiting_for_review", repair_outcome: "auto_retry_disabled" };
+          }
           // Budget remains: keep parent in waiting_for_repair for next attempt
           parent.repair_attempt = nextAttempt_;
           parent.attempt = nextAttempt_;

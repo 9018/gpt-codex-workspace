@@ -79,6 +79,56 @@ function parseResultJson(text) {
 }
 
 /**
+ * Reconstruct a synthetic result.json from available evidence when the
+ * original result.json is missing. All fields that cannot be proven from
+ * existing facts MUST be marked unknown/null.
+ *
+ * This is a pure function — it does not read files or run git commands.
+ *
+ * @param {object} params
+ * @param {string} params.sessionId
+ * @param {string} [params.goalId]
+ * @param {string} [params.taskId]
+ * @param {string|null} [params.commit]
+ * @param {string[]} [params.changedFiles]
+ * @param {boolean} [params.worktreeClean]
+ * @param {string|null} [params.resultMd]
+ * @param {string|null} [params.tests]
+ * @returns {object} Synthetic result
+ */
+export function reconstructResultJson({ sessionId, goalId, taskId, commit, changedFiles, worktreeClean, resultMd, tests } = {}) {
+  const reconstruction = {
+    status: 'unknown',
+    summary: 'System-reconstructed from available evidence (original result.json was missing)',
+    session_id: sessionId || null,
+    goal_id: goalId || null,
+    task_id: taskId || null,
+    commit: commit || null,
+    changed_files: Array.isArray(changedFiles) ? changedFiles : [],
+    worktree_clean: worktreeClean !== false,
+    tests: tests || null,
+    verification: {},
+    result_json_source: 'system_reconstructed',
+    reconstructed_at: new Date().toISOString(),
+  };
+
+  // Include result.md evidence if available
+  if (resultMd) {
+    reconstruction.result_md_evidence = true;
+  }
+
+  // Only set verification fields when we have actual evidence
+  if (tests) {
+    reconstruction.verification = {
+      commands: tests,
+      // Cannot prove pass/fail without actual result.json evidence
+    };
+  }
+
+  return reconstruction;
+}
+
+/**
  * Terminalize a TUI session when durable result artifacts exist but session
  * is still marked active/created. This is idempotent.
  *
@@ -218,6 +268,20 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     findings.push({ code: "commit_missing", severity: "blocker", message: "Dirty work exists but no durable commit evidence was found." });
   }
 
+  // P0: System-reconstruct result.json when missing
+  const reconstructedResultJson = !resultJsonPresent
+    ? reconstructResultJson({
+        sessionId,
+        goalId,
+        taskId,
+        commit,
+        changedFiles,
+        worktreeClean,
+        resultMd: resultMdText || null,
+        tests,
+      })
+    : null;
+
   return {
     kind: "codex_tui_completion_snapshot",
     session_id: session.id,
@@ -233,6 +297,8 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     result_json_present: resultJsonPresent,
     result_json_valid: resultJsonPresent ? !parsedResultJson.error : false,
     result_json_error: parsedResultJson.error,
+    result_json_source: resultJsonPresent ? 'original' : (reconstructedResultJson ? 'system_reconstructed' : 'missing'),
+    reconstructed_result_json: reconstructedResultJson,
     result_json_path: resultJsonPath,
     result_md_present: resultMdPresent,
     result_md_path: resultMdPath,
