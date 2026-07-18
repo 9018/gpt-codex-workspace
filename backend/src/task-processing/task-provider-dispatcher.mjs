@@ -76,7 +76,11 @@ export async function dispatchTaskProvider(input = {}, deps = {}) {
 
     // Build provider registry from the providers passed by caller
     const bridgeRegistry = deps.providerRegistry || createExecutionProviderRegistry();
-    const bridgeProviders = deps.providers || defaultProviders(deps);
+    // Merge input.providers (from callers like dispatch-bridge test)
+    // with deps.providers (from production wiring)
+    const inputProviders = input.providers || {};
+    const depsProviders = deps.providers || defaultProviders(deps);
+    const bridgeProviders = { ...depsProviders, ...inputProviders };
     for (const bp of Object.values(bridgeProviders)) {
       if (bp && !bridgeRegistry.get(bp.name)) bridgeRegistry.register(bp);
     }

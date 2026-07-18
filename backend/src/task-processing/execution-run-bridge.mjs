@@ -41,12 +41,24 @@ export async function executeTaskViaExecutionRun({ taskId, goalId = null, provid
     projectionService: deps.projectionService || null,
   });
 
+  // Default acceptance service: mirror pipeline adapter's evaluateAcceptance logic
+  // so advanceRun does not fail with "acceptanceService is required" when no
+  // explicit acceptance service is wired.
+  const defaultAcceptanceService = deps.acceptanceService || {
+    async evaluate({ evidence }) {
+      if (evidence) {
+        return { decision: "accepted", summary: "Evidence collected, accepted by default" };
+      }
+      return { decision: "repair_required", summary: "No evidence collected" };
+    },
+  };
+
   // Create the run service
   const runService = createExecutionRunService({
     runStore,
     projectionService: deps.projectionService || null,
     attemptStore: deps.attemptStore || null,
-    acceptanceService: deps.acceptanceService || null,
+    acceptanceService: defaultAcceptanceService,
     attemptOrchestrator: { execute: (args) => pipelineAdapter.executeProviderCycle({ ...args, context }) },
   });
 

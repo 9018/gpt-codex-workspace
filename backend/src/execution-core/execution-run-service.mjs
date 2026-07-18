@@ -127,7 +127,7 @@ export function createExecutionRunService(deps) {
           run,
           rawEvidence: outcome.raw_evidence,
         })
-      : null;
+      : outcome.raw_evidence || null;
 
     run = await deps.runStore.updateRun(run.id, {
       evidence_bundle_id: evidence?.id || null,
