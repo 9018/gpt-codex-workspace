@@ -24,7 +24,7 @@ import { randomUUID } from "node:crypto";
 
 const PROGRESS_FILENAME = "progress.json";
 const SUBAGENTS_FILENAME = "subagents.json";
-const VALID_STATUSES = new Set(["pending", "running", "completed", "failed", "blocked", "skipped", "cancelled"]);
+const VALID_STATUSES = new Set(["declared", "not_spawned", "spawning", "running", "completed", "failed", "skipped"]);
 const VALID_PHASES = new Set([
   "context_curation", "analysis", "planning", "building",
   "verification", "review", "repair", "integration", "finalization",
@@ -43,7 +43,7 @@ function assertSafeGoalId(goalId) {
   return goalId;
 }
 
-function normalizeStatus(status, fallback = "pending") {
+function normalizeStatus(status, fallback = "declared") {
   return VALID_STATUSES.has(status) ? status : fallback;
 }
 
@@ -130,6 +130,11 @@ export function createSubagentProgressStore({ workspaceRoot }) {
           blockers: Array.isArray(incoming.blockers) ? incoming.blockers : [],
           started_at: incoming.started_at || null,
           completed_at: incoming.completed_at || null,
+          native_agent_id: incoming.native_agent_id || null,
+          child_thread_id: incoming.child_thread_id || null,
+          parent_thread_id: incoming.parent_thread_id || null,
+          spawned_at: incoming.spawned_at || null,
+          native_evidence_unavailable: incoming.native_evidence_unavailable === true,
         };
         if (idx >= 0) {
           merged.subagents[idx] = { ...merged.subagents[idx], ...normalized };
@@ -191,6 +196,11 @@ export function createSubagentProgressStore({ workspaceRoot }) {
       blockers: Array.isArray(s.blockers) ? s.blockers : [],
       started_at: s.started_at || null,
       completed_at: s.completed_at || null,
+      native_agent_id: s.native_agent_id || null,
+      child_thread_id: s.child_thread_id || null,
+      parent_thread_id: s.parent_thread_id || null,
+      spawned_at: s.spawned_at || null,
+      native_evidence_unavailable: s.native_evidence_unavailable === true,
     }));
 
     // Merge with existing subagents.json if present (by role+round)

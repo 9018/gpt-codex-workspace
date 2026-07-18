@@ -238,8 +238,8 @@ export async function startCodexTuiGoalSessionImpl({
       env: processEnv,
       command,
       args: resumeNativeSessionId
-        ? ["resume", String(resumeNativeSessionId), initialPrompt]
-        : [initialPrompt],
+        ? ["resume", String(resumeNativeSessionId)]
+        : [],
       onData: (chunk) => {
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
@@ -285,20 +285,32 @@ export async function startCodexTuiGoalSessionImpl({
   for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
   activeSessions.set(sessionId, { store, ptySession, autopilot, releaseLockFn, onTerminalized });
 
-  // First output wait + ENTER submission
+  // Wait for the interactive TUI, then dispatch the real slash command through PTY.
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 5_000);
   const afterBootstrapWait = await store.readSession(sessionId, { maxChars: 0 });
   if (Number(afterBootstrapWait.terminal_event_count || 0) >= 1) return afterBootstrapWait;
 
-  const alreadyRunning = /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt)/iu.test(bootstrapOutput);
-  let bootstrapMethod = "argv_prompt_auto_submitted";
-  if (!alreadyRunning) {
-    ptySession.write("\r");
-    await store.appendSessionLog(sessionId, "[bootstrap-input] ENTER\n").catch(() => {});
-    bootstrapMethod = "argv_prompt_enter";
-  }
-
   const bootstrapSentAt = new Date().toISOString();
+  const goalCommand = `/goal ${initialPrompt}`;
+  ptySession.write(`${goalCommand}\r`);
+  await store.appendSessionLog(sessionId, `[bootstrap-input] /goal dispatched\n`).catch(() => {});
+  const bootstrapMethod = "pty_goal_slash_command";
+
+  // Fail closed unless the TUI emits post-dispatch activity.
+  const outputBeforeDispatch = bootstrapOutput;
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  const ackReceived = bootstrapOutput !== outputBeforeDispatch
+    || /(?:\bWorking\b|esc to interrupt|ctrl\+c to interrupt|goal)/iu.test(bootstrapOutput);
+  const goalDispatchEvidence = {
+    command_type: "slash_command",
+    command: "/goal",
+    dispatched_at: bootstrapSentAt,
+    ack_received: ackReceived,
+    ack_status: ackReceived ? "active" : "no_ack",
+    ack_at: ackReceived ? new Date().toISOString() : null,
+    method: bootstrapMethod,
+    error: ackReceived ? null : "TUI did not acknowledge /goal command",
+  };
   autopilot?.activate();
 
   const nativeSessionsAfter = pathContext
@@ -323,6 +335,8 @@ export async function startCodexTuiGoalSessionImpl({
     bootstrap_method: bootstrapMethod,
     first_output_at: firstOutputAt,
     submitted: true,
+    goal_mode_active: ackReceived,
+    goal_dispatch_evidence: goalDispatchEvidence,
     native_session_id: nativeBinding?.nativeSessionId || null,
     native_session_binding_source: nativeBinding?.source || null,
     native_session_binding_reason: nativeBinding?.reason || null,

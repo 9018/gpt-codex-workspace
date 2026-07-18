@@ -65,7 +65,7 @@ test("normalizeSubagentResult normalizes various field aliases", () => {
   assert.deepEqual(result.changed_files, ["api.ts"]);
   assert.deepEqual(result.artifacts, ["report.md"]);
   assert.deepEqual(result.blockers, ["api_key_missing"]);
-  assert.equal(result.status, "pending");
+  assert.equal(result.status, "declared");
   assert.equal(result.evidence.exit_code, 0);
 });
 

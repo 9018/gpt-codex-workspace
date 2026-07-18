@@ -65,14 +65,14 @@ test("readProgress returns null for non-existent goal", async () => {
   assert.equal(result, null);
 });
 
-test("writeProgress normalizes invalid status to pending", async () => {
+test("writeProgress normalizes invalid status to declared", async () => {
   const { store } = await makeStore();
 
   const written = await store.writeProgress(GOAL_ID, {
     status: "invalid_status",
   });
 
-  assert.equal(written.status, "pending");
+  assert.equal(written.status, "declared");
 });
 
 // ===========================================================================

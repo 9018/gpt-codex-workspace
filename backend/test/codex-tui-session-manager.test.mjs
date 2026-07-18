@@ -51,7 +51,7 @@ async function readResult(workspaceRoot, goalId) {
   return JSON.parse(await readFile(join(workspaceRoot, ".gptwork", "goals", goalId, "result.json"), "utf8"));
 }
 
-test("start passes the goal as the interactive Codex initial prompt", async () => {
+test("start dispatches the goal as a real interactive slash command", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-manager-")));
   const fakeAdapter = makeFakeAdapter();
   const session = await startCodexTuiGoalSession({
@@ -65,16 +65,14 @@ test("start passes the goal as the interactive Codex initial prompt", async () =
   assert.equal(session.status, "running");
   assert.equal(session.task_id, "task_1");
   assert.equal(session.goal_id, "goal_1");
-  assert.equal(session.bootstrap_method, "argv_prompt_enter");
+  assert.equal(session.bootstrap_method, "pty_goal_slash_command");
   assert.equal(fakeAdapter.spawns.length, 1);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
-  assert.equal(fakeAdapter.spawns[0].args.length, 1);
-  assert.match(fakeAdapter.spawns[0].args[0], /goal_id=goal_1/);
-  assert.match(fakeAdapter.spawns[0].args[0], /Use Superpowers/);
-  assert.match(fakeAdapter.spawns[0].args[0], /codex\.entry\.md/);
-  assert.ok(fakeAdapter.spawns[0].args[0].includes(`.gptwork/runtime-goals/goal_1/codex.entry.md`));
+  assert.deepEqual(fakeAdapter.spawns[0].args, []);
   assert.equal(await readlink(join(cwd, ".gptwork", "runtime-goals", "goal_1")), join(cwd, ".gptwork", "goals", "goal_1"));
-  assert.deepEqual(fakeAdapter.writes, ["\r"], "argv prompt must be submitted exactly once after the TUI first renders");
+    assert.equal(fakeAdapter.writes.length, 1);
+  assert.match(fakeAdapter.writes[0], /^\/goal /);
+  assert.match(fakeAdapter.writes[0], /goal_id=goal_1/);
 
   const read = await readCodexTuiSession(session.id);
   assert.match(read.log, /TUI ready/);
@@ -192,8 +190,9 @@ test("start does not send bootstrap Enter when Codex already auto-submitted the 
     ptyAdapter: fakeAdapter,
   });
 
-  assert.equal(session.bootstrap_method, "argv_prompt_auto_submitted");
-  assert.deepEqual(fakeAdapter.writes, []);
+  assert.equal(session.bootstrap_method, "pty_goal_slash_command");
+  assert.equal(fakeAdapter.writes.length, 1);
+  assert.match(fakeAdapter.writes[0], /^\/goal /);
 });
 
 test("start uses native Codex resume arguments when a persisted native session is available", async () => {
@@ -209,7 +208,9 @@ test("start uses native Codex resume arguments when a persisted native session i
 
   assert.equal(fakeAdapter.spawns[0].args[0], "resume");
   assert.equal(fakeAdapter.spawns[0].args[1], "native-persisted");
-  assert.match(fakeAdapter.spawns[0].args[2], /goal_id=goal_native_resume/);
+  assert.equal(fakeAdapter.spawns[0].args.length, 2);
+  assert.match(fakeAdapter.writes[0], /^\/goal /);
+  assert.match(fakeAdapter.writes[0], /goal_id=goal_native_resume/);
   assert.equal(session.resume_native_session_id, "native-persisted");
 });
 
@@ -313,8 +314,9 @@ test("stores session metadata under explicit workspaceRoot instead of cwd", asyn
   assert.equal(session.deprecated_cwd_session_root, false);
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
   assert.equal(fakeAdapter.spawns[0].command, "codex-custom");
-  assert.ok(fakeAdapter.spawns[0].args[0].includes(`.gptwork/runtime-goals/goal_root/codex.entry.md`));
-  assert.ok(!fakeAdapter.spawns[0].args[0].includes(workspaceRoot));
+  assert.deepEqual(fakeAdapter.spawns[0].args, []);
+  assert.ok(fakeAdapter.writes[0].includes(`.gptwork/runtime-goals/goal_root/codex.entry.md`));
+  assert.ok(!fakeAdapter.writes[0].includes(workspaceRoot));
   assert.equal(await readlink(join(cwd, ".gptwork", "runtime-goals", "goal_root")), join(workspaceRoot, ".gptwork", "goals", "goal_root"));
 
   const workspaceStore = createCodexTuiSessionStore({ workspaceRoot });

@@ -34,9 +34,13 @@ function phaseForRole(role) {
 function nowIso() { return new Date().toISOString(); }
 
 function normalizeStatus(status) {
-  if (!status) return "pending";
-  if (status === "queued" || status === "waiting_for_review") return "pending";
-  return ["completed","running","failed","blocked","skipped","cancelled","pending"].includes(status) ? status : "pending";
+  if (!status) return "declared";
+  if (status === "pending" || status === "queued" || status === "waiting_for_review") return "declared";
+  if (status === "blocked") return "failed";
+  if (status === "cancelled") return "skipped";
+  return ["declared", "not_spawned", "spawning", "running", "completed", "failed", "skipped"].includes(status)
+    ? status
+    : "declared";
 }
 
 export function buildProgressFromAgentRuns(agentRuns = []) {

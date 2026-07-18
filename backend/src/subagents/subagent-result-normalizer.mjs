@@ -14,11 +14,11 @@ import { getPhaseForRoleInfo, isRepairRole } from "./subagent-policy.mjs";
 
 // -- Constants ---------------------------------------------------------------
 
-const VALID_STATUSES = new Set(["pending", "running", "completed", "failed", "blocked", "skipped", "cancelled"]);
+const VALID_STATUSES = new Set(["declared", "not_spawned", "spawning", "running", "completed", "failed", "skipped"]);
 
 // -- Helpers -----------------------------------------------------------------
 
-function normalizeStatus(status, fallback = "pending") {
+function normalizeStatus(status, fallback = "declared") {
   return VALID_STATUSES.has(status) ? status : fallback;
 }
 
@@ -147,7 +147,7 @@ export function deduplicateSubagentResults(normalizedResults = []) {
  * Infer the overall pipeline status from a set of subagent results.
  *
  * @param {object[]} subagents - Array of normalized subagent results
- * @returns {string} One of: "running", "completed", "failed", "blocked"
+ * @returns {string} One of: "running", "completed", "failed"
  */
 export function inferPipelineStatus(subagents = []) {
   if (!Array.isArray(subagents) || subagents.length === 0) return "running";
@@ -164,15 +164,15 @@ export function inferPipelineStatus(subagents = []) {
   // If any agent is still running, pipeline is running
   if (statuses.includes("running")) return "running";
 
-  // If any agent is pending, pipeline is running (not yet complete)
-  if (statuses.includes("pending")) return "running";
+  // If any agent is declared (not yet started), pipeline is running
+  if (statuses.includes("declared") || statuses.includes("spawning")) return "running";
 
   // If any agent has no started_at, pipeline is running
-  const unstarted = subagents.filter((s) => s.role !== "repairer" && !s.started_at);
+  const unstarted = subagents.filter((s) => s.role !== "repairer" && s.status === "declared" && !s.started_at);
   if (unstarted.length > 0) return "running";
 
-  // All agents completed/failed/skipped/cancelled
-  const ended = subagents.filter((s) => ["completed", "failed", "skipped", "cancelled"].includes(s.status));
+  // All agents completed/failed/skipped/not_spawned
+  const ended = subagents.filter((s) => ["completed", "failed", "skipped", "cancelled", "not_spawned"].includes(s.status));
   if (ended.length > 0 && ended.length === subagents.length) {
     // If finalizer completed, pipeline is completed
     const finalizer = subagents.find((s) => s.role === "finalizer");
