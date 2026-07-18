@@ -1,4 +1,8 @@
 export function classifyTuiState(frame = {}, { resultJsonPresent = false } = {}) {
+  const normalizedText = String(frame.normalized_text || "");
+  if (/sign in with chatgpt|login server error|log in with device code|authentication required/i.test(normalizedText)) {
+    return { state: "authentication_required", confidence: 1, reason_code: "codex_authentication_required" };
+  }
   if (resultJsonPresent && (frame.prompt_markers || []).length > 0) return { state: "collecting_result", confidence: 1, reason_code: "result_present_prompt_returned" };
   if ((frame.confirmation_markers || []).length > 0) return { state: "awaiting_confirmation", confidence: 1, reason_code: "confirmation_prompt" };
   if ((frame.selectable_options || []).length > 0) return { state: "awaiting_choice", confidence: 1, reason_code: "choice_list" };

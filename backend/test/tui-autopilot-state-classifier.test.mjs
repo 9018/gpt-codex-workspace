@@ -12,3 +12,13 @@ test("classifyTuiState recognizes progress, prompt return, and bounded uncertain
   assert.equal(classifyTuiState({ prompt_markers: ["codex_prompt"] }).state, "ready_for_instruction");
   assert.equal(classifyTuiState({ normalized_text: "ambiguous screen" }).state, "unclassified");
 });
+
+
+test("classifyTuiState fails closed on Codex authentication screens", () => {
+  const decision = classifyTuiState({
+    normalized_text: "Sign in with ChatGPT\nLogin server error: 404 Not Found",
+    error_markers: ["404 Not Found"],
+  });
+  assert.equal(decision.state, "authentication_required");
+  assert.equal(decision.reason_code, "codex_authentication_required");
+});

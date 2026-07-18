@@ -19,3 +19,12 @@ test("decideTuiAction escalates only bounded high uncertainty", () => {
   assert.equal(decision.type, "checkpoint_supervisor");
   assert.equal(decision.reason_code, "autopilot_action_budget_exhausted");
 });
+
+
+test("decideTuiAction never sends task input to an authentication screen", () => {
+  const decision = decideTuiAction({ state: "authentication_required" });
+  assert.deepEqual(decision, {
+    type: "checkpoint_supervisor",
+    reason_code: "codex_authentication_required",
+  });
+});

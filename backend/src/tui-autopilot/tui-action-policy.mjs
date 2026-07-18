@@ -2,6 +2,7 @@ import { decideTuiConfirmation } from "./tui-confirmation-policy.mjs";
 
 export function decideTuiAction({ state, frame = {}, allowedRoots = [], remainingAcceptance = [], actionAttempts = 0, maxActions = 100 } = {}) {
   if (actionAttempts >= maxActions) return { type: "checkpoint_supervisor", reason_code: "autopilot_action_budget_exhausted" };
+  if (state === "authentication_required") return { type: "checkpoint_supervisor", reason_code: "codex_authentication_required" };
   if (state === "awaiting_confirmation") {
     const decision = decideTuiConfirmation(frame, { allowedRoots });
     return { type: "send_input", input: decision.input, reason_code: decision.reason_code, followup: decision.alternative_instruction };
