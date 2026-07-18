@@ -7,6 +7,8 @@ import {
   createSessionInventoryToolsGroup,
   listCodexSessionsMetadata,
   readCodexNativeSession,
+  summarizeCodexNativeSession,
+  listCodexNativeSessions,
 } from '../src/tool-groups/session-inventory-tools-group.mjs';
 
 function fakeTool(description, inputSchema, handler) {
@@ -230,4 +232,56 @@ test('readCodexNativeSession leaves an incomplete trailing JSONL record for the 
   } finally {
     await rm(codexHome, { recursive: true, force: true });
   }
+});
+
+
+test('summarizeCodexNativeSession extracts resume-style metadata and terminal status', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-native-summary-'));
+  try {
+    const relativePath = '2026/07/19/rollout-2026-07-19T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl';
+    const absolutePath = join(root, relativePath);
+    await mkdir(join(root, '2026', '07', '19'), { recursive: true });
+    const lines = [
+      { timestamp: '2026-07-19T00:00:00Z', type: 'session_meta', payload: { cwd: '/repo/project' } },
+      { timestamp: '2026-07-19T00:00:01Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '<environment_context>ignored</environment_context>' }] } },
+      { timestamp: '2026-07-19T00:00:02Z', type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: '分析项目代码，执行完整链路测试' }] } },
+      { timestamp: '2026-07-19T00:00:03Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '开始检查。' }] } },
+      { timestamp: '2026-07-19T00:00:04Z', type: 'response_item', payload: { type: 'message', role: 'assistant', content: [{ type: 'output_text', text: '检查完成。' }] } },
+      { timestamp: '2026-07-19T00:00:05Z', type: 'event_msg', payload: { type: 'task_complete' } },
+    ];
+    await writeFile(absolutePath, lines.map(JSON.stringify).join('\n') + '\n');
+    const info = await (await import('node:fs/promises')).stat(absolutePath);
+    const result = await summarizeCodexNativeSession({ absolutePath, relativePath, stat: info, activeNativeSessionIds: new Set() });
+    assert.equal(result.session_id, 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee');
+    assert.equal(result.title, '分析项目代码，执行完整链路测试');
+    assert.equal(result.cwd, '/repo/project');
+    assert.equal(result.message_count, 4);
+    assert.equal(result.last_assistant_message, '检查完成。');
+    assert.equal(result.status, 'finished');
+    assert.equal(result.attachable, true);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('listCodexNativeSessions filters tests, isolates malformed files, sorts, and limits', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-native-list-'));
+  try {
+    const dir = join(codexHome, 'sessions', '2026', '07', '19'); await mkdir(dir, { recursive: true });
+    const business = join(dir, 'rollout-11111111-1111-1111-1111-111111111111.jsonl');
+    const testFile = join(dir, 'rollout-22222222-2222-2222-2222-222222222222.jsonl');
+    const malformed = join(dir, 'rollout-33333333-3333-3333-3333-333333333333.jsonl');
+    await writeFile(business, JSON.stringify({ type:'response_item', payload:{ type:'message', role:'user', content:[{type:'input_text',text:'真实业务任务'}] } })+'\n');
+    await writeFile(testFile, JSON.stringify({ type:'response_item', payload:{ type:'message', role:'user', content:[{type:'input_text',text:'__gptwork_test_invalid_arg__'}] } })+'\n');
+    await writeFile(malformed, '{not-json}\n');
+    const now = Date.now(); const { utimes } = await import('node:fs/promises');
+    await utimes(business, now/1000-20, now/1000-20); await utimes(testFile, now/1000-10, now/1000-10); await utimes(malformed, now/1000, now/1000);
+    const context = { user_id:'test', scopes:['workspace:read'] };
+    const result = await listCodexNativeSessions({ codexHome }, { limit: 10 }, context);
+    assert.equal(result.sessions.length, 1);
+    assert.equal(result.sessions[0].title, '真实业务任务');
+    assert.equal(result.filtered_test_sessions, 1);
+    assert.equal(result.errors.length, 1);
+    const included = await listCodexNativeSessions({ codexHome }, { limit: 1, includeTestSessions: true }, context);
+    assert.equal(included.sessions.length, 1);
+    assert.equal(included.sessions[0].is_test_session, true);
+  } finally { await rm(codexHome, { recursive: true, force: true }); }
 });

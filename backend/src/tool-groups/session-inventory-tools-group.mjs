@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { startCodexTuiGoalSession, getCodexTuiSessionStatus, sendCodexTuiSessionInput, stopCodexTuiSession } from '../codex-tui-session-manager.mjs';
+import { activeSessions } from '../codex-tui/active-session-registry.mjs';
 import { requireScope, defaultTokenContext } from '../auth-context.mjs';
 import { extractTaskLimit } from '../task-status.mjs';
 import { emitTaskProgress, updateTask } from '../task-lifecycle.mjs';
@@ -53,6 +54,112 @@ export async function readCodexNativeSession(config, { relative_path, cursor = 0
     }
   }
   return { native_session_id: nativeSessionIdFromPath(target), relative_path: relative(root, target).replaceAll("\\", "/"), cursor: start, next_cursor: end, eof: end >= buf.length, messages };
+}
+
+
+function textFromContent(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return content.map((item) => typeof item === 'string' ? item : (item?.text || item?.content || '')).filter(Boolean).join('\n');
+}
+
+function normalizedPreview(value, maxLength) {
+  const text = String(value || '').replace(/\s+/g, ' ').trim();
+  return text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text;
+}
+
+function isIgnoredUserText(text) {
+  const value = String(text || '').trim();
+  return !value || value.startsWith('<environment_context>') || value.startsWith('<codex_internal_context') || value.includes('__gptwork_test_invalid_arg__');
+}
+
+function activeNativeIdsFromRegistry() {
+  const ids = new Set();
+  for (const key of activeSessions.keys()) {
+    const match = String(key).match(/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/i);
+    if (match) ids.add(match[1].toLowerCase());
+  }
+  return ids;
+}
+
+export async function summarizeCodexNativeSession({ absolutePath, relativePath, stat: fileStat, activeNativeSessionIds = new Set() }) {
+  const sessionId = nativeSessionIdFromPath(absolutePath);
+  const content = await readFile(absolutePath, 'utf8');
+  let cwd = null;
+  let title = '';
+  let lastAssistantMessage = '';
+  let messageCount = 0;
+  let terminal = false;
+  let parsedLines = 0;
+  let isTestSession = false;
+
+  for (const line of content.split(/\r?\n/)) {
+    if (!line.trim()) continue;
+    let value;
+    try { value = JSON.parse(line); } catch { continue; }
+    parsedLines += 1;
+    const payload = value?.payload || value || {};
+    if (!cwd) cwd = payload.cwd || payload.session_meta?.cwd || value.cwd || null;
+    const role = payload.role || value.role;
+    const text = textFromContent(payload.content ?? payload.message ?? payload.text ?? value.content);
+    if (role === 'user' || role === 'assistant') messageCount += 1;
+    if (role === 'user') {
+      if (text.includes('__gptwork_test_invalid_arg__')) isTestSession = true;
+      if (!title && !isIgnoredUserText(text)) title = normalizedPreview(text, 160);
+    }
+    if (role === 'assistant' && text.trim()) lastAssistantMessage = normalizedPreview(text, 500);
+    const eventType = String(payload.type || value.type || '').toLowerCase();
+    if (/(task_complete|task_completed|turn_complete|turn_completed|session_complete|session_completed|completed|terminated|cancelled|failed)/.test(eventType)) terminal = true;
+  }
+  if (parsedLines === 0) throw new Error('session contains no valid JSONL records');
+  const active = activeNativeSessionIds.has(sessionId.toLowerCase());
+  return {
+    session_id: sessionId,
+    title: title || '(untitled Codex session)',
+    updated_at: fileStat.mtime.toISOString(),
+    cwd,
+    message_count: messageCount,
+    last_assistant_message: lastAssistantMessage || null,
+    status: active ? 'running' : terminal ? 'finished' : 'idle',
+    attachable: !active,
+    relative_path: String(relativePath).replaceAll('\\', '/'),
+    size_bytes: fileStat.size,
+    is_test_session: isTestSession,
+  };
+}
+
+export async function listCodexNativeSessions(config, { limit = 50, includeTestSessions = false } = {}, context) {
+  requireScope(context, 'workspace:read');
+  const root = resolveSessionsRoot(config);
+  const maxItems = Math.max(1, Math.min(Number(limit) || 50, 200));
+  const files = [];
+  async function walk(dir) {
+    let entries;
+    try { entries = await readdir(dir, { withFileTypes: true }); }
+    catch (error) { if (error.code === 'ENOENT') return; throw error; }
+    for (const entry of entries) {
+      const child = join(dir, entry.name);
+      if (entry.isDirectory()) await walk(child);
+      else if (entry.isFile() && entry.name.endsWith('.jsonl')) files.push({ absolutePath: child, stat: await stat(child) });
+    }
+  }
+  await walk(root);
+  files.sort((a, b) => b.stat.mtimeMs - a.stat.mtimeMs);
+  const sessions = [];
+  const errors = [];
+  let filteredTestSessions = 0;
+  const activeNativeSessionIds = activeNativeIdsFromRegistry();
+  for (const file of files) {
+    try {
+      const relativePath = relative(root, file.absolutePath).replaceAll('\\', '/');
+      const summary = await summarizeCodexNativeSession({ ...file, relativePath, activeNativeSessionIds });
+      if (summary.is_test_session && !includeTestSessions) { filteredTestSessions += 1; continue; }
+      if (sessions.length < maxItems) sessions.push(summary);
+    } catch (error) {
+      errors.push({ relative_path: relative(root, file.absolutePath).replaceAll('\\', '/'), error: error.message });
+    }
+  }
+  return { sessions, count: sessions.length, limit: maxItems, filtered_test_sessions: filteredTestSessions, errors };
 }
 
 function validateDateSegment(value) {
@@ -164,9 +271,9 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
       async (args, context) => listCodexSessionsMetadata(config, args, context),
     ),
     codex_native_sessions_list: tool(
-      "List native Codex session files under the configured sessions root.",
-      schema({ year: "string", month: "string", day: "string", limit: "integer" }),
-      async (args, context) => listCodexSessionsMetadata(config, args, context),
+      "List native Codex sessions with Resume-style title, cwd, message count, last assistant reply, lifecycle status, and attach compatibility.",
+      schema({ limit: "integer", include_test_sessions: "boolean" }),
+      async ({ limit, include_test_sessions = false }, context) => listCodexNativeSessions(config, { limit, includeTestSessions: include_test_sessions }, context),
     ),
     codex_native_session_read: tool(
       "Read structured messages from any native Codex session JSONL under the configured sessions root.",
