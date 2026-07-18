@@ -48,7 +48,9 @@ export async function sendCodexTuiTaskDelta(sessionId, delta, options = {}) {
     ptySession.write("\u001b");
     await new Promise((resolve) => setTimeout(resolve, options.interrupt_settle_ms ?? 150));
   }
-  await sendCodexTuiSessionInput(sessionId, `${instruction}\r`, options);
+  await sendCodexTuiSessionInput(sessionId, instruction, options);
+  await new Promise((resolve) => setTimeout(resolve, options.submit_settle_ms ?? 100));
+  ptySession.write("\r");
   return store.updateSession(sessionId, {
     status: "running",
     checkpoint: null,
