@@ -333,6 +333,17 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
       schema({ control_session_id: "string" }, ["control_session_id"]),
       async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_clear', { control_session_id }); return { ...result, goal_command: "/goal clear", goal_action: "clear_requested" }; },
     ),
+    codex_native_goal_stop: tool(
+      "Stop the persistent Goal by sending /goal clear before detaching the control channel.",
+      schema({ control_session_id: "string" }, ["control_session_id"]),
+      async ({ control_session_id }, context) => {
+        requireScope(context, "workspace:write");
+        await sendSession(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] });
+        const result = await stopSession(control_session_id, { reason: "native_detach", workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] });
+        await audit('goal_stop', { control_session_id });
+        return { ...result, goal_command: "/goal clear", goal_action: "clear_requested_then_detached" };
+      },
+    ),
     create_codex_session_inventory_task: tool(
       "Use this instead of create_task plus assign_task_to_codex when the user asks Codex to list Codex sessions. Creates a safe readonly task, streams progress, immediately runs the approved built-in handler, and returns the completed task with metadata-only results. It explicitly forbids transcript contents, tokens, configs, cookies, cache files, memories, or shell snapshots.",
       schema({ limit: "integer" }),
