@@ -216,3 +216,13 @@ test("execute marks command applying before routing", async () => {
   await executor.execute(baseCommand);
   assert.deepEqual(order, ["markApplying", "route", "markApplied"]);
 });
+
+test("start_repair_cycle fails closed when goal relay service is missing", async () => {
+  const command = {
+    ...baseCommand,
+    action: "start_repair_cycle",
+    payload: { remaining_work_summary: "Finish production wiring" },
+  };
+  const executor = createSupervisorCommandExecutor(createMockDeps({ goalRelayService: undefined }));
+  await assert.rejects(() => executor.execute(command), /goalRelayService not configured/);
+});

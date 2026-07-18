@@ -124,11 +124,7 @@ export function createSupervisorCommandExecutor(deps) {
 
       case "start_repair_cycle":
         if (!deps.goalRelayService) {
-          // If no relay service configured, return basic result
-          return {
-            action: "start_repair_cycle",
-            reason: command.payload?.remaining_work_summary || "Remaining work detected",
-          };
+          throw new Error("goalRelayService not configured");
         }
         return deps.goalRelayService.startRepairCycle({
           run,

@@ -49,6 +49,7 @@ let _reviewCoordinator = null;
 let _commandExecutor = null;
 let _reviewWorker = null;
 
+let _goalRelayService = null;
 let _reviewTools = null;
 let _decisionTools = null;
 
