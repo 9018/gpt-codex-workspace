@@ -206,3 +206,28 @@ test('native attach resumes with deterministic control session and send/status/d
     assert.equal((await tools.codex_native_session_detach.handler({ control_session_id: 'native_123' }, write)).status, 'stopped');
   } finally { await rm(codexHome, { recursive: true, force: true }); }
 });
+
+test('readCodexNativeSession leaves an incomplete trailing JSONL record for the next page', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-codex-native-page-'));
+  try {
+    const sessionsRoot = join(codexHome, 'sessions', '2026', '07', '19');
+    await mkdir(sessionsRoot, { recursive: true });
+    const filename = 'rollout-2026-07-19T00-00-00-019f7680-023a-7952-856c-cc24be4e4021.jsonl';
+    const first = JSON.stringify({ timestamp: '2026-07-19T00:00:00.000Z', type: 'event_msg', payload: { type: 'task_started' } }) + '\n';
+    const second = JSON.stringify({ timestamp: '2026-07-19T00:00:01.000Z', type: 'response_item', payload: { role: 'assistant', content: 'x'.repeat(5000) } }) + '\n';
+    await writeFile(join(sessionsRoot, filename), first + second);
+
+    const result = await readCodexNativeSession(
+      { codexHome },
+      { relative_path: `2026/07/19/${filename}`, cursor: 0, max_bytes: first.length + 100 },
+      { user_id: 'test', scopes: ['workspace:read'] },
+    );
+
+    assert.equal(result.messages.length, 1);
+    assert.equal(result.messages[0].raw_type, 'event_msg');
+    assert.equal(result.next_cursor, first.length);
+    assert.equal(result.eof, false);
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
+});

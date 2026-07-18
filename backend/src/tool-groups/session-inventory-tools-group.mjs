@@ -32,7 +32,12 @@ export async function readCodexNativeSession(config, { relative_path, cursor = 0
   const { root, target } = safeSessionPath(config, relative_path);
   const buf = await readFile(target);
   const start = Math.max(0, Math.min(Number(cursor) || 0, buf.length));
-  const end = Math.min(buf.length, start + Math.max(1024, Math.min(Number(max_bytes) || 262144, 1048576)));
+  const requestedEnd = Math.min(buf.length, start + Math.max(1024, Math.min(Number(max_bytes) || 262144, 1048576)));
+  let end = requestedEnd;
+  if (requestedEnd < buf.length) {
+    const lastNewline = buf.lastIndexOf(0x0a, requestedEnd - 1);
+    end = lastNewline >= start ? lastNewline + 1 : start;
+  }
   const chunk = buf.subarray(start, end).toString("utf8");
   const messages = [];
   for (const line of chunk.split(/\r?\n/)) {
