@@ -294,6 +294,35 @@ test('listCodexNativeSessions filters tests, isolates malformed files, sorts, an
   } finally { await rm(codexHome, { recursive: true, force: true }); }
 });
 
+
+test('listCodexNativeSessions stops parsing older JSONL files after reaching the limit', async () => {
+  const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-native-limit-fast-'));
+  try {
+    const dir = join(codexHome, 'sessions', '2026', '07', '19');
+    await mkdir(dir, { recursive: true });
+    const recent = join(dir, 'rollout-99999999-9999-9999-9999-999999999999.jsonl');
+    const oldMalformed = join(dir, 'rollout-00000000-0000-0000-0000-000000000000.jsonl');
+    await writeFile(recent, JSON.stringify({ type:'response_item', payload:{ type:'message', role:'user', content:[{ type:'input_text', text:'最新会话' }] } })+'\n');
+    await writeFile(oldMalformed, '{not-json}\n');
+    const { utimes } = await import('node:fs/promises');
+    const now = Date.now() / 1000;
+    await utimes(recent, now, now);
+    await utimes(oldMalformed, now - 3600, now - 3600);
+
+    const result = await listCodexNativeSessions(
+      { codexHome },
+      { limit: 1 },
+      { user_id:'test', scopes:['workspace:read'] },
+    );
+
+    assert.equal(result.sessions.length, 1);
+    assert.equal(result.sessions[0].title, '最新会话');
+    assert.equal(result.errors.length, 0);
+  } finally {
+    await rm(codexHome, { recursive: true, force: true });
+  }
+});
+
 test('codex_native_sessions_list exposes enriched schema, enforces scope, and maps test-session option', async () => {
   const codexHome = await mkdtemp(join(tmpdir(), 'gptwork-native-tool-'));
   try {

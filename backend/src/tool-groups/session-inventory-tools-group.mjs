@@ -157,11 +157,12 @@ export async function listCodexNativeSessions(config, { limit = 50, includeTestS
   let filteredTestSessions = 0;
   const activeNativeSessionIds = activeNativeIdsFromRegistry();
   for (const file of files) {
+    if (sessions.length >= maxItems) break;
     try {
       const relativePath = relative(root, file.absolutePath).replaceAll('\\', '/');
       const summary = await summarizeCodexNativeSession({ ...file, relativePath, activeNativeSessionIds });
       if (summary.is_test_session && !includeTestSessions) { filteredTestSessions += 1; continue; }
-      if (sessions.length < maxItems) sessions.push(summary);
+      sessions.push(summary);
     } catch (error) {
       errors.push({ relative_path: relative(root, file.absolutePath).replaceAll('\\', '/'), error: error.message });
     }
@@ -193,7 +194,7 @@ export async function listCodexSessionsMetadata(config, { year = "", month = "",
       throw error;
     }
 
-    entries.sort((a, b) => a.name.localeCompare(b.name));
+    entries.sort((a, b) => b.name.localeCompare(a.name));
     for (const entry of entries) {
       if (sessions.length >= maxItems) return;
       const child = join(dir, entry.name);
