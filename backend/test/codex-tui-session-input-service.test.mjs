@@ -37,9 +37,10 @@ test("structured correction submits with Enter and resumes exhausted autopilot",
   });
 
   assert.equal(resetCount, 1);
-  assert.equal(writes.length, 1);
-  assert.ok(writes[0].endsWith("\r"));
-  assert.match(writes[0], /Write CORRECTED and continue\./);
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0], "\u001b");
+  assert.ok(writes[1].endsWith("\r"));
+  assert.match(writes[1], /Write CORRECTED and continue\./);
   assert.equal(result.status, "running");
   assert.equal(result.active_delta_revision, 1);
   assert.equal(result.delta_delivery.delivered, true);
