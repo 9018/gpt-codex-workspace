@@ -80,7 +80,9 @@ test("slash command appends Enter and reports output acknowledgement", async () 
   });
   try {
     const result = await sendCodexTuiSlashCommand(sessionId, "/goal pause", { sleep_fn: async () => {}, ack_timeout_ms: 10 });
-    assert.deepEqual(writes, ["/goal pause\r"]);
+    assert.equal(writes[0], "\u0015");
+    assert.equal(writes.at(-1), "\r");
+    assert.equal(writes.slice(1, -1).join(""), "/goal pause");
     assert.equal(result.command_submitted, true);
     assert.equal(result.ack_received, true);
   } finally {

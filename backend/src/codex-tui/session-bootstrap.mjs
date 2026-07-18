@@ -27,6 +27,7 @@ import {
 } from "./active-session-registry.mjs";
 import { waitForTuiOutput } from "./session-recovery.mjs";
 import { terminalizeCodexTuiSession } from "./session-terminalizer.mjs";
+import { submitTuiText } from "./tui-safe-input.mjs";
 import { uniqueStrings, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";
 
 /**
@@ -311,7 +312,7 @@ export async function startCodexTuiGoalSessionImpl({
     await store.appendSessionLog(sessionId, `[bootstrap] native session resumed without /goal dispatch\n`).catch(() => {});
   } else {
     const goalCommand = `/goal ${initialPrompt}`;
-    ptySession.write(`${goalCommand}\r`);
+    await submitTuiText(ptySession, goalCommand);
     await store.appendSessionLog(sessionId, `[bootstrap-input] /goal dispatched\n`).catch(() => {});
     bootstrapMethod = "pty_goal_slash_command";
 

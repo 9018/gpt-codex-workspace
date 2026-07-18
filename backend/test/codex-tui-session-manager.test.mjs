@@ -70,9 +70,10 @@ test("start dispatches the goal as a real interactive slash command", async () =
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
   assert.deepEqual(fakeAdapter.spawns[0].args, []);
   assert.equal(await readlink(join(cwd, ".gptwork", "runtime-goals", "goal_1")), join(cwd, ".gptwork", "goals", "goal_1"));
-    assert.equal(fakeAdapter.writes.length, 1);
-  assert.match(fakeAdapter.writes[0], /^\/goal /);
-  assert.match(fakeAdapter.writes[0], /goal_id=goal_1/);
+  assert.ok(fakeAdapter.writes.length >= 3);
+  assert.equal(fakeAdapter.writes[0], "\u0015");
+  assert.match(fakeAdapter.writes.slice(1, -1).join(""), /^\/goal /);
+  assert.match(fakeAdapter.writes.slice(1, -1).join(""), /goal_id=goal_1/);
 
   const read = await readCodexTuiSession(session.id);
   assert.match(read.log, /TUI ready/);
@@ -191,8 +192,9 @@ test("start does not send bootstrap Enter when Codex already auto-submitted the 
   });
 
   assert.equal(session.bootstrap_method, "pty_goal_slash_command");
-  assert.equal(fakeAdapter.writes.length, 1);
-  assert.match(fakeAdapter.writes[0], /^\/goal /);
+  assert.ok(fakeAdapter.writes.length >= 3);
+  assert.equal(fakeAdapter.writes[0], "\u0015");
+  assert.match(fakeAdapter.writes.slice(1, -1).join(""), /^\/goal /);
 });
 
 test("start uses native Codex resume arguments when a persisted native session is available", async () => {
@@ -343,8 +345,8 @@ test("stores session metadata under explicit workspaceRoot instead of cwd", asyn
   assert.equal(fakeAdapter.spawns[0].cwd, cwd);
   assert.equal(fakeAdapter.spawns[0].command, "codex-custom");
   assert.deepEqual(fakeAdapter.spawns[0].args, []);
-  assert.ok(fakeAdapter.writes[0].includes(`.gptwork/runtime-goals/goal_root/codex.entry.md`));
-  assert.ok(!fakeAdapter.writes[0].includes(workspaceRoot));
+  assert.ok(fakeAdapter.writes.join("").includes(`.gptwork/runtime-goals/goal_root/codex.entry.md`));
+  assert.ok(!fakeAdapter.writes.join("").includes(workspaceRoot));
   assert.equal(await readlink(join(cwd, ".gptwork", "runtime-goals", "goal_root")), join(workspaceRoot, ".gptwork", "goals", "goal_root"));
 
   const workspaceStore = createCodexTuiSessionStore({ workspaceRoot });

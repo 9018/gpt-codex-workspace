@@ -8,6 +8,7 @@ import { createTaskContextStore } from "../context-contract/task-context-store.m
 import { validateTaskDelta, renderDeltaInstruction } from "../codex-tui-task-delta.mjs";
 import { activeManagerForSession } from "./active-session-registry.mjs";
 import { findStoreForSession } from "./session-bootstrap.mjs";
+import { submitTuiText } from "./tui-safe-input.mjs";
 
 export async function sendCodexTuiSessionInput(sessionId, text, options = {}) {
   await findStoreForSession(sessionId, options);
@@ -24,7 +25,7 @@ export async function sendCodexTuiSlashCommand(sessionId, command, options = {})
   const before = await store.readSession(sessionId, { maxChars: 0 });
   const text = String(command || "").trim();
   if (!text.startsWith("/")) throw new Error("slash command must start with /");
-  ptySession.write(`${text}\r`);
+  await submitTuiText(ptySession, text);
   await store.appendSessionLog(sessionId, `[input] ${text}\n`);
   const sleep = options.sleep_fn || ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
   const timeoutMs = Math.max(0, Number(options.ack_timeout_ms ?? 5_000));
