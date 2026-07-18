@@ -226,3 +226,98 @@ test("start_repair_cycle fails closed when goal relay service is missing", async
   const executor = createSupervisorCommandExecutor(createMockDeps({ goalRelayService: undefined }));
   await assert.rejects(() => executor.execute(command), /goalRelayService not configured/);
 });
+
+// ---------------------------------------------------------------------------
+// Route: resume_and_send_correction
+// ---------------------------------------------------------------------------
+
+test("execute resume_and_send_correction calls nativeResumeService then tuiCorrectionService", async () => {
+  let resumeCalled = false;
+  let correctionCalled = false;
+  const deps = createMockDeps({
+    nativeResumeService: {
+      resume: async ({ run, nativeSessionId, worktreePath }) => {
+        resumeCalled = true;
+        assert.equal(run.id, "run_1");
+        assert.equal(nativeSessionId, "ns_001");
+        assert.equal(worktreePath, "/tmp/worktree");
+        return { control_session_id: "ctrl_sess_resumed" };
+      },
+    },
+    tuiCorrectionService: {
+      apply: async (cmd, run) => {
+        correctionCalled = true;
+        // Verify the preconditions and run were updated with the resumed session
+        assert.equal(cmd.preconditions.expected_session_id, "ctrl_sess_resumed");
+        assert.equal(run.active_session_id, "ctrl_sess_resumed");
+        return { session_id: "ctrl_sess_resumed", delta_id: "delta_resumed" };
+      },
+    },
+  });
+  const executor = createSupervisorCommandExecutor(deps);
+  const command = {
+    ...baseCommand,
+    action: "resume_and_send_correction",
+    preconditions: {
+      expected_native_session_id: "ns_001",
+      expected_worktree_path: "/tmp/worktree",
+    },
+  };
+  const result = await executor.execute(command);
+  assert.ok(resumeCalled, "nativeResumeService.resume should be called");
+  assert.ok(correctionCalled, "tuiCorrectionService.apply should be called");
+  assert.equal(result.delta_id, "delta_resumed");
+});
+
+test("execute resume_and_send_correction fails closed when nativeResumeService is missing", async () => {
+  const deps = createMockDeps({ nativeResumeService: undefined });
+  const executor = createSupervisorCommandExecutor(deps);
+  const command = {
+    ...baseCommand,
+    action: "resume_and_send_correction",
+  };
+  await assert.rejects(
+    () => executor.execute(command),
+    /nativeResumeService not configured/
+  );
+});
+
+// ---------------------------------------------------------------------------
+// Route: handoff_to_codex
+// ---------------------------------------------------------------------------
+
+test("execute handoff_to_codex calls handoffService.handoff", async () => {
+  let handoffCalled = false;
+  const deps = createMockDeps({
+    handoffService: {
+      handoff: async ({ runId, receipt }) => {
+        handoffCalled = true;
+        assert.equal(runId, "run_1");
+        assert.deepEqual(receipt, { status: "handoff_ready" });
+        return { handed_off: true, new_owner: "codex" };
+      },
+    },
+  });
+  const executor = createSupervisorCommandExecutor(deps);
+  const command = {
+    ...baseCommand,
+    action: "handoff_to_codex",
+    payload: { status: "handoff_ready" },
+  };
+  const result = await executor.execute(command);
+  assert.ok(handoffCalled, "handoffService.handoff should be called");
+  assert.equal(result.handed_off, true);
+});
+
+test("execute handoff_to_codex fails closed when handoffService is missing", async () => {
+  const deps = createMockDeps({ handoffService: undefined });
+  const executor = createSupervisorCommandExecutor(deps);
+  const command = {
+    ...baseCommand,
+    action: "handoff_to_codex",
+  };
+  await assert.rejects(
+    () => executor.execute(command),
+    /handoffService not configured/
+  );
+});
