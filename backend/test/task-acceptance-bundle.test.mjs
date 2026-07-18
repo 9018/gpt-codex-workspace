@@ -68,7 +68,7 @@ test('getTaskAcceptanceBundle returns compact acceptance evidence without full c
   const bundle = await getTaskAcceptanceBundle({ store: makeStore(state), config: { defaultWorkspaceRoot: root }, task_id: 'task_bundle' });
 
   assert.deepEqual(Object.keys(bundle), [
-    'task_id', 'goal_id', 'title', 'status', 'operation_kind', 'acceptance_contract_summary',
+    'task_id', 'goal_id', 'title', 'status', 'task_status', 'canonical_status', 'canonical_outcome', 'operation_kind', 'acceptance_contract_summary',
     'result_summary', 'verification', 'contract_verification', 'no_change_repair_completion_summary',
     'unified_decision', 'closure_decision', 'integration', 'changed_files', 'report_paths', 'run_evidence', 'blockers', 'non_blocking_followups', 'quality_notes', 'missing_evidence',
   ]);
@@ -178,4 +178,100 @@ test('getTaskAcceptanceBundle merges durable result.json when task.result only c
   assert.equal(bundle.contract_verification.contract_valid, true);
   assert.deepEqual(bundle.changed_files, ['src/fix.mjs']);
   assert.deepEqual(bundle.missing_evidence, []);
+});
+
+test('getTaskAcceptanceBundle canonical_status overrides stale waiting_for_review when unified_decision says completed', async (t) => {
+  const state = {
+    tasks: [{
+      id: 'task_stale_wfr',
+      goal_id: 'goal_stale_wfr',
+      title: 'Stale waiting_for_review',
+      status: 'waiting_for_review',
+      result: {
+        summary: 'This task is actually completed',
+        changed_files: ['src/fix.mjs'],
+        commit: 'abc123',
+        verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+        contract_verification: { acceptance_status: 'satisfied', blocking_passed: true, completion_eligible: true, blockers: [] },
+        integration: { status: 'merged', merged: true },
+        closure_decision: { status: 'auto_completed_clean', reason: 'Blocking requirements passed' },
+        finalizer_decision: { status: 'completed', reason: 'terminal_evidence_satisfied' },
+        unified_decision: {
+          status: 'completed',
+          reason: 'All evidence satisfied',
+          blocking_passed: true,
+          requires_review: false,
+          source: 'finalizer',
+          profile: 'code_change',
+          safe_to_auto_advance: true,
+          normalized_at: new Date().toISOString(),
+        },
+      },
+      logs: [],
+    }],
+    goals: [{ id: 'goal_stale_wfr', task_id: 'task_stale_wfr', title: 'Stale goal', status: 'completed' }],
+  };
+
+  const bundle = await getTaskAcceptanceBundle({ store: makeStore(state), config: { defaultWorkspaceRoot: '/' }, task_id: 'task_stale_wfr' });
+
+  // The raw task status is "waiting_for_review", but canonical state from
+  // unified_decision says "completed". The bundle must surface "completed".
+  assert.equal(bundle.status, 'completed', 'bundle status must use canonical state, not stale task.status');
+  assert.equal(bundle.canonical_status, 'completed', 'canonical_status must be completed');
+  assert.equal(bundle.task_status, 'waiting_for_review', 'task_status preserves raw task.status for debugging');
+  assert.equal(bundle.canonical_outcome.status, 'completed', 'canonical_outcome status must match unified_decision');
+  assert.equal(bundle.canonical_outcome.blocking_passed, true, 'canonical_outcome blocking_passed must be true');
+  assert.ok(bundle.canonical_outcome.normalized_at, 'canonical_outcome must have normalized_at');
+});
+
+test('getTaskAcceptanceBundle canonical_status falls back to task.status when no unified/finalizer decision', async (t) => {
+  const state = {
+    tasks: [{
+      id: 'task_no_ud',
+      goal_id: 'goal_no_ud',
+      title: 'No unified decision',
+      status: 'running',
+      result: {
+        summary: 'Task is still running',
+        verification: { passed: null, commands: [] },
+      },
+      logs: [],
+    }],
+    goals: [{ id: 'goal_no_ud', task_id: 'task_no_ud', title: 'No UD goal', status: 'open' }],
+  };
+
+  const bundle = await getTaskAcceptanceBundle({ store: makeStore(state), config: { defaultWorkspaceRoot: '/' }, task_id: 'task_no_ud' });
+
+  assert.equal(bundle.status, 'running', 'bundle status must fall back to task.status');
+  assert.equal(bundle.canonical_status, 'running', 'canonical_status must fall back to task.status');
+  assert.equal(bundle.task_status, 'running', 'task_status must be running');
+  assert.equal(bundle.canonical_outcome, null, 'canonical_outcome must be null when no unified_decision');
+});
+
+test('getTaskAcceptanceBundle canonical_status uses finalizer_decision when unified_decision is absent', async (t) => {
+  const state = {
+    tasks: [{
+      id: 'task_fd_only',
+      goal_id: 'goal_fd_only',
+      title: 'Finalizer decision only',
+      status: 'waiting_for_review',
+      result: {
+        summary: 'Finalizer says completed',
+        changed_files: ['src/fix.mjs'],
+        commit: 'abc123',
+        verification: { passed: true, commands: [{ cmd: 'npm run check:syntax', exit_code: 0 }] },
+        integration: { status: 'merged', merged: true },
+        finalizer_decision: { status: 'completed', reason: 'terminal_evidence_satisfied' },
+      },
+      logs: [],
+    }],
+    goals: [{ id: 'goal_fd_only', task_id: 'goal_fd_only', title: 'FD only goal', status: 'completed' }],
+  };
+
+  const bundle = await getTaskAcceptanceBundle({ store: makeStore(state), config: { defaultWorkspaceRoot: '/' }, task_id: 'task_fd_only' });
+
+  assert.equal(bundle.status, 'completed', 'bundle status must use finalizer_decision.status');
+  assert.equal(bundle.canonical_status, 'completed', 'canonical_status must be completed');
+  assert.equal(bundle.task_status, 'waiting_for_review', 'task_status preserves raw status');
+  assert.equal(bundle.canonical_outcome, null, 'canonical_outcome must be null when no unified_decision');
 });

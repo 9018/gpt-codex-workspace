@@ -242,3 +242,37 @@ test("writebackTuiEvidence enters unified_decision path with correct fields", as
   assert.ok(ud.goal_effect);
   assert.ok(ud.queue_effect);
 });
+
+test("persistTuiTerminalState converges task goal and queue to unified terminal status", async () => {
+  const { persistTuiTerminalState } = await import("../src/codex-tui-evidence-writeback.mjs");
+  const state = {
+    tasks: [{ id: "task_terminal", goal_id: "goal_terminal", status: "waiting_for_review", result: {} }],
+    goals: [{ id: "goal_terminal", task_id: "task_terminal", status: "running" }],
+    goal_queue: [{ queue_id: "queue_terminal", task_id: "task_terminal", goal_id: "goal_terminal", status: "running" }],
+  };
+  const store = { mutate: async (fn) => fn(state) };
+  const unifiedDecision = {
+    status: "completed",
+    reason: "all_evidence_satisfied",
+    blocking_passed: true,
+    requires_review: false,
+    safe_to_auto_advance: true,
+    goal_effect: { status: "completed" },
+    queue_effect: { status: "completed" },
+  };
+  const taskResult = { status: "completed", summary: "done", unified_decision: unifiedDecision };
+
+  const persisted = await persistTuiTerminalState({
+    store,
+    task: state.tasks[0],
+    taskResult,
+    unifiedDecision,
+  });
+
+  assert.equal(persisted.persisted, true);
+  assert.equal(state.tasks[0].status, "completed");
+  assert.equal(state.tasks[0].result.unified_decision.status, "completed");
+  assert.equal(state.goals[0].status, "completed");
+  assert.equal(state.goal_queue[0].status, "completed");
+  assert.match(state.tasks[0].logs.at(-1).message, /canonical terminal state/i);
+});

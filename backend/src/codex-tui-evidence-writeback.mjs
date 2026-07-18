@@ -71,6 +71,64 @@ function commitReachableOnCanonical(workspaceRoot, commit) {
   return null;
 }
 
+
+const PERSISTABLE_TERMINAL_STATUSES = new Set([
+  "completed",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "waiting_for_review",
+  "waiting_for_repair",
+  "waiting_for_integration",
+]);
+
+export async function persistTuiTerminalState({ store, task, taskResult = {}, unifiedDecision = {} } = {}) {
+  if (!store || typeof store.mutate !== "function" || !task?.id) {
+    return { persisted: false, reason: "store_or_task_unavailable" };
+  }
+  const status = String(unifiedDecision.status || taskResult.status || "");
+  if (!PERSISTABLE_TERMINAL_STATUSES.has(status)) {
+    return { persisted: false, reason: "non_persistable_status", status };
+  }
+  const now = new Date().toISOString();
+  let found = false;
+  await store.mutate((state) => {
+    const storedTask = (state.tasks || []).find((item) => item?.id === task.id);
+    if (!storedTask) return state;
+    found = true;
+    storedTask.status = status;
+    storedTask.result = {
+      ...(storedTask.result || {}),
+      ...taskResult,
+      status,
+      unified_decision: unifiedDecision,
+    };
+    storedTask.updated_at = now;
+    storedTask.logs = Array.isArray(storedTask.logs) ? storedTask.logs : [];
+    storedTask.logs.push({ time: now, message: `[tui-writeback] canonical terminal state persisted: ${status}` });
+
+    const goalId = storedTask.goal_id || task.goal_id || null;
+    const goalStatus = String(unifiedDecision.goal_effect?.status || status);
+    const goal = (state.goals || []).find((item) => item?.id === goalId || item?.task_id === task.id);
+    if (goal && PERSISTABLE_TERMINAL_STATUSES.has(goalStatus)) {
+      goal.status = goalStatus;
+      goal.updated_at = now;
+    }
+
+    const queueStatus = String(unifiedDecision.queue_effect?.status || status);
+    for (const item of state.goal_queue || []) {
+      if (item?.task_id !== task.id && (!goalId || item?.goal_id !== goalId)) continue;
+      if (PERSISTABLE_TERMINAL_STATUSES.has(queueStatus)) {
+        item.status = queueStatus;
+        item.blocked_reason = null;
+        item.updated_at = now;
+      }
+    }
+    return state;
+  });
+  return { persisted: found, status, reason: found ? "canonical_terminal_state_persisted" : "task_not_found" };
+}
+
 // ---------------------------------------------------------------------------
 // Main export
 // ---------------------------------------------------------------------------
@@ -250,6 +308,13 @@ export async function writebackTuiEvidence({
     );
   }
 
+  const persistence = await persistTuiTerminalState({
+    store,
+    task,
+    taskResult: { ...applied.taskResult, unified_decision: unifiedDecision, finalizer_decision: finalizerDecision },
+    unifiedDecision,
+  });
+
   return {
     taskResult: applied.taskResult,
     unified_decision: unifiedDecision,
@@ -264,6 +329,7 @@ export async function writebackTuiEvidence({
     commit,
     tests,
     integration_evidence: integrationEvidence,
+    persistence,
   };
 }
 
@@ -285,4 +351,4 @@ export function hasMinimumTuiEvidence(completion = {}) {
   );
 }
 
-export default { writebackTuiEvidence, hasMinimumTuiEvidence };
+export default { writebackTuiEvidence, hasMinimumTuiEvidence, persistTuiTerminalState };

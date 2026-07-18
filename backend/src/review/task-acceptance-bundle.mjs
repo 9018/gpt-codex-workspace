@@ -266,11 +266,36 @@ export async function getTaskAcceptanceBundle({ store, config = {}, task_id } = 
   ].slice(0, MAX_ITEMS);
   const missingEvidence = collectMissingEvidence({ task, result, verification, contractVerification, reportPaths });
 
+  // P0: Derive canonical terminal state from the authoritative decision source.
+  // Prefer unified_decision.status (single source of truth), then
+  // finalizer_decision.status (pre-reconciled), then task.status (raw store).
+  // This ensures the acceptance bundle never exposes stale waiting_for_review
+  // as current when the canonical terminal state is completed.
+  const canonicalStatus =
+    result?.unified_decision?.status
+    || result?.finalizer_decision?.status
+    || task.status
+    || null;
+
   return {
     task_id: task.id,
     goal_id: goal?.id || task.goal_id || null,
     title: task.title || goal?.title || null,
-    status: task.status || null,
+    status: canonicalStatus,
+    task_status: task.status || null,
+    canonical_status: canonicalStatus,
+    canonical_outcome: result?.unified_decision
+      ? {
+          status: result.unified_decision.status || null,
+          reason: result.unified_decision.reason || null,
+          blocking_passed: result.unified_decision.blocking_passed === true,
+          requires_review: result.unified_decision.requires_review === true,
+          source: result.unified_decision.source || null,
+          profile: result.unified_decision.profile || null,
+          safe_to_auto_advance: result.unified_decision.safe_to_auto_advance === true,
+          normalized_at: result.unified_decision.normalized_at || null,
+        }
+      : null,
     operation_kind: result?.operation_kind || contract?.intent?.operation_kind || contract?.operation_kind || null,
     acceptance_contract_summary: summarizeContract(contract),
     result_summary: summarizeResult(result),
