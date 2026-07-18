@@ -22,6 +22,7 @@ import { createActionGuard } from "./supervisor-action-guard.mjs";
 import { createSupervisorCommandExecutor } from "./supervisor-command-executor.mjs";
 import { createReviewWorker } from "./supervisor-review-worker.mjs";
 import { createExecutionRunStore } from "../execution-core/execution-run-store.mjs";
+import { createWiredGoalRelay } from "../goal-relay/goal-relay-production-wiring.mjs";
 
 import { createSupervisorReviewTools } from "../tool-groups/supervisor-review/supervisor-review-tools.mjs";
 import { createSupervisorDecisionTools } from "../tool-groups/supervisor-review/supervisor-decision-tools.mjs";
@@ -57,7 +58,7 @@ let _decisionTools = null;
  *
  * @param {object} stateStore - The shared state store (e.g., from server-tools.mjs)
  */
-export function ensureSupervisorRuntime(stateStore) {
+export function ensureSupervisorRuntime(stateStore, runtimeDeps = {}) {
   if (_initialized) return;
 
   // Create execution run store
@@ -117,6 +118,17 @@ export function ensureSupervisorRuntime(stateStore) {
     reviewRequestStore: _reviewRequestStore,
   });
 
+  if (runtimeDeps.createGoal && runtimeDeps.enqueueGoal) {
+    _goalRelayService = createWiredGoalRelay({
+      runStore: _runStore,
+      createGoal: runtimeDeps.createGoal,
+      enqueueGoal: runtimeDeps.enqueueGoal,
+      tuiGoalDriver: runtimeDeps.tuiGoalDriver || null,
+      getActiveTuiSession: runtimeDeps.getActiveTuiSession || null,
+      artifactBaseDir: runtimeDeps.artifactBaseDir || process.cwd(),
+    }).goalRelayService;
+  }
+
   // Revision reader shared between command executor and review worker
   const revisionReader = {
     current: async (runId) => {
@@ -136,6 +148,7 @@ export function ensureSupervisorRuntime(stateStore) {
     leaseStore: _leaseManager,
     planStore: _planStore,
     commandStore: _commandStore,
+    goalRelayService: _goalRelayService,
     failureClassifier: {
       classify: (error) => ({
         retryable: error.message?.includes("timeout") || error.message?.includes("connection"),

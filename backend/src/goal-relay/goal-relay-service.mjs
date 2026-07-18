@@ -238,6 +238,26 @@ export function createGoalRelayService(deps) {
     return { ...createGoalRelayState(), ...serialized.goal_relay };
   }
 
+
+  async function startRepairCycle({ run, revisionId, failure_summary = "", evidence = {} } = {}) {
+    if (!run?.id) throw new Error("run is required");
+    if (!revisionId) throw new Error("revisionId is required");
+    if (await hasCycleBeenStarted({ runId: run.id, revisionId })) {
+      return { idempotent: true, decision: RELAY_DECISIONS.START_REPAIR_CYCLE };
+    }
+    const decision = await evaluateGoalCompletion({ run, evidence, remaining_work: true, failure_summary });
+    if (decision.decision !== RELAY_DECISIONS.START_REPAIR_CYCLE) return decision;
+    if (!deps.repairArtifactWriter) throw new Error("repairArtifactWriter not configured");
+    if (!deps.tuiBridge) throw new Error("tuiBridge not configured");
+    const artifactPath = await deps.repairArtifactWriter.write({ run, summary: failure_summary, repair_artifact: decision.repair_artifact, decision });
+    const successor = await deps.tuiBridge.submitSuccessorGoal({ run, next_goal: decision.next_goal, repair_artifact: { ...decision.repair_artifact, path: artifactPath } });
+    decision.repair_artifact.path = artifactPath;
+    decision.next_goal = { ...decision.next_goal, id: successor.goal_id, task_id: successor.task_id, tui_session_id: successor.tui_session_id };
+    await applyRelayDecision({ run, decision, executionResult: successor });
+    await markCycleStarted({ runId: run.id, revisionId });
+    return { ...decision, successor, idempotent: false };
+  }
+
   return {
     ensureRelayState,
     evaluateGoalCompletion,
@@ -246,5 +266,6 @@ export function createGoalRelayService(deps) {
     markCycleStarted,
     serializeRelayState,
     deserializeRelayState,
+    startRepairCycle,
   };
 }

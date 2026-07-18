@@ -130,13 +130,11 @@ export function createSupervisorCommandExecutor(deps) {
             reason: command.payload?.remaining_work_summary || "Remaining work detected",
           };
         }
-        return deps.goalRelayService.applyRelayDecision({
+        return deps.goalRelayService.startRepairCycle({
           run,
-          decision: {
-            decision: "start_repair_cycle",
-            reason: command.payload?.remaining_work_summary || "Remaining work",
-          },
-          executionResult: command.result,
+          revisionId: command.review_revision_id || command.id,
+          failure_summary: command.payload?.remaining_work_summary || "Remaining work",
+          evidence: command.payload?.evidence || {},
         });
 
       case "wait":

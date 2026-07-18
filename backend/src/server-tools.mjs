@@ -310,7 +310,11 @@ export function filterToolsForMode(tools, mode) {
 export function createTools({ store, config, browser, github, bark, envLoadResult, sources, registry, workerState, processStartedAt, notifyCreatedTaskIfNeeded, eventLogger, hookBus }) {
   // Initialize supervisor runtime with shared state store
   if (store && !process.env.SUPERVISOR_RUNTIME_DISABLED) {
-    ensureSupervisorRuntime(store);
+    ensureSupervisorRuntime(store, {
+      createGoal: (args) => createGoal(store, config, args),
+      enqueueGoal: (goalId, opts) => goalQueue.enqueueGoal(store, goalId, opts),
+      artifactBaseDir: resolveRepoDir(),
+    });
     if (config?.supervisorWorkerEnabled !== false) {
       startReviewWorker(config?.supervisorWorkerIntervalMs || 10000);
     }
