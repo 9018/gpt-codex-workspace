@@ -3,6 +3,10 @@
  * TUI Task Delta Protocol — structured same-task delta for review/repair flow.
  */
 
+const KIND_ALIASES = Object.freeze({
+  supervisor_correction: "correction",
+});
+
 const ALLOWED_KINDS = Object.freeze(
   new Set([
     "new_evidence",
@@ -38,35 +42,38 @@ export function validateTaskDelta(delta, session) {
   if (!delta || typeof delta !== "object") {
     throw new Error("delta must be an object");
   }
-  if (!ALLOWED_KINDS.has(delta.kind)) {
+  const normalized = {
+    ...delta,
+    kind: KIND_ALIASES[delta.kind] || delta.kind,
+  };
+  if (!ALLOWED_KINDS.has(normalized.kind)) {
     throw new Error(`unsupported delta kind: ${delta.kind}`);
   }
-  if (delta.task_id !== session.task_id) {
+  if (normalized.task_id !== session.task_id) {
     throw new Error("delta task_id does not match session");
   }
-  if (delta.goal_id !== session.goal_id) {
+  if (normalized.goal_id !== session.goal_id) {
     throw new Error("delta goal_id does not match session");
   }
-  if (delta.base_context_digest !== session.task_context_digest) {
+  if (normalized.base_context_digest !== session.task_context_digest) {
     throw new Error("delta context digest mismatch");
   }
 
   const expectedRevision =
     Number(session.active_delta_revision || 0) + 1;
-  if (delta.revision !== expectedRevision) {
+  if (normalized.revision !== expectedRevision) {
     throw new Error(
-      `delta revision must be ${expectedRevision}, got ${delta.revision}`
+      `delta revision must be ${expectedRevision}, got ${normalized.revision}`
     );
   }
 
-  // Reject changes to fixed contract fields
   for (const field of FIXED_CONTRACT_FIELDS) {
-    if (delta[field] !== undefined) {
+    if (normalized[field] !== undefined) {
       throw new Error(`delta cannot modify fixed field: ${field}`);
     }
   }
 
-  return delta;
+  return normalized;
 }
 
 /**
