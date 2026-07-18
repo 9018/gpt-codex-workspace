@@ -19,7 +19,7 @@ import {
 } from "./active-session-registry.mjs";
 
 /** Terminal result statuses recognized by the contract. */
-export const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "timed_out", "stopped"]);
+export const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "timed_out", "stopped", "detached"]);
 
 /**
  * Normalize a PTY terminal event to a canonical shape.
@@ -135,8 +135,8 @@ export async function writeJsonAtomic(path, value) {
 export function failClosedResult(event) {
   if (event.source === "native-detach") {
     return {
-      status: "stopped",
-      summary: "Native Codex session control channel detached.",
+      status: "detached",
+      summary: "Native Codex session control channel detached; Goal lifecycle is unchanged.",
       changed_files: [],
       tests: "none",
       commit: "none",

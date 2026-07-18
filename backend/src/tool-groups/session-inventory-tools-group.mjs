@@ -319,9 +319,19 @@ export function createSessionInventoryToolsGroup({ tool, schema, config, store, 
       async ({ control_session_id, text }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, text, { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('send', { control_session_id }); return result; },
     ),
     codex_native_session_detach: tool(
-      "Detach and stop the control channel for a native Codex session.",
+      "Detach the control channel for a native Codex session without changing its Goal lifecycle.",
       schema({ control_session_id: "string" }, ["control_session_id"]),
       async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await stopSession(control_session_id, { reason: "native_detach", workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('detach', { control_session_id }); return result; },
+    ),
+    codex_native_goal_pause: tool(
+      "Pause the persistent Goal in an attached native Codex session. The control channel remains attached.",
+      schema({ control_session_id: "string" }, ["control_session_id"]),
+      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, "/goal pause", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_pause', { control_session_id }); return { ...result, goal_command: "/goal pause", goal_action: "pause_requested" }; },
+    ),
+    codex_native_goal_clear: tool(
+      "Clear the persistent Goal in an attached native Codex session. The control channel remains attached for confirmation or later detach.",
+      schema({ control_session_id: "string" }, ["control_session_id"]),
+      async ({ control_session_id }, context) => { requireScope(context, "workspace:write"); const result = await sendSession(control_session_id, "/goal clear", { workspaceRoot: config.workspaceRoot, candidateWorkspaceRoots: [config.workspaceRoot] }); await audit('goal_clear', { control_session_id }); return { ...result, goal_command: "/goal clear", goal_action: "clear_requested" }; },
     ),
     create_codex_session_inventory_task: tool(
       "Use this instead of create_task plus assign_task_to_codex when the user asks Codex to list Codex sessions. Creates a safe readonly task, streams progress, immediately runs the approved built-in handler, and returns the completed task with metadata-only results. It explicitly forbids transcript contents, tokens, configs, cookies, cache files, memories, or shell snapshots.",

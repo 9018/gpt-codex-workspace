@@ -265,7 +265,7 @@ test("session persists the complete autonomous runtime policy", async () => {
 
 
 
-test("native detach stops the control channel without recording task failure", async () => {
+test("native detach closes only the control channel without changing Goal lifecycle", async () => {
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-native-detach-")));
   const fakeAdapter = makeFakeAdapter();
   const session = await startCodexTuiGoalSession({
@@ -278,14 +278,14 @@ test("native detach stops the control channel without recording task failure", a
 
   const stopped = await stopCodexTuiSession(session.id, { reason: "native_detach" });
 
-  assert.equal(stopped.status, "stopped");
-  assert.equal(stopped.result_status, "stopped");
+  assert.equal(stopped.status, "detached");
+  assert.equal(stopped.result_status, "detached");
   assert.equal(stopped.error, undefined);
   assert.equal(stopped.failed_at, undefined);
   assert.equal(stopped.terminal_event.source, "native-detach");
   const result = await readResult(cwd, "native_detach_goal");
-  assert.equal(result.status, "stopped");
-  assert.equal(result.summary, "Native Codex session control channel detached.");
+  assert.equal(result.status, "detached");
+  assert.equal(result.summary, "Native Codex session control channel detached; Goal lifecycle is unchanged.");
 });
 
 test("manager sends input, reads status, and stops sessions safely", async () => {

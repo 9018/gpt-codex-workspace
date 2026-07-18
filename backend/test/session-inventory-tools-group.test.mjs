@@ -37,6 +37,9 @@ test('session inventory tool group exposes stable public tool names and schemas'
     'codex_native_session_status',
     'codex_native_session_send',
     'codex_native_session_detach',
+    'codex_native_goal_pause',
+    'codex_native_goal_clear',
+    'codex_native_goal_stop',
     'create_codex_session_inventory_task',
   ]);
 
@@ -195,8 +198,8 @@ test('native attach resumes with deterministic control session and send/status/d
       sessionApi: {
         start: async (args) => { calls.push(['start', args]); return { id: 'native_123', status: 'running' }; },
         status: async (id) => ({ id, status: 'running' }),
-        send: async (id, text) => ({ id, text, sent: true }),
-        stop: async (id) => ({ id, status: 'stopped' }),
+        send: async (id, text) => { calls.push(['send', id, text]); return { id, text, sent: true }; },
+        stop: async (id) => ({ id, status: 'detached' }),
       },
     });
     const write = { user_id: 'test', scopes: ['workspace:write', 'workspace:read'] };
@@ -205,7 +208,12 @@ test('native attach resumes with deterministic control session and send/status/d
     assert.deepEqual(calls[0][1].resumeNativeSessionId, '12345678-1234-1234-1234-123456789abc');
     assert.equal((await tools.codex_native_session_status.handler({ control_session_id: 'native_123' }, write)).status, 'running');
     assert.equal((await tools.codex_native_session_send.handler({ control_session_id: 'native_123', text: 'continue' }, write)).sent, true);
-    assert.equal((await tools.codex_native_session_detach.handler({ control_session_id: 'native_123' }, write)).status, 'stopped');
+    assert.equal((await tools.codex_native_goal_pause.handler({ control_session_id: 'native_123' }, write)).goal_action, 'pause_requested');
+    assert.equal(calls.at(-1)[0], 'send');
+    assert.equal(calls.at(-1)[2], '/goal pause');
+    assert.equal((await tools.codex_native_goal_clear.handler({ control_session_id: 'native_123' }, write)).goal_action, 'clear_requested');
+    assert.equal(calls.at(-1)[2], '/goal clear');
+    assert.equal((await tools.codex_native_session_detach.handler({ control_session_id: 'native_123' }, write)).status, 'detached');
   } finally { await rm(codexHome, { recursive: true, force: true }); }
 });
 
