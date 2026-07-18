@@ -697,3 +697,32 @@ test("status normalizes semantic runtime completion into terminal contract", asy
   assert.deepEqual(canonical.verification.commands, ["read back expected content"]);
   assert.equal(canonical.verification.passed, true);
 });
+
+test("terminal result evidence overrides waiting_for_supervisor checkpoint", async () => {
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-supervisor-result-root-")));
+  const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-supervisor-result-cwd-")));
+  const fakeAdapter = makeFakeAdapter();
+  const session = await startCodexTuiGoalSession({
+    task: { id: "task_supervisor_result", title: "Supervisor result precedence" },
+    goal: { id: "goal_supervisor_result" },
+    cwd,
+    workspaceRoot,
+    ptyAdapter: fakeAdapter,
+  });
+  const store = createCodexTuiSessionStore({ workspaceRoot });
+  await store.updateSession(session.id, {
+    status: "waiting_for_supervisor",
+    checkpoint: { reason_code: "autopilot_action_budget_exhausted" },
+  });
+  const goalDir = join(workspaceRoot, ".gptwork", "goals", "goal_supervisor_result");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "completed", summary: "completed before checkpoint",
+    changed_files: [], tests: "passed", commit: "none", remote_head: "none",
+    warnings: [], followups: [], verification: { commands: [], passed: true },
+  }));
+
+  const status = await getCodexTuiSessionStatus(session.id, { workspaceRoot });
+  assert.equal(status.status, "completed");
+  assert.equal(status.pid_alive, false);
+});

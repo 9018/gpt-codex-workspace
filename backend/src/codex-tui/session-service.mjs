@@ -109,7 +109,7 @@ export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null
   let active = activeSessions.get(sessionId);
   let record = await normalizeRecoveredSessionRecord(store, sessionId);
 
-  if (["created", "running"].includes(record.status)) {
+  if (!["completed", "failed", "timed_out", "stopped", "cancelled"].includes(record.status)) {
     const root = record.metadata?.session_store_root || record.metadata?.workspace_root;
     const resultCandidates = root && record.goal_id
       ? codexTuiGoalArtifactCandidates({ workspaceRoot: root, cwd: record.cwd, goalId: record.goal_id, filename: "result.json" })
