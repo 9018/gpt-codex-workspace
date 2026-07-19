@@ -152,8 +152,8 @@ test("renderTranscriptMarkdown handles empty conversation", () => {
 test("codexInstruction contains entry-first execution instructions", () => {
   const goal = { id: "goal_codex_instr", autonomy_policy: { mode: "subagent_first", gpt_question_budget: 3 } };
   const instr = codexInstruction(goal);
-  assert.match(instr, /parent Codex agent/);
-  assert.match(instr, /subagent-first autonomous execution/);
+  assert.match(instr, /parent Codex executor/);
+  assert.match(instr, /you may start subagents/);
   assert.match(instr, /smallest reversible goal-aligned change/);
   assert.match(instr, /You must not ask ChatGPT for/);
   assert.match(instr, /- code navigation/);

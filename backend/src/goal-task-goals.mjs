@@ -79,19 +79,19 @@ export async function createGoal(store, config, args, context = defaultTokenCont
   // P0.1: Inject default autonomy/subagent policies if not provided in payload
   const payloadPolicies = args.payload || {};
   goal.autonomy_policy = payloadPolicies.autonomy_policy || {
-    mode: 'subagent_first',
+    mode: 'single_runner',
     gpt_question_budget: 0,
     allow_autonomous_defaults: true,
     default_decision_rule: 'choose_smallest_reversible_goal_aligned_change'
   };
   goal.subagent_policy = payloadPolicies.subagent_policy || {
-    mode: 'task_isolated_parent_tui',
-    advisory_roles: ['explorer', 'architect', 'test_analyst'],
-    canonical_roles: ['context_curator', 'planner', 'builder', 'verifier', 'reviewer', 'finalizer'],
-    recovery_role: 'repairer',
-    integrator_scope: 'workstream',
+    mode: 'disabled',
+    advisory_roles: [],
+    canonical_roles: [],
+    recovery_role: null,
+    integrator_scope: null,
     require_review_before_completion: false,
-    require_test_or_verification: true
+    require_test_or_verification: false
   };
   // --- v2: Process or compile Task Context Packet ---
   // Explicit packets are execution contracts: invalid input must fail closed.

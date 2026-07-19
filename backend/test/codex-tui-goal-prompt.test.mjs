@@ -15,10 +15,11 @@ test("goal objective is short and points at codex.entry.md", () => {
   assert.match(objective, /Implement TUI foundation/);
 });
 
-test("goal objective uses subagents dynamically instead of prescribing a fixed pipeline", () => {
+test("goal objective allows optional subagents without prescribing a fixed pipeline", () => {
   const objective = buildCodexTuiGoalObjective({ goalId: "goal_abc", taskTitle: "Implement TUI foundation" });
 
-  assert.match(objective, /Use subagents only when they materially help\./);
+  assert.match(objective, /Decide whether subagents materially help/);
+  assert.match(objective, /parent TUI session remains responsible for integration, verification, and the final result/);
   assert.doesNotMatch(objective, /Subagent pipeline \(parent TUI fixed\)/);
   assert.doesNotMatch(objective, /context_curator/);
   assert.doesNotMatch(objective, /repairer \(up to 2 rounds/);

@@ -350,19 +350,19 @@ test("createGoal injects default autonomy_policy and subagent_policy", async () 
 
   // Verify policy fields exist with defaults
   assert.ok(created.goal.autonomy_policy, "autonomy_policy should exist");
-  assert.equal(created.goal.autonomy_policy.mode, "subagent_first");
+  assert.equal(created.goal.autonomy_policy.mode, "single_runner");
   assert.equal(created.goal.autonomy_policy.gpt_question_budget, 0);
   assert.equal(created.goal.autonomy_policy.allow_autonomous_defaults, true);
   assert.equal(created.goal.autonomy_policy.default_decision_rule, "choose_smallest_reversible_goal_aligned_change");
 
   assert.ok(created.goal.subagent_policy, "subagent_policy should exist");
-  assert.equal(created.goal.subagent_policy.mode, "task_isolated_parent_tui");
-  assert.deepEqual(created.goal.subagent_policy.advisory_roles, ["explorer", "architect", "test_analyst"]);
-  assert.deepEqual(created.goal.subagent_policy.canonical_roles, ["context_curator", "planner", "builder", "verifier", "reviewer", "finalizer"]);
-  assert.equal(created.goal.subagent_policy.recovery_role, "repairer");
-  assert.equal(created.goal.subagent_policy.integrator_scope, "workstream");
+  assert.equal(created.goal.subagent_policy.mode, "disabled");
+  assert.deepEqual(created.goal.subagent_policy.advisory_roles, []);
+  assert.deepEqual(created.goal.subagent_policy.canonical_roles, []);
+  assert.equal(created.goal.subagent_policy.recovery_role, null);
+  assert.equal(created.goal.subagent_policy.integrator_scope, null);
   assert.equal(created.goal.subagent_policy.require_review_before_completion, false);
-  assert.equal(created.goal.subagent_policy.require_test_or_verification, true);
+  assert.equal(created.goal.subagent_policy.require_test_or_verification, false);
 });
 
 test("createEncodedGoal injects default policies when payload lacks them", async () => {
@@ -381,9 +381,9 @@ test("createEncodedGoal injects default policies when payload lacks them", async
   });
 
   assert.ok(created.goal.autonomy_policy, "autonomy_policy should exist");
-  assert.equal(created.goal.autonomy_policy.mode, "subagent_first");
+  assert.equal(created.goal.autonomy_policy.mode, "single_runner");
   assert.ok(created.goal.subagent_policy, "subagent_policy should exist");
-  assert.equal(created.goal.subagent_policy.mode, "task_isolated_parent_tui");
+  assert.equal(created.goal.subagent_policy.mode, "disabled");
 });
 
 test("createEncodedGoal respects custom policies in payload", async () => {
@@ -443,12 +443,14 @@ test("goal.md contains Autonomy Policy and Subagent Policy sections", async () =
 
   assert.match(goalMd.content, /## Autonomy Policy/);
   assert.match(goalMd.content, /## Subagent Policy/);
-  assert.match(goalMd.content, /Mode: subagent_first/);
+  assert.match(goalMd.content, /Mode: disabled/);
+  assert.match(goalMd.content, /Required roles:\n\(none\)/);
+  assert.match(goalMd.content, /Mode: single_runner/);
   assert.match(goalMd.content, /GPT question budget: 0/);
   assert.match(goalMd.content, /Do not ask ChatGPT for implementation decisions/);
   assert.match(goalMd.content, /Required roles:/);
-  assert.match(goalMd.content, /- analyst/);
-  assert.match(goalMd.content, /- escalation_judge/);
+  assert.doesNotMatch(goalMd.content, /- analyst/);
+  assert.doesNotMatch(goalMd.content, /- escalation_judge/);
 });
 
 // ---------------------------------------------------------------------------
