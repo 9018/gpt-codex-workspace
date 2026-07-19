@@ -94,6 +94,39 @@ async function deleteNativeSessionById(nativeSessionsRoot, nativeSessionId) {
   return deleted;
 }
 
+export async function pruneBoundNativeSession({
+  controlSessionId,
+  workspaceRoot,
+  projectRoot,
+  nativeSessionsRoot,
+} = {}) {
+  if (!controlSessionId) throw new TypeError('controlSessionId is required');
+  if (!workspaceRoot) throw new TypeError('workspaceRoot is required');
+  if (!projectRoot) throw new TypeError('projectRoot is required');
+  if (!nativeSessionsRoot) return { control_session_id: controlSessionId, native_session_id: null, deleted_native_sessions: [] };
+
+  const controlRecords = await listControlRecords(workspaceRoot);
+  const control = controlRecords.find((entry) => entry.controlSessionId === controlSessionId) || null;
+  const manifests = createCodexSessionManifestStore({ projectRoot });
+  const manifest = await manifests.read(controlSessionId).catch((error) => {
+    if (error?.code === 'ENOENT') return null;
+    throw error;
+  });
+  const nativeSessionId = nativeIdFromRecord(control?.record) || manifest?.native_session_id || null;
+  const deletedNativeSessions = await deleteNativeSessionById(nativeSessionsRoot, nativeSessionId);
+  await deleteSessionOwnedFolders({
+    record: null,
+    manifest: null,
+    nativeSessionsRoot,
+    deletedNativeSessions,
+  });
+  return {
+    control_session_id: controlSessionId,
+    native_session_id: nativeSessionId,
+    deleted_native_sessions: deletedNativeSessions,
+  };
+}
+
 export async function deleteBoundCodexSession({
   controlSessionId,
   workspaceRoot,

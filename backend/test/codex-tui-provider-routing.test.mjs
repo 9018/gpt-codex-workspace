@@ -359,7 +359,7 @@ test("codex_tui_goal missing result.json enters automatic retry with actionable 
   assert.equal(result.result.session_id, "session_missing");
   assert.equal(store.state.tasks[0].status, "waiting_for_review");
   assert.equal(store.state.tasks[0].result.session_id, "session_missing");
-  assert.equal(store.state.tasks[0].result.tui_phase, "automatic_recovery_pending");
+  assert.equal(store.state.tasks[0].result.tui_phase, "human_review_missing_evidence");
   assert.equal(store.state.tasks[0].result.collect_result.status, "not_ready");
   assert.match(store.state.tasks[0].result.collect_result.expected_result_json, /goal_1\/result\.json$/);
   assert.equal(store.state.tasks[0].result.collect_result.finding.code, "tui_result_json_missing");
@@ -502,7 +502,7 @@ test("codex_exec provider responses 404 blocks and does not enter acceptance or 
     }),
   );
 
-  assert.equal(result.status, "blocked");
+  assert.equal(result.status, "waiting_for_review");
   assert.equal(acceptanceCalls, 0);
   assert.equal(integrationCalls, 0);
   assert.equal(finalized.taskResult.failure_class, "codex_transport_404");

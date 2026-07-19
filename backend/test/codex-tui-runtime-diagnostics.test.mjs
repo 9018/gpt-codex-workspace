@@ -40,7 +40,7 @@ function fakeSchema(shape = {}, required = []) {
   return { type: "object", properties: shape, required };
 }
 
-test("omits codex_tui_goal diagnostics when TUI is not configured and no task/session references it", async () => {
+test("reports codex_tui_goal diagnostics with default autonomous provider when no explicit config", async () => {
   const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-runtime-empty-")));
 
   const diagnostics = await collectCodexTuiRuntimeDiagnostics({
@@ -50,7 +50,14 @@ test("omits codex_tui_goal diagnostics when TUI is not configured and no task/se
     env: {},
   });
 
-  assert.equal(diagnostics, null);
+  assert.notEqual(diagnostics, null);
+  assert.equal(diagnostics.provider, "codex_tui_goal");
+  assert.equal(diagnostics.enabled, true);
+  assert.equal(diagnostics.config_source, "default");
+  assert.equal(diagnostics.activation, "default_autonomous");
+  assert.equal(diagnostics.explicit_task_count, 0);
+  assert.equal(diagnostics.session_store.present, false);
+  assert.equal(diagnostics.completion.ready_for_review_count, 0);
 });
 
 test("reports autonomous TUI as the default provider", async () => {

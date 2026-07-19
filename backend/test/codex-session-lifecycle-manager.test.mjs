@@ -9,6 +9,7 @@ import {
   deleteBoundCodexSession,
   clearAllBoundCodexSessions,
   reconcileCodexSessionBindings,
+  pruneBoundNativeSession,
 } from '../src/codex-session/codex-session-lifecycle-manager.mjs';
 
 async function exists(path) {
@@ -169,4 +170,29 @@ test('clearAllBoundCodexSessions removes session root folders instead of recreat
   assert.equal(await exists(join(projectRoot, '.gptwork', 'codex-sessions')), false);
   assert.equal(await exists(nativeSessionsRoot), false);
   assert.ok(result.deleted_bound_folders.includes(controlRoot));
+});
+
+
+test('pruneBoundNativeSession removes terminal native rollout while retaining control record and manifest', async () => {
+  const { projectRoot, workspaceRoot, nativeSessionsRoot } = await fixture();
+  const controlId = 'control_terminal';
+  const nativeId = 'native-terminal';
+  const recordPath = join(workspaceRoot, '.gptwork', 'codex-tui-sessions', `${controlId}.json`);
+  const rolloutPath = join(nativeSessionsRoot, '2026', '07', '20', 'terminal.jsonl');
+  await writeFile(recordPath, JSON.stringify({ id: controlId, native_session_id: nativeId, status: 'completed' }));
+  await writeFile(rolloutPath, JSON.stringify({ type: 'session_meta', payload: { id: nativeId } }) + '\n');
+  const manifests = createCodexSessionManifestStore({ projectRoot });
+  await manifests.write({ control_session_id: controlId, native_session_id: nativeId, status: 'completed' });
+
+  const result = await pruneBoundNativeSession({
+    controlSessionId: controlId,
+    workspaceRoot,
+    projectRoot,
+    nativeSessionsRoot,
+  });
+
+  assert.equal(await exists(rolloutPath), false);
+  assert.equal(await exists(recordPath), true);
+  assert.equal(await exists(join(projectRoot, '.gptwork', 'codex-sessions', 'manifests', `${controlId}.json`)), true);
+  assert.deepEqual(result.deleted_native_sessions, [rolloutPath]);
 });
