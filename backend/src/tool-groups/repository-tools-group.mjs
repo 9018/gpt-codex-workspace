@@ -22,7 +22,13 @@ export function createRepositoryToolsGroup({ tool, schema, registry }) {
 
     list_repositories: tool("List all registered repositories in the workspace registry with canonical paths.", schema({}), async () => {
       const repos = registry.list();
-      return { count: repos.length, repositories: repos };
+      return {
+        count: repos.length,
+        repositories: repos.map((repo) => ({
+          ...repo,
+          display_name: (repo.owner && repo.repo_name) ? repo.owner + "/" + repo.repo_name : (repo.repo_name || repo.repo_id || "Unnamed Repository"),
+        })),
+      };
     }),
 
     get_repository_status: tool("Get detailed status for a registered repository, including canonical/stale detection and ahead/behind. If no repo_id/owner/repo_name is provided and there is exactly one registered repo, it will be used automatically. Multi-repo projects must specify repo_id.", schema({ repo_id: "string", owner: "string", repo_name: "string" }, []), async (args) => {

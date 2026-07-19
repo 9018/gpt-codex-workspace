@@ -191,6 +191,24 @@ export function summarizeNativeTextZh(name, data) {
     case "gptwork_doctor": return renderDoctor(data);
     case "show_changes": return renderChanges(data);
     case "read_handoff": return renderHandoff(data);
+    case "list_projects": {
+      const projects = Array.isArray(data.projects) ? data.projects : [];
+      if (projects.length === 0) return "项目列表：无可用项目";
+      const lines = [`项目列表：共 ${projects.length} 个`];
+      for (const p of projects) {
+        lines.push(`- ${p.display_name || p.name || p.id}${p.description ? ` · ${p.description}` : ""}`);
+      }
+      return lines.join("\n");
+    }
+    case "list_repositories": {
+      const repos = Array.isArray(data.repositories) ? data.repositories : [];
+      if (repos.length === 0) return "远程仓库列表：无已注册仓库";
+      const lines = [`远程仓库列表：共 ${repos.length} 个`];
+      for (const r of repos) {
+        lines.push(`- ${r.display_name || r.repo_name || r.repo_id}${r.remote_url ? ` · ${r.remote_url}` : ""}`);
+      }
+      return lines.join("\n");
+    }
     case "health_check":
       return `服务状态：${data.ok === false ? "异常" : "正常"}\n服务：${data.service || "gptwork-mcp"}`;
     default:

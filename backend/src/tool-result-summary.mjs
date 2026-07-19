@@ -200,6 +200,22 @@ export function summarizeToolResult(name, structuredContent) {
           if (d.dry_run) lines.push(formatKeyValue('dry_run', 'true'));
           return formatToolCard('Start Next', { lines });
         }
+        case "list_projects": {
+          const projs = structuredContent.projects || [];
+          const lines = [`  Projects (${projs.length}):`];
+          for (const p of projs) {
+            lines.push(`    ${p.display_name || p.name || p.id}  [${p.id}]  ${p.description || ""}`);
+          }
+          return lines.join('\n');
+        }
+        case "list_repositories": {
+          const repos = structuredContent.repositories || [];
+          const lines = [`  Repositories (${repos.length}):`];
+          for (const r of repos) {
+            lines.push(`    ${r.display_name || r.repo_name || r.repo_id}`);
+          }
+          return lines.join("\n");
+        }
         case "gptwork_self_test": {
           const d = structuredContent;
           const lines = [ formatKeyValue('summary', d.summary || '-') ];

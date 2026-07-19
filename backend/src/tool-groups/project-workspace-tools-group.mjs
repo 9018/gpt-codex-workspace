@@ -28,7 +28,13 @@ export function createProjectWorkspaceToolsGroup({
       schema({}),
       async (_args, context) => {
         const state = await store.load();
-        return { projects: state.projects.filter((project) => canAccessProject(context, project.id)) };
+        const projects = state.projects.filter((project) => canAccessProject(context, project.id));
+        return {
+          projects: projects.map((project) => ({
+            ...project,
+            display_name: project.name || project.id || "Unnamed Project",
+          })),
+        };
       },
     ),
     get_project: tool(
