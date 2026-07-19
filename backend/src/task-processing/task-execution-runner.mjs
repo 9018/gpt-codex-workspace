@@ -1077,7 +1077,7 @@ export async function runTaskExecution(store, config, task, context, github, dep
       message: taskResult.summary || "The configured provider returned 404 for /v1/responses.",
       source: "codex_transport",
     };
-    taskResult.status = "blocked";
+    taskResult.status = "waiting_for_review";
     taskResult.pipeline_halted = true;
     taskResult.next_action = taskResult.next_action || "Configure a provider endpoint that implements the Codex Responses transport, then requeue the task.";
     taskResult.acceptance_findings = [finding];
@@ -1112,14 +1112,14 @@ export async function runTaskExecution(store, config, task, context, github, dep
       task_id: task.id,
       goal_id: goal?.id,
       taskResult,
-      taskStatus: "blocked",
+      taskStatus: "waiting_for_review",
     }, context).catch((err) => recordAgentRunWritebackFailure(taskResult, "finalizer", err));
 
     return finalizeCodexTaskRunFn({
       store,
       config,
       task,
-      taskStatus: "blocked",
+      taskStatus: "waiting_for_review",
       taskResult,
       doneAt: new Date().toISOString(),
       cr,
@@ -1163,7 +1163,7 @@ export async function runTaskExecution(store, config, task, context, github, dep
     && !providerExecutionReady.evidence
     && taskResult.failure_class === "result_missing"
   ) {
-    taskStatus = "retry_wait";
+    taskStatus = "waiting_for_review";
   }
   taskStatus = applyAutonomyValidation(taskStatus, taskResult, goal, parsedResult);
   taskStatus = await applyRuntimeCodeChangeGuard({
