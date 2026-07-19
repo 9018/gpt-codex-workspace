@@ -308,10 +308,15 @@ test("manager sends input, reads status, and stops sessions safely", async () =>
   assert.equal(status.status, "running");
   assert.equal(status.pid, 99);
 
-  const stopped = await stopCodexTuiSession(session.id, { reason: "test complete" });
+  const stopped = await stopCodexTuiSession(session.id, {
+    reason: "test complete",
+    gracefulStopTimeoutMs: 0,
+    sleep_fn: async () => {},
+  });
   assert.equal(stopped.status, "failed");
   assert.equal(stopped.terminal_event_count, 1);
   assert.equal(stopped.terminal_event.source, "explicit-stop");
+  assert.deepEqual(fakeAdapter.writes.slice(-3), ["\u0015", "/goal stop", "\r"]);
   assert.deepEqual(fakeAdapter.stops, [undefined]);
   const result = await readResult(cwd, "goal_2");
   assert.equal(result.status, "failed");

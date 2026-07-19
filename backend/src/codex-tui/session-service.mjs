@@ -24,6 +24,7 @@ import {
 } from "./session-terminalizer.mjs";
 import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./result-locator.mjs";
 import { isProcessAlive, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";
+import { submitTuiText } from "./tui-safe-input.mjs";
 
 /**
  * Start a Codex TUI goal session.  Idempotent by sessionId: if a session
@@ -71,9 +72,36 @@ export async function readCodexTuiSession(sessionId, { maxChars, workspaceRoot =
  * @param {object} [options]
  * @returns {Promise<object>} Terminalized session record
  */
-export async function stopCodexTuiSession(sessionId, { reason = "stopped", workspaceRoot = null, candidateWorkspaceRoots: candidateRoots = [], releaseLockFn = null } = {}) {
+export async function stopCodexTuiSession(sessionId, {
+  reason = "stopped",
+  workspaceRoot = null,
+  candidateWorkspaceRoots: candidateRoots = [],
+  releaseLockFn = null,
+  gracefulStopTimeoutMs = 10_000,
+  sleep_fn: sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
   const store = await findStoreForSession(sessionId, { workspaceRoot, candidateWorkspaceRoots: candidateRoots });
   const active = activeSessions.get(sessionId);
+
+  const shouldRequestNativeGoalStop = !["native_detach", "evidence_timeout"].includes(reason);
+  if (active?.ptySession && shouldRequestNativeGoalStop) {
+    try {
+      await submitTuiText(active.ptySession, "/goal stop", { sleep_fn: sleep });
+      await store.appendSessionLog(sessionId, "[input] /goal stop\n");
+      const deadline = Date.now() + Math.max(0, Number(gracefulStopTimeoutMs));
+      while (Date.now() < deadline) {
+        await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
+        const current = await store.readSession(sessionId, { maxChars: 0 });
+        if (["completed", "failed", "timed_out", "stopped", "detached", "cancelled"].includes(current.status)) {
+          activeSessions.delete(sessionId);
+          return current;
+        }
+      }
+    } catch {
+      // Fall through to process termination when the native stop command cannot be delivered.
+    }
+  }
+
   const terminalized = await terminalizeCodexTuiSession({
     sessionId,
     store,
