@@ -193,7 +193,81 @@ export function summarizeNativeTextZh(name, data) {
     case "read_handoff": return renderHandoff(data);
     case "health_check":
       return `服务状态：${data.ok === false ? "异常" : "正常"}\n服务：${data.service || "gptwork-mcp"}`;
+
+    case "list_projects": return renderProjectList(data);
+    case "list_workspaces": return renderWorkspaceList(data);
+    case "list_repositories": return renderRepositoryList(data);
+    case "open_project_context": {
+      const ctx = data;
+      const repo = ctx.repo || {};
+      const summary = ctx.state_summary || {};
+      const repos = Array.isArray(ctx.repositories) ? ctx.repositories : [];
+      const tasks = Array.isArray(summary.recent_tasks) ? summary.recent_tasks : [];
+      const goals = Array.isArray(summary.recent_goals) ? summary.recent_goals : [];
+      const lines = [
+        '项目上下文',
+        `仓库：${repo.root || repo.path || "-"} · 分支 ${repo.branch || "-"} · ${repo.dirty ? "有未提交修改" : "干净"}`,
+        `状态：任务 ${summary.tasks ?? 0} 个 · 目标 ${summary.goals ?? 0} 个`,
+      ];
+      if (tasks.length) {
+        lines.push('最近任务：');
+        for (const t of tasks) {
+          lines.push(`  - ${t.display || t.title || t.id || "未命名"} · ${t.status || "-"}`);
+        }
+      }
+      if (goals.length) {
+        lines.push('最近目标：');
+        for (const g of goals) {
+          lines.push(`  - ${g.display || g.title || g.id || "未命名"} · ${g.status || "-"}`);
+        }
+      }
+      if (repos.length) {
+        lines.push(`注册仓库：${repos.length} 个`);
+        for (const r of repos.slice(0, 5)) {
+          lines.push(`  - ${r.display || r.repo_id || "未命名"}`);
+        }
+        if (repos.length > 5) lines.push(`  - 其余 ${repos.length - 5} 个已省略`);
+      }
+      const next = Array.isArray(ctx.recommended_next_tools) ? ctx.recommended_next_tools.slice(0, 6) : [];
+      if (next.length) lines.push(`建议下一步：${next.join("、")}`);
+      return lines.join("\n");
+    }
+
     default:
       return null;
   }
+}
+
+function renderProjectList(data) {
+  const projects = Array.isArray(data.projects) ? data.projects : [];
+  const lines = [`项目：共 ${projects.length} 个`];
+  for (const p of projects) {
+    const name = p.name || p.display || "未命名";
+    const id = String(p.id || "-").slice(0, 12);
+    lines.push(`- ${name}（${id}）`);
+  }
+  return lines.join("\n");
+}
+
+function renderWorkspaceList(data) {
+  const workspaces = Array.isArray(data.workspaces) ? data.workspaces : [];
+  const projectId = data.project_id || "-";
+  const lines = [`工作区（项目 ${projectId}）：共 ${workspaces.length} 个`];
+  for (const w of workspaces) {
+    const name = w.name || "未命名";
+    lines.push(`- ${name}（${w.type || "-"}）`);
+  }
+  return lines.join("\n");
+}
+
+function renderRepositoryList(data) {
+  const repos = Array.isArray(data.repositories) ? data.repositories : [];
+  const lines = [`注册仓库：共 ${repos.length} 个`];
+  for (const r of repos.slice(0, 10)) {
+    const display = r.display || r.repo_id || r.repo_name || "未命名";
+    const branch = r.default_branch || "-";
+    lines.push(`- ${display}（默认分支 ${branch}）`);
+  }
+  if (repos.length > 10) lines.push(`- 其余 ${repos.length - 10} 个已省略`);
+  return lines.join("\n");
 }

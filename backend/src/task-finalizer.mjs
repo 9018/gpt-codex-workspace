@@ -1,12 +1,11 @@
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+import {
+  NO_MUTATION_PROFILES,
+  TERMINAL_INTEGRATION_STATUSES,
+  NON_TERMINAL_INTEGRATION_STATUSES,
+  REPAIRABLE_INTEGRATION_STATUSES,
+} from './completion-state-shared.mjs';
 
-// P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
-// legitimate terminal state and integration is not meaningful.
-const NO_MUTATION_PROFILES = new Set([
-  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
-  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
-  'github_sync_only', 'docs_only', 'docs_only',
-]);
 import { createReviewStateBlock } from './task-review-status-taxonomy.mjs';
 import { normalizeToUnifiedDecision } from './codex-unified-decision.mjs';
 
@@ -58,9 +57,6 @@ const REPAIRABLE_FAILURE_CLASSES = new Set([
   "acceptance_failed",
 ]);
 
-const REPAIRABLE_INTEGRATION_STATUSES = new Set(["conflict", "check_failed", "push_failed", "pr_failed"]);
-const TERMINAL_INTEGRATION_STATUSES = new Set(["merged", "ff_only_merged", "skipped", "not_required", "already_integrated"]);
-const NON_TERMINAL_INTEGRATION_STATUSES = new Set(["branch_pushed", "pr_opened", "pending", "queued", "locked", "waiting"]);
 
 function asObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};

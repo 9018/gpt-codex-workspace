@@ -28,7 +28,13 @@ export function createProjectWorkspaceToolsGroup({
       schema({}),
       async (_args, context) => {
         const state = await store.load();
-        return { projects: state.projects.filter((project) => canAccessProject(context, project.id)) };
+        const projects = state.projects
+          .filter((project) => canAccessProject(context, project.id))
+          .map((project) => ({
+            ...project,
+            name: project.name || project.id || '未命名项目',
+          }));
+        return { projects };
       },
     ),
     get_project: tool(
@@ -37,7 +43,11 @@ export function createProjectWorkspaceToolsGroup({
       async ({ project_id = 'default' }, context) => {
         const state = await store.load();
         requireProjectAccess(context, project_id);
-        return { project: findProject(state, project_id) };
+        const project = findProject(state, project_id);
+        if (project) {
+          project.name = project.name || project.id || '未命名项目';
+        }
+        return { project };
       },
     ),
     list_workspaces: tool(
@@ -46,11 +56,18 @@ export function createProjectWorkspaceToolsGroup({
       async ({ project_id = 'default' }, context) => {
         const state = await store.load();
         requireProjectAccess(context, project_id);
+        const workspaces = state.workspaces
+          .filter((workspace) => workspace.project_id === project_id && canAccessWorkspace(context, workspace.id))
+          .map((workspace) => ({
+            ...workspace,
+            name: workspace.name
+              || (workspace.type === 'ssh' && workspace.host ? `${workspace.host}远程工作区` : null)
+              || workspace.id
+              || '未命名工作区',
+          }));
         return {
           project_id,
-          workspaces: state.workspaces.filter(
-            (workspace) => workspace.project_id === project_id && canAccessWorkspace(context, workspace.id),
-          ),
+          workspaces,
         };
       },
     ),
@@ -60,13 +77,28 @@ export function createProjectWorkspaceToolsGroup({
       async (args, context) => {
         const workspace = await selectWorkspace(store, args.workspace_id, context);
         if (workspace.type === 'hosted') await mkdir(workspace.root, { recursive: true });
+        if (workspace) {
+          workspace.name = workspace.name
+            || (workspace.type === 'ssh' && workspace.host ? `${workspace.host}远程工作区` : null)
+            || workspace.id
+            || '未命名工作区';
+        }
         return { workspace, limits: limits(config) };
       },
     ),
     set_active_workspace: tool(
       'Return the selected workspace for caller-side state.',
       schema({ workspace_id: 'string' }, ['workspace_id']),
-      async ({ workspace_id }, context) => ({ active_workspace: await selectWorkspace(store, workspace_id, context) }),
+      async ({ workspace_id }, context) => {
+        const active = await selectWorkspace(store, workspace_id, context);
+        if (active) {
+          active.name = active.name
+            || (active.type === 'ssh' && active.host ? `${active.host}远程工作区` : null)
+            || active.id
+            || '未命名工作区';
+        }
+        return { active_workspace: active };
+      },
     ),
     create_workspace: tool(
       'Create a hosted or SSH workspace for a project. SSH workspaces use key authentication first; pass identity_file to pin a key. Hosts outside 10.0.0.0/8 use the default SOCKS proxy 10.0.1.105:20177 unless socks_proxy is provided.',

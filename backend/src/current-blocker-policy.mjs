@@ -2,6 +2,7 @@ import {
   RESULT_SHAPE_TYPES,
   classifyResultShape,
 } from './result-shape-classifier.mjs';
+import { NO_MUTATION_PROFILES } from './completion-state-shared.mjs';
 import { execSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
@@ -15,13 +16,6 @@ import {
   normalizeTaskStatus,
 } from './task-status-taxonomy.mjs';
 
-// P0-MA22: No-mutation task profiles — changed_files=[] is a valid terminal.
-const NO_MUTATION_PROFILES = new Set([
-  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
-  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
-  'github_sync_only',
-  'docs_only',
-]);
 
 export const CURRENT_WORK_DECISION_LABELS = Object.freeze({
   ACTIVE: 'active',

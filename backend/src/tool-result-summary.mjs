@@ -46,15 +46,30 @@ export function summarizeToolResult(name, structuredContent) {
           return goalContextCard(structuredContent);
         case "open_project_context": {
           const ctx = structuredContent;
+          const summary = ctx.state_summary || {};
+          const tasks = Array.isArray(summary.recent_tasks) ? summary.recent_tasks : [];
+          const goals = Array.isArray(summary.recent_goals) ? summary.recent_goals : [];
           const lines = [
             formatKeyValue('repo', ctx.repo?.root || '-'),
             formatKeyValue('branch', ctx.repo?.branch || '-'),
             formatKeyValue('head', ctx.repo?.head || '-'),
             formatKeyValue('worktree', ctx.repo?.dirty ? 'dirty' : 'clean'),
-            formatKeyValue('tasks', ctx.state_summary?.tasks ?? 0),
-            formatKeyValue('goals', ctx.state_summary?.goals ?? 0),
+            formatKeyValue('tasks', summary.tasks ?? 0),
+            formatKeyValue('goals', summary.goals ?? 0),
             formatKeyValue('tool mode', ctx.config?.tool_mode || 'standard'),
           ];
+          if (tasks.length) {
+            lines.push('', 'Recent tasks:');
+            for (const t of tasks) {
+              lines.push('  ' + (t.display || t.title || t.id || 'Unnamed') + ' [' + (t.status || '-') + ']');
+            }
+          }
+          if (goals.length) {
+            lines.push('', 'Recent goals:');
+            for (const g of goals) {
+              lines.push('  ' + (g.display || g.title || g.id || 'Unnamed') + ' [' + (g.status || '-') + ']');
+            }
+          }
           if (Array.isArray(ctx.recommended_next_tools) && ctx.recommended_next_tools.length) {
             lines.push('', 'Next tools: ' + ctx.recommended_next_tools.join(', '));
           }
@@ -211,6 +226,33 @@ export function summarizeToolResult(name, structuredContent) {
           }
           return formatToolCard('Self Test', { lines });
         }
+
+        case "list_projects": {
+          const projs = Array.isArray(structuredContent.projects) ? structuredContent.projects : [];
+          const lines = [projs.length + " project(s)"];
+          for (const p of projs) {
+            lines.push("  " + (p.name || p.display || p.id || "Unnamed") + " (" + (p.id || "").slice(0, 12) + ")");
+          }
+          return lines.join("\n");
+        }
+        case "list_workspaces": {
+          const ws = Array.isArray(structuredContent.workspaces) ? structuredContent.workspaces : [];
+          const lines = [ws.length + " workspace(s)" + (structuredContent.project_id ? " for " + structuredContent.project_id : "")];
+          for (const w of ws) {
+            lines.push("  " + (w.name || "Unnamed") + " (" + (w.type || "-") + ")");
+          }
+          return lines.join("\n");
+        }
+        case "list_repositories": {
+          const repos = Array.isArray(structuredContent.repositories) ? structuredContent.repositories : [];
+          const lines = [repos.length + " repository(ies)"];
+          for (const r of repos.slice(0, 10)) {
+            lines.push("  " + (r.display || r.repo_id || r.repo_name || "Unnamed") + " (" + (r.default_branch || "-") + ")");
+          }
+          if (repos.length > 10) lines.push("  ... " + (repos.length - 10) + " more");
+          return lines.join("\n");
+        }
+
           default:
             return JSON.stringify(structuredContent);
         }

@@ -6,20 +6,14 @@ import { tmpdir } from 'node:os';
 import { readVerificationReport, isVerificationReportReusable } from './verification-report.mjs';
 import { runLocalShell } from './workspace-service.mjs';
 import { classifyNoChangeRepairOutcome } from './no-change-repair-classifier.mjs';
+import {
+  NO_MUTATION_PROFILES,
+  REPAIRABLE_INTEGRATION_STATUSES,
+} from './completion-state-shared.mjs';
 
-// P0-MA22: No-mutation profile set — tasks where changed_files=[] is a
-// legitimate terminal state (sync-only, verification-only, diagnostic,
-// noop, already_integrated, repair_noop, etc.).
-const NO_MUTATION_PROFILES = new Set([
-  'diagnostic', 'noop', 'readonly_validation', 'already_integrated',
-  'repair_noop', 'network_retry', 'verification_only', 'sync_only',
-  'github_sync_only',
-  'docs_only',
-]);
 
 const AUTO_INTEGRATION_STATUSES = new Set(['branch_pushed', 'pr_opened']);
 const BLOCKED_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed', 'locked']);
-const REPAIRABLE_INTEGRATION_STATUSES = new Set(['conflict', 'check_failed', 'push_failed', 'pr_failed']);
 
 function blocker(code, message, source = 'auto_integration_completion') {
   return { severity: 'blocker', code, message, source };

@@ -58,6 +58,9 @@ export class RepoRegistry {
       if (detected) defaultBranch = detected;
     }
 
+    // Generate human-readable display name (owner/repo, or explicit display_name)
+    const displayName = info.display_name || existing?.display_name || `${parsed.owner}/${parsed.repo}`;
+
     const record = {
       repo_id: parsed.repo_id,
       provider: parsed.provider,
@@ -65,6 +68,7 @@ export class RepoRegistry {
       owner: parsed.owner,
       repo_name: parsed.repo,
       remote_url: info.remote_url,
+      display_name: displayName,
       default_branch: defaultBranch,
       canonical_path: canonicalPath,
       roles: info.roles || existing?.roles || [],

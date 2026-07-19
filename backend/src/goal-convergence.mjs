@@ -1,7 +1,12 @@
 import { REVIEW_STATES, createReviewStateBlock } from './task-review-status-taxonomy.mjs';
 
-import { applyLegacyResolution, findLegacySuccessor, hasCompletionEvidence as hasLegacyCompletionEvidence } from "./legacy-reconciliation.mjs";
+import { applyLegacyResolution, findLegacySuccessor } from "./legacy-reconciliation.mjs";
 import { UNIFIED_STATUSES } from './codex-unified-decision.mjs';
+import {
+  hasCompletionEvidence,
+  isNonBlockerForProfile,
+  SYNC_LIKE_PROFILES,
+} from './completion-state-shared.mjs';
 import {
   TASK_STATUSES,
   isHumanReviewStatus,
@@ -11,14 +16,10 @@ import {
 } from "./task-status-taxonomy.mjs";
 
 const TERMINAL_GOAL_STATUSES = new Set(["completed", "failed", "cancelled", "blocked"]);
-const SYNC_LIKE_PROFILES = new Set([
-  "sync_only",
-  "github_sync_only",
-  "verification_only",
-  "noop",
-  "repair_noop",
-  "network_retry",
-]);
+
+// Legacy re-export for backward compatibility during migration
+// Consumers should import SYNC_LIKE_PROFILES from completion-state-shared.mjs
+export { SYNC_LIKE_PROFILES };
 
 export function determineGoalStatus(goal, task, taskResult = {}) {
 
@@ -83,7 +84,7 @@ function completedGoalStatus(task, taskResult) {
   if (hasCompletionEvidence(taskResult)) return "completed";
 
   const profile = taskResult?.convergence?.profile || taskResult?.acceptance_profile || inferProfile(task, taskResult);
-  if (SYNC_LIKE_PROFILES.has(profile) && nonBlockingFindingsOnly(taskResult, profile)) {
+  if (isSyncLikeProfile(profile) && nonBlockingFindingsOnly(taskResult, profile)) {
     return "completed";
   }
 
@@ -101,10 +102,6 @@ function failedGoalStatus(task, taskResult) {
   if (exhausted) return taskStatus === TASK_STATUSES.BLOCKED ? "blocked" : "failed";
   if (taskResult.repairable === false || taskResult.failure_class === "result_missing") return "failed";
   return "waiting_for_repair";
-}
-
-function hasCompletionEvidence(taskResult = {}) {
-  return hasLegacyCompletionEvidence(taskResult);
 }
 
 function genuineBlockers(taskResult = {}) {
@@ -142,13 +139,8 @@ function inferProfile(task = {}, taskResult = {}) {
   return "code_change";
 }
 
-function isNonBlockerForProfile(code, profile) {
-  if (!code || !profile) return false;
-  if (code === "tests_missing") return SYNC_LIKE_PROFILES.has(profile);
-  if (code === "changed_files_mismatch") return SYNC_LIKE_PROFILES.has(profile);
-  if (code === "git_worktree_lifecycle_metadata_only") return true;
-  if (code === "worktree_no_changes_yet") return true;
-  return false;
+function isSyncLikeProfile(profile) {
+  return SYNC_LIKE_PROFILES.has(profile);
 }
 
 export async function convergeStaleGoalStatuses(store) {

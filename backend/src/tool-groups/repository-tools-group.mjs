@@ -7,11 +7,12 @@ import { getRepoStatus } from "../repo-registry.mjs";
  */
 export function createRepositoryToolsGroup({ tool, schema, registry }) {
   return {
-    register_repository: tool("Register a repository in the workspace registry so Codex can find it via canonical path instead of stale temporary clones.", schema({ remote_url: "string", canonical_path: "string", default_branch: "string", roles: "string", tags: "string", status: "string" }, ["remote_url"]), async (args) => {
+    register_repository: tool("Register a repository in the workspace registry so Codex can find it via canonical path instead of stale temporary clones.", schema({ remote_url: "string", canonical_path: "string", default_branch: "string", display_name: "string", roles: "string", tags: "string", status: "string" }, ["remote_url"]), async (args) => {
       const info = {
         remote_url: args.remote_url,
         canonical_path: args.canonical_path || null,
         default_branch: args.default_branch || null,
+        display_name: args.display_name || null,
         roles: args.roles ? args.roles.split(",").map(s => s.trim()).filter(Boolean) : [],
         tags: args.tags ? args.tags.split(",").map(s => s.trim()).filter(Boolean) : [],
         status: args.status || "active",

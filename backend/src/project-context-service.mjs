@@ -1,6 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { execFileSync } from "node:child_process";
+import { taskDisplayName, goalDisplayName } from './human-readable-identity.mjs';
 import { collectWorkerQueueCounts } from "./worker-queue-counts.mjs";
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from "./legacy-reconciliation.mjs";
 import { TASK_STATUSES, isHumanReviewStatus } from "./task-status-taxonomy.mjs";
@@ -147,14 +148,24 @@ export async function collectProjectContext({ config, store, workerState, regist
       tasks: state.tasks?.length || 0,
       goals: state.goals?.length || 0,
       workspaces: state.workspaces?.length || 0,
-      recent_tasks: tasks.slice(-5).reverse().map((task) => ({
-        id: task.id,
-        title: task.title || "",
-        status: task.status,
-        assignee: task.assignee || "",
-        legacy_resolution: legacyResolutionSummary(task),
+      recent_tasks: tasks.slice(-5).reverse().map((task) => {
+        const _g = task.goal_id ? state.goals?.find(g => g.id === task.goal_id) : null;
+        return {
+          id: task.id,
+          display: taskDisplayName(task, _g),
+          title: task.title || "",
+          status: task.status,
+          assignee: task.assignee || "",
+          legacy_resolution: legacyResolutionSummary(task),
+        };
+      }),
+      recent_goals: (state.goals || []).slice(-5).reverse().map((goal) => ({
+        id: goal.id,
+        display: goalDisplayName(goal),
+        title: goal.title || "",
+        status: goal.status,
+        assignee: goal.assignee || "",
       })),
-      recent_goals: (state.goals || []).slice(-5).reverse().map((goal) => ({ id: goal.id, title: goal.title || "", status: goal.status, assignee: goal.assignee || "" })),
     },
     current_blockers: currentBlockers,
     raw_history: {
@@ -172,7 +183,7 @@ export async function collectProjectContext({ config, store, workerState, regist
       queue,
     },
     worktree_retention: retainedWorktrees,
-    repositories: typeof registry?.list === "function" ? registry.list().slice(0, 20) : [],
+    repositories: typeof registry?.list === "function" ? registry.list().slice(0, 20).map(r => ({ ...r, display: (r.owner && r.repo_name) ? r.owner + "/" + r.repo_name : r.repo_id })) : [],
     file_tree: boundedTree(repoRoot, 80),
     readme_excerpt: "",
     analysis_entry: analysisEntry,
