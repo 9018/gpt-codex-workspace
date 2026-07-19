@@ -1,75 +1,671 @@
-# GPT-Codex Workspace
+# GPTWork
 
-[中文主文档](README.zh-CN.md) | English
+> 当前版本：2026-07-19，由 ChatGPT 直接手动重写。
+>
+> 让 ChatGPT 负责产品推进，让 Codex 负责执行。
 
-GPTWork is a backend MCP service that coordinates ChatGPT, Codex, and project workspaces. ChatGPT creates bounded goals, GPTWork manages task state/queue/context/evidence, and Codex executes changes in isolated worktrees before GPTWork verifies, accepts, integrates, and closes the work.
+GPTWork 是一个面向复杂软件项目的 AI 执行操作系统。
 
-The detailed project documentation is maintained in Chinese at [README.zh-CN.md](README.zh-CN.md). This English README is the current operator/product entry and should stay aligned with the release gates.
+它不是一次性生成代码的工具，而是一套围绕 **目标、执行、证据、验收、修正、继续推进** 构建的闭环工作流。
 
-## Current Product Shape
+```text
+产品目标
+   ↓
+ChatGPT 分析与规划
+   ↓
+生成 Goal
+   ↓
+拆分 Task
+   ↓
+Codex 执行
+   ↓
+收集代码、命令、测试与 Git 证据
+   ↓
+ChatGPT 验收
+   ↓
+是否达到产品目标？
+   ├─ 是 → 结束
+   └─ 否 → 生成下一 Goal → 继续执行
+```
 
-- **Primary entry**: ChatGPT should start with `open_project_context`, then use `create_encoded_goal` for implementation, deployment, maintenance, or multi-step work.
-- **Bounded context**: Codex starts from `.gptwork/goals/<goal_id>/codex.entry.md` and prefers `context.bundle.md` over full goal context when a bundle exists.
-- **Compact review**: Review should use `get_task_review_packet` and `get_task_acceptance_bundle`, not full transcripts or large diffs.
-- **Default automation path**: all pipeline roles default to `codex_exec` through the canonical `ROLE_BACKEND_DEFAULTS` source. Role-specific overrides via `GPTWORK_AGENT_ROLE_BACKENDS` are explicit operator configuration, not product defaults.
-- **Codex TUI**: `codex_tui_goal` is an explicit operator fallback only. GPTWork never silently downgrades automatic execution to TUI.
-- **Pipeline gates**: new builder/deploy/admin tasks enforce pipeline gates before closure. Missing required artifacts block closure or send the task to review/repair.
-- **Product diagnostics**: `product_status`, `runtime_status`, `worker_status`, and `gptwork_doctor` show commit/runtime/queue/blocker/review/TUI status without requiring raw state reads.
-- **Tool-result v5 contract**: model-facing tool results are bounded. Full card payloads remain in card metadata; only controlled compatibility fields are exposed to the model.
+---
 
-Important delivery boundaries: `branch_pushed != merged`, `pr_opened != merged`, `merged != deployed`, and `health 200 != running expected commit`. `quality_notes` and `non_blocking_followups` do not block current task closure.
+## GPTWork 解决什么问题
 
-## Quick Start
+普通 AI Coding 的工作方式通常是：
+
+```text
+用户提出需求
+   ↓
+AI 修改代码
+   ↓
+AI 声称完成
+   ↓
+用户自己检查
+```
+
+问题在于：
+
+- 一次执行无法代表产品完成
+- 修改代码和判断是否完成混在一起
+- 缺少持续上下文
+- 缺少可靠验收
+- 失败后容易盲目重试
+- 多任务并行时容易互相污染
+
+GPTWork 将整个过程改造成：
+
+```text
+需求
+  ↓
+目标建模
+  ↓
+受控执行
+  ↓
+证据收集
+  ↓
+独立验收
+  ↓
+修正或推进
+  ↓
+产品完成
+```
+
+---
+
+## 系统角色
+
+```text
+用户
+  │
+  └─ 提供产品目标与关键决策
+
+ChatGPT
+  ├─ 理解目标
+  ├─ 制定 Goal
+  ├─ 管理上下文
+  ├─ 调度任务
+  ├─ 审查执行结果
+  ├─ 判断是否通过
+  └─ 决定修正、继续或停止
+
+Codex
+  ├─ 阅读任务上下文
+  ├─ 修改代码
+  ├─ 执行命令
+  ├─ 编写与运行测试
+  ├─ 生成结构化结果
+  └─ 返回可验收证据
+```
+
+核心原则：
+
+```text
+ChatGPT 负责决策
+Codex 负责执行
+证据负责证明
+验收负责结束
+```
+
+---
+
+## 完整执行链路
+
+```text
+用户输入产品目标
+        ↓
+ChatGPT 读取项目上下文
+        ↓
+生成当前阶段 Goal
+        ↓
+生成执行 Task
+        ↓
+选择执行模式
+        ├─ Codex Exec
+        └─ Codex TUI
+        ↓
+创建或绑定独立 Worktree
+        ↓
+Codex 修改代码并运行验证
+        ↓
+输出 Result + Evidence
+        ↓
+ChatGPT 严格验收
+        ↓
+        ├─ Pass
+        │    ↓
+        │  判断产品是否完成
+        │    ├─ 是 → Goal 完成
+        │    └─ 否 → 创建下一 Goal
+        │
+        ├─ Partial
+        │    ↓
+        │  创建收敛 Goal
+        │
+        ├─ Reject
+        │    ↓
+        │  创建修复 Goal
+        │
+        └─ Unknown
+             ↓
+           人工验收
+```
+
+---
+
+## Goal 驱动
+
+GPTWork 不直接把用户的整段需求交给执行器。
+
+它先把产品目标转化为可推进、可验证、可结束的 Goal。
+
+```text
+Product Goal
+    ↓
+Goal 01：建立基础能力
+    ↓
+Goal 02：补齐核心流程
+    ↓
+Goal 03：完成自动验收
+    ↓
+Goal 04：完成异常恢复
+    ↓
+Goal 05：完成产品化收敛
+    ↓
+Product Done
+```
+
+每个 Goal 独立拥有：
+
+- 原始用户目标
+- 当前阶段目标
+- Task 上下文
+- 验收标准
+- 执行记录
+- 变更文件
+- 测试结果
+- Git 证据
+- 审查结论
+- 下一步决策
+
+---
+
+## Task 不是 Goal
+
+```text
+Goal
+  ↓
+描述“这一阶段必须达成什么”
+
+Task
+  ↓
+描述“Codex 这一次具体做什么”
+```
+
+一个 Goal 可以包含多个 Task。
+
+```text
+Goal：完成登录系统
+  ├─ Task 01：实现认证接口
+  ├─ Task 02：实现登录页面
+  ├─ Task 03：补齐集成测试
+  └─ Task 04：修复验收缺陷
+```
+
+Task 完成不代表 Goal 完成。
+
+Goal 完成也不一定代表整个产品完成。
+
+---
+
+## 自动验收闭环
+
+GPTWork 的核心不是自动执行，而是自动验收。
+
+```text
+Codex 完成任务
+      ↓
+读取结构化结果
+      ↓
+核对变更文件
+      ↓
+核对测试结果
+      ↓
+核对命令输出
+      ↓
+核对 Git 状态
+      ↓
+核对验收合同
+      ↓
+生成验收结论
+```
+
+验收结论只有以下几类：
+
+```text
+Passed
+  → 当前目标已满足
+
+Partial
+  → 已完成部分目标，需要继续收敛
+
+Failed
+  → 存在明确缺陷，需要修复
+
+Blocked
+  → 被外部条件阻塞
+
+Unknown
+  → 现有证据无法证明完成，进入人工验收
+```
+
+系统不会因为 Codex 输出“完成”就自动结束。
+
+---
+
+## 证据优先
+
+GPTWork 不依赖执行器的自然语言自述判断结果。
+
+```text
+可信度从低到高：
+
+执行器声称完成
+      ↓
+存在文件修改
+      ↓
+测试通过
+      ↓
+验收合同通过
+      ↓
+Git 集成完成
+      ↓
+产品目标被证明满足
+```
+
+常见证据包括：
+
+- changed files
+- commands
+- tests
+- verification report
+- commit hash
+- remote head
+- integration result
+- acceptance result
+- reviewer decision
+
+没有证据，不自动宣告完成。
+
+---
+
+## 失败恢复
+
+GPTWork 区分三种失败：
+
+```text
+实现失败
+  → 代码或逻辑不符合要求
+  → 创建修复 Goal
+
+执行失败
+  → 命令、环境、依赖或进程失败
+  → 根据证据恢复
+
+证据缺失
+  → 无法证明执行是否完成
+  → 重建结果或进入人工验收
+```
+
+禁止逻辑：
+
+```text
+result.json 缺失
+   ≠ 自动重跑原任务
+   ≠ 自动创建 repair task
+   ≠ 自动反复执行
+```
+
+正确逻辑：
+
+```text
+result.json 缺失
+   ↓
+从 Session、Git、Worktree、命令记录和 result.md 重建结果
+   ↓
+能证明的字段写入
+不能证明的字段保持 null / unknown
+   ↓
+证据不足则进入人工验收
+```
+
+---
+
+## 上下文管理
+
+GPTWork 不把整段历史对话无差别塞给 Codex。
+
+上下文按照来源和优先级组织：
+
+```text
+产品目标
+   ↓
+当前 Goal
+   ↓
+当前 Task
+   ↓
+验收合同
+   ↓
+项目约束
+   ↓
+相关文件
+   ↓
+历史决策
+   ↓
+执行证据
+```
+
+Codex 正常执行时读取的是有界上下文包，而不是无限增长的聊天记录。
+
+```text
+原始上下文
+   ↓
+筛选
+   ↓
+去重
+   ↓
+压缩
+   ↓
+来源标记
+   ↓
+Task Context Packet
+```
+
+这样可以降低：
+
+- 上下文污染
+- 无关信息干扰
+- Token 浪费
+- 历史错误持续传播
+- 大型项目分析速度下降
+
+---
+
+## Codex Exec 与 Codex TUI
+
+GPTWork 支持两种执行方式。
+
+### Codex Exec
+
+```text
+Task
+  ↓
+结构化 Prompt
+  ↓
+Codex CLI 非交互执行
+  ↓
+结构化结果
+  ↓
+自动验收
+```
+
+适合：
+
+- 默认自动化流程
+- 可预测任务
+- 批量执行
+- 并行任务
+- CI 风格运行
+
+### Codex TUI
+
+```text
+Goal
+  ↓
+启动原生 Codex TUI Session
+  ↓
+持续执行
+  ↓
+ChatGPT 中途检查
+  ↓
+普通纠偏或继续执行
+  ↓
+收集持久化证据
+  ↓
+最终验收
+```
+
+适合：
+
+- 长时间复杂任务
+- 需要连续交互的实现
+- 需要观察执行过程
+- 原生 Codex Session 管理
+
+两种模式都必须进入同一套验收闭环。
+
+---
+
+## TUI 中的纠偏原则
+
+```text
+Goal 01 执行中
+      ↓
+ChatGPT 检查
+      ↓
+发现轻微偏离
+      ↓
+直接发送普通纠偏指令
+      ↓
+继续当前 Goal
+```
+
+只有当前 Goal 已完成并验收后，才创建下一 Goal。
+
+```text
+不要：
+发现小问题 → 立刻创建新 Goal
+
+应该：
+发现小问题 → 当前 Session 内纠偏
+Goal 完成 → 严格验收
+仍有缺口 → 创建下一 Goal
+```
+
+---
+
+## 多任务并行
+
+GPTWork 支持多个独立工作流并行推进。
+
+```text
+Product Goal
+   ├─ Workstream A：后端
+   │    ├─ Task A1
+   │    └─ Task A2
+   │
+   ├─ Workstream B：前端
+   │    ├─ Task B1
+   │    └─ Task B2
+   │
+   └─ Workstream C：测试
+        ├─ Task C1
+        └─ Task C2
+```
+
+并行任务通过以下机制隔离：
+
+- 独立 Goal
+- 独立 Task Context
+- 独立 Git Worktree
+- Repo Lock
+- Workstream DAG
+- Join 节点
+- 独立验收结果
+
+---
+
+## 多 Agent 协作
+
+复杂任务可以经过多个角色协同处理。
+
+```text
+Context Curator
+      ↓
+Planner
+      ↓
+Builder
+      ↓
+Verifier
+      ↓
+Reviewer
+      ↓
+Finalizer
+      ↓
+Integrator
+```
+
+角色职责：
+
+| 角色 | 职责 |
+|---|---|
+| Context Curator | 整理当前任务所需上下文 |
+| Planner | 制定执行计划 |
+| Builder | 修改代码并完成实现 |
+| Verifier | 运行测试与验证 |
+| Reviewer | 独立审查结果 |
+| Repairer | 修复明确缺陷 |
+| Finalizer | 汇总结果并决定是否可关闭 |
+| Integrator | 合并、提交与集成 |
+
+这些角色不是为了制造流程，而是为了分离执行与判断。
+
+---
+
+## Git Worktree 隔离
+
+每个需要修改代码的任务都可以在独立 Worktree 中执行。
+
+```text
+主仓库
+  ├─ Worktree A → Task A
+  ├─ Worktree B → Task B
+  └─ Worktree C → Task C
+```
+
+作用：
+
+- 避免多任务互相覆盖
+- 避免污染主工作区
+- 支持并行执行
+- 保留失败现场
+- 便于独立验收
+- 便于明确集成边界
+
+---
+
+## 状态流转
+
+```text
+created
+   ↓
+assigned
+   ↓
+running
+   ↓
+verifying
+   ↓
+reviewing
+   ↓
+   ├─ completed
+   ├─ waiting_for_repair
+   ├─ waiting_for_review
+   ├─ blocked
+   ├─ failed
+   └─ cancelled
+```
+
+状态必须由证据驱动，而不是由一次自然语言回复驱动。
+
+---
+
+## 产品完成条件
+
+```text
+所有 Task 完成
+      ≠ 产品完成
+
+所有 Goal 完成
+      ≠ 一定产品完成
+
+产品目标被验收证明满足
+      = 产品完成
+```
+
+最终关闭前至少需要确认：
+
+- 核心需求已实现
+- 阻断问题为零
+- 必要测试通过
+- 关键证据完整
+- 集成状态明确
+- 没有未处理的产品级缺口
+
+---
+
+## 快速开始
 
 ```bash
 cd backend
 npm install
 npm link
+
 gptwork init
 gptwork start
 ```
 
-In another shell:
+本地检查：
 
 ```bash
-cd backend
 gptwork doctor --local
 gptwork status --local
-gptwork connect --local
 gptwork self-test --local
 curl http://127.0.0.1:8787/health
 ```
 
-For production initialization:
+生产初始化：
 
 ```bash
-cd backend
 gptwork init --production
 ```
 
-Production mode validates worker enablement, role/backend settings, Codex exec settings, workspace configuration, vector-store configuration, and integration mode before the environment is treated as ready.
+---
 
-## Runtime Configuration Highlights
+## 默认执行策略
 
-```bash
-# Product default: all roles use automatic Codex execution.
-GPTWORK_AGENT_BACKEND=codex_exec
+```text
+默认自动执行
+   ↓
+Codex Exec
 
-# Optional explicit per-role override examples.
-# GPTWORK_AGENT_ROLE_BACKENDS=verifier=local_command,reviewer=local_command
-# GPTWORK_AGENT_ROLE_COMMANDS=verifier=npm --prefix backend test||reviewer=node scripts/review.mjs
+需要长时间交互
+   ↓
+Codex TUI
 
-# Optional explicit TUI fallback. It still requires task metadata opt-in.
-# GPTWORK_CODEX_TUI_ENABLED=true
-# GPTWORK_CODEX_TUI_COMMAND=codex
-# GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS=30000
-# GPTWORK_CODEX_TUI_SESSION_ROOT=/path/to/workspace
-# GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=true
+多个独立任务
+   ↓
+Workstream + Worktree 并行
+
+执行完成
+   ↓
+统一进入 Evidence + Acceptance
 ```
 
-## Verification and Release Gates
+---
 
-Fast local checks:
+## 发布检查
+
+快速检查：
 
 ```bash
 cd backend
@@ -78,61 +674,63 @@ npm run check:imports
 node scripts/release-delivery-check.mjs --fast
 ```
 
-Release candidates should pass all product gates from a clean worktree:
+完整发布检查：
 
 ```bash
-cd backend
 npm run release:delivery-check
 npm run release:tui-first-loop-gate
 npm run release:check
 ```
 
-`release:delivery-check` covers the delivery system and compatibility surface, `release:tui-first-loop-gate` covers the TUI-first loop smoke path, and `release:check` is the baseline package release gate.
+---
 
-## Main Docs
+## 项目结构
 
-- [中文主文档](README.zh-CN.md)
-- [Current status](docs/current-status.md)
-- [Architecture](docs/architecture.md)
-- [Operations](docs/operations.md)
-- [Release gate](docs/delivery/release-gate.md)
-- [Context and worktree contract](docs/delivery/context-and-worktree-contract.md)
-- [Setup and connection](docs/setup-connect.md)
-- [Goal queue](docs/goal-queue.md)
-- [GitHub fallback](docs/github-fallback.md)
-
-## Security
-
-Do not put real tokens, `.env` contents, runtime secrets, GitHub tokens, notification keys, raw transcripts, shell snapshots, or durable memory contents in README files, docs, goal payloads, results, or Issues. Use local ignored runtime configuration and secret stores.
-
-## License
-
-MIT
-
-## Workstream Productization
-
-GPTWork includes a complete Workstream productization contract (G1–G7) covering:
-
-- **Workstream identity and CRUD** with access control and execution/acceptance policies
-- **Context links** for ChatGPT conversations, Codex threads, and GitHub issues
-- **DAG orchestration**: fan-out/join, capacity limits, topological sort
-- **Drift/stall detection**: wrong phase/scope, stale progress, dead TUI, stale locks
-- **Acceptance controller**: verdict (passed/failed/partial/blocked), repair budget (max 2), ChatGPT escalation
-- **Tick controller**: bounded 5-transition advancement per cycle
-- **Hourly supervisor contract**: drift correction, stall recovery, direct edit preference, idempotency
-- **Apps SDK card view**: operations dashboard for Workstream health
-
-Verification commands:
-
-```bash
-# E2E productization + hourly supervisor tests (25 tests)
-node --test backend/test/e2e-workstream-productization.test.mjs backend/test/workstream-hourly-supervisor.test.mjs
-
-# All workstream tests
-node --test backend/test/workstream-*.test.mjs
-
-# Full test suite
-npm --prefix backend test
+```text
+gpt-codex-workspace/
+├─ backend/        → MCP 服务、Worker、执行与验收核心
+├─ bin/            → 项目级命令入口
+├─ plugins/        → 插件能力
+├─ scripts/        → 初始化、检查和运维脚本
+├─ data/           → 运行数据
+├─ .gptwork/       → Goal、Task、Context、Evidence 与状态
+└─ README.md       → 产品说明
 ```
 
-Full documentation: [docs/workstreams/tui-productization/README.md](docs/workstreams/tui-productization/README.md).
+---
+
+## 设计原则
+
+```text
+Goal 优先于 Prompt
+证据优先于声明
+验收优先于结束
+纠偏优先于重开
+重建优先于重跑
+隔离优先于共享
+产品完成优先于任务完成
+```
+
+---
+
+## 最终目标
+
+GPTWork 希望把软件开发从：
+
+```text
+人不断提醒 AI 下一步做什么
+```
+
+变成：
+
+```text
+人提供产品目标
+      ↓
+ChatGPT 持续负责规划与验收
+      ↓
+Codex 持续负责实现与验证
+      ↓
+系统自动修正并继续推进
+      ↓
+产品完成
+```
