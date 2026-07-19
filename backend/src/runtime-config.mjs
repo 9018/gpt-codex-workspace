@@ -18,6 +18,7 @@
 import { loadRuntimeEnv, resolveEnvFilePath } from "./runtime-env.mjs";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
+import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { parseBooleanEnv } from "./tool-discovery/tool-discovery-config.mjs";
 
@@ -174,6 +175,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     renderMode: normalizeRenderMode(_get("GPTWORK_RENDER_MODE", "text")),
 
     // Codex
+    codexHome: _get("GPTWORK_CODEX_HOME", process.env.CODEX_HOME || resolve(homedir(), ".codex")),
     codexExecTimeout: _getNum("GPTWORK_CODEX_EXEC_TIMEOUT", 3600),
     shellMode: _get("GPTWORK_SHELL_MODE", "full"),
     writeMode: _get("GPTWORK_WRITE_MODE", "workspace"),
@@ -322,6 +324,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     toolMode: "GPTWORK_TOOL_MODE",
     delayedToolDiscovery: "GPTWORK_DELAYED_TOOL_DISCOVERY",
     renderMode: "GPTWORK_RENDER_MODE",
+    codexHome: "GPTWORK_CODEX_HOME",
     codexExecTimeout: "GPTWORK_CODEX_EXEC_TIMEOUT",
     codexFirstOutputTimeout: "GPTWORK_CODEX_FIRST_OUTPUT_TIMEOUT",
     codexContentFirstOutputTimeout: "GPTWORK_CODEX_CONTENT_FIRST_OUTPUT_TIMEOUT",

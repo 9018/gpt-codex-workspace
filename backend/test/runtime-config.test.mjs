@@ -733,3 +733,11 @@ test("buildRuntimeConfig rejects unknown render mode", () => {
   );
   delete process.env.GPTWORK_RENDER_MODE;
 });
+
+test("buildRuntimeConfig loads GPTWORK_CODEX_HOME for session inventory", async () => {
+  clearGptWorkVars();
+  const { root, envFile } = await makeEnvFile("GPTWORK_CODEX_HOME=/tmp/custom-codex-home\n");
+  const { config, sources } = buildRuntimeConfig(root, envFile);
+  assert.equal(config.codexHome, "/tmp/custom-codex-home");
+  assert.equal(sources.codexHome, "runtime.env");
+});
