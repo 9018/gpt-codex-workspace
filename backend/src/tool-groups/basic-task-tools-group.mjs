@@ -111,7 +111,7 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
   return {
     create_task: tool({
       name: "create_task",
-      description: "Create a new project task. ChatGPT uses this to tell Codex what to do. Assign it to Codex and Codex will execute it. Tasks sync to GitHub Issues if configured. For listing Codex session files, use list_codex_sessions_metadata or create_codex_session_inventory_task instead of a free-text task.",
+      description: "Create a new project task. ChatGPT translates the user’s plain-language product intent into executable technical instructions, owns technical clarification and task framing, and assigns Codex to execute. Do not require the user to inspect code or make engineering decisions; ask the user only when product intent itself is genuinely ambiguous. Tasks sync to GitHub Issues if configured. For listing Codex session files, use list_codex_sessions_metadata or create_codex_session_inventory_task instead of a free-text task.",
       inputSchema: schema({
       title: { type: "string", description: "Task title summarizing the work to be done." },
       description: { type: "string", description: "Detailed task description or instructions." },

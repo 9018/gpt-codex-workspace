@@ -320,10 +320,10 @@ export function createWorkflowToolsGroup({
     workflow_record_result: tool({
       name: "workflow_record_result",
       description:
-        "Record a manual acceptance verdict for a task. Persists the result " +
-        "in .gptwork/workflows/<workflow_id>.json and returns the stored record " +
-        "along with a current task summary. GPTChat should then analyze the " +
-        "result and call workflow_advance if appropriate.",
+        "Record GPTChat's acceptance verdict for a task after GPTChat reviews code, tests, and execution evidence. " +
+        "The user is not expected to inspect code or make technical acceptance decisions. Persists the result " +
+        "in .gptwork/workflows/<workflow_id>.json and returns the stored record along with a current task summary. " +
+        "GPTChat should then call workflow_advance if appropriate; ask the user only when product intent itself is genuinely ambiguous.",
       inputSchema: schema(
         {
           workflow_id: {
@@ -341,7 +341,7 @@ export function createWorkflowToolsGroup({
           verdict: {
             type: "string",
             description:
-              "Manual acceptance verdict:\n" +
+              "GPTChat acceptance verdict after reviewing technical evidence:\n" +
               '- "passed" — task accepted, ready to advance\n' +
               '- "failed" — task rejected, needs fix task\n' +
               '- "partial" — partially accepted, needs convergence task\n' +
@@ -480,8 +480,9 @@ export function createWorkflowToolsGroup({
       name: "workflow_advance",
       description:
         "Gather current workflow/runtime/worker/repo state and generate a " +
-        "structured proposal for the next action. In 'propose' or 'dry_run' " +
-        "mode, no task is created — GPTChat analyzes the proposal and calls " +
+        "structured proposal for the next action. GPTChat owns technical review, correction, acceptance, and continuation decisions; " +
+        "the user is not expected to inspect code or choose engineering actions. Ask the user only when product intent itself is genuinely ambiguous. " +
+        "In 'propose' or 'dry_run' mode, no task is created — GPTChat analyzes the proposal and calls " +
         "create_task. In 'apply' mode, creates the next task only when " +
         "unambiguous and safe; otherwise returns needs_gptchat_decision.\n\n" +
         "Idempotent: repeated calls with the same inputs return the existing " +
@@ -503,7 +504,7 @@ export function createWorkflowToolsGroup({
           manual_verdict: {
             type: "string",
             description:
-              "Manual acceptance verdict:\n" +
+              "GPTChat acceptance verdict after reviewing technical evidence:\n" +
               '- "passed" — task accepted, ready to advance\n' +
               '- "failed" — task rejected, needs fix task\n' +
               '- "partial" — partially accepted, needs convergence task\n' +
@@ -513,7 +514,7 @@ export function createWorkflowToolsGroup({
           manual_note: {
             type: "string",
             description:
-              "Optional user note explaining the verdict. Included in the " +
+              "Optional GPTChat review note explaining the verdict. Included in the " +
               "idempotency fingerprint.",
           },
           mode: {

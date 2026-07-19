@@ -20,7 +20,7 @@ import {
 } from "./active-session-registry.mjs";
 
 /** Terminal result statuses recognized by the contract. */
-export const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "timed_out", "stopped", "detached"]);
+export const TERMINAL_RESULT_STATUSES = new Set(["completed", "failed", "timed_out", "stopped", "cancelled", "detached"]);
 
 /**
  * Normalize a PTY terminal event to a canonical shape.
@@ -149,20 +149,23 @@ export function failClosedResult(event) {
     };
   }
   const timedOut = event.source === "evidence_timeout" || event.source === "timeout";
+  const explicitlyStopped = event.source === "explicit-stop" || event.error === "manual_stop";
   const detail = event.error
     || (event.exit_code !== null ? `PTY exited with code ${event.exit_code}` : null)
     || (event.signal ? `PTY exited from signal ${event.signal}` : null)
     || `PTY terminal event: ${event.source}`;
   return {
-    status: timedOut ? "timed_out" : "failed",
-    summary: `Codex TUI terminated without contract-valid result evidence: ${detail}`,
+    status: explicitlyStopped ? "stopped" : (timedOut ? "timed_out" : "failed"),
+    summary: explicitlyStopped
+      ? `Codex TUI was stopped by the supervisor: ${detail}`
+      : `Codex TUI terminated without contract-valid result evidence: ${detail}`,
     changed_files: [],
     tests: "none",
     commit: "none",
     remote_head: "none",
     warnings: [],
     followups: [],
-    verification: { commands: [], passed: false },
+    verification: { commands: [], passed: explicitlyStopped },
     terminal_event: event,
   };
 }
@@ -235,7 +238,7 @@ export async function terminalizeCodexTuiSession({ sessionId, store, event = {},
       process_cleanup: processCleanup,
       ...(status === "completed" ? { completed_at: terminalizedAt } : {}),
       ...(status === "timed_out" ? { timed_out_at: terminalizedAt } : {}),
-      ...(status === "stopped" ? { stopped_at: terminalizedAt } : {}),
+      ...(["stopped", "cancelled"].includes(status) ? { stopped_at: terminalizedAt } : {}),
       ...(status === "failed" ? {
         failed_at: terminalizedAt,
         error: terminalEvent.error || result.summary,

@@ -47,7 +47,7 @@ test('complete_task handler description matches expected text', () => {
   });
 
   assert.match(tools.complete_task.description, /Mark a task completed/);
-  assert.match(tools.request_human_review.description, /Mark a task as waiting for human review/);
+  assert.match(tools.request_human_review.description, /Escalate a task to GPTChat review/);
 });
 
 

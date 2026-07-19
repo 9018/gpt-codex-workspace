@@ -232,9 +232,9 @@ test("codex_tui_goal missing evidence schedules automatic recovery without invok
   assert.equal(tuiArgs.task.id, "task_1");
   assert.equal(tuiArgs.goal.id, "goal_1");
   assert.equal(tuiArgs.cwd, join(root, ".gptwork", "worktrees", "task_1"));
-  assert.equal(result.status, "retry_wait");
+  assert.equal(result.status, "waiting_for_review");
   assert.equal(result.result.session_id, "session_1");
-  assert.equal(store.state.tasks[0].status, "retry_wait");
+  assert.equal(store.state.tasks[0].status, "waiting_for_review");
   assert.equal(store.state.tasks[0].result.provider, "codex_tui");
   assert.equal(store.state.tasks[0].result.commit, "none");
   assert.deepEqual(store.state.tasks[0].result.changed_files, []);
@@ -355,9 +355,9 @@ test("codex_tui_goal missing result.json enters automatic retry with actionable 
     startCodexTuiGoalSessionFn: async (args) => ({ id: "session_missing", task_id: args.task.id, goal_id: args.goal.id, cwd: args.cwd, status: "running" }),
   }));
 
-  assert.equal(result.status, "retry_wait");
+  assert.equal(result.status, "waiting_for_review");
   assert.equal(result.result.session_id, "session_missing");
-  assert.equal(store.state.tasks[0].status, "retry_wait");
+  assert.equal(store.state.tasks[0].status, "waiting_for_review");
   assert.equal(store.state.tasks[0].result.session_id, "session_missing");
   assert.equal(store.state.tasks[0].result.tui_phase, "automatic_recovery_pending");
   assert.equal(store.state.tasks[0].result.collect_result.status, "not_ready");

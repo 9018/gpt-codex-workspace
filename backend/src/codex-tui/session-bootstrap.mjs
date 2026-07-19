@@ -8,7 +8,7 @@
  * @module session-bootstrap
  */
 
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { mkdir, rm, symlink } from "node:fs/promises";
 import { createCodexTuiSessionStore } from "../codex-tui-session-store.mjs";
 import { createCodexTuiPtyAdapter } from "../codex-tui-pty-adapter.mjs";
@@ -354,7 +354,7 @@ export async function startCodexTuiGoalSessionImpl({
     };
     autopilot?.activate();
 
-    const nativeSessionsAfter = pathContext
+    let nativeSessionsAfter = pathContext
       ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
       : [];
     nativeBinding = pathContext
@@ -366,6 +366,54 @@ export async function startCodexTuiGoalSessionImpl({
         pid: ptySession.pid ?? null,
       })
       : null;
+    const bindingDeadline = Date.now() + 5_000;
+    let nativeRecord = nativeBinding?.nativeSessionId
+      ? nativeSessionsAfter.find((item) => item.id === nativeBinding.nativeSessionId)
+      : null;
+    while (pathContext && (!nativeBinding?.nativeSessionId || !nativeRecord?.cwd) && Date.now() < bindingDeadline) {
+      await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
+      nativeSessionsAfter = await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => []);
+      nativeBinding = resolveNativeSessionBinding({
+        output: bootstrapOutput,
+        before: nativeSessionsBefore,
+        after: nativeSessionsAfter,
+        cwd,
+        pid: ptySession.pid ?? null,
+      });
+      nativeRecord = nativeBinding?.nativeSessionId
+        ? nativeSessionsAfter.find((item) => item.id === nativeBinding.nativeSessionId)
+        : null;
+      if (!nativeRecord?.cwd) {
+        const priorPaths = new Set(nativeSessionsBefore.map((item) => item.path));
+        const cwdCandidates = nativeSessionsAfter.filter((item) => !priorPaths.has(item.path) && item.id && item.cwd && resolve(item.cwd) === resolve(cwd));
+        if (cwdCandidates.length === 1) {
+          nativeRecord = cwdCandidates[0];
+          nativeBinding = { nativeSessionId: nativeRecord.id, source: "sessions_root_cwd", reason: null, path: nativeRecord.path };
+        }
+      }
+    }
+    if (pathContext && (!nativeBinding?.nativeSessionId || !nativeRecord?.cwd)) {
+      try { ptySession.write("\u0003"); } catch {}
+      try { ptySession.stop(); } catch {}
+      activeSessions.delete(sessionId);
+      const error = new Error(`Codex TUI native session binding failed: ${nativeBinding?.reason || "native_session_not_found"}`);
+      error.code = "codex_tui_native_session_unbound";
+      throw error;
+    }
+    if (pathContext && nativeBinding?.nativeSessionId) {
+      const expectedCwd = resolve(worktreePath || cwd);
+      const tuiCwd = resolve(cwd);
+      const nativeCwd = nativeRecord?.cwd ? resolve(nativeRecord.cwd) : null;
+      if (tuiCwd !== expectedCwd || !nativeCwd || nativeCwd !== expectedCwd) {
+        try { ptySession.write("\u0003"); } catch {}
+        try { ptySession.stop(); } catch {}
+        activeSessions.delete(sessionId);
+        const error = new Error(`Codex TUI cwd mismatch: worktree=${expectedCwd}; tui=${tuiCwd}; native=${nativeCwd || "missing"}`);
+        error.code = "codex_tui_cwd_mismatch";
+        throw error;
+      }
+      nativeBinding = { ...nativeBinding, path: nativeRecord?.path || nativeBinding.path || null, cwd: nativeCwd };
+    }
   }
 
   record = await store.updateSession(sessionId, {
@@ -382,6 +430,10 @@ export async function startCodexTuiGoalSessionImpl({
     native_session_id: nativeBinding?.nativeSessionId || null,
     native_session_binding_source: nativeBinding?.source || null,
     native_session_binding_reason: nativeBinding?.reason || null,
+    native_session_path: nativeBinding?.path || null,
+    native_session_cwd: nativeBinding?.cwd || null,
+    display_name: task?.title || goal?.title || "未命名任务",
+    short_task_id: task?.id ? `T${String(task.id).replace(/^task_/, "").replace(/-/g, "").slice(0, 8)}` : null,
     resume_native_session_id: resumeNativeSessionId || null,
   });
 
@@ -392,6 +444,10 @@ export async function startCodexTuiGoalSessionImpl({
         native_session_id: nativeBinding?.nativeSessionId || null,
         native_session_binding_source: nativeBinding?.source || null,
         native_session_binding_reason: nativeBinding?.reason || null,
+        native_session_path: nativeBinding?.path || null,
+        native_session_cwd: nativeBinding?.cwd || null,
+        display_name: task?.title || goal?.title || "未命名任务",
+        short_task_id: task?.id ? `T${String(task.id).replace(/^task_/, "").replace(/-/g, "").slice(0, 8)}` : null,
         task_id: task?.id || null,
         goal_id: goal?.id || null,
         execution_id: executionId || null,

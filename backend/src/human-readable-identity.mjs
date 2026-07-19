@@ -50,7 +50,8 @@ export function humanStatusText(status, { provider = "Codex" } = {}) {
   if (["running", "collecting", "evaluating"].includes(value)) return `${provider} 正在运行`;
   if (["queued", "pending", "assigned", "created", "starting", "ready"].includes(value)) return "等待执行";
   if (["completed", "succeeded", "passed", "verified"].includes(value)) return "已完成";
-  if (["failed", "timed_out", "cancelled"].includes(value)) return "执行失败";
+  if (["stopped", "cancelled"].includes(value)) return "已停止";
+  if (["failed", "timed_out"].includes(value)) return "执行失败";
   if (value.startsWith("waiting_for_")) return "等待处理";
   return status || "状态未知";
 }

@@ -86,19 +86,36 @@ export async function stopCodexTuiSession(sessionId, {
   const shouldRequestNativeGoalStop = !["native_detach", "evidence_timeout"].includes(reason);
   if (active?.ptySession && shouldRequestNativeGoalStop) {
     try {
-      await submitTuiText(active.ptySession, "/goal stop", { sleep_fn: sleep });
-      await store.appendSessionLog(sessionId, "[input] /goal stop\n");
+      const steps = [
+        { label: "ctrl_c", send: async () => active.ptySession.write("\u0003") },
+        { label: "/stop", send: async () => submitTuiText(active.ptySession, "/stop", { sleep_fn: sleep }) },
+        { label: "/goal clear", send: async () => submitTuiText(active.ptySession, "/goal clear", { sleep_fn: sleep }) },
+        { label: "/quit", send: async () => submitTuiText(active.ptySession, "/quit", { sleep_fn: sleep }) },
+      ];
+      for (const step of steps) {
+        await step.send();
+        await store.appendSessionLog(sessionId, `[stop-input] ${step.label}\n`);
+        await sleep(250);
+      }
       const deadline = Date.now() + Math.max(0, Number(gracefulStopTimeoutMs));
       while (Date.now() < deadline) {
+        if (!isProcessAlive(active.ptySession.pid)) break;
         await sleep(Math.min(100, Math.max(1, deadline - Date.now())));
-        const current = await store.readSession(sessionId, { maxChars: 0 });
-        if (["completed", "failed", "timed_out", "stopped", "detached", "cancelled"].includes(current.status)) {
-          activeSessions.delete(sessionId);
-          return current;
-        }
+      }
+      if (!isProcessAlive(active.ptySession.pid)) {
+        const stopped = await terminalizeCodexTuiSession({
+          sessionId,
+          store,
+          releaseLockFn: releaseLockFn || active?.releaseLockFn || null,
+          onTerminalized: active?.onTerminalized || null,
+          event: { source: "explicit-stop", exit_code: 0, signal: null, error: reason, error_code: null },
+        });
+        try { active.ptySession.stop(); } catch {}
+        activeSessions.delete(sessionId);
+        return stopped;
       }
     } catch {
-      // Fall through to process termination when the native stop command cannot be delivered.
+      // Fall through to process-group termination when the native stop sequence cannot be delivered.
     }
   }
 

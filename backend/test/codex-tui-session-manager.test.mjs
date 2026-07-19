@@ -135,6 +135,13 @@ test("start binds TUI environment and native Codex session to the project manife
   const fakeAdapter = makeFakeAdapter();
   fakeAdapter.spawn = async function spawn(options) {
     this.spawns.push(options);
+    const nativeDir = join(codexHome, "sessions", "2026", "07", "20");
+    await mkdir(nativeDir, { recursive: true });
+    await writeFile(join(nativeDir, "rollout-native-tui-1.jsonl"), JSON.stringify({
+      timestamp: new Date().toISOString(),
+      type: "session_meta",
+      payload: { id: "native-tui-1", cwd: projectRoot, pid: 101 },
+    }) + "\n", "utf8");
     setTimeout(() => options.onData?.("session id: native-tui-1\nTUI ready $ "), 10);
     return {
       pid: 101,
@@ -313,17 +320,20 @@ test("manager sends input, reads status, and stops sessions safely", async () =>
     gracefulStopTimeoutMs: 0,
     sleep_fn: async () => {},
   });
-  assert.equal(stopped.status, "failed");
+  assert.equal(stopped.status, "stopped");
   assert.equal(stopped.terminal_event_count, 1);
   assert.equal(stopped.terminal_event.source, "explicit-stop");
-  assert.deepEqual(fakeAdapter.writes.slice(-3), ["\u0015", "/goal stop", "\r"]);
+  assert.ok(fakeAdapter.writes.includes("\u0003"));
+  assert.ok(fakeAdapter.writes.includes("/stop"));
+  assert.ok(fakeAdapter.writes.includes("/goal clear"));
+  assert.ok(fakeAdapter.writes.includes("/quit"));
   assert.deepEqual(fakeAdapter.stops, [undefined]);
   const result = await readResult(cwd, "goal_2");
-  assert.equal(result.status, "failed");
+  assert.equal(result.status, "stopped");
   assert.equal(result.terminal_event.source, "explicit-stop");
 
   const stoppedStatus = await getCodexTuiSessionStatus(session.id);
-  assert.equal(stoppedStatus.status, "failed");
+  assert.equal(stoppedStatus.status, "stopped");
 });
 
 // recovery test appended by ChatGPT
@@ -577,7 +587,7 @@ test("does not create or inject project CODEX_HOME before spawning Codex TUI", a
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-home-")));
   const codexHome = join(cwd, ".codex-runtime");
   const fakeAdapter = makeFakeAdapter();
-  await startCodexTuiGoalSession({
+  await assert.rejects(() => startCodexTuiGoalSession({
     task: { id: "task_home", title: "Home preparation" },
     goal: { id: "goal_home" },
     cwd,
@@ -591,7 +601,7 @@ test("does not create or inject project CODEX_HOME before spawning Codex TUI", a
       codexHome,
       nativeSessionsRoot: join(codexHome, "sessions"),
     },
-  });
+  }), (error) => error?.code === "codex_tui_native_session_unbound");
   await assert.rejects(stat(codexHome));
 });
 

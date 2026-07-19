@@ -328,7 +328,7 @@ test("codex_tui_start_goal acquires lock on worktree, starts a session, and dele
   assert.deepEqual(await tools.codex_tui_read.handler({ session_id: "session_1", max_chars: 5 }), { id: "session_1", task_id: taskId, cwd: "worktree_cwd", log: "hello", maxChars: 5 });
   assert.deepEqual(await tools.codex_tui_send.handler({ session_id: "session_1", text: "continue\n" }), { id: "session_1", log: "[input] continue\n" });
   assert.deepEqual(await tools.codex_tui_stop.handler({ session_id: "session_1" }), {
-    id: "session_1", status: "stopped", reason: "manual_stop", task_state: "waiting_for_repair", reconciled: true
+    id: "session_1", status: "stopped", reason: "manual_stop", task_state: "cancelled", reconciled: true
   });
 
   // Clean up worktree

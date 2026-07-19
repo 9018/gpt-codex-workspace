@@ -212,7 +212,7 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
     }),
     request_human_review: tool({
       name: "request_human_review",
-      description: "Mark a task as waiting for human review.",
+      description: "Escalate a task to GPTChat review when automated execution cannot safely decide. GPTChat—not the user—reviews code, tests, evidence, corrections, acceptance, and continuation. Do not ask the user to inspect code or make technical decisions; involve the user only when product intent itself is genuinely ambiguous.",
       inputSchema: schema({ task_id: "string", message: "string" }, ["task_id"]),
       modes: ["standard", "codex", "full"],
       ...common,

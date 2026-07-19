@@ -60,9 +60,11 @@ export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped
     const transitionService = injectedTransitionService || createTaskTransitionService({ store });
     const transition = await transitionService.transitionTask({
       task_id: taskId,
-      event: hasEvidence ? TASK_EVENTS.EXECUTION_SESSION_STOPPED : TASK_EVENTS.RUNTIME_LOST,
+      event: reason === "manual_stop"
+        ? TASK_EVENTS.CANCEL_REQUESTED
+        : (hasEvidence ? TASK_EVENTS.EXECUTION_SESSION_STOPPED : TASK_EVENTS.RUNTIME_LOST),
       expected_statuses: [existingTask.status],
-      payload: hasEvidence ? {} : { repairable: true },
+      payload: reason === "manual_stop" ? { requested_by: "gpt_supervisor" } : (hasEvidence ? {} : { repairable: true }),
       reason: `TUI stopped: ${reason}`,
       source: "codex_tui",
       actor: { type: "system", id: "codex_tui_stop" },
@@ -84,8 +86,8 @@ export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped
     nextState.activities.push({ time: task.updated_at, type: "task.tui_stopped_reconciled", task_id: task.id, status: task.status, reason });
     const queueItem = (nextState.goal_queue || []).find((entry) => entry.task_id === task.id);
     if (queueItem && !wasTerminal) {
-      queueItem.status = hasEvidence ? "running" : "waiting";
-      queueItem.blocked_reason = hasEvidence ? null : `automatic repair after TUI stop: ${reason}`;
+      queueItem.status = reason === "manual_stop" ? "cancelled" : (hasEvidence ? "running" : "waiting");
+      queueItem.blocked_reason = reason === "manual_stop" ? null : (hasEvidence ? null : `automatic repair after TUI stop: ${reason}`);
       queueItem.updated_at = task.updated_at;
     }
     updated = task;
