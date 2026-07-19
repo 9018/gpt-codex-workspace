@@ -82,15 +82,15 @@ const OPERATION_PATTERNS = [
   ["queue_admin", /\b(queue admin|manage queue|queue operation|reorder queue|queue recovery|advance queue|clear queue|pause queue)\b|队列管理|队列操作/iu],
 ];
 
-function inferOperationKind({ user_request = "", goal_prompt = "", mode = "" } = {}) {
-  const text = `${mode}\n${user_request}\n${goal_prompt}`;
+function inferOperationKind({ title = "", description = "", user_request = "", goal_prompt = "", mode = "" } = {}) {
+  const text = `${mode}\n${title}\n${description}\n${user_request}\n${goal_prompt}`;
   const requestedMode = String(mode || "").toLowerCase();
   const normalizedMode = requestedMode === "implementation" || requestedMode === "code_change" ? "builder" : requestedMode;
   if (normalizedMode === "deploy") return { operation_kind: "deploy", semantic_confidence: "high" };
   if (normalizedMode === "readonly" && /validat(e|ion)|检查|验证/iu.test(text)) return { operation_kind: "readonly_validation", semantic_confidence: "medium" };
   if (normalizedMode === "readonly") return { operation_kind: "diagnostic", semantic_confidence: "medium" };
   if (normalizedMode === "admin" && /restart|重启/iu.test(text)) return { operation_kind: "restart", semantic_confidence: "high" };
-  if (normalizedMode === "admin" && /cleanup|clean ?up|清理|delete old|prune/iu.test(text)) return { operation_kind: "cleanup", semantic_confidence: "high" };
+  if (normalizedMode === "admin" && /cleanup|clean ?up|clear|delete|remove|prune|清理|清空|删除|移除/iu.test(text)) return { operation_kind: "cleanup", semantic_confidence: "high" };
   if (normalizedMode === "admin" && /command|queue recovery|recover|管理命令|执行命令/iu.test(text)) return { operation_kind: "admin_command", semantic_confidence: "high" };
 
   const matches = [];

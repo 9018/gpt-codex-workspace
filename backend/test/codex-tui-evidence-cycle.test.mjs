@@ -5,73 +5,79 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCodexTuiEvidenceCycle } from "../src/codex-tui-evidence-cycle.mjs";
 
-test("TUI evidence cycle repairs the same session once before timing out", async () => {
+test("TUI result.json missing does not re-enter session, retry, repair, or create follow-up", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-"));
-  const goal = { id: "goal_missing" };
   const sent = [];
   const out = await runCodexTuiEvidenceCycle({
     task: { id: "task_missing" },
-    goal,
+    goal: { id: "goal_missing" },
     sessionId: "session_missing",
     workspaceRoot,
     maxWaitMs: 1,
     pollMs: 1,
     sleepFn: async () => {},
-    collectFn: async () => ({ result_json: null }),
+    collectFn: async () => ({
+      result_json: null,
+      result_json_valid: false,
+      ready_for_review: false,
+      changed_files: [],
+      tests: null,
+      commit: null,
+      worktree_clean: true,
+    }),
     sendInputFn: async (sessionId, input) => sent.push({ sessionId, input }),
   });
 
   assert.equal(out.evidence_ready, false);
-  assert.equal(out.reason, "tui_result_json_missing");
-  assert.equal(out.timed_out, true);
-  assert.equal(out.repair_attempted, true);
-  assert.equal(sent.length, 1);
-  assert.equal(sent[0].sessionId, "session_missing");
-  assert.match(sent[0].input, /result\.json/);
-  assert.match(sent[0].input, /continue/i);
-  assert.equal(out.finding.code, "tui_result_json_timeout");
+  assert.equal(out.reason, "tui_result_json_missing_reconstructed");
+  assert.equal(out.status, "waiting_for_review");
+  assert.equal(out.requires_human_review, true);
+  assert.equal(out.retry_original_task, false);
+  assert.equal(out.create_repair_task, false);
+  assert.equal(out.create_followup, false);
+  assert.equal(out.repair_attempted, false);
+  assert.equal(sent.length, 0);
+  assert.equal(out.finding.code, "tui_result_json_missing_reconstructed");
 });
 
-test("TUI evidence cycle accepts evidence produced by the same-session repair", async () => {
-  const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-repair-"));
-  const goal = { id: "goal_repaired" };
-  const dir = join(workspaceRoot, ".gptwork", "goals", goal.id);
-  const resultPath = join(dir, "result.json");
-  await mkdir(dir, { recursive: true });
-  let sends = 0;
-
+test("TUI result.json missing uses reconstructed evidence when closure is provable", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-reconstructed-"));
+  const reconstructed = {
+    status: null,
+    outcome: "unknown",
+    changed_files: ["backend/src/example.mjs"],
+    tests: [{ command: "node --test", exit_code: 0 }],
+    commit: "abcdef1",
+    verification: { passed: null },
+    source: "tui_evidence_reconstruction",
+  };
   const out = await runCodexTuiEvidenceCycle({
-    task: { id: "task_repaired" },
-    goal,
-    sessionId: "session_repaired",
+    task: { id: "task_reconstructed" },
+    goal: { id: "goal_reconstructed" },
+    sessionId: "session_reconstructed",
     workspaceRoot,
     maxWaitMs: 1,
     pollMs: 1,
     sleepFn: async () => {},
-    sendInputFn: async () => {
-      sends += 1;
-      await writeFile(resultPath, JSON.stringify({
-        status: "completed",
-        summary: "repaired evidence",
-        changed_files: [],
-        tests: [],
-        commit: null,
-        remote_head: null,
-        warnings: [],
-        followups: [],
-        verification: { passed: true, commands: [] },
-      }));
-    },
-    collectFn: async () => ({ result_json: { status: "completed" } }),
+    collectFn: async () => ({
+      result_json: null,
+      result_json_valid: false,
+      ready_for_review: true,
+      reconstructed_result: reconstructed,
+    }),
   });
 
-  assert.equal(sends, 1);
   assert.equal(out.evidence_ready, true);
-  assert.equal(out.repair_attempted, true);
-  assert.equal(out.reason, "tui_result_json_collected_after_repair");
+  assert.equal(out.status, "ready");
+  assert.equal(out.requires_human_review, false);
+  assert.equal(out.retry_original_task, false);
+  assert.equal(out.create_repair_task, false);
+  assert.equal(out.create_followup, false);
+  assert.deepEqual(out.reconstructed_result, reconstructed);
+  assert.equal(out.finding.severity, "warning");
 });
 
-test("TUI evidence cycle returns ready when result.json exists", async () => {
+test("TUI evidence cycle returns ready when valid result.json exists", async () => {
   const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-"));
   const goal = { id: "goal_ready" };
   const dir = join(workspaceRoot, ".gptwork", "goals", goal.id);
@@ -91,11 +97,14 @@ test("TUI evidence cycle returns ready when result.json exists", async () => {
     maxWaitMs: 1,
     pollMs: 1,
     sleepFn: async () => {},
-    collectFn: async () => ({ result_json: { ok: true } }),
+    collectFn: async () => ({ result_json: { ok: true }, result_json_valid: true }),
   });
 
   assert.equal(out.evidence_ready, true);
   assert.equal(out.reason, "tui_result_json_collected");
+  assert.equal(out.retry_original_task, false);
+  assert.equal(out.create_repair_task, false);
+  assert.equal(out.create_followup, false);
 });
 
 test("TUI evidence cycle throws when goal.id is missing", async () => {

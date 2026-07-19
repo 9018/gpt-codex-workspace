@@ -369,9 +369,10 @@ export async function collectProductStatus(services) {
     config: {
       bark_enabled: bark?.isEnabled?.() || false,
       github_enabled: github?.enabled || false,
-      agent_backend: config.agentBackend || "codex_exec",
+      agent_backend: config.executeProvider || "codex_tui_goal",
+      pipeline_role_backend: config.agentBackend || "codex_exec",
       agent_role_backends: config.agentRoleBackends || {},
-      codex_tui_enabled: config.codexTuiEnabled === true,
+      codex_tui_enabled: config.codexTuiEnabled !== false,
       codex_tui_command_set: Boolean(config.codexTuiCommand),
       codex_tui_evidence_wait_ms: config.codexTuiEvidenceWaitMs ?? null,
       codex_tui_session_root: config.codexTuiSessionRoot || config.defaultWorkspaceRoot || config.workspaceRoot || null,

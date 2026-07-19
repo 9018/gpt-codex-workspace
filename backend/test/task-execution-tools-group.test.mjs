@@ -90,7 +90,7 @@ test('execution tool group assign_task_to_codex handler calls dependencies', asy
 
   assert.equal(ensureTaskGoalCalls.length, 1);
   assert.equal(ensureTaskGoalCalls[0].taskId, 'new-task');
-  assert.deepEqual(ensureTaskGoalCalls[0].opts, { assign_to_codex: true });
+  assert.deepEqual(ensureTaskGoalCalls[0].opts, { assign_to_codex: true, sync_execution_profile: true });
   assert.equal(result.goal.id, 'goal-1');
   await new Promise(r => setTimeout(r, 10));
   assert.equal(syncTaskCalled, true);

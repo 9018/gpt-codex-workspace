@@ -1,95 +1,120 @@
-import { readFile, readdir } from "node:fs/promises";
+import { readFile, readdir, stat, unlink } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { getLocksDir } from "./repo-lock-paths.mjs";
 
-// ---------------------------------------------------------------------------
-// Diagnostics
-// ---------------------------------------------------------------------------
+export const RELEASED_LOCK_RETENTION_MS = 3 * 24 * 60 * 60 * 1000;
 
-/**
- * Get a safe summary of all repo locks for diagnostics.
- * No secret values exposed.
- *
- * @param {string} workspaceRoot
- * @returns {Promise<{active_repo_locks: number, stale_repo_locks: number, locks: object[]}>}
- */
+export async function cleanupExpiredRepoLocks(
+  workspaceRoot,
+  { now = Date.now(), retentionMs = RELEASED_LOCK_RETENTION_MS } = {},
+) {
+  if (!workspaceRoot) return { deleted: 0 };
+  const lockDir = getLocksDir(workspaceRoot);
+  if (!existsSync(lockDir)) return { deleted: 0 };
+
+  let deleted = 0;
+  try {
+    const entries = await readdir(lockDir, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isFile()) continue;
+      const lockPath = join(lockDir, entry.name);
+      let expired = false;
+
+      if (entry.name.endsWith(".json")) {
+        try {
+          const lockData = JSON.parse(await readFile(lockPath, "utf8"));
+          if (!["released", "stale"].includes(lockData.status)) continue;
+          const terminalAt = lockData.released_at || lockData.stale_at || lockData.last_heartbeat_at;
+          const terminalTime = new Date(terminalAt).getTime();
+          expired = Number.isFinite(terminalTime) && now - terminalTime >= retentionMs;
+        } catch {
+          continue;
+        }
+      } else if (entry.name.includes(".released.") || entry.name.includes(".stale.")) {
+        try {
+          expired = now - (await stat(lockPath)).mtimeMs >= retentionMs;
+        } catch {
+          continue;
+        }
+      }
+
+      if (expired) {
+        try {
+          await unlink(lockPath);
+          deleted++;
+        } catch {
+          // Non-fatal: another process may already have removed it.
+        }
+      }
+    }
+  } catch {
+    // Non-fatal diagnostics cleanup.
+  }
+
+  return { deleted };
+}
+
+function toSafeLock(lockData) {
+  const status = lockData.status;
+  return {
+    safe_repo_id: lockData.safe_repo_id,
+    canonical_repo_path: lockData.canonical_repo_path,
+    task_id: lockData.task_id,
+    run_id: lockData.run_id,
+    status,
+    mode: lockData.mode,
+    acquired_at: lockData.acquired_at,
+    last_heartbeat_at: lockData.last_heartbeat_at,
+    released_at: lockData.released_at || null,
+    stale_at: lockData.stale_at || null,
+    restart_state: lockData.restart_state || null,
+    stale_reason: lockData.stale_reason || null,
+    blocks_current_work: !["released", "stale"].includes(status),
+    diagnostic_level: status === "released" ? "history" : status === "stale" ? "stale" : "active",
+    stale_reason_scope: status === "released" && lockData.stale_reason ? "historical_released_lock" : null,
+  };
+}
+
 export async function getRepoLockSummary(workspaceRoot) {
+  await cleanupExpiredRepoLocks(workspaceRoot);
   if (!workspaceRoot) {
-    return { active_repo_locks: 0, stale_repo_locks: 0, locks: [] };
+    return { active_repo_locks: 0, stale_repo_locks: 0, released_repo_locks: 0, history_lock_count: 0, locks: [] };
   }
 
   const lockDir = getLocksDir(workspaceRoot);
   if (!existsSync(lockDir)) {
-    return { active_repo_locks: 0, stale_repo_locks: 0, locks: [] };
+    return { active_repo_locks: 0, stale_repo_locks: 0, released_repo_locks: 0, history_lock_count: 0, locks: [] };
   }
 
   let active = 0;
   let stale = 0;
   let released = 0;
-  let releasedWithStaleReason = 0;
   const locks = [];
-  const historyLocks = [];
 
   try {
     const entries = await readdir(lockDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-
-      const lockPath = join(lockDir, entry.name);
       let lockData;
       try {
-        lockData = JSON.parse(await readFile(lockPath, "utf8"));
+        lockData = JSON.parse(await readFile(join(lockDir, entry.name), "utf8"));
       } catch {
         continue;
       }
 
-      // Safe fields only — no secrets
-      const safeEntry = {
-        safe_repo_id: lockData.safe_repo_id,
-        task_id: lockData.task_id,
-        status: lockData.status,
-        acquired_at: lockData.acquired_at,
-        last_heartbeat_at: lockData.last_heartbeat_at,
-        mode: lockData.mode,
-      };
-
-      // Only include restart_state if set (safe string, not a secret)
-      if (lockData.restart_state) {
-        safeEntry.restart_state = lockData.restart_state;
-      }
-
-      if (lockData.stale_reason) {
-        safeEntry.stale_reason = lockData.stale_reason;
-      }
-
       if (lockData.status === "released") {
         released++;
-        if (lockData.stale_reason) releasedWithStaleReason++;
-        safeEntry.blocks_current_work = false;
-        safeEntry.diagnostic_level = "history";
-        safeEntry.stale_reason_scope = lockData.stale_reason ? "historical_released_lock" : null;
-        historyLocks.push(safeEntry);
         continue;
       }
-
-      if (lockData.status === "stale") {
-        safeEntry.blocks_current_work = true;
-        safeEntry.diagnostic_level = "blocker";
-        stale++;
-      } else {
-        safeEntry.blocks_current_work = true;
-        safeEntry.diagnostic_level = "active";
-        active++;
-      }
-
-      locks.push(safeEntry);
+      if (lockData.status === "stale") stale++;
+      else active++;
+      locks.push(toSafeLock(lockData));
     }
   } catch {
-    // Non-fatal
+    // Non-fatal.
   }
 
-  // Sort: active locks first, then by acquired_at descending
   locks.sort((a, b) => {
     if (a.status === "held" && b.status !== "held") return -1;
     if (a.status !== "held" && b.status === "held") return 1;
@@ -100,63 +125,43 @@ export async function getRepoLockSummary(workspaceRoot) {
     active_repo_locks: active,
     stale_repo_locks: stale,
     released_repo_locks: released,
+    history_lock_count: released,
     locks,
-    history: {
-      released_repo_locks: released,
-      released_with_stale_reason: releasedWithStaleReason,
-      locks: historyLocks,
-    },
   };
 }
 
-/**
- * List all repo locks (full details for list_repo_locks tool).
- *
- * @param {string} workspaceRoot
- * @returns {Promise<object[]>}
- */
-export async function listRepoLocks(workspaceRoot) {
+export async function listRepoLocks(
+  workspaceRoot,
+  { scope = "current", page = 1, pageSize = 50 } = {},
+) {
+  await cleanupExpiredRepoLocks(workspaceRoot);
   if (!workspaceRoot) return [];
 
   const lockDir = getLocksDir(workspaceRoot);
   if (!existsSync(lockDir)) return [];
 
   const locks = [];
-
   try {
     const entries = await readdir(lockDir, { withFileTypes: true });
     for (const entry of entries) {
       if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-
-      const lockPath = join(lockDir, entry.name);
       let lockData;
       try {
-        lockData = JSON.parse(await readFile(lockPath, "utf8"));
+        lockData = JSON.parse(await readFile(join(lockDir, entry.name), "utf8"));
       } catch {
         continue;
       }
-
-      // Safe fields only
-      const status = lockData.status;
-      locks.push({
-        safe_repo_id: lockData.safe_repo_id,
-        canonical_repo_path: lockData.canonical_repo_path,
-        task_id: lockData.task_id,
-        run_id: lockData.run_id,
-        status,
-        mode: lockData.mode,
-        acquired_at: lockData.acquired_at,
-        last_heartbeat_at: lockData.last_heartbeat_at,
-        restart_state: lockData.restart_state || null,
-        stale_reason: lockData.stale_reason || null,
-        blocks_current_work: status !== "released",
-        diagnostic_level: status === "released" ? "history" : status === "stale" ? "blocker" : "active",
-        stale_reason_scope: status === "released" && lockData.stale_reason ? "historical_released_lock" : null,
-      });
+      const isHistory = lockData.status === "released";
+      if (scope === "history" ? !isHistory : isHistory) continue;
+      locks.push(toSafeLock(lockData));
     }
   } catch {
-    // Non-fatal
+    // Non-fatal.
   }
 
-  return locks;
+  locks.sort((a, b) => new Date(b.released_at || b.stale_at || b.last_heartbeat_at || b.acquired_at).getTime() - new Date(a.released_at || a.stale_at || a.last_heartbeat_at || a.acquired_at).getTime());
+  const normalizedPage = Math.max(1, Number(page) || 1);
+  const normalizedPageSize = Math.min(200, Math.max(1, Number(pageSize) || 50));
+  const start = (normalizedPage - 1) * normalizedPageSize;
+  return locks.slice(start, start + normalizedPageSize);
 }

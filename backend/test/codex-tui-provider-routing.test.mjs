@@ -511,7 +511,7 @@ test("codex_exec provider responses 404 blocks and does not enter acceptance or 
   assert.match(finalized.taskResult.next_action, /provider endpoint/i);
 });
 
-test("TUI evidence timeout stops the live session and enters automatic retry_wait", async () => {
+test("TUI evidence timeout stops the live session and enters human review without retry or repair", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-timeout-retry-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
   let stopped = null;
@@ -559,9 +559,16 @@ test("TUI evidence timeout stops the live session and enters automatic retry_wai
   assert.equal(stopped?.sessionId, "session_timeout");
   assert.equal(stopped?.options?.reason, "evidence_timeout");
   assert.equal(released, 1);
-  assert.equal(store.state.tasks[0].status, "retry_wait");
-  assert.equal(store.state.tasks[0].result.failure_class, "result_missing");
+  assert.equal(store.state.tasks[0].status, "waiting_for_review");
+  assert.equal(store.state.tasks[0].result.failure_class, undefined);
+  assert.equal(store.state.tasks[0].result.requires_human_review, true);
+  assert.equal(store.state.tasks[0].result.retry_original_task, false);
+  assert.equal(store.state.tasks[0].result.create_repair_task, false);
+  assert.equal(store.state.tasks[0].result.verification.passed, null);
+  assert.equal(store.state.tasks[0].result.verification.indeterminate, true);
   assert.equal(store.state.tasks[0].metadata.tui_session_owner, undefined);
   assert.equal(store.state.tasks[0].metadata.tui_session_id, "session_timeout");
-  assert.equal(result.status, "retry_wait");
+  assert.equal(result.status, "waiting_for_review");
+  assert.equal(result.kind, "codex_tui_awaiting_human_review");
+  assert.equal(result.create_repair_task, false);
 });

@@ -34,13 +34,13 @@ test('repo lock tool group exposes stable public aliases and response shape', as
   const listed = await tools.list_repo_locks.handler();
   const alias = await tools.repo_lock_status.handler();
 
-  assert.deepEqual(listed, { active_repo_locks: 1, stale_repo_locks: 0, locks: [{ repo: 'demo', task_id: 'task_1' }] });
+  assert.deepEqual(listed, { active_repo_locks: 1, stale_repo_locks: 0, history_lock_count: 0, scope: 'current', page: 1, page_size: 50, locks: [{ repo: 'demo', task_id: 'task_1' }] });
   assert.deepEqual(alias, listed);
   assert.deepEqual(calls, [
-    ['list', '/tmp/gptwork'],
     ['summary', '/tmp/gptwork'],
     ['list', '/tmp/gptwork'],
     ['summary', '/tmp/gptwork'],
+    ['list', '/tmp/gptwork'],
   ]);
 });
 

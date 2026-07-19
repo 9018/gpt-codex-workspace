@@ -194,7 +194,7 @@ export function createCodexTuiToolsGroup({
    */
   async function startGoalHandler({ task_id }, context) {
     if (!isCodexTuiEnabled(config)) {
-      return { kind: "codex_tui_disabled", status: "disabled", provider: "codex_tui_goal", reason: "GPTWORK_CODEX_TUI_ENABLED is not true" };
+      return { kind: "codex_tui_disabled", status: "disabled", provider: "codex_tui_goal", reason: "TUI was explicitly disabled by GPTWORK_CODEX_TUI_ENABLED=false" };
     }
 
     const task = await findTaskFn(store, task_id);

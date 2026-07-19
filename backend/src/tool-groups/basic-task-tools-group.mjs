@@ -5,6 +5,45 @@ import { getTaskReviewPacket } from '../review/review-packet-builder.mjs';
 import { normalizeLegacyTaskWorkstream } from '../workstream/workstream-model.mjs';
 import { isResolvedLegacyReviewTask, legacyResolutionSummary } from '../legacy-reconciliation.mjs';
 import { isHumanReviewStatus, isRepairStatus, isFailedTerminalStatus } from '../task-status-taxonomy.mjs';
+import { cancelTaskExecution as cancelTaskExecutionDefault } from '../task-cancellation.mjs';
+
+
+const DELETABLE_TASK_STATUSES = new Set(['completed', 'failed', 'cancelled', 'timed_out']);
+
+function buildTaskDeletionPlan(state, taskIds, { force = false } = {}) {
+  const requested = [...new Set((taskIds || []).filter(Boolean))];
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const byId = new Map(tasks.map((task) => [task.id, task]));
+  const missing = requested.filter((id) => !byId.has(id));
+  const blocked = requested.map((id) => byId.get(id)).filter(Boolean)
+    .filter((task) => !force && !DELETABLE_TASK_STATUSES.has(task.status))
+    .map((task) => ({ task_id: task.id, status: task.status }));
+  const blockedIds = new Set(blocked.map((item) => item.task_id));
+  const deletable = requested.filter((id) => byId.has(id) && !blockedIds.has(id));
+  const ids = new Set(deletable);
+  const linkedGoalIds = new Set(tasks.filter((task) => ids.has(task.id)).map((task) => task.goal_id).filter(Boolean));
+  const countMatches = (key, predicate) => Array.isArray(state[key]) ? state[key].filter(predicate).length : 0;
+  return { requested, deletable, missing, blocked, linked_goal_ids: [...linkedGoalIds], related: {
+    queue_items: countMatches('goal_queue', (item) => ids.has(item.task_id)),
+    agent_runs: countMatches('agent_runs', (item) => ids.has(item.task_id)),
+    activities: countMatches('activities', (item) => ids.has(item.task_id)),
+    task_locks: countMatches('repo_locks', (item) => ids.has(item.task_id)),
+  } };
+}
+
+function applyTaskDeletionPlan(state, plan, { deleteLinkedGoals = false } = {}) {
+  const ids = new Set(plan.deletable);
+  const goalIds = new Set(plan.linked_goal_ids);
+  const next = { ...state, tasks: (state.tasks || []).filter((task) => !ids.has(task.id)) };
+  for (const key of ['goal_queue', 'agent_runs', 'activities', 'repo_locks']) {
+    if (Array.isArray(state[key])) next[key] = state[key].filter((item) => !ids.has(item.task_id));
+  }
+  if (deleteLinkedGoals && Array.isArray(state.goals)) {
+    const stillReferenced = new Set(next.tasks.map((task) => task.goal_id).filter(Boolean));
+    next.goals = state.goals.filter((goal) => !goalIds.has(goal.id) || stillReferenced.has(goal.id));
+  }
+  return next;
+}
 
 /**
  * Build a task summary object suitable for ChatGPT reasoning.
@@ -66,7 +105,7 @@ function buildTaskSummary(task) {
  * Dependencies (createTask, github) are passed in to avoid circular imports
  * from gptwork-server.mjs.
  */
-export function createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github, eventLogger, hookBus }) {
+export function createBasicTaskToolsGroup({ tool, schema, config, store, createTask, github, eventLogger, hookBus, cancelTaskExecution = cancelTaskExecutionDefault }) {
   const common = { modes: ["standard", "codex", "full"], audience: ["chatgpt", "codex"], tags: ["task"], outputTemplate: "ui://widget/gptwork-card-v2.html",
       resourceUri: "ui://widget/gptwork-card-v2.html" };
   return {
@@ -205,11 +244,64 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
       inputSchema: schema({ task_id: "string", status: "string" }, ["task_id", "status"]),
       ...common,
       handler: async ({ task_id, status }) => {
+        let cancellation = null;
+        if (status === "cancelled") {
+          const task = await findTask(store, task_id);
+          cancellation = await cancelTaskExecution({ task, config });
+        }
         const result = await updateTask(store, task_id, (task) => { task.status = status; });
         github.syncTask(result.task).catch(() => {});
         await eventLogger?.append("task.status_changed", { task_id, status });
         await hookBus?.emit("onTaskStatusChanged", { task: result.task });
-        return result;
+        return cancellation ? { ...result, cancellation } : result;
+      },
+    }),
+    delete_task: tool({
+      name: "delete_task",
+      description: "Permanently delete one terminal task and its task-owned queue, agent-run, activity, and lock records. Defaults to dry-run. Active tasks are rejected unless force=true.",
+      inputSchema: schema({
+        task_id: { type: "string", description: "Task ID to delete." },
+        dry_run: { type: "boolean", description: "Preview only. Default: true.", default: true },
+        force: { type: "boolean", description: "Allow deletion of a non-terminal task. Default: false.", default: false },
+        delete_linked_goal: { type: "boolean", description: "Delete an unreferenced linked goal. Default: false.", default: false }
+      }, ["task_id"]),
+      ...common,
+      handler: async ({ task_id, dry_run = true, force = false, delete_linked_goal = false }) => {
+        const state = await store.load();
+        const plan = buildTaskDeletionPlan(state, [task_id], { force });
+        if (plan.missing.length) throw new Error(`task_not_found:${task_id}`);
+        if (plan.blocked.length) throw new Error(`task_not_terminal:${task_id}:${plan.blocked[0].status}`);
+        if (!dry_run) {
+          await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goal }));
+          await eventLogger?.append("task.deleted", { task_id, delete_linked_goal });
+        }
+        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };
+      },
+    }),
+    delete_tasks: tool({
+      name: "delete_tasks",
+      description: "Permanently delete multiple terminal tasks atomically. Supply task_ids or all_terminal=true. Defaults to dry-run.",
+      inputSchema: schema({
+        task_ids: { type: "array", items: { type: "string" }, description: "Specific task IDs to delete." },
+        all_terminal: { type: "boolean", description: "Select every terminal task. Default: false.", default: false },
+        dry_run: { type: "boolean", description: "Preview only. Default: true.", default: true },
+        force: { type: "boolean", description: "Allow explicitly listed non-terminal tasks. Default: false.", default: false },
+        delete_linked_goals: { type: "boolean", description: "Delete linked goals no longer referenced by remaining tasks. Default: false.", default: false }
+      }),
+      ...common,
+      handler: async ({ task_ids = [], all_terminal = false, dry_run = true, force = false, delete_linked_goals = false }) => {
+        const state = await store.load();
+        const selected = all_terminal
+          ? (state.tasks || []).filter((task) => DELETABLE_TASK_STATUSES.has(task.status)).map((task) => task.id)
+          : task_ids;
+        if (!Array.isArray(selected) || selected.length === 0) throw new Error('no_tasks_selected');
+        const plan = buildTaskDeletionPlan(state, selected, { force });
+        if (plan.blocked.length) throw new Error(`tasks_not_terminal:${plan.blocked.map((item) => `${item.task_id}:${item.status}`).join(',')}`);
+        if (!dry_run) {
+          await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goals }));
+          await eventLogger?.append("tasks.deleted", { task_ids: plan.deletable, delete_linked_goals });
+        }
+        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };
       },
     }),
     append_task_log: tool({

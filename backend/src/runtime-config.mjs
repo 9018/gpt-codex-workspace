@@ -220,7 +220,7 @@ export function buildRuntimeConfig(workspaceRoot, overridePath, preloadedKeys = 
     claudeCommand: _get("GPTWORK_CLAUDE_COMMAND", "claude"),
     codexCommand: _get("GPTWORK_CODEX_COMMAND", "codex"),
     claudeTuiEnabled: _getBool("GPTWORK_CLAUDE_TUI_ENABLED", false),
-    codexTuiEnabled: _getBool("GPTWORK_CODEX_TUI_ENABLED", false),
+    codexTuiEnabled: _getBool("GPTWORK_CODEX_TUI_ENABLED", true),
     codexTuiCommand: _get("GPTWORK_CODEX_TUI_COMMAND", _get("GPTWORK_CODEX_COMMAND", "codex")),
     codexTuiEvidenceWaitMs: _getNum("GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS", 30000),
     codexTuiSessionRoot: _get("GPTWORK_CODEX_TUI_SESSION_ROOT", ""),

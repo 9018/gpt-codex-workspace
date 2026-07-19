@@ -33,7 +33,7 @@ export function createExecutionToolsGroup({
           task.status = "assigned";
           task.mode = normalizeAssignedTaskMode(task, mode);
         });
-        const linked = await ensureTaskGoal(store, config, result.task.id, context, { assign_to_codex: true });
+        const linked = await ensureTaskGoal(store, config, result.task.id, context, { assign_to_codex: true, sync_execution_profile: true });
         // Send created notification for newly assigned Codex task (after ensureTaskGoal handles goal linking)
         notifyCreatedTaskIfNeeded(result.task);
         github.syncTask(result.task).catch(() => {});

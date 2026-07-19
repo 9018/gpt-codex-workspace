@@ -472,7 +472,7 @@ test("collectContextBundleHealth handles tasks with many acceptance findings as 
 test("productStatusCard shows backend chain from canonical source when available", () => {
   const data = makeMinimalProductData({
     role_backends: {
-      text: "All pipeline roles → codex_exec (product default)",
+      text: "Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec",
       entries: [
         { role: "builder", backend: "codex_exec", semantic: "real", source: "product_default", label: "builder → codex_exec (Product default)" },
       ],
@@ -516,7 +516,7 @@ test("productStatusCard shows backend chain when codex_exec is product default, 
   // Test that all-codex_exec default does NOT trigger warning diagnostics
   const data = makeMinimalProductData({
     role_backends: {
-      text: "All pipeline roles → codex_exec (product default)",
+      text: "Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec",
       entries: [],
     },
   });

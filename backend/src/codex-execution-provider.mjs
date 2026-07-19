@@ -32,7 +32,8 @@ export function taskExplicitlyUsesCodexTuiGoal(task) {
 
 export function isCodexTuiEnabled(config = {}, env = process.env) {
   const explicit = config.codexTuiEnabled ?? config.codex_tui_enabled ?? env.GPTWORK_CODEX_TUI_ENABLED;
-  return String(explicit || "").trim().toLowerCase() === "true";
+  if (explicit === undefined || explicit === null || String(explicit).trim() === "") return true;
+  return String(explicit).trim().toLowerCase() !== "false";
 }
 
 export function isClaudeTuiEnabled(config = {}, env = process.env) {
@@ -137,7 +138,7 @@ export function checkSuperpowersPluginForTuiFallback(config = {}, env = process.
     required: true,
     diagnostic: {
       code: 'superpowers_plugin_missing',
-      message: 'TUI fallback requires the Superpowers plugin but it is not installed.',
+      message: 'Autonomous TUI execution requires the Superpowers plugin but it is not installed.',
       remediation: 'Install the Superpowers plugin via: codex --install-plugin superpowers, or disable the check with GPTWORK_REQUIRE_SUPERPOWERS_FOR_TUI=false.',
     },
   };

@@ -17,9 +17,11 @@ const CARD_ENABLED_TOOLS = new Set([
   "show_changes",
   "workstream_status",
   "read_handoff",
+  "list_projects",
   "list_goals",
   "start_next_queued_goal",
   "runtime_status",
+  "list_repositories",
   "worker_status",
   "list_tasks",
   "get_task",
@@ -732,6 +734,10 @@ export function buildCardViewModel(tool, data, meta = {}) {
     case "run_assigned_codex_tasks":
       return buildRunAssignedCard(tool, payload, meta);
     case "workstream_status":
+    case "list_projects":
+      return buildProjectListCard(tool, payload, meta);
+    case "list_repositories":
+      return buildRepoListCard(tool, payload, meta);
       return buildWorkstreamStatusCard(tool, payload, meta);
     case "product_status":
       return buildProductStatusCard(tool, payload, meta);
@@ -806,3 +812,56 @@ function buildProductStatusCard(tool, data, meta) {
 
 
 export { CARD_VERSION };
+
+function buildProjectListCard(tool, data, meta) {
+  const projects = Array.isArray(data.projects) ? data.projects : [];
+  const card = baseCard(tool, data, { ...meta, title: "Projects" });
+  card.card_type = "directory";
+  card.status = projects.length > 0 ? "ok" : "info";
+  card.severity = card.status;
+  card.summary = `${projects.length} project(s)`;
+  addKeyValues(card.key_values, [
+    { key: "count", value: projects.length },
+  ]);
+  if (projects.length > 0) {
+    card.sections.push({
+      title: "Projects",
+      type: "table",
+      rows: projects.map((project) => ({
+        name: project.name || project.id,
+        id: project.id,
+        description: project.description ? truncate(project.description, 80) : "-",
+        default_workspace: project.default_workspace_id || "-",
+        team_id: project.team_id || "-",
+      })),
+    });
+  }
+  return finalize(card);
+}
+
+function buildRepoListCard(tool, data, meta) {
+  const repos = Array.isArray(data.repositories) ? data.repositories : [];
+  const card = baseCard(tool, data, { ...meta, title: "Registered Repositories" });
+  card.card_type = "directory";
+  card.status = repos.length > 0 ? "ok" : "info";
+  card.severity = card.status;
+  card.summary = `${repos.length} registered repository/repositories`;
+  addKeyValues(card.key_values, [
+    { key: "count", value: repos.length },
+  ]);
+  if (repos.length > 0) {
+    card.sections.push({
+      title: "Repositories",
+      type: "table",
+      rows: repos.map((repo) => ({
+        name: repo.repo_name,
+        owner: repo.owner,
+        repo_id: repo.repo_id,
+        canonical_path: repo.canonical_path || "-",
+        default_branch: repo.default_branch || "main",
+        status: repo.status || "active",
+      })),
+    });
+  }
+  return finalize(card);
+}

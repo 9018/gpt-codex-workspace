@@ -486,7 +486,7 @@ export async function runTaskExecution(store, config, task, context, github, dep
         commit: "none",
         changed_files: [],
         tests: null,
-        followup: "Set GPTWORK_CODEX_TUI_ENABLED=true to allow explicit codex_tui_goal tasks to start TUI sessions.",
+        followup: "TUI is the default autonomous provider. Remove an explicit GPTWORK_CODEX_TUI_ENABLED=false setting to enable it.",
       };
       await updateTaskFn(store, task.id, (item) => {
         item.status = "waiting_for_review";
@@ -698,7 +698,17 @@ export async function runTaskExecution(store, config, task, context, github, dep
           workspaceRoot: config.defaultWorkspaceRoot,
         });
       } catch { /* state transition must still proceed */ }
-      const terminalStatus = evidenceTimedOut ? "retry_wait" : "failed";
+      // Missing or unprovable TUI evidence is not an execution/verification failure.
+      // The evidence cycle has already reconstructed everything available and
+      // explicitly forbids retry, follow-up, or repair creation. Preserve that
+      // classification as human review instead of turning it into a repairable
+      // verification failure.
+      const terminalStatus = "waiting_for_review";
+      const reviewFinding = collected?.finding || {
+        severity: "blocker",
+        code: "tui_evidence_insufficient_for_closure",
+        message: `Available TUI/session/Git evidence could not prove closure: ${collected?.reason || "evidence unavailable"}.`,
+      };
       await updateTaskFn(store, task.id, (item) => {
         item.status = terminalStatus;
         item.metadata = { ...(item.metadata || {}), tui_session_id: session.id };
@@ -707,31 +717,38 @@ export async function runTaskExecution(store, config, task, context, github, dep
         item.result = {
           ...sessionStartedResult,
           status: terminalStatus,
-          failure_class: evidenceTimedOut ? "result_missing" : "tui_result_missing",
-          tui_phase: "blocked_missing_evidence",
+          requires_review: true,
+          requires_human_review: true,
+          retry_original_task: false,
+          create_followup: false,
+          create_repair_task: false,
+          repair_attempted: false,
+          tui_phase: "human_review_missing_evidence",
           expected_result_json: collected?.expected_result_json || null,
           expected_result_md: collected?.expected_result_md || null,
-          finding: collected?.finding || null,
+          finding: reviewFinding,
+          blockers: [reviewFinding],
           verification: {
-            passed: false,
-            findings: [collected?.finding || {
-              severity: "blocker",
-              code: evidenceTimedOut ? "tui_result_json_timeout" : "tui_result_json_failed",
-              message: `TUI session evidence collection resulted in terminal state: ${collected?.reason || "no evidence"} after evidence wait period.`,
-            }],
+            passed: null,
+            indeterminate: true,
+            findings: [reviewFinding],
           },
           collect_result: collected,
         };
-        item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal ${terminalStatus}: ${collected?.reason || "no evidence"}` });
+        item.logs.push({ time: new Date().toISOString(), message: `[worker] codex_tui_goal waiting_for_review: ${collected?.reason || "closure evidence insufficient"}` });
       });
       return {
-        kind: "codex_tui_awaiting_evidence",
+        kind: "codex_tui_awaiting_human_review",
         status: terminalStatus,
+        requires_human_review: true,
+        retry_original_task: false,
+        create_followup: false,
+        create_repair_task: false,
         session_id: session.id,
         expected_result_json: collected?.expected_result_json || null,
-        finding: collected?.finding || null,
+        finding: reviewFinding,
         collect_result: collected || null,
-        reason: collected?.reason || "result evidence missing",
+        reason: collected?.reason || "closure evidence insufficient",
       };
     }
 
@@ -978,26 +995,53 @@ export async function runTaskExecution(store, config, task, context, github, dep
   ) {
     const handle = providerExecutionReady.attempt?.provider_handle || {};
     const failure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || {};
+    const reviewFinding = failure.cycle?.finding || failure || {
+      severity: "blocker",
+      code: "tui_evidence_insufficient_for_closure",
+      message: "Codex TUI evidence was insufficient to prove closure.",
+    };
     taskResult.session_id = handle.session_id || null;
     taskResult.native_session_id = handle.native_session_id || failure.native_session_id || null;
-    taskResult.tui_phase = "automatic_recovery_pending";
-    taskResult.failure_class = failure.failure_class || "result_missing";
+    taskResult.status = "waiting_for_review";
+    taskResult.requires_review = true;
+    taskResult.requires_human_review = true;
+    taskResult.retry_original_task = false;
+    taskResult.create_followup = false;
+    taskResult.create_repair_task = false;
+    taskResult.repair_attempted = false;
+    taskResult.tui_phase = "human_review_missing_evidence";
+    delete taskResult.failure_class;
     taskResult.collect_result = failure.cycle || null;
+    taskResult.blockers = [reviewFinding];
     taskResult.verification = {
-      passed: false,
+      passed: null,
+      indeterminate: true,
       commands: [],
-      findings: [failure.cycle?.finding || failure].filter(Boolean),
+      findings: [reviewFinding].filter(Boolean),
     };
     await updateTaskFn(store, task.id, (item) => {
-      item.status = "retry_wait";
+      item.status = "waiting_for_review";
       item.metadata = { ...(item.metadata || {}), tui_session_id: taskResult.session_id };
       delete item.metadata.tui_session_owner;
       item.result = structuredClone(taskResult);
       item.logs.push({
         time: new Date().toISOString(),
-        message: `[worker] Codex TUI evidence unavailable; automatic recovery scheduled (${taskResult.failure_class})`,
+        message: "[worker] Codex TUI evidence insufficient; routed to human review without retry or repair",
       });
     });
+    return {
+      kind: "codex_tui_awaiting_human_review",
+      status: "waiting_for_review",
+      task_id: task.id,
+      goal_id: goal?.id || null,
+      session_id: taskResult.session_id,
+      requires_human_review: true,
+      retry_original_task: false,
+      create_followup: false,
+      create_repair_task: false,
+      finding: reviewFinding,
+      result: taskResult,
+    };
   }
 
   if (parsedResult) applyLegacyNoChangeCompatibility(parsedResult);

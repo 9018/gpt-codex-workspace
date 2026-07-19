@@ -5,6 +5,7 @@ import { createGoal } from "./goal-task-goals.mjs";
 import { decodeTaskDescriptionEnvelope } from "./goal-task-utils.mjs";
 import { writeGoalWorkspaceFiles } from "./goal-task-workspace-files.mjs";
 import { WORKSTREAM_IDENTITY_FIELDS } from "./workstream/workstream-model.mjs";
+import { buildAcceptanceContract } from "./acceptance/contract-builder.mjs";
 
 export async function ensureTaskGoal(store, config, taskId, context = defaultTokenContext("system"), options = {}) {
   const state = await store.load();
@@ -20,6 +21,24 @@ export async function ensureTaskGoal(store, config, taskId, context = defaultTok
     : (typeof store.findGoalByTaskId === "function" ? await store.findGoalByTaskId(taskId) : state.goals.find((item) => item.task_id === taskId));
 
   if (goal) {
+    if (options.sync_execution_profile === true) {
+      const mode = task.mode || goal.mode || "full";
+      const acceptanceContract = buildAcceptanceContract({
+        title: task.title || goal.title,
+        description: task.description || goal.goal_prompt || goal.user_request,
+        goal_prompt: goal.goal_prompt,
+        user_request: goal.user_request,
+        mode,
+      });
+      goal.mode = mode;
+      goal.acceptance_contract = acceptanceContract;
+      task.acceptance_contract = acceptanceContract;
+      const goalIndex = state.goals.findIndex((item) => item.id === goal.id);
+      if (goalIndex !== -1) state.goals[goalIndex] = goal;
+      const taskIndex = state.tasks.findIndex((item) => item.id === task.id);
+      if (taskIndex !== -1) state.tasks[taskIndex] = task;
+      await store.save();
+    }
     const conversation = typeof store.findConversationById === "function"
       ? store.findConversationById(goal.conversation_id)
       : state.conversations.find((item) => item.id === goal.conversation_id) || null;

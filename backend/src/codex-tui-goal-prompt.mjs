@@ -1,17 +1,9 @@
 /**
  * codex-tui-goal-prompt.mjs — Goal objective and follow-up prompt builders.
  *
- * Generates the structured prompt that instructs the Codex TUI session
- * about its execution contract, including the subagent pipeline phases,
- * progress write paths, and completion report format.
- *
- * Pipeline (parent TUI fixed order):
- *   context_curator → [explorer|architect|test_analyst parallel] → planner
- *   → builder → verifier → reviewer → repairer (≤2 rounds) → finalizer
- *
- * Progress files (no ANSI parsing needed):
- *   .gptwork/goals/<goal_id>/progress.json
- *   .gptwork/goals/<goal_id>/subagents.json
+ * The bootstrap prompt is intentionally entry-first and minimal. Detailed task
+ * context and execution constraints belong in codex.entry.md. Subagents are
+ * optional and should only be used when they materially help the task.
  */
 
 const MAX_GOAL_OBJECTIVE_CHARS = 4000;
@@ -22,37 +14,16 @@ function compactText(value, maxChars) {
   return `${text.slice(0, Math.max(0, maxChars - 15)).trim()}...`;
 }
 
-/**
- * Build the subagent pipeline phase instruction block.
- * Injected into the goal objective so ChatGPT understands the fixed pipeline.
- *
- * @param {string} goalId - Goal identifier
- * @returns {string} Pipeline instructions
- */
-export function buildPipelinePhaseInstruction({ goalId, goalDir = null } = {}) {
-  const id = String(goalId || "").trim() || "<goal_id>";
-  const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
+function buildIncrementalResultInstructions(dir) {
+  const partial = `${dir}/result.partial.json`;
+  const final = `${dir}/result.json`;
   return [
-    "Subagent pipeline (parent TUI fixed):",
-    "  1. context_curator (context bundle preparation)",
-    "  2. explorer + architect + test_analyst (parallel analysis phase)",
-    "  3. planner (single)",
-    "  4. builder (single implementation agent)",
-    "  5. verifier (single verification agent)",
-    "  6. reviewer (single review agent)",
-    "  7. repairer (up to 2 rounds, only on failure)",
-    "  8. finalizer (single closure agent)",
-    "",
-    "Progress is written atomically to:",
-    `  ${dir}/progress.json`,
-    `  ${dir}/subagents.json`,
-    "",
-    "codex_tui_progress and codex_tui_subagents MCP tools",
-    "return structured progress without ANSI screen parsing.",
-    "",
-    "Each subagent result includes:",
-    "  role, status, summary, changed_files, artifacts, blockers, started_at, completed_at.",
-  ].join("\n");
+    `Maintain ${partial} at key stages: started -> code_changed -> testing -> finished.`,
+    "Update only after a meaningful stage transition; do not rewrite it for every command.",
+    "Each update must include status, phase, summary, updated_at, changed_files, and known command results.",
+    `When finished, write the complete final payload to ${partial}, then atomically rename it to ${final}.`,
+    "Do not treat the partial file as completion; only the final result is a completion candidate and GPTWork will independently verify it.",
+  ];
 }
 
 /**
@@ -61,39 +32,28 @@ export function buildPipelinePhaseInstruction({ goalId, goalDir = null } = {}) {
  * @param {object} options
  * @param {string} options.goalId - Goal identifier (required)
  * @param {string} [options.taskTitle] - Task title
- * @param {boolean} [options.includePipeline] - Include subagent pipeline instructions (default: true)
+ * @param {string} [options.goalDir] - Durable goal directory
  * @returns {string} Goal objective text
  */
-export function buildCodexTuiGoalObjective({ goalId, taskTitle, includePipeline = true, goalDir = null } = {}) {
+export function buildCodexTuiGoalObjective({ goalId, taskTitle, goalDir = null } = {}) {
   const id = String(goalId || "").trim();
   if (!id) throw new Error("goalId is required");
   const title = compactText(taskTitle || "Codex TUI goal", 260);
   const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
 
-  const parts = [
+  return [
     `goal_id=${id}`,
     `task=${title}`,
     "",
-    "Use Superpowers for this task.",
-    `Read ${dir}/codex.entry.md before planning or editing.`,
+    "Use Superpowers.",
+    `Read ${dir}/codex.entry.md and execute it autonomously.`,
+    "Use subagents only when they materially help.",
+    "Verify before completion.",
+    ...buildIncrementalResultInstructions(dir),
+    `Write ${dir}/result.md when finished.`,
     "",
-    "Execution contract:",
-    `- Write ${dir}/result.json`,
-    `- Write ${dir}/result.md`,
-    "- Include changed_files, tests, verification, blockers, and commit if any.",
-    "- Do not declare completion until verification-before-completion has been performed.",
-    "- For non-trivial implementation, use Superpowers planning/TDD/subagent/review workflows.",
-  ];
-
-  if (includePipeline) {
-    parts.push("", buildPipelinePhaseInstruction({ goalId: id, goalDir: dir }));
-  }
-
-  parts.push("",
     "When done, print a concise STATUS/SUMMARY/CHANGED_FILES/TESTS/COMMIT report.",
-  );
-
-  return parts.join("\n");
+  ].join("\n");
 }
 
 /**
@@ -111,12 +71,10 @@ export function buildCodexTuiFollowupInstruction({ goalId, goalDir = null } = {}
     `Continue GPTWork goal_id=${id}.`,
     "Use Superpowers.",
     `The entrypoint remains ${dir}/codex.entry.md.`,
-    `The durable result contract remains ${dir}/result.json and result.md.`,
-    "",
-    "Progress tracking:",
-    `  ${dir}/progress.json`,
-    `  ${dir}/subagents.json`,
-    "  codex_tui_progress, codex_tui_subagents MCP tools (no ANSI parsing).",
+    ...buildIncrementalResultInstructions(dir),
+    `The durable final result contract remains ${dir}/result.json and result.md.`,
+    "Use subagents only when they materially help.",
+    "Verify before completion.",
     "",
     "If context was compacted, re-read the entrypoint and continue from the current repository state.",
   ].join("\n");
@@ -133,6 +91,5 @@ export function buildCodexTuiFollowupInstruction({ goalId, goalDir = null } = {}
 export function buildCodexTuiBootstrapMessages({ goalId, taskTitle } = {}) {
   return [
     `/goal ${buildCodexTuiGoalObjective({ goalId, taskTitle })}\r`,
-    `${buildCodexTuiFollowupInstruction({ goalId })}\r`,
   ];
 }

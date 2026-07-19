@@ -34,7 +34,7 @@ export const NULL_REASON = Object.freeze({
   CONFIGURED: "configured_null",
 });
 
-// Product default: all pipeline roles default to codex_exec (real agent execution).
+// Pipeline sub-role default: codex_exec. Top-level task execution defaults to autonomous codex_tui_goal.
 // Per-role overrides (agentRoleBackends) always take precedence.
 // Roles that default to auto-artifact when a null backend IS explicitly configured
 // are tracked separately in ROLE_AUTO_ARTIFACT_DEFAULTS.
@@ -196,7 +196,7 @@ export function resolveAgentBackendId({ config = {}, role = "builder", task = {}
   // Fallback to role defaults
   // Note: ROLE_BACKEND_DEFAULTS now has all roles as codex_exec.
   // Previous per-role distinction (null for integrator/finalizer, local_command for verifier/reviewer)
-  // has been consolidated: product default is codex_exec for every role.
+  // has been consolidated for pipeline sub-roles; top-level task execution remains TUI-first.
   const roleDefault = ROLE_BACKEND_DEFAULTS[role];
   if (roleDefault) return roleDefault.backend;
   return AGENT_BACKEND_IDS.CODEX_EXEC;
@@ -277,7 +277,7 @@ export function isRealBackendResult(parsedResult) {
 
 /**
  * Build a compact pipeline role-backend chain for diagnostics.
- * By product default all roles are codex_exec (real agent execution).
+ * Pipeline sub-roles default to codex_exec; the top-level task provider defaults to autonomous codex_tui_goal.
  * When a user explicitly configures a role to null (via agentRoleBackends),
  * the semantic switches to auto_artifact / test_noop / configured accordingly.
  *
@@ -340,7 +340,7 @@ export function formatBackendChainSummary(config = {}, roles) {
   const allDefault = entries.every((e) => e.source === "product_default");
   let text;
   if (allDefault) {
-    text = `All pipeline roles → codex_exec (product default)`;
+    text = `Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec`;
   } else {
     text = entries.map((e) => e.label).join("\n");
   }
@@ -366,7 +366,7 @@ export function getBackendConfigSummary(config = {}) {
  * Produce a human-readable label for a role's backend in the pipeline chain.
  * Used by buildPipelineRoleBackendChain to produce clear diagnostics.
  *
- * With product defaults, all roles show as:
+ * Pipeline sub-role defaults show as:
  *   <role> / codex_exec (real agent execution)
  *
  * When null backend is configured, the label shows the null reason:

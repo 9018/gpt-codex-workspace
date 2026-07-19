@@ -30,6 +30,8 @@ test('basic task tool group exposes stable public tool names and schemas', () =>
     'get_task_acceptance_bundle',
     'get_task_review_packet',
     'update_task_status',
+    'delete_task',
+    'delete_tasks',
     'append_task_log',
     'attach_task_artifact',
   ]);
@@ -215,4 +217,99 @@ test('basic task tool group append_task_log and attach_task_artifact handlers ex
 
   assert.equal(typeof tools.append_task_log.handler, 'function');
   assert.equal(typeof tools.attach_task_artifact.handler, 'function');
+});
+
+
+test('cancelling a task stops and deletes execution session before status write', async () => {
+  const order = [];
+  const state = { tasks: [{ id: 't-cancel', status: 'running', logs: [], artifacts: [] }], activities: [] };
+  const tools = createBasicTaskToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    config: { defaultWorkspaceRoot: '/tmp/gptwork' },
+    store: {
+      load: async () => state,
+      save: async () => { order.push('status-write'); },
+    },
+    createTask: async () => {},
+    github: { syncTask: async () => {} },
+    cancelTaskExecution: async ({ task }) => {
+      assert.equal(task.id, 't-cancel');
+      order.push('execution-cleanup');
+      return { stopped_sessions: ['s1'], deleted_sessions: ['s1'] };
+    },
+  });
+
+  const result = await tools.update_task_status.handler({ task_id: 't-cancel', status: 'cancelled' });
+  assert.equal(result.task.status, 'cancelled');
+  assert.deepEqual(order.slice(0, 2), ['execution-cleanup', 'status-write']);
+  assert.deepEqual(result.cancellation, { stopped_sessions: ['s1'], deleted_sessions: ['s1'] });
+});
+
+
+test('delete_task removes terminal task and task-owned related records atomically', async () => {
+  const state = {
+    tasks: [
+      { id: 't1', status: 'completed', goal_id: 'g1' },
+      { id: 't2', status: 'running', goal_id: 'g2' },
+    ],
+    goals: [{ id: 'g1' }, { id: 'g2' }],
+    goal_queue: [{ id: 'q1', task_id: 't1' }, { id: 'q2', task_id: 't2' }],
+    agent_runs: [{ id: 'r1', task_id: 't1' }],
+    activities: [{ id: 'a1', task_id: 't1' }],
+    repo_locks: [{ id: 'l1', task_id: 't1' }],
+    workspaces: [{ id: 'w1' }],
+  };
+  let saved = null;
+  const tools = createBasicTaskToolsGroup({
+    tool: fakeTool, schema: fakeSchema, config: {},
+    store: { load: async () => state, save: async (next) => { saved = next; } },
+    createTask: async () => {}, github: { syncTask: async () => {} },
+  });
+
+  const preview = await tools.delete_task.handler({ task_id: 't1' });
+  assert.equal(preview.dry_run, true);
+  assert.equal(saved, null);
+  assert.deepEqual(preview.plan.related, { queue_items: 1, agent_runs: 1, activities: 1, task_locks: 1 });
+
+  const result = await tools.delete_task.handler({ task_id: 't1', dry_run: false });
+  assert.deepEqual(result.deleted_task_ids, ['t1']);
+  assert.deepEqual(saved.tasks.map((task) => task.id), ['t2']);
+  assert.deepEqual(saved.goal_queue.map((item) => item.id), ['q2']);
+  assert.deepEqual(saved.agent_runs, []);
+  assert.deepEqual(saved.activities, []);
+  assert.deepEqual(saved.repo_locks, []);
+  assert.deepEqual(saved.goals.map((goal) => goal.id), ['g1', 'g2']);
+  assert.deepEqual(saved.workspaces, [{ id: 'w1' }]);
+});
+
+test('delete_task rejects active tasks unless force=true', async () => {
+  const state = { tasks: [{ id: 't-running', status: 'running' }] };
+  let saves = 0;
+  const tools = createBasicTaskToolsGroup({
+    tool: fakeTool, schema: fakeSchema, config: {},
+    store: { load: async () => state, save: async () => { saves += 1; } },
+    createTask: async () => {}, github: { syncTask: async () => {} },
+  });
+  await assert.rejects(() => tools.delete_task.handler({ task_id: 't-running', dry_run: false }), /task_not_terminal/);
+  assert.equal(saves, 0);
+});
+
+test('delete_tasks all_terminal deletes selected tasks with one state save', async () => {
+  const state = { tasks: [
+    { id: 'done', status: 'completed' },
+    { id: 'failed', status: 'failed' },
+    { id: 'active', status: 'running' },
+  ] };
+  let saves = 0;
+  let saved = null;
+  const tools = createBasicTaskToolsGroup({
+    tool: fakeTool, schema: fakeSchema, config: {},
+    store: { load: async () => state, save: async (next) => { saves += 1; saved = next; } },
+    createTask: async () => {}, github: { syncTask: async () => {} },
+  });
+  const result = await tools.delete_tasks.handler({ all_terminal: true, dry_run: false });
+  assert.equal(saves, 1);
+  assert.deepEqual(new Set(result.deleted_task_ids), new Set(['done', 'failed']));
+  assert.deepEqual(saved.tasks.map((task) => task.id), ['active']);
 });

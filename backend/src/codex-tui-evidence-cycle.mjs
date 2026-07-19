@@ -15,25 +15,12 @@ async function waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }
   return existsSync(resultJsonPath);
 }
 
-function evidenceRepairInstruction(resultJsonPath) {
-  return [
-    "Continue the current task in this same Codex session.",
-    `Durable completion evidence is missing. Write a contract-valid result.json at ${resultJsonPath}.`,
-    "Include terminal status, summary, changed_files, tests, commit, remote_head, warnings, followups, and verification commands/passed.",
-    "Run any remaining acceptance checks first, then write the evidence file and continue to a terminal state.",
-  ].join(" ") + "\r";
-}
-
 /**
- * Run the TUI evidence collection cycle: poll for result.json, then collect
- * durable evidence via collectCodexTuiCompletion.
- *
- * Returns { evidence_ready, reason, finding?, collected? } with a terminal
- * status when the evidence deadline is reached without durable artifacts.
- *
- * P0: When the poll loop times out, the result is a terminal evidence failure
- * (status=timed_out), NOT a transient waiting_for_review. Callers must use
- * the returned status to determine whether to transition to failed/timed_out.
+ * Run the TUI evidence collection cycle. Missing or invalid result.json is
+ * reconstructed from existing TUI/session/Git/result.md evidence. A surviving
+ * result.partial.json is progress evidence only and is never treated as task
+ * completion. This function never re-enters the TUI session, creates repair or
+ * follow-up work, or reruns the task. Insufficient evidence goes to review.
  */
 export async function runCodexTuiEvidenceCycle({
   task,
@@ -43,6 +30,7 @@ export async function runCodexTuiEvidenceCycle({
   collectFn = collectCodexTuiCompletion,
   now = Date.now,
   sleepFn = sleep,
+  // Retained for backwards-compatible callers. Intentionally never invoked.
   sendInputFn = null,
   maxWaitMs = 120_000,
   pollMs = 5_000,
@@ -50,86 +38,63 @@ export async function runCodexTuiEvidenceCycle({
   if (!goal?.id) throw new Error("goal.id is required");
   if (!sessionId) throw new Error("sessionId is required");
 
-  const resultJsonPath = join(workspaceRoot, ".gptwork", "goals", goal.id, "result.json");
-  let timedOut = !(await waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }));
-  let repairAttempted = false;
-  if (timedOut && typeof sendInputFn === "function") {
-    repairAttempted = true;
-    await sendInputFn(sessionId, evidenceRepairInstruction(resultJsonPath));
-    timedOut = !(await waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }));
-  }
-
+  const goalDir = join(workspaceRoot, ".gptwork", "goals", goal.id);
+  const resultJsonPath = join(goalDir, "result.json");
+  const partialResultJsonPath = join(goalDir, "result.partial.json");
+  const resultJsonObserved = await waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs });
+  const partialResultObserved = existsSync(partialResultJsonPath);
   const collected = await collectFn({ sessionId, workspaceRoot });
+  const reconstructed = collected?.reconstructed_result || null;
+  const resultJsonUsable = Boolean(collected?.result_json && collected?.result_json_valid !== false);
+  const closureProvable = collected?.ready_for_review === true;
 
-  // Freshness re-check: stat + re-read result.json before concluding timeout
-  // If the file exists with a recent mtime and valid terminal content, treat as evidence-ready.
-  if (timedOut) {
-    try {
-      const { stat: statFile, readFile: reReadFile } = await import("node:fs/promises");
-      const reStat = await statFile(resultJsonPath).catch(() => null);
-      if (reStat) {
-        const ageMs = Date.now() - reStat.mtime.getTime();
-        if (ageMs < 10_000) {
-          const reRead = await reReadFile(resultJsonPath, "utf8").catch(() => null);
-          if (reRead) {
-            const parsed = JSON.parse(reRead);
-            if (parsed && (parsed.status === "completed" || parsed.status === "failed" || parsed.status === "timed_out") && (parsed.summary || parsed.tests || parsed.changed_files)) {
-              timedOut = false;
-            }
-          }
-        }
-      }
-    } catch { /* stat/read failed -- continue with timeout */ }
-  }
-
-  if (timedOut) {
+  if (!resultJsonUsable) {
+    const code = resultJsonObserved
+      ? "tui_result_json_invalid_reconstructed"
+      : partialResultObserved
+        ? "tui_result_partial_only_reconstructed"
+        : "tui_result_json_missing_reconstructed";
     return {
-      evidence_ready: false,
-      reason: "tui_result_json_missing",
-      status: "timed_out",
-      timed_out: true,
-      repair_attempted: repairAttempted,
+      evidence_ready: closureProvable,
+      reason: code,
+      status: closureProvable ? "ready" : "waiting_for_review",
+      requires_human_review: !closureProvable,
+      retry_original_task: false,
+      create_followup: false,
+      create_repair_task: false,
+      repair_attempted: false,
       session_id: sessionId,
       goal_id: goal.id,
       task_id: task?.id || null,
       expected_result_json: resultJsonPath,
-      expected_result_md: join(workspaceRoot, ".gptwork", "goals", goal.id, "result.md"),
+      observed_partial_result_json: partialResultObserved ? partialResultJsonPath : null,
+      expected_result_md: join(goalDir, "result.md"),
       finding: {
-        severity: "blocker",
-        code: "tui_result_json_timeout",
-        message: `TUI session timed out waiting for result file: ${resultJsonPath} after ${maxWaitMs}ms. No durable evidence was produced.`,
+        severity: closureProvable ? "warning" : "blocker",
+        code,
+        message: closureProvable
+          ? "The final result.json was unavailable, but existing TUI session, Git/worktree, command and result.md evidence was sufficient to reconstruct reviewable structured evidence."
+          : partialResultObserved
+            ? "Only result.partial.json was present. It is progress evidence, not completion evidence; route to human review without retrying or creating repair/follow-up work."
+            : "result.json was unavailable and existing evidence could not prove closure; route to human review without retrying or creating repair/follow-up work.",
       },
-      collected,
-    };
-  }
-
-  if (!collected?.result_json && !collected?.result?.result_json_valid) {
-    return {
-      evidence_ready: false,
-      reason: "tui_result_json_collected_invalid",
-      status: "failed",
-      session_id: sessionId,
-      goal_id: goal.id,
-      task_id: task?.id || null,
-      expected_result_json: resultJsonPath,
-      expected_result_md: join(workspaceRoot, ".gptwork", "goals", goal.id, "result.md"),
-      finding: {
-        severity: "blocker",
-        code: "tui_result_json_collected_invalid",
-        message: `Result file exists at ${resultJsonPath} but could not be parsed or lacks valid content.`,
-      },
+      reconstructed_result: reconstructed,
       collected,
     };
   }
 
   return {
     evidence_ready: true,
-    reason: repairAttempted ? "tui_result_json_collected_after_repair" : "tui_result_json_collected",
+    reason: "tui_result_json_collected",
     status: "ready",
-    repair_attempted: repairAttempted,
+    repair_attempted: false,
+    retry_original_task: false,
+    create_followup: false,
+    create_repair_task: false,
     session_id: sessionId,
     goal_id: goal.id,
     task_id: task?.id || null,
+    observed_partial_result_json: partialResultObserved ? partialResultJsonPath : null,
     collected,
   };
 }

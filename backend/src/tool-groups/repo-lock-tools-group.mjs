@@ -17,12 +17,20 @@ function isClearableTaskStatus(status) {
 }
 
 export function createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, getRepoLockSummary, store }) {
-  async function repoLockStatusHandler() {
-    const lockList = await listRepoLocks(config.defaultWorkspaceRoot);
+  async function repoLockStatusHandler({ scope = "current", page = 1, page_size = 50 } = {}) {
     const lockSummary = await getRepoLockSummary(config.defaultWorkspaceRoot);
+    const lockList = await listRepoLocks(config.defaultWorkspaceRoot, {
+      scope,
+      page,
+      pageSize: page_size,
+    });
     return {
       active_repo_locks: lockSummary.active_repo_locks,
       stale_repo_locks: lockSummary.stale_repo_locks,
+      history_lock_count: lockSummary.history_lock_count || lockSummary.released_repo_locks || 0,
+      scope,
+      page,
+      page_size,
       locks: lockList,
     };
   }
@@ -40,12 +48,20 @@ export function createRepoLockToolsGroup({ tool, schema, config, listRepoLocks, 
   return {
     list_repo_locks: tool(
       'List repo execution locks with safe diagnostics. Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)',
-      schema({}),
+      schema({
+        scope: { type: "string", enum: ["current", "history"], description: "current returns active/stale locks; history returns released locks." },
+        page: { type: "integer", minimum: 1, description: "History/current page number. Default 1." },
+        page_size: { type: "integer", minimum: 1, maximum: 200, description: "Page size. Default 50, maximum 200." },
+      }),
       repoLockStatusHandler,
     ),
     repo_lock_status: tool(
       'List repo execution locks with safe diagnostics (alias for list_repo_locks). Returns active and stale locks with task ids and repo identifiers. Helps detect concurrent Codex execution conflicts. No secrets exposed. (查看仓库执行锁状态)',
-      schema({}),
+      schema({
+        scope: { type: "string", enum: ["current", "history"], description: "current returns active/stale locks; history returns released locks." },
+        page: { type: "integer", minimum: 1, description: "History/current page number. Default 1." },
+        page_size: { type: "integer", minimum: 1, maximum: 200, description: "Page size. Default 50, maximum 200." },
+      }),
       repoLockStatusHandler,
     ),
     // -----------------------------------------------------------------------

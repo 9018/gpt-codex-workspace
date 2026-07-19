@@ -149,8 +149,7 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     ? buildCardViewModel(name, base, { payload_hash: hash, card_instance_id: `${name}:${hash}`, title })
     : undefined;
   if (card) {
-    if (base.summary) card.summary = base.summary;
-    else if (auto.summary) card.summary = auto.summary;
+    card.summary = base.summary || card.summary || auto.summary;
     if (base.status) card.status = base.status;
   }
   const legacy = card ? legacyFieldsFromCard(card) : {};
@@ -184,6 +183,7 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     "tasks",
     "goal",
     "goals",
+    "projects",
     "conversation",
     "workspace_files",
     "acceptance_bundle",
@@ -195,6 +195,7 @@ export function tagToolResult(name, toolDescriptor, structuredContent, { include
     "kind",
     "external_id",
     "count",
+    "repositories",
   ]) {
     if (!omitDeepQueryFields.has(key) && base[key] !== undefined) modelPayload[key] = base[key];
   }

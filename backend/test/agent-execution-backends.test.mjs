@@ -452,7 +452,7 @@ test("formatBackendChainSummary returns single-line default when all roles use p
   const { formatBackendChainSummary } = await import("../src/agent-execution-backends.mjs");
 
   const result = formatBackendChainSummary({});
-  assert.equal(result.text, "All pipeline roles → codex_exec (product default)");
+  assert.equal(result.text, "Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec");
   assert.ok(result.entries.every((e) => e.source === "product_default"));
   assert.ok(result.entries.every((e) => e.backend === "codex_exec"));
 });
@@ -472,14 +472,14 @@ test("formatBackendChainSummary shows override entries when role config differs 
   const reviewerEntry = result.entries.find((e) => e.role === "reviewer");
   assert.equal(reviewerEntry.source, "explicit_role_override");
   assert.equal(reviewerEntry.backend, "local_command");
-  assert.notEqual(result.text, "All pipeline roles → codex_exec (product default)");
+  assert.notEqual(result.text, "Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec");
 });
 
 test("getBackendConfigSummary returns correct default summary", async () => {
   const { getBackendConfigSummary } = await import("../src/agent-execution-backends.mjs");
 
   const defaultSummary = getBackendConfigSummary({});
-  assert.equal(defaultSummary, "All pipeline roles → codex_exec (product default)");
+  assert.equal(defaultSummary, "Task execution → codex_tui_goal (autonomous default); pipeline sub-roles → codex_exec");
 
   // With explicit global override
   const overrideSummary = getBackendConfigSummary({ agentBackend: "local_command" });

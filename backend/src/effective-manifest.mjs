@@ -59,7 +59,7 @@ export function getEffectiveManifest() {
   }
 
   const agentBackends = {
-    defaultBackend: config.agentBackend || config.codexBackend || 'codex_exec',
+    defaultBackend: config.executeProvider || 'codex_tui_goal',
     roleBackends: config.agentRoleBackends || {},
     localCommand: config.agentLocalCommand || null,
   };

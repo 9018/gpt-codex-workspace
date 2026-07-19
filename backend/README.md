@@ -31,16 +31,16 @@ Production mode validates worker enablement, backend routing, Codex exec setting
 
 ## Product Defaults
 
-- `GPTWORK_AGENT_BACKEND=codex_exec` is the product default.
-- All pipeline roles default to `codex_exec` through `ROLE_BACKEND_DEFAULTS`.
-- `GPTWORK_AGENT_ROLE_BACKENDS` is only for explicit per-role overrides, for example `verifier=local_command,reviewer=local_command`.
-- `codex_tui_goal` is an explicit operator fallback. It requires runtime enablement and task metadata opt-in; GPTWork does not silently route automatic work to TUI.
+- `codex_tui_goal` is the product-default autonomous execution provider.
+- `codex_exec` is also a first-class autonomous provider and is used only when explicitly selected or when typed provider availability policy permits it.
+- TUI does not depend on routine operator interaction: GPTWork drives task dispatch, continuation, evidence collection, acceptance, repair, resume, and cancellation.
+- `GPTWORK_AGENT_ROLE_BACKENDS` remains available for explicit per-role overrides such as deterministic local verification.
 - New builder/deploy/admin tasks enforce pipeline gates before closure.
 
-## Optional TUI Runtime Settings
+## Autonomous TUI Runtime Settings
 
 ```bash
-# GPTWORK_CODEX_TUI_ENABLED=true
+# GPTWORK_CODEX_TUI_ENABLED=true  # default; set false only to disable TUI explicitly
 # GPTWORK_CODEX_TUI_COMMAND=codex
 # GPTWORK_CODEX_TUI_EVIDENCE_WAIT_MS=30000
 # GPTWORK_CODEX_TUI_SESSION_ROOT=/path/to/workspace

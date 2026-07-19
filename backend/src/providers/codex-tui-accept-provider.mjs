@@ -16,7 +16,7 @@ export async function runCodexTuiAccept({ invocation, goal, workspace, config, d
     return {
       status: 'blocked',
       kind: 'codex_tui_disabled',
-      reason: 'GPTWORK_CODEX_TUI_ENABLED is not true'
+      reason: 'TUI was explicitly disabled by GPTWORK_CODEX_TUI_ENABLED=false'
     };
   }
 

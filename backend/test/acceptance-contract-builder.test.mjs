@@ -486,3 +486,14 @@ test("explicit requirements remain authoritative over operation kind defaults", 
   assert.equal(contract.requirements.requires_integration, false);
   assert.equal(contract.semantic_validation.valid, true);
 });
+
+test("admin 清空 Codex Session uses cleanup contract without git integration", () => {
+  const contract = buildAcceptanceContract({
+    title: "清空全部 Codex Session",
+    description: "停止并删除全部 Codex Session",
+    mode: "admin",
+  });
+  assert.equal(contract.intent.operation_kind, "cleanup");
+  assert.equal(contract.requirements.requires_commit, false);
+  assert.equal(contract.requirements.requires_integration, false);
+});

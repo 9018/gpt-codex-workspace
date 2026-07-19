@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   CODEX_EXECUTION_PROVIDERS,
   checkSuperpowersPluginForTuiFallback,
+  isCodexTuiEnabled,
   normalizeCodexExecutionProvider,
   taskUsesCodexTuiGoal,
   describeCodexExecutionProvider,
@@ -62,4 +63,11 @@ test("checkSuperpowersPluginForTuiFallback resolves plugins from configured CODE
   }, {});
 
   assert.deepEqual(result, { available: true, required: true, diagnostic: null });
+});
+
+test("Codex TUI is enabled by default and only explicit false disables it", () => {
+  assert.equal(isCodexTuiEnabled({}, {}), true);
+  assert.equal(isCodexTuiEnabled({ codexTuiEnabled: true }, {}), true);
+  assert.equal(isCodexTuiEnabled({ codexTuiEnabled: false }, {}), false);
+  assert.equal(isCodexTuiEnabled({}, { GPTWORK_CODEX_TUI_ENABLED: "false" }), false);
 });
