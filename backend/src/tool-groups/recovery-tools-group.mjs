@@ -29,7 +29,7 @@
  *  16. recovery_stale_queue_unblock
  */
 
-import { execFile, execSync } from "node:child_process";
+import { execFile, execSync, spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { readFile, writeFile, mkdir, rm, copyFile, stat, readdir, appendFile } from "node:fs/promises";
 import { dirname, join, relative, resolve, sep } from "node:path";
@@ -54,6 +54,59 @@ import {
 } from "../task-status-taxonomy.mjs";
 
 const execFileAsync = promisify(execFile);
+
+export function executeRecoveryShellCommand(command, { cwd, timeout = 30000, maxBuffer = 1024 * 1024 } = {}) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("/bin/sh", ["-c", command], {
+      cwd,
+      detached: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const stdout = [];
+    const stderr = [];
+    let size = 0;
+    let settled = false;
+    const finish = (fn, value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn(value);
+    };
+    const collect = (target) => (chunk) => {
+      size += chunk.length;
+      if (size > maxBuffer) {
+        try { process.kill(-child.pid, "SIGKILL"); } catch {}
+        const error = new Error("stdout maxBuffer length exceeded");
+        error.code = "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+        finish(reject, error);
+        return;
+      }
+      target.push(chunk);
+    };
+    child.stdout.on("data", collect(stdout));
+    child.stderr.on("data", collect(stderr));
+    child.on("error", (error) => finish(reject, error));
+    child.on("close", (code, signal) => {
+      const out = Buffer.concat(stdout).toString("utf8");
+      const err = Buffer.concat(stderr).toString("utf8");
+      if (code === 0) return finish(resolve, { stdout: out, stderr: err });
+      const error = new Error(`Command failed with code ${code}${signal ? ` (${signal})` : ""}`);
+      error.code = code;
+      error.stdout = out;
+      error.stderr = err;
+      finish(reject, error);
+    });
+    const timer = setTimeout(() => {
+      try { process.kill(-child.pid, "SIGKILL"); } catch {}
+      const error = new Error(`Command timed out after ${timeout}ms`);
+      error.code = "ETIMEDOUT";
+      error.stdout = Buffer.concat(stdout).toString("utf8");
+      error.stderr = Buffer.concat(stderr).toString("utf8");
+      finish(reject, error);
+    }, timeout);
+    timer.unref?.();
+  });
+}
 
 // ---------------------------------------------------------------------------
 // Secret redaction
@@ -1238,10 +1291,11 @@ export function createRecoveryToolsGroup({
       }
 
       try {
-        const output = execSync(cmdStr, { cwd: repoPath, timeout: tOut, maxBuffer: 1024 * 1024, encoding: "utf8" });
+        const { stdout: output, stderr = "" } = await executeRecoveryShellCommand(cmdStr, { cwd: repoPath, timeout: tOut, maxBuffer: 1024 * 1024 });
+        const combinedOutput = String(output || "") + String(stderr || "");
         const elapsed = Date.now() - start;
-        const stdout = redactText(output).slice(0, 50000);
-        const truncated = Buffer.byteLength(output) > 50000;
+        const stdout = redactText(combinedOutput).slice(0, 50000);
+        const truncated = Buffer.byteLength(combinedOutput) > 50000;
         await audit({ tool: "recovery_command_runner", action: "run_command", dry_run: false, result: "ok", summary: cmdDesc, elapsed_ms: elapsed });
         return { ok: true, command: cmdDesc, exit_code: 0, stdout, truncated, elapsed_ms: elapsed, cmd: redactText(cmdStr).slice(0, 200) };
       } catch (err) {

@@ -805,3 +805,18 @@ test("23. stale_queue_unblock: audit log is written on successful unblock", asyn
     delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
   }
 });
+
+test("14h. recovery command execution does not block the event loop", async () => {
+  const { executeRecoveryShellCommand } = await import("../src/tool-groups/recovery-tools-group.mjs");
+  let timerFired = false;
+  const timer = new Promise((resolve) => setTimeout(() => { timerFired = true; resolve(); }, 20));
+  const command = executeRecoveryShellCommand("sleep 0.15; printf done", {
+    cwd: process.cwd(),
+    timeout: 1000,
+    maxBuffer: 1024 * 1024,
+  });
+  await timer;
+  assert.equal(timerFired, true);
+  const result = await command;
+  assert.equal(result.stdout, "done");
+});
