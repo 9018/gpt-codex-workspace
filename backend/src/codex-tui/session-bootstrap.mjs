@@ -157,6 +157,10 @@ export async function startCodexTuiGoalSessionImpl({
     });
   }
 
+  const canonicalGoalDir = join(sessionStoreRoot, ".gptwork", "goals", goal.id);
+  const runtimeGoalRoot = join(cwd, ".gptwork", "runtime-goals");
+  const runtimeGoalDir = join(runtimeGoalRoot, goal.id);
+
   let record = await store.createSession({
     sessionId,
     taskId: task?.id || null,
@@ -187,15 +191,16 @@ export async function startCodexTuiGoalSessionImpl({
       tui_no_progress_seconds: Number(tuiNoProgressSeconds || 120),
       tui_classifier_enabled: tuiClassifierEnabled !== false,
       resume_native_session_id: resumeNativeSessionId || null,
-      codex_home: null,
+      codex_home: pathContext?.codexHome || null,
+      project_root: pathContext?.projectRoot || null,
+      native_sessions_root: pathContext?.nativeSessionsRoot || null,
+      control_sessions_root: pathContext?.controlSessionsRoot || null,
+      runtime_goal_dir: runtimeGoalDir,
+      canonical_goal_dir: canonicalGoalDir,
       deprecation_warnings: deprecatedCwdSessionRoot ? ["startCodexTuiGoalSession without workspaceRoot stores sessions under cwd; pass workspaceRoot explicitly"] : [],
     },
   });
 
-  // Runtime goal directory symlink
-  const canonicalGoalDir = join(sessionStoreRoot, ".gptwork", "goals", goal.id);
-  const runtimeGoalRoot = join(cwd, ".gptwork", "runtime-goals");
-  const runtimeGoalDir = join(runtimeGoalRoot, goal.id);
   await mkdir(runtimeGoalRoot, { recursive: true });
   await rm(runtimeGoalDir, { recursive: true, force: true });
   await symlink(canonicalGoalDir, runtimeGoalDir, "dir");
@@ -391,7 +396,16 @@ export async function startCodexTuiGoalSessionImpl({
         goal_id: goal?.id || null,
         execution_id: executionId || null,
         cwd,
-        codex_home: null,
+        worktree_path: worktreePath || cwd,
+        runtime_goal_dir: runtimeGoalDir,
+        canonical_goal_dir: canonicalGoalDir,
+        folder_bindings: [
+          { path: runtimeGoalDir, owner: 'session', cleanup_policy: 'delete_with_session' },
+          { path: canonicalGoalDir, owner: 'goal', cleanup_policy: 'retain_for_evidence' },
+          { path: worktreePath || cwd, owner: 'task', cleanup_policy: 'delete_with_task' },
+          { path: pathContext.nativeSessionsRoot, owner: 'codex_native', cleanup_policy: 'prune_empty_after_session_delete' },
+        ],
+        codex_home: pathContext?.codexHome || null,
         provider: "codex_tui_goal",
         status: "running",
       });

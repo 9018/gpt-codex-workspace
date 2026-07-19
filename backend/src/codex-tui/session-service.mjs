@@ -167,6 +167,7 @@ export async function getCodexTuiSessionStatus(sessionId, { workspaceRoot = null
     status: record.status,
     task_id: record.task_id,
     goal_id: record.goal_id,
+    native_session_id: record.native_session_id || record.metadata?.resume_native_session_id || null,
     pid,
     pid_alive: active ? true : isProcessAlive(pid),
     detached: record.status === "detached",

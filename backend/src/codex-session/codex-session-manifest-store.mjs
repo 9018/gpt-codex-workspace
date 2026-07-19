@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, readFile, readdir, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 function safeId(value) {
@@ -33,14 +33,27 @@ export function createCodexSessionManifestStore({ projectRoot } = {}) {
     async read(controlSessionId) {
       return JSON.parse(await readFile(pathFor(controlSessionId), "utf8"));
     },
-    async findByNativeSessionId(nativeSessionId) {
+    async list() {
       const entries = await readdir(manifestsRoot, { withFileTypes: true }).catch(() => []);
+      const values = [];
       for (const entry of entries) {
         if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
-        const value = JSON.parse(await readFile(join(manifestsRoot, entry.name), "utf8"));
+        values.push(JSON.parse(await readFile(join(manifestsRoot, entry.name), "utf8")));
+      }
+      return values.sort((a, b) => String(a.control_session_id).localeCompare(String(b.control_session_id)));
+    },
+    async findByNativeSessionId(nativeSessionId) {
+      for (const value of await this.list()) {
         if (value.native_session_id === nativeSessionId) return value;
       }
       return null;
+    },
+    async delete(controlSessionId) {
+      await rm(pathFor(controlSessionId), { force: true });
+    },
+    async update(controlSessionId, patch = {}) {
+      const current = await this.read(controlSessionId);
+      return this.write({ ...current, ...patch, control_session_id: current.control_session_id, created_at: current.created_at });
     },
   };
 }

@@ -13,6 +13,7 @@ import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./res
 import { randomUUID } from "node:crypto";
 import { releaseLockForTask } from "../repo-lock.mjs";
 import { cleanupIsolatedWorktreeProcesses } from "./session-process-cleanup.mjs";
+import { updateBoundCodexSessionStatus } from "../codex-session/codex-session-lifecycle-manager.mjs";
 import {
   activeSessions,
   pendingTerminalizations,
@@ -244,6 +245,13 @@ export async function terminalizeCodexTuiSession({ sessionId, store, event = {},
 
     activeSessions.delete(sessionId);
     const updated = await store.updateSession(sessionId, patch);
+    await updateBoundCodexSessionStatus({
+      projectRoot: current.metadata?.project_root || null,
+      controlSessionId: sessionId,
+      status,
+      terminalizedAt,
+      patch: { terminal_event: terminalEvent, result_status: status },
+    }).catch(() => null);
     const release = typeof releaseLockFn === "function"
       ? releaseLockFn
       : (workspaceRoot && current.task_id ? () => releaseLockForTask(workspaceRoot, current.task_id) : null);

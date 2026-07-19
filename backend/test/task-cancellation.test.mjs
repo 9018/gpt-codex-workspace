@@ -22,11 +22,11 @@ test('cancelTaskExecution stops TUI then deletes TUI/native session, lock, and w
   await Promise.all([mkdir(sessionsDir, { recursive: true }), mkdir(lockDir, { recursive: true }), mkdir(worktree, { recursive: true }), mkdir(nativeDir, { recursive: true })]);
   const recordPath = join(sessionsDir, `${sessionId}.json`);
   const logPath = join(sessionsDir, `${sessionId}.log`);
-  const nativePath = join(nativeDir, `rollout-${nativeId}.jsonl`);
+  const nativePath = join(nativeDir, 'rollout-random-name.jsonl');
   const lockPath = join(lockDir, `repo-${taskId}.json`);
   await writeFile(recordPath, JSON.stringify({ id: sessionId, task_id: taskId, native_session_id: nativeId, worktree_path: worktree }));
   await writeFile(logPath, 'log');
-  await writeFile(nativePath, '{}\n');
+  await writeFile(nativePath, JSON.stringify({ type: 'session_meta', payload: { id: nativeId } }) + '\n');
   await writeFile(lockPath, JSON.stringify({ task_id: taskId }));
 
   const calls = [];

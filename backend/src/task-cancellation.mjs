@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stopCodexTuiSession } from './codex-tui-session-manager.mjs';
+import { deleteBoundCodexSession } from './codex-session/codex-session-lifecycle-manager.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -25,29 +26,6 @@ async function listMatchingSessionRecords(root, taskId) {
     if (record?.task_id === taskId || entry.name.includes(taskId)) records.push({ record, path, dir });
   }
   return records;
-}
-
-async function deleteNativeSessionFiles(codexHome, nativeSessionIds) {
-  const deleted = [];
-  if (!codexHome || nativeSessionIds.size === 0) return deleted;
-  const root = join(codexHome, 'sessions');
-  async function walk(dir) {
-    let entries = [];
-    try { entries = await readdir(dir, { withFileTypes: true }); } catch (err) {
-      if (err?.code === 'ENOENT') return;
-      throw err;
-    }
-    for (const entry of entries) {
-      const path = join(dir, entry.name);
-      if (entry.isDirectory()) await walk(path);
-      else if (entry.isFile() && [...nativeSessionIds].some((id) => entry.name.includes(id))) {
-        await rm(path, { force: true });
-        deleted.push(path);
-      }
-    }
-  }
-  await walk(root);
-  return deleted;
 }
 
 async function deleteTaskWorktrees(workspaceRoot, taskId, explicitPath = null, canonicalRepoPath = null) {
@@ -105,24 +83,22 @@ export async function cancelTaskExecution({ task, config, stopSessionFn = stopCo
   const records = await listMatchingSessionRecords(workspaceRoot, task.id);
   const stoppedSessions = [];
   const deletedSessions = [];
-  const nativeIds = new Set();
+  const deletedNativeSessions = [];
+  const projectRoot = config.defaultRepoPath || workspaceRoot;
+  const nativeSessionsRoot = config.codexHome ? join(config.codexHome, 'sessions') : null;
   for (const { record, path, dir } of records) {
     const sessionId = record?.id || path.slice(dir.length + 1, -5);
-    await stopSessionFn(sessionId, {
-      reason: 'task_cancelled',
+    const deleted = await deleteBoundCodexSession({
+      controlSessionId: sessionId,
       workspaceRoot,
-      candidateWorkspaceRoots: [workspaceRoot, record?.cwd, record?.worktree_path].filter(Boolean),
-      gracefulStopTimeoutMs: 2_000,
+      projectRoot,
+      nativeSessionsRoot,
+      stopSessionFn,
     });
     stoppedSessions.push(sessionId);
-    const nativeId = record?.native_session_id || record?.metadata?.native_session_id || record?.metadata?.resume_native_session_id;
-    if (nativeId) nativeIds.add(String(nativeId));
-    await rm(path, { force: true });
-    await rm(path.replace(/\.json$/, '.log'), { force: true });
     deletedSessions.push(sessionId);
+    deletedNativeSessions.push(...deleted.deleted_native_sessions);
   }
-
-  const deletedNativeSessions = await deleteNativeSessionFiles(config.codexHome, nativeIds);
   const deletedLocks = await deleteTaskLockFiles(workspaceRoot, task.id);
   const deletedWorktrees = await deleteTaskWorktrees(workspaceRoot, task.id, task.worktree?.path || null, config.defaultRepoPath || null);
   return {
