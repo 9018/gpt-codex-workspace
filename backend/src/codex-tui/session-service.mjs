@@ -8,6 +8,7 @@
  */
 
 import { join } from "node:path";
+import { homedir } from "node:os";
 import {
   activeSessions,
   pendingSessionStarts,
@@ -25,6 +26,22 @@ import {
 import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./result-locator.mjs";
 import { isProcessAlive, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";
 import { submitTuiText } from "./tui-safe-input.mjs";
+import { resolvePathContext } from "../path-context/path-context-resolver.mjs";
+
+export async function resolveSessionPathContext(args = {}) {
+  if (args.pathContext) return args.pathContext;
+  const cwd = args.cwd;
+  if (!cwd) return null;
+  return resolvePathContext({
+    workspaceRoot: args.workspaceRoot || null,
+    task: { ...(args.task || {}), worktree_path: args.task?.worktree_path || cwd },
+    config: {
+      projectRoot: args.task?.canonical_repo_path || args.task?.repo_resolution?.canonical_repo_path || cwd,
+      defaultWorkspaceRoot: args.workspaceRoot || null,
+      codexHome: process.env.CODEX_HOME || join(homedir(), ".codex"),
+    },
+  });
+}
 
 /**
  * Start a Codex TUI goal session.  Idempotent by sessionId: if a session
@@ -45,7 +62,8 @@ export async function startCodexTuiGoalSession(args = {}) {
     return pending.promise;
   }
 
-  const promise = startCodexTuiGoalSessionImpl(args).finally(() => {
+  const pathContext = await resolveSessionPathContext(args);
+  const promise = startCodexTuiGoalSessionImpl({ ...args, pathContext }).finally(() => {
     if (pendingSessionStarts.get(sessionId)?.promise === promise) pendingSessionStarts.delete(sessionId);
   });
   pendingSessionStarts.set(sessionId, { cwd: args.cwd, promise });

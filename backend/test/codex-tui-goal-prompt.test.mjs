@@ -60,3 +60,11 @@ test("goal objective truncates very long titles under 4000 chars", () => {
   assert.match(objective, /goal_id=goal_long/);
   assert.match(objective, /codex\.entry\.md/);
 });
+
+
+test("goal objective starts with a human-readable task title before UUID metadata", () => {
+  const objective = buildCodexTuiGoalObjective({ goalId: "goal_abc-123", taskTitle: "修复 Codex Session 绑定与标题" });
+  const lines = objective.split("\n");
+  assert.equal(lines[0], "task=修复 Codex Session 绑定与标题");
+  assert.equal(lines[1], "goal_id=goal_abc-123");
+});

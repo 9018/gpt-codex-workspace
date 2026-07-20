@@ -42,8 +42,8 @@ export function buildCodexTuiGoalObjective({ goalId, taskTitle, goalDir = null }
   const dir = String(goalDir || `.gptwork/goals/${id}`).replace(/\/$/, "");
 
   return [
-    `goal_id=${id}`,
     `task=${title}`,
+    `goal_id=${id}`,
     "",
     "Use Superpowers.",
     `Read ${dir}/codex.entry.md and execute it autonomously.`,
