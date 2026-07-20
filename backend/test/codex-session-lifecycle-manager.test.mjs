@@ -196,3 +196,38 @@ test('pruneBoundNativeSession removes terminal native rollout while retaining co
   assert.equal(await exists(join(projectRoot, '.gptwork', 'codex-sessions', 'manifests', `${controlId}.json`)), true);
   assert.deepEqual(result.deleted_native_sessions, [rolloutPath]);
 });
+
+test('cleanupTaskOwnedCodexSessions removes unbound descendant rollouts in the task window but preserves sessions owned by another task', async () => {
+  const { cleanupTaskOwnedCodexSessions } = await import('../src/codex-session/codex-session-lifecycle-manager.mjs');
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-task-session-cleanup-'));
+  const workspaceRoot = join(root, 'workspace');
+  const projectRoot = join(root, 'project');
+  const nativeSessionsRoot = join(root, 'codex-home', 'sessions');
+  const controlsRoot = join(workspaceRoot, '.gptwork', 'codex-tui-sessions');
+  const manifestsRoot = join(projectRoot, '.gptwork', 'codex-sessions', 'manifests');
+  const nativeDay = join(nativeSessionsRoot, '2026', '07', '20');
+  await Promise.all([
+    mkdir(controlsRoot, { recursive: true }),
+    mkdir(manifestsRoot, { recursive: true }),
+    mkdir(nativeDay, { recursive: true }),
+  ]);
+
+  const childPath = join(nativeDay, 'rollout-child.jsonl');
+  const protectedPath = join(nativeDay, 'rollout-protected.jsonl');
+  await writeFile(childPath, JSON.stringify({ timestamp: '2026-07-20T06:15:00.000Z', type: 'session_meta', payload: { id: 'native_child', cwd: '/tmp/codex-flow-child' } }) + '\n');
+  await writeFile(protectedPath, JSON.stringify({ timestamp: '2026-07-20T06:16:00.000Z', type: 'session_meta', payload: { id: 'native_other', cwd: '/tmp/other-task' } }) + '\n');
+  await writeFile(join(manifestsRoot, 'other-control.json'), JSON.stringify({ control_session_id: 'other-control', native_session_id: 'native_other', task_id: 'task_other' }));
+
+  const result = await cleanupTaskOwnedCodexSessions({
+    taskId: 'task_parent',
+    workspaceRoot,
+    projectRoot,
+    nativeSessionsRoot,
+    startedAt: '2026-07-20T06:10:00.000Z',
+    endedAt: '2026-07-20T06:40:00.000Z',
+  });
+
+  assert.equal(await exists(childPath), false);
+  assert.equal(await exists(protectedPath), true);
+  assert.deepEqual(result.deleted_native_sessions, [childPath]);
+});

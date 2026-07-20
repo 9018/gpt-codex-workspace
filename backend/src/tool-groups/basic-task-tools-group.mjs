@@ -272,6 +272,8 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         if (plan.missing.length) throw new Error(`task_not_found:${task_id}`);
         if (plan.blocked.length) throw new Error(`task_not_terminal:${task_id}:${plan.blocked[0].status}`);
         if (!dry_run) {
+          const target = (state.tasks || []).find((task) => task.id === task_id);
+          if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
           await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goal }));
           await eventLogger?.append("task.deleted", { task_id, delete_linked_goal });
         }
@@ -298,6 +300,10 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         const plan = buildTaskDeletionPlan(state, selected, { force });
         if (plan.blocked.length) throw new Error(`tasks_not_terminal:${plan.blocked.map((item) => `${item.task_id}:${item.status}`).join(',')}`);
         if (!dry_run) {
+          for (const id of plan.deletable) {
+            const target = (state.tasks || []).find((task) => task.id === id);
+            if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
+          }
           await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goals }));
           await eventLogger?.append("tasks.deleted", { task_ids: plan.deletable, delete_linked_goals });
         }

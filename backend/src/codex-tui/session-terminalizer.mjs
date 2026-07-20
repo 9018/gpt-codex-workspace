@@ -13,7 +13,7 @@ import { codexTuiGoalArtifactCandidates, firstMatchingJsonArtifact } from "./res
 import { randomUUID } from "node:crypto";
 import { releaseLockForTask } from "../repo-lock.mjs";
 import { cleanupIsolatedWorktreeProcesses } from "./session-process-cleanup.mjs";
-import { pruneBoundNativeSession, updateBoundCodexSessionStatus } from "../codex-session/codex-session-lifecycle-manager.mjs";
+import { cleanupTaskOwnedCodexSessions, pruneBoundNativeSession, updateBoundCodexSessionStatus } from "../codex-session/codex-session-lifecycle-manager.mjs";
 import {
   activeSessions,
   pendingTerminalizations,
@@ -255,12 +255,23 @@ export async function terminalizeCodexTuiSession({ sessionId, store, event = {},
       terminalizedAt,
       patch: { terminal_event: terminalEvent, result_status: status },
     }).catch(() => null);
-    await pruneBoundNativeSession({
-      controlSessionId: sessionId,
-      workspaceRoot,
-      projectRoot: current.metadata?.project_root || null,
-      nativeSessionsRoot: current.metadata?.native_sessions_root || null,
-    }).catch(() => null);
+    if (current.task_id) {
+      await cleanupTaskOwnedCodexSessions({
+        taskId: current.task_id,
+        workspaceRoot,
+        projectRoot: current.metadata?.project_root || null,
+        nativeSessionsRoot: current.metadata?.native_sessions_root || null,
+        startedAt: current.started_at || current.created_at || null,
+        endedAt: terminalizedAt,
+      }).catch(() => null);
+    } else {
+      await pruneBoundNativeSession({
+        controlSessionId: sessionId,
+        workspaceRoot,
+        projectRoot: current.metadata?.project_root || null,
+        nativeSessionsRoot: current.metadata?.native_sessions_root || null,
+      }).catch(() => null);
+    }
     const release = typeof releaseLockFn === "function"
       ? releaseLockFn
       : (workspaceRoot && current.task_id ? () => releaseLockForTask(workspaceRoot, current.task_id) : null);

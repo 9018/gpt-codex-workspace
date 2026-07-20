@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stopCodexTuiSession } from './codex-tui-session-manager.mjs';
-import { deleteBoundCodexSession } from './codex-session/codex-session-lifecycle-manager.mjs';
+import { cleanupTaskOwnedCodexSessions } from './codex-session/codex-session-lifecycle-manager.mjs';
 
 const execFileAsync = promisify(execFile);
 
@@ -80,31 +80,23 @@ export async function cancelTaskExecution({ task, config, stopSessionFn = stopCo
   const workspaceRoot = config?.defaultWorkspaceRoot;
   if (!workspaceRoot) throw new Error('defaultWorkspaceRoot is required for cancellation cleanup');
 
-  const records = await listMatchingSessionRecords(workspaceRoot, task.id);
-  const stoppedSessions = [];
-  const deletedSessions = [];
-  const deletedNativeSessions = [];
   const projectRoot = config.defaultRepoPath || workspaceRoot;
   const nativeSessionsRoot = config.codexHome ? join(config.codexHome, 'sessions') : null;
-  for (const { record, path, dir } of records) {
-    const sessionId = record?.id || path.slice(dir.length + 1, -5);
-    const deleted = await deleteBoundCodexSession({
-      controlSessionId: sessionId,
-      workspaceRoot,
-      projectRoot,
-      nativeSessionsRoot,
-      stopSessionFn,
-    });
-    stoppedSessions.push(sessionId);
-    deletedSessions.push(sessionId);
-    deletedNativeSessions.push(...deleted.deleted_native_sessions);
-  }
+  const sessionCleanup = await cleanupTaskOwnedCodexSessions({
+    taskId: task.id,
+    workspaceRoot,
+    projectRoot,
+    nativeSessionsRoot,
+    startedAt: task.started_at || task.created_at || null,
+    endedAt: new Date().toISOString(),
+    stopSessionFn,
+  });
   const deletedLocks = await deleteTaskLockFiles(workspaceRoot, task.id);
   const deletedWorktrees = await deleteTaskWorktrees(workspaceRoot, task.id, task.worktree?.path || null, config.defaultRepoPath || null);
   return {
-    stopped_sessions: stoppedSessions,
-    deleted_sessions: deletedSessions,
-    deleted_native_sessions: deletedNativeSessions,
+    stopped_sessions: sessionCleanup.deleted_control_sessions,
+    deleted_sessions: sessionCleanup.deleted_control_sessions,
+    deleted_native_sessions: sessionCleanup.deleted_native_sessions,
     deleted_locks: deletedLocks,
     deleted_worktrees: deletedWorktrees,
   };

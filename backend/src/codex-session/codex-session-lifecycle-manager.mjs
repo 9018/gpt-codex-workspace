@@ -127,6 +127,89 @@ export async function pruneBoundNativeSession({
   };
 }
 
+
+function sessionTimeMs(entry) {
+  const parsed = Date.parse(entry?.timestamp || '');
+  return Number.isFinite(parsed) ? parsed : Number(entry?.mtimeMs || 0);
+}
+
+function isWithinWindow(entry, startedAt, endedAt) {
+  const value = sessionTimeMs(entry);
+  const start = Date.parse(startedAt || '');
+  const end = Date.parse(endedAt || '');
+  if (Number.isFinite(start) && value < start) return false;
+  if (Number.isFinite(end) && value > end + 5_000) return false;
+  return true;
+}
+
+/**
+ * Remove every native Codex session attributable to one GPTWork task.
+ * Existing bindings are authoritative. Unbound native sessions created during
+ * the task execution window are treated as descendants, except when another
+ * task manifest already owns them. This keeps the control layer thin while
+ * covering real Codex sessions spawned indirectly by tests or child commands.
+ */
+export async function cleanupTaskOwnedCodexSessions({
+  taskId,
+  workspaceRoot,
+  projectRoot,
+  nativeSessionsRoot,
+  startedAt = null,
+  endedAt = new Date().toISOString(),
+  stopSessionFn = null,
+} = {}) {
+  if (!taskId) throw new TypeError('taskId is required');
+  if (!workspaceRoot) throw new TypeError('workspaceRoot is required');
+  if (!projectRoot) throw new TypeError('projectRoot is required');
+
+  const records = await listControlRecords(workspaceRoot);
+  const manifests = createCodexSessionManifestStore({ projectRoot });
+  const manifestEntries = await manifests.list();
+  const manifestByControl = new Map(manifestEntries.map((entry) => [entry.control_session_id, entry]));
+  const ownedControlIds = new Set();
+  const protectedNativeIds = new Set();
+
+  for (const { controlSessionId, record } of records) {
+    const manifest = manifestByControl.get(controlSessionId);
+    const ownerTaskId = record?.task_id || manifest?.task_id || null;
+    const nativeId = nativeIdFromRecord(record) || manifest?.native_session_id || null;
+    if (ownerTaskId === taskId) ownedControlIds.add(controlSessionId);
+    else if (nativeId) protectedNativeIds.add(nativeId);
+  }
+  for (const manifest of manifestEntries) {
+    if (manifest?.task_id === taskId) ownedControlIds.add(manifest.control_session_id);
+    else if (manifest?.native_session_id) protectedNativeIds.add(manifest.native_session_id);
+  }
+
+  const deletedControlSessions = [];
+  const deletedNativeSessions = [];
+  for (const controlSessionId of ownedControlIds) {
+    const result = await deleteBoundCodexSession({
+      controlSessionId, workspaceRoot, projectRoot, nativeSessionsRoot, stopSessionFn,
+    });
+    if (result.deleted_control_session) deletedControlSessions.push(controlSessionId);
+    deletedNativeSessions.push(...result.deleted_native_sessions);
+  }
+
+  const alreadyDeleted = new Set(deletedNativeSessions);
+  if (nativeSessionsRoot) {
+    for (const native of await snapshotNativeSessions(nativeSessionsRoot)) {
+      if (alreadyDeleted.has(native.path)) continue;
+      if (native.id && protectedNativeIds.has(native.id)) continue;
+      if (!isWithinWindow(native, startedAt, endedAt)) continue;
+      await rm(native.path, { force: true });
+      deletedNativeSessions.push(native.path);
+      await pruneEmptyParents(dirname(native.path), nativeSessionsRoot, []);
+    }
+  }
+
+  return {
+    task_id: taskId,
+    deleted_control_sessions: [...new Set(deletedControlSessions)].sort(),
+    deleted_native_sessions: [...new Set(deletedNativeSessions)].sort(),
+  };
+}
+
 export async function deleteBoundCodexSession({
   controlSessionId,
   workspaceRoot,
