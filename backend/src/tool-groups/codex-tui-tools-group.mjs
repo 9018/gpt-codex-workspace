@@ -618,7 +618,7 @@ codex_tui_collect: tool({
           try {
             const state = await store.load();
             const currentTask = (state.tasks || []).find((item) => item.id === snapshot.task_id);
-            if (currentTask && ['running', 'assigned', 'collecting', 'waiting_for_review', 'waiting_for_supervisor'].includes(currentTask.status)) {
+            if (currentTask && ['running', 'assigned', 'collecting', 'waiting_for_review', 'waiting_for_supervisor', 'completed'].includes(currentTask.status)) {
               const currentResult = currentTask.result || {};
               const goal = (state.goals || []).find((item) => item.id === snapshot.goal_id) || {};
               const rawResult = {
@@ -629,7 +629,7 @@ codex_tui_collect: tool({
                 worktree_clean: snapshot.worktree_clean,
               };
               const contractVerification = verifyAcceptanceContract({
-                contract: currentTask.acceptance_contract || goal.acceptance_contract || null,
+                contract: goal.acceptance_contract || currentTask.acceptance_contract || null,
                 task: currentTask,
                 goal,
                 result: rawResult,
@@ -688,6 +688,26 @@ codex_tui_collect: tool({
                   taskResult: { ...resultPatch, status: 'completed' },
                   unifiedDecision: { status: 'completed', goal_effect: { status: 'completed' }, queue_effect: { status: 'completed' } },
                   workspaceRoot,
+                });
+                await mutableStore.mutate((nextState) => {
+                  const now = new Date().toISOString();
+                  for (const run of nextState.agent_runs || []) {
+                    if (run.task_id !== snapshot.task_id || !['builder', 'verifier', 'reviewer', 'finalizer'].includes(run.role)) continue;
+                    run.status = 'completed';
+                    run.summary = `${run.role}: completed from accepted TUI evidence`;
+                    run.output_artifacts = [{
+                      kind: run.role === 'verifier' ? 'verification' : run.role === 'reviewer' ? 'reviewer_decision' : run.role === 'finalizer' ? 'result' : 'change_summary',
+                      path: snapshot.result_json_path,
+                      passed: run.role === 'verifier' || run.role === 'reviewer' ? true : undefined,
+                      status: 'completed',
+                      commit: snapshot.commit,
+                      changed_count: snapshot.changed_files?.length || 0,
+                      metadata: { source: 'accepted_tui_evidence', context_digest: run.input_context_digest || null },
+                    }];
+                    run.events = Array.isArray(run.events) ? run.events : [];
+                    run.events.push({ type: 'completed', message: run.summary, data: { status: 'completed', source: 'accepted_tui_evidence' }, created_at: now });
+                    run.updated_at = now;
+                  }
                 });
               } else {
                 await transitionService.transitionTask({
