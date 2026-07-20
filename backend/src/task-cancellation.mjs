@@ -1,5 +1,6 @@
 import { readdir, readFile, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import { resolveCodexSessionsRoot } from './codex-session/codex-session-root.mjs';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { stopCodexTuiSession } from './codex-tui-session-manager.mjs';
@@ -81,7 +82,7 @@ export async function cancelTaskExecution({ task, config, stopSessionFn = stopCo
   if (!workspaceRoot) throw new Error('defaultWorkspaceRoot is required for cancellation cleanup');
 
   const projectRoot = config.defaultRepoPath || workspaceRoot;
-  const nativeSessionsRoot = config.codexHome ? join(config.codexHome, 'sessions') : null;
+  const nativeSessionsRoot = resolveCodexSessionsRoot(config.codexHome);
   const sessionCleanup = await cleanupTaskOwnedCodexSessions({
     taskId: task.id,
     workspaceRoot,

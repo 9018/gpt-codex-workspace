@@ -1,4 +1,5 @@
 import { join, resolve } from "node:path";
+import { resolveCodexSessionsRoot } from "../codex-session/codex-session-root.mjs";
 
 import { PathContextError } from "./path-context-schema.mjs";
 import { validatePathContext } from "./path-context-validator.mjs";
@@ -71,5 +72,7 @@ export async function resolvePathContext({
     executionCwd: worktreePath || canonicalRepoPath,
     worktreePath,
     controlSessionsRoot: join(canonicalRepoPath, ".gptwork", "codex-sessions"),
+    codexHome: firstPath(config.codexHome),
+    nativeSessionsRoot: resolveCodexSessionsRoot(config.codexHome),
   });
 }

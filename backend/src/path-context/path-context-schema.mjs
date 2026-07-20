@@ -1,6 +1,7 @@
 export const PATH_CONTEXT_FIELDS = Object.freeze([
   "mcpRoot", "projectsRoot", "workspaceRoot", "projectRoot",
   "canonicalRepoPath", "executionCwd", "worktreePath", "controlSessionsRoot",
+  "codexHome", "nativeSessionsRoot",
 ]);
 
 export class PathContextError extends Error {

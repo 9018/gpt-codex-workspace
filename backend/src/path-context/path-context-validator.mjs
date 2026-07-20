@@ -66,5 +66,7 @@ export function validatePathContext(input = {}) {
     throw new PathContextError("control_sessions_root_invalid", "controlSessionsRoot must be project scoped");
   }
   context.controlSessionsRoot = expectedControlSessionsRoot;
+  if (context.codexHome) context.codexHome = realpathOrResolved(context.codexHome);
+  if (context.nativeSessionsRoot) context.nativeSessionsRoot = realpathOrResolved(context.nativeSessionsRoot);
   return context;
 }

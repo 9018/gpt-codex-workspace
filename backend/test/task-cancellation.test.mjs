@@ -45,3 +45,26 @@ test('cancelTaskExecution stops TUI then deletes TUI/native session, lock, and w
   assert.deepEqual(result.stopped_sessions, [sessionId]);
   assert.deepEqual(result.deleted_sessions, [sessionId]);
 });
+
+test('cancelTaskExecution resolves user-home Codex layout and removes native rollout from .codex/sessions', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-cancel-user-home-'));
+  const codexUserHome = join(root, 'user-home');
+  const taskId = 'task_cancel_user_home';
+  const sessionId = `goal_1_${taskId}`;
+  const nativeId = '019f7f17-bcd2-7a41-a2f8-e70ba6469e77';
+  const sessionsDir = join(root, '.gptwork', 'codex-tui-sessions');
+  const nativeDir = join(codexUserHome, '.codex', 'sessions', '2026', '07', '20');
+  await Promise.all([mkdir(sessionsDir, { recursive: true }), mkdir(nativeDir, { recursive: true })]);
+  const recordPath = join(sessionsDir, `${sessionId}.json`);
+  const nativePath = join(nativeDir, 'rollout-user-home.jsonl');
+  await writeFile(recordPath, JSON.stringify({ id: sessionId, task_id: taskId, native_session_id: nativeId }));
+  await writeFile(nativePath, JSON.stringify({ type: 'session_meta', payload: { id: nativeId } }) + '\n');
+
+  await cancelTaskExecution({
+    task: { id: taskId, created_at: '2026-07-20T10:00:00.000Z' },
+    config: { defaultWorkspaceRoot: root, codexHome: codexUserHome, defaultRepoPath: root },
+    stopSessionFn: async () => ({ status: 'stopped' }),
+  });
+
+  assert.equal(await absent(nativePath), true);
+});

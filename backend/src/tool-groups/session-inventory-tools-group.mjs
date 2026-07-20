@@ -1,6 +1,6 @@
-import { existsSync } from 'node:fs';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
+import { resolveCodexSessionsRoot } from '../codex-session/codex-session-root.mjs';
 import { startCodexTuiGoalSession, getCodexTuiSessionStatus, sendCodexTuiSessionInput, sendCodexTuiSlashCommand, stopCodexTuiSession } from '../codex-tui-session-manager.mjs';
 import { activeSessions } from '../codex-tui/active-session-registry.mjs';
 import { requireScope, defaultTokenContext } from '../auth-context.mjs';
@@ -9,9 +9,7 @@ import { emitTaskProgress, updateTask } from '../task-lifecycle.mjs';
 
 
 function resolveSessionsRoot(config) {
-  const explicit = join(config.codexHome, "sessions");
-  const legacy = join(config.codexHome, ".codex", "sessions");
-  return !existsSync(explicit) && existsSync(legacy) ? legacy : explicit;
+  return resolveCodexSessionsRoot(config.codexHome);
 }
 
 function safeSessionPath(config, relativePath) {
