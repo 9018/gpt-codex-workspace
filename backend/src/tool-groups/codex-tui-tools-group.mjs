@@ -628,8 +628,9 @@ codex_tui_collect: tool({
                 changed_files: snapshot.changed_files || [],
                 worktree_clean: snapshot.worktree_clean,
               };
+              const acceptanceContract = goal.acceptance_contract || currentTask.acceptance_contract || null;
               const contractVerification = verifyAcceptanceContract({
-                contract: goal.acceptance_contract || currentTask.acceptance_contract || null,
+                contract: acceptanceContract,
                 task: currentTask,
                 goal,
                 result: rawResult,
@@ -679,14 +680,25 @@ codex_tui_collect: tool({
               };
               const canComplete = contractVerification.completion_eligible === true
                 && contractVerification.blocking_passed === true
-                && currentTask.acceptance_contract?.requirements?.requires_integration !== true;
+                && acceptanceContract?.requirements?.requires_integration !== true;
               const canonicalStatus = canComplete ? 'completed' : 'waiting_for_review';
               if (canComplete) {
                 await persistTuiTerminalState({
                   store: mutableStore,
                   task: currentTask,
                   taskResult: { ...resultPatch, status: 'completed' },
-                  unifiedDecision: { status: 'completed', goal_effect: { status: 'completed' }, queue_effect: { status: 'completed' } },
+                  unifiedDecision: {
+                    status: 'completed',
+                    blocking_passed: true,
+                    completion_eligible: true,
+                    requires_review: false,
+                    safe_to_auto_advance: true,
+                    source: 'codex_tui_collect',
+                    profile: acceptanceContract?.profile || acceptanceContract?.intent?.operation_kind || null,
+                    normalized_at: new Date().toISOString(),
+                    goal_effect: { status: 'completed', complete_goal: true, safe_to_auto_advance: true },
+                    queue_effect: { status: 'completed', unblock_dependents: true },
+                  },
                   workspaceRoot,
                 });
                 await mutableStore.mutate((nextState) => {
