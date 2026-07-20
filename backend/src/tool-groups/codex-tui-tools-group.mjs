@@ -41,6 +41,8 @@ import { diagnosticVerificationPassed, reconcileTuiAgentRunsFromProgress } from 
 import { ensurePipelineRunsForTask } from "../pipeline-orchestration.mjs";
 import { createTaskTransitionService } from "../task-state/task-transition-service.mjs";
 import { TASK_EVENTS } from "../task-state/task-transition-events.mjs";
+import { verifyAcceptanceContract } from "../acceptance/contract-verifier.mjs";
+import { persistTuiTerminalState } from "../codex-tui-evidence-writeback.mjs";
 
 
 export async function reconcileStoppedTuiTask({ store, taskId, reason = "stopped", hasEvidence = false, transitionService: injectedTransitionService } = {}) {
