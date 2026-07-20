@@ -219,6 +219,18 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   if (resultJsonPresent && parsedResultJson.error) {
     findings.push({ code: "result_json_invalid", severity: "blocker", message: parsedResultJson.error });
   }
+  const terminalResultStatus = parsedResultJson.value?.status || null;
+  const terminalVerificationPassed = parsedResultJson.value?.verification?.passed;
+  if (resultJsonPresent && (
+    ["failed", "timed_out", "stopped", "cancelled", "detached"].includes(terminalResultStatus)
+    || terminalVerificationPassed === false
+  )) {
+    findings.push({
+      code: "terminal_result_failed",
+      severity: "blocker",
+      message: `The TUI terminal result is not acceptance-ready: status=${terminalResultStatus || "unknown"}, verification.passed=${String(terminalVerificationPassed)}.`,
+    });
+  }
   if (!worktreeClean) {
     findings.push({ code: "dirty_worktree", severity: "blocker", message: "The TUI worktree has uncommitted changes." });
   }

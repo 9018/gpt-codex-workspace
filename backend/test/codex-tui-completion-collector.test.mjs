@@ -358,3 +358,30 @@ test("collector preserves committed changed files using session base commit", as
   assert.equal(snapshot.worktree_clean, true);
   assert.equal(snapshot.reconstructed_result.verification.passed, true);
 });
+
+test("collect does not mark failed terminal evidence ready for review", async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo);
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "acceptance.contract.json"), JSON.stringify({
+    requirements: { requires_commit: false, requires_integration: false },
+  }));
+  await writeFile(join(goalDir, "result.md"), "# Result\n\nExecution failed.\n");
+  await writeFile(join(goalDir, "result.json"), JSON.stringify({
+    status: "failed",
+    summary: "PTY exited before producing evidence",
+    changed_files: [],
+    tests: "none",
+    commit: "none",
+    remote_head: "none",
+    warnings: [],
+    followups: [],
+    verification: { commands: [], passed: false },
+  }));
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+  assert.equal(snapshot.result_json_valid, true);
+  assert.equal(snapshot.ready_for_review, false);
+  assert.equal(snapshot.findings.some((finding) => finding.code === "terminal_result_failed"), true);
+});

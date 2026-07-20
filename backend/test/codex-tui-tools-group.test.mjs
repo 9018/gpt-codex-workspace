@@ -611,3 +611,56 @@ test("codex_tui_send submits slash commands through the slash-command service", 
   assert.equal(calls[0][0], "slash");
   assert.equal(calls[0][2], "/goal resume");
 });
+
+test("codex_tui_collect converges failed terminal evidence instead of leaving task running", async () => {
+  const taskId = "task_terminal_failed";
+  const goalId = "goal_terminal_failed";
+  const store = makeStore({
+    tasks: [{ id: taskId, goal_id: goalId, status: "running", result: {}, metadata: {} }],
+    goals: [{ id: goalId, status: "running" }],
+    goal_queue: [{ task_id: taskId, goal_id: goalId, status: "running" }],
+    agent_runs: [{ task_id: taskId, role: "builder", status: "declared", events: [] }],
+  });
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store,
+    config: { defaultWorkspaceRoot: "/tmp/gptwork", defaultRepoPath: "/tmp/repo", codexTuiEnabled: true },
+    collectCodexTuiCompletionFn: async ({ sessionId }) => ({
+      kind: "codex_tui_completion_snapshot",
+      session_id: sessionId,
+      task_id: taskId,
+      goal_id: goalId,
+      ready_for_review: false,
+      result_json_present: true,
+      result_json_valid: true,
+      result_json_path: "/tmp/result.json",
+      result_json: {
+        status: "failed",
+        summary: "PTY exited without valid evidence",
+        changed_files: [],
+        tests: "none",
+        commit: "none",
+        remote_head: "none",
+        warnings: [],
+        followups: [],
+        verification: { commands: [], passed: false },
+      },
+      reconstructed_result: null,
+      changed_files: [],
+      tests: "none",
+      commit: null,
+      worktree_clean: true,
+      findings: [{ code: "terminal_result_failed", severity: "blocker" }],
+    }),
+    reconcileTuiAgentRunsFn: async () => ({ reconciled: true }),
+  });
+
+  const snapshot = await tools.codex_tui_collect.handler({ session_id: "session_failed" });
+  const state = await store.load();
+  assert.equal(snapshot.terminal_writeback?.persisted, true);
+  assert.equal(state.tasks.find((item) => item.id === taskId).status, "failed");
+  assert.equal(state.goals.find((item) => item.id === goalId).status, "failed");
+  assert.equal(state.goal_queue.find((item) => item.task_id === taskId).status, "failed");
+  assert.equal(state.agent_runs.find((item) => item.task_id === taskId).status, "blocked");
+});

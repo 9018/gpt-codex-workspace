@@ -610,6 +610,46 @@ codex_tui_collect: tool({
           }).catch((error) => ({ reconciled: false, reason: error?.message || String(error), error: true }));
         }
 
+        const terminalFailureStatus = ["failed", "timed_out", "stopped", "cancelled", "detached"].includes(snapshot.result_json?.status)
+          ? snapshot.result_json.status
+          : null;
+        if (terminalFailureStatus && snapshot.task_id) {
+          try {
+            const state = await store.load();
+            const currentTask = (state.tasks || []).find((item) => item.id === snapshot.task_id);
+            if (currentTask && !isTerminalStatus(currentTask.status)) {
+              snapshot.terminal_writeback = await persistTuiTerminalState({
+                store: mutableStore,
+                task: currentTask,
+                taskResult: {
+                  ...(snapshot.result_json || snapshot.reconstructed_result || {}),
+                  provider: "codex_tui_goal",
+                  session_id: snapshot.session_id,
+                  result_json_present: snapshot.result_json_present === true,
+                  result_json_valid: snapshot.result_json_valid === true,
+                  worktree_clean: snapshot.worktree_clean ?? null,
+                  findings: snapshot.findings || [],
+                  status: terminalFailureStatus,
+                },
+                unifiedDecision: {
+                  status: terminalFailureStatus,
+                  blocking_passed: false,
+                  completion_eligible: false,
+                  requires_review: false,
+                  safe_to_auto_advance: false,
+                  source: "codex_tui_collect_terminal_failure",
+                  normalized_at: new Date().toISOString(),
+                  goal_effect: { status: terminalFailureStatus, complete_goal: false, safe_to_auto_advance: false },
+                  queue_effect: { status: terminalFailureStatus, unblock_dependents: false },
+                },
+                workspaceRoot,
+              });
+            }
+          } catch (error) {
+            snapshot.terminal_writeback = { persisted: false, error: error?.message || String(error) };
+          }
+        }
+
         // When the session evidence is complete and ready for review,
         // write the result back to the task and transition its status.
         // This is the single boundary where TUI completion evidence becomes
