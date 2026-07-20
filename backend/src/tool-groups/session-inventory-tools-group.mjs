@@ -71,6 +71,20 @@ function objectiveFromInternalContext(text) {
   return match ? normalizedPreview(match[1], 160) : '';
 }
 
+function shortTaskIdFromCwd(cwd) {
+  const match = String(cwd || '').match(/(?:^|[\/])task_([0-9a-f-]{8,})/i);
+  if (!match) return '';
+  return `T${match[1].replace(/-/g, '').slice(0, 8)}`;
+}
+
+function gptworkTaskTitle(text, cwd) {
+  const match = String(text || '').match(/(?:^|\n)task=([^\n]+)/);
+  if (!match) return '';
+  const taskTitle = normalizedPreview(match[1], 120);
+  const shortTaskId = shortTaskIdFromCwd(cwd);
+  return shortTaskId ? `${taskTitle} · ${shortTaskId}` : taskTitle;
+}
+
 function isIgnoredUserText(text) {
   const value = String(text || '').trim();
   return !value || value.startsWith('<environment_context>') || value.startsWith('<codex_internal_context') || value.includes('__gptwork_test_invalid_arg__');
@@ -108,7 +122,9 @@ export async function summarizeCodexNativeSession({ absolutePath, relativePath, 
     if (role === 'user' || role === 'assistant') messageCount += 1;
     if (role === 'user') {
       if (text.includes('__gptwork_test_invalid_arg__')) isTestSession = true;
+      const gptworkTitle = gptworkTaskTitle(text, cwd);
       const objective = objectiveFromInternalContext(text);
+      if (!title && gptworkTitle) title = gptworkTitle;
       if (!title && objective) title = objective;
       if (!title && !isIgnoredUserText(text)) title = normalizedPreview(text, 160);
     }

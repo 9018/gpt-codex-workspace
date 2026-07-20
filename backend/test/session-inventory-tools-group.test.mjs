@@ -359,3 +359,29 @@ test('summarizeCodexNativeSession prefers the original goal objective for Resume
     assert.equal(result.title, '分析项目代码，做实验测试项目执行能力，调用项目接口测试，链路测试');
   } finally { await rm(root, { recursive:true, force:true }); }
 });
+
+test('summarizeCodexNativeSession reduces GPTWork bootstrap prompt to task title and short task id', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-native-human-title-'));
+  try {
+    const relativePath = '2026/07/20/rollout-2026-07-20T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl';
+    const absolutePath = join(root, relativePath);
+    const cwd = '/repo/.gptwork/worktrees/project/task_738621bb-4b0a-46ea-99ee-f8e4a8e7a23d';
+    await mkdir(join(root, '2026', '07', '20'), { recursive: true });
+    const prompt = [
+      'task=真实验证：Session 标题与原生绑定',
+      'goal_id=goal_274e6e30-a1d3-4f07-ae1d-5e6b6bf2f6b5',
+      '',
+      'Use Superpowers.',
+      'Read .gptwork/runtime-goals/goal_274e6e30-a1d3-4f07-ae1d-5e6b6bf2f6b5/codex.entry.md and execute it autonomously.',
+    ].join('\n');
+    const lines = [
+      { type: 'session_meta', payload: { cwd } },
+      { type: 'response_item', payload: { type: 'message', role: 'user', content: [{ type: 'input_text', text: prompt }] } },
+    ];
+    await writeFile(absolutePath, lines.map(JSON.stringify).join('\n') + '\n');
+    const info = await (await import('node:fs/promises')).stat(absolutePath);
+    const result = await summarizeCodexNativeSession({ absolutePath, relativePath, stat: info, activeNativeSessionIds: new Set() });
+    assert.equal(result.title, '真实验证：Session 标题与原生绑定 · T738621bb');
+    assert.doesNotMatch(result.title, /goal_id|Use Superpowers/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
