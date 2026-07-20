@@ -23,3 +23,15 @@ test("supervisor_correction is normalized to same-goal correction", () => {
   assert.match(renderDeltaInstruction(validated), /kind=correction/);
   assert.match(renderDeltaInstruction(validated), /continue the current goal/);
 });
+
+test("context digest comparison tolerates transport whitespace and hex casing", () => {
+  const validated = validateTaskDelta({
+    kind: "correction",
+    task_id: "task_1",
+    goal_id: "goal_1",
+    base_context_digest: "  SHA256:ABC  ",
+    revision: 1,
+    instruction: "Continue.",
+  }, session);
+  assert.equal(validated.base_context_digest, "sha256:abc");
+});

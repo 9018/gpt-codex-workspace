@@ -27,6 +27,7 @@ import {
   getCodexTuiSessionStatus,
   readCodexTuiSession,
   sendCodexTuiSessionInput,
+  sendCodexTuiSlashCommand,
   sendCodexTuiTaskDelta,
   startCodexTuiGoalSession,
   stopCodexTuiSession,
@@ -149,6 +150,7 @@ export function createCodexTuiToolsGroup({
   getCodexTuiSessionStatusFn = getCodexTuiSessionStatus,
   readCodexTuiSessionFn = readCodexTuiSession,
   sendCodexTuiSessionInputFn = sendCodexTuiSessionInput,
+  sendCodexTuiSlashCommandFn = sendCodexTuiSlashCommand,
   sendCodexTuiTaskDeltaFn = sendCodexTuiTaskDelta,
   stopCodexTuiSessionFn = stopCodexTuiSession,
   collectCodexTuiCompletionFn = collectCodexTuiCompletion,
@@ -547,7 +549,13 @@ export function createCodexTuiToolsGroup({
       description: "Send text input to an active Codex TUI session.",
       inputSchema: schema({ session_id: "string", text: "string" }, ["session_id", "text"]),
       ...metadata,
-      handler: async ({ session_id, text }) => sendCodexTuiSessionInputFn(session_id, text, { candidateWorkspaceRoots: sessionWorkspaceRoots() }),
+      handler: async ({ session_id, text }) => {
+        const input = String(text ?? "");
+        if (input.trim().startsWith("/")) {
+          return sendCodexTuiSlashCommandFn(session_id, input, { candidateWorkspaceRoots: sessionWorkspaceRoots() });
+        }
+        return sendCodexTuiSessionInputFn(session_id, input, { candidateWorkspaceRoots: sessionWorkspaceRoots() });
+      },
     }),
     codex_tui_preview_task_delta: tool({
       name: "codex_tui_preview_task_delta",
@@ -608,10 +616,25 @@ codex_tui_collect: tool({
           try {
             const state = await store.load();
             const currentTask = (state.tasks || []).find((item) => item.id === snapshot.task_id);
-            if (currentTask && ['running', 'assigned', 'collecting'].includes(currentTask.status)) {
+            if (currentTask && ['running', 'assigned', 'collecting', 'waiting_for_review', 'waiting_for_supervisor'].includes(currentTask.status)) {
               const currentResult = currentTask.result || {};
+              const goal = (state.goals || []).find((item) => item.id === snapshot.goal_id) || {};
+              const rawResult = {
+                ...(snapshot.result_json || snapshot.reconstructed_result || {}),
+                commit: snapshot.commit,
+                tests: snapshot.tests,
+                changed_files: snapshot.changed_files || [],
+                worktree_clean: snapshot.worktree_clean,
+              };
+              const contractVerification = verifyAcceptanceContract({
+                contract: currentTask.acceptance_contract || goal.acceptance_contract || null,
+                task: currentTask,
+                goal,
+                result: rawResult,
+                verification: rawResult.verification || {},
+              });
               const resultPatch = {
-                ...(snapshot.result_json || {}),
+                ...rawResult,
                 provider: 'codex_tui_goal',
                 session_id: snapshot.session_id,
                 commit: snapshot.commit,
@@ -650,28 +673,42 @@ codex_tui_collect: tool({
                   : (snapshot.result_json?.diagnostic_evidence || currentResult.diagnostic_evidence || null),
                 result_md_present: snapshot.result_md_present,
                 result_json_present: snapshot.result_json_present,
+                contract_verification: contractVerification,
               };
+              const canComplete = contractVerification.completion_eligible === true
+                && contractVerification.blocking_passed === true
+                && currentTask.acceptance_contract?.requirements?.requires_integration !== true;
+              const canonicalStatus = canComplete ? 'completed' : 'waiting_for_review';
               await transitionService.transitionTask({
                 task_id: snapshot.task_id,
                 event: TASK_EVENTS.RECONCILIATION_CORRECTION,
                 expected_statuses: [currentTask.status],
                 payload: {
-                  canonical_status: 'waiting_for_review',
+                  canonical_status: canonicalStatus,
                   task_result_patch: resultPatch,
                   audit: { operation: 'tui_collect_evidence_writeback', session_id: snapshot.session_id },
                 },
-                reason: 'TUI collect produced complete evidence',
+                reason: canComplete ? 'TUI collect satisfied acceptance contract' : 'TUI collect produced reviewable evidence',
                 source: 'codex_tui',
                 actor: { type: 'system', id: 'codex_tui_collect' },
                 idempotency_key: `tui_collect:${snapshot.task_id}:${snapshot.session_id}:${snapshot.commit || 'no_commit'}`,
               });
+              if (canComplete) {
+                await persistTuiTerminalState({
+                  store: mutableStore,
+                  task: currentTask,
+                  taskResult: { ...resultPatch, status: 'completed' },
+                  unifiedDecision: { status: 'completed', goal_effect: { status: 'completed' }, queue_effect: { status: 'completed' } },
+                  workspaceRoot,
+                });
+              }
               await mutableStore.mutate((nextState) => {
                 const item = (nextState.tasks || []).find((candidate) => candidate.id === snapshot.task_id);
                 if (!item) return;
                 item.metadata = { ...(item.metadata || {}), tui_session_id: snapshot.session_id };
                 delete item.metadata.tui_session_owner;
                 item.logs ||= [];
-                item.logs.push({ time: new Date().toISOString(), message: '[tui] collect: complete evidence, transitioned to waiting_for_review' });
+                item.logs.push({ time: new Date().toISOString(), message: `[tui] collect: complete evidence, transitioned to ${canonicalStatus}` });
               });
             }
           } catch (err) {
@@ -697,6 +734,24 @@ codex_tui_collect: tool({
             goal_id,
             status: "no_data",
             detail: "No progress.json found for this goal. The goal may not have started execution yet.",
+          };
+        }
+        const state = await store.load();
+        const goal = (state.goals || []).find((item) => item.id === goal_id);
+        const task = (state.tasks || []).find((item) =>
+          item.goal_id === goal_id || (goal?.task_id && item.id === goal.task_id)
+        );
+        if (task && isTerminalStatus(task.status)) {
+          return {
+            kind: "subagent_progress",
+            goal_id,
+            ...progress,
+            phase: "terminal",
+            status: task.status,
+            current_action: "none",
+            next_expected_event: null,
+            stale_progress_overridden: progress.status !== task.status || progress.phase !== "terminal",
+            terminal_task_id: task.id,
           };
         }
         return {

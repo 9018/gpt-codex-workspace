@@ -234,7 +234,7 @@ export async function startCodexTuiGoalSessionImpl({
     noProgressMs: Number(tuiNoProgressSeconds || 120) * 1_000,
     writeInput: writeAutopilotInput,
     interrupt: () => writeAutopilotInput("\x03"),
-    resume: () => writeAutopilotInput("/resume\r"),
+    resume: () => writeAutopilotInput("/goal resume\r"),
     persist: (patch) => store.updateSession(sessionId, patch),
   });
 

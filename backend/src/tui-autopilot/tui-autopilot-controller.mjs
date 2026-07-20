@@ -36,6 +36,7 @@ export function createTuiAutopilotController({
   let sequence = 0;
   let actionAttempts = 0;
   let repairAttempts = 0;
+  let lastSideEffectSignature = null;
   let active = initiallyActive !== false;
   return {
     activate() { active = true; },
@@ -44,6 +45,7 @@ export function createTuiAutopilotController({
       actionAttempts = 0;
       repairAttempts = 0;
       progressTracker.reset?.();
+      lastSideEffectSignature = null;
     },
     async ingest(chunk, context = {}) {
       transcript.append(chunk);
@@ -63,8 +65,14 @@ export function createTuiAutopilotController({
         }),
       }, { at: now() });
       let action;
+      const streamDisconnected = /stream disconnected before completion|stream truncated before any output was produced/i.test(String(chunk || ""));
       if (!active) {
         action = { type: "observe", reason_code: "autopilot_not_activated" };
+      } else if (streamDisconnected) {
+        action = repairAttempts >= maxRepairs
+          ? { type: "checkpoint_supervisor", reason_code: "stream_disconnect_recovery_budget_exhausted" }
+          : { type: "resume", reason_code: "stream_disconnected_goal_resume" };
+        if (action.type === "resume") repairAttempts += 1;
       } else if (progress.no_progress) {
         action = repairAttempts >= maxRepairs
           ? { type: "checkpoint_supervisor", reason_code: "autopilot_recovery_budget_exhausted" }
@@ -80,7 +88,22 @@ export function createTuiAutopilotController({
           maxActions,
         });
       }
-      if (action.type === "send_input") actionAttempts += 1;
+      if (action.type === "send_input") {
+        const sideEffectSignature = JSON.stringify({
+          state: classification.state,
+          type: action.type,
+          input: action.input,
+          reason_code: action.reason_code,
+        });
+        if (sideEffectSignature === lastSideEffectSignature) {
+          action = { type: "observe", reason_code: "duplicate_action_suppressed" };
+        } else {
+          lastSideEffectSignature = sideEffectSignature;
+          actionAttempts += 1;
+        }
+      } else if (action.type !== "observe") {
+        lastSideEffectSignature = null;
+      }
       if (action.type === "checkpoint_supervisor") {
         await persist({
           status: "waiting_for_supervisor",

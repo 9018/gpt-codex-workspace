@@ -38,6 +38,13 @@ const FIXED_CONTRACT_FIELDS = Object.freeze(
  * @returns {object} validated delta
  * @throws {Error}
  */
+function normalizeContextDigest(value) {
+  if (typeof value !== "string") return value;
+  const normalized = value.trim();
+  const match = /^sha256:([0-9a-f]+)$/i.exec(normalized);
+  return match ? `sha256:${match[1].toLowerCase()}` : normalized;
+}
+
 export function validateTaskDelta(delta, session) {
   if (!delta || typeof delta !== "object") {
     throw new Error("delta must be an object");
@@ -55,9 +62,12 @@ export function validateTaskDelta(delta, session) {
   if (normalized.goal_id !== session.goal_id) {
     throw new Error("delta goal_id does not match session");
   }
-  if (normalized.base_context_digest !== session.task_context_digest) {
+  const deltaContextDigest = normalizeContextDigest(normalized.base_context_digest);
+  const sessionContextDigest = normalizeContextDigest(session.task_context_digest);
+  if (deltaContextDigest !== sessionContextDigest) {
     throw new Error("delta context digest mismatch");
   }
+  normalized.base_context_digest = deltaContextDigest;
 
   const expectedRevision =
     Number(session.active_delta_revision || 0) + 1;

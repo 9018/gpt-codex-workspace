@@ -564,3 +564,50 @@ test("G2: codex_tui_start_goal returns worktree metadata in response", async () 
   const { removeTaskWorktree } = await import("../src/task-worktree-manager.mjs");
   await removeTaskWorktree(taskId, { workspaceRoot: repo, repoId: "test-repo", canonicalRepoPath: repo });
 });
+
+test("codex_tui_progress overlays terminal task state over stale progress.json", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "tui-terminal-progress-")));
+  const goalId = "goal_terminal_progress";
+  const goalDir = join(root, ".gptwork", "goals", goalId);
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(goalDir, "progress.json"), JSON.stringify({
+    phase: "finalization",
+    status: "running",
+    current_action: "idle",
+    blockers: [],
+    next_expected_event: "pipeline_advance",
+    subagents: [],
+  }));
+  const state = makeState(root, "task_terminal_progress", goalId);
+  state.tasks[0].status = "failed";
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store: makeStore(state),
+    config: { defaultWorkspaceRoot: root, defaultRepoPath: root, codexTuiEnabled: true },
+  });
+  const result = await tools.codex_tui_progress.handler({ goal_id: goalId });
+  assert.equal(result.status, "failed");
+  assert.equal(result.phase, "terminal");
+  assert.equal(result.current_action, "none");
+  assert.equal(result.next_expected_event, null);
+  assert.equal(result.stale_progress_overridden, true);
+});
+
+test("codex_tui_send submits slash commands through the slash-command service", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), "tui-slash-send-")));
+  const state = makeState(root, "task_slash_send", "goal_slash_send");
+  const calls = [];
+  const tools = createCodexTuiToolsGroup({
+    tool: fakeTool,
+    schema: fakeSchema,
+    store: makeStore(state),
+    config: { defaultWorkspaceRoot: root, defaultRepoPath: root, codexTuiEnabled: true },
+    sendCodexTuiSessionInputFn: async (...args) => calls.push(["plain", ...args]),
+    sendCodexTuiSlashCommandFn: async (...args) => { calls.push(["slash", ...args]); return { command_submitted: true }; },
+  });
+  const result = await tools.codex_tui_send.handler({ session_id: "session_1", text: "/goal resume" });
+  assert.equal(result.command_submitted, true);
+  assert.equal(calls[0][0], "slash");
+  assert.equal(calls[0][2], "/goal resume");
+});

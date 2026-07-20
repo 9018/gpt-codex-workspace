@@ -33,3 +33,33 @@ test("autopilot controller produces a bounded supervisor checkpoint on exhausted
   assert.equal(patches.at(-1).status, "waiting_for_supervisor");
   assert.equal(patches.at(-1).checkpoint.reason_code, "autopilot_action_budget_exhausted");
 });
+
+test("autopilot does not spend action budget by resending the same input for an unchanged prompt", async () => {
+  const writes = [];
+  const controller = createTuiAutopilotController({
+    sessionId: "session_duplicate",
+    writeInput: async (input) => writes.push(input),
+  });
+  await controller.ingest("Run npm test in /workspace/repo? (y/n)");
+  const writesAfterFirst = [...writes];
+  const second = await controller.ingest("Run npm test in /workspace/repo? (y/n)");
+  assert.deepEqual(writes, writesAfterFirst);
+  assert.equal(second.action.type, "observe");
+  assert.equal(second.action.reason_code, "duplicate_action_suppressed");
+  assert.equal(controller.snapshot().action_attempts, 1);
+});
+
+test("stream disconnect deterministically resumes the current goal before generic no-progress recovery", async () => {
+  const resumes = [];
+  const patches = [];
+  const controller = createTuiAutopilotController({
+    sessionId: "session_stream_disconnect",
+    resume: async () => resumes.push("/goal resume"),
+    persist: async (patch) => patches.push(patch),
+  });
+  const result = await controller.ingest("stream disconnected before completion: Stream truncated before any output was produced");
+  assert.equal(result.action.type, "resume");
+  assert.equal(result.action.reason_code, "stream_disconnected_goal_resume");
+  assert.deepEqual(resumes, ["/goal resume"]);
+  assert.equal(patches.at(-1).repair_attempts, 1);
+});
