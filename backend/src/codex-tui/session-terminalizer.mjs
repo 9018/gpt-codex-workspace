@@ -68,22 +68,25 @@ export function isContractValidTerminalResult(result) {
  */
 
 export function normalizeTerminalResultCandidate(result) {
-  if (isContractValidTerminalResult(result)) return result;
   if (!result || typeof result !== "object") return null;
-  if (!TERMINAL_RESULT_STATUSES.has(result.status)) return null;
-  if (typeof result.summary !== "string" || !Array.isArray(result.changed_files)) return null;
-  if (typeof result.verification?.passed !== "boolean") return null;
-  const commands = Array.isArray(result.verification.commands)
-    ? result.verification.commands
-    : (Array.isArray(result.verification.steps) ? result.verification.steps : []);
+  const candidate = result.status === "finished"
+    ? { ...result, status: "completed" }
+    : result;
+  if (isContractValidTerminalResult(candidate)) return candidate;
+  if (!TERMINAL_RESULT_STATUSES.has(candidate.status)) return null;
+  if (typeof candidate.summary !== "string" || !Array.isArray(candidate.changed_files)) return null;
+  if (typeof candidate.verification?.passed !== "boolean") return null;
+  const commands = Array.isArray(candidate.verification.commands)
+    ? candidate.verification.commands
+    : (Array.isArray(candidate.verification.steps) ? candidate.verification.steps : []);
   return {
-    ...result,
-    tests: Object.hasOwn(result, "tests") ? result.tests : "none",
-    commit: Object.hasOwn(result, "commit") ? result.commit : "none",
-    remote_head: Object.hasOwn(result, "remote_head") ? result.remote_head : "none",
-    warnings: Array.isArray(result.warnings) ? result.warnings : [],
-    followups: Array.isArray(result.followups) ? result.followups : [],
-    verification: { ...result.verification, commands },
+    ...candidate,
+    tests: Object.hasOwn(candidate, "tests") ? candidate.tests : "none",
+    commit: Object.hasOwn(candidate, "commit") ? candidate.commit : "none",
+    remote_head: Object.hasOwn(candidate, "remote_head") ? candidate.remote_head : "none",
+    warnings: Array.isArray(candidate.warnings) ? candidate.warnings : [],
+    followups: Array.isArray(candidate.followups) ? candidate.followups : [],
+    verification: { ...candidate.verification, commands },
   };
 }
 

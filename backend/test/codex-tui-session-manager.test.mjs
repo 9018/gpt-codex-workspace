@@ -471,13 +471,13 @@ test("PTY exit during spawn cannot leave a terminal session active", async () =>
   );
 });
 
-test("explicit stop and later PTY exit share one terminal event and preserve durable completion", async () => {
+test("explicit stop preserves durable finished evidence as canonical completed", async () => {
   const workspaceRoot = track(await mkdtemp(join(tmpdir(), "codex-tui-stop-root-")));
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-stop-cwd-")));
   const goalDir = join(workspaceRoot, ".gptwork", "goals", "goal_stop");
   await mkdir(goalDir, { recursive: true });
   await writeFile(join(goalDir, "result.json"), JSON.stringify({
-    status: "completed",
+    status: "finished",
     summary: "durable completion",
     changed_files: [],
     tests: "focused test passed",
