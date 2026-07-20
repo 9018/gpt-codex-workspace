@@ -679,20 +679,6 @@ codex_tui_collect: tool({
                 && contractVerification.blocking_passed === true
                 && currentTask.acceptance_contract?.requirements?.requires_integration !== true;
               const canonicalStatus = canComplete ? 'completed' : 'waiting_for_review';
-              await transitionService.transitionTask({
-                task_id: snapshot.task_id,
-                event: TASK_EVENTS.RECONCILIATION_CORRECTION,
-                expected_statuses: [currentTask.status],
-                payload: {
-                  canonical_status: canonicalStatus,
-                  task_result_patch: resultPatch,
-                  audit: { operation: 'tui_collect_evidence_writeback', session_id: snapshot.session_id },
-                },
-                reason: canComplete ? 'TUI collect satisfied acceptance contract' : 'TUI collect produced reviewable evidence',
-                source: 'codex_tui',
-                actor: { type: 'system', id: 'codex_tui_collect' },
-                idempotency_key: `tui_collect:${snapshot.task_id}:${snapshot.session_id}:${snapshot.commit || 'no_commit'}`,
-              });
               if (canComplete) {
                 await persistTuiTerminalState({
                   store: mutableStore,
@@ -700,6 +686,21 @@ codex_tui_collect: tool({
                   taskResult: { ...resultPatch, status: 'completed' },
                   unifiedDecision: { status: 'completed', goal_effect: { status: 'completed' }, queue_effect: { status: 'completed' } },
                   workspaceRoot,
+                });
+              } else {
+                await transitionService.transitionTask({
+                  task_id: snapshot.task_id,
+                  event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+                  expected_statuses: [currentTask.status],
+                  payload: {
+                    canonical_status: canonicalStatus,
+                    task_result_patch: resultPatch,
+                    audit: { operation: 'tui_collect_evidence_writeback', session_id: snapshot.session_id },
+                  },
+                  reason: 'TUI collect produced reviewable evidence',
+                  source: 'codex_tui',
+                  actor: { type: 'system', id: 'codex_tui_collect' },
+                  idempotency_key: `tui_collect:${snapshot.task_id}:${snapshot.session_id}:${snapshot.commit || 'no_commit'}`,
                 });
               }
               await mutableStore.mutate((nextState) => {
@@ -712,7 +713,8 @@ codex_tui_collect: tool({
               });
             }
           } catch (err) {
-            // Non-fatal: snapshot is still returned, task state update failed
+            snapshot.writeback_error = err?.message || String(err);
+            snapshot.writeback_failed = true;
           }
         }
         return snapshot;
