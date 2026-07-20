@@ -276,3 +276,41 @@ test("persistTuiTerminalState converges task goal and queue to unified terminal 
   assert.equal(state.goal_queue[0].status, "completed");
   assert.match(state.tasks[0].logs.at(-1).message, /canonical terminal state/i);
 });
+
+test("terminal writeback releases lock and closes queued downstream agent runs", async () => {
+  const { persistTuiTerminalState } = await import("../src/codex-tui-evidence-writeback.mjs");
+  const { acquireRepoLock, getLockFilePath } = await import("../src/repo-lock.mjs");
+  const { readFile } = await import("node:fs/promises");
+  const workspaceRoot = track(await mkdtemp(join(tmpdir(), "terminal-lock-release-")));
+  const repoPath = join(workspaceRoot, "repo");
+  await mkdir(repoPath, { recursive: true });
+  const task = { id: "task_release", goal_id: "goal_release", status: "running", result: {} };
+  const state = {
+    tasks: [task],
+    goals: [{ id: "goal_release", task_id: task.id, status: "running" }],
+    goal_queue: [],
+    agent_runs: [
+      { id: "builder", task_id: task.id, role: "builder", status: "running", events: [] },
+      { id: "verifier", task_id: task.id, role: "verifier", status: "queued", events: [] },
+      { id: "reviewer", task_id: task.id, role: "reviewer", status: "declared", events: [] },
+    ],
+    advisory_runs: [{ id: "advisor", task_id: task.id, role: "architect", status: "declared" }],
+  };
+  const store = { mutate: async (fn) => fn(state) };
+  const acquired = await acquireRepoLock(workspaceRoot, repoPath, { taskId: task.id });
+  assert.equal(acquired.acquired, true);
+
+  await persistTuiTerminalState({
+    store,
+    task,
+    taskResult: { status: "waiting_for_review", summary: "evidence uncertain" },
+    unifiedDecision: { status: "waiting_for_review" },
+    workspaceRoot,
+  });
+
+  const lock = JSON.parse(await readFile(getLockFilePath(workspaceRoot, repoPath), "utf8"));
+  assert.equal(lock.status, "released");
+  assert.deepEqual(state.agent_runs.map((run) => run.status), ["blocked", "blocked", "blocked"]);
+  assert.equal(state.advisory_runs[0].status, "blocked");
+  assert.ok(state.agent_runs.every((run) => run.status !== "queued"));
+});

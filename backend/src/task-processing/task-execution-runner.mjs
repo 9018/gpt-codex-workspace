@@ -698,6 +698,12 @@ export async function runTaskExecution(store, config, task, context, github, dep
           workspaceRoot: config.defaultWorkspaceRoot,
         });
       } catch { /* state transition must still proceed */ }
+      // A review/failed/completed task is no longer executing. Preserve the
+      // worktree for evidence, but never retain its execution lock.
+      if (repoLockPath || tuiLockAcquired) {
+        await releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id).catch(() => {});
+        repoLockPath = null;
+      }
       // Missing or unprovable TUI evidence is not an execution/verification failure.
       // The evidence cycle has already reconstructed everything available and
       // explicitly forbids retry, follow-up, or repair creation. Preserve that

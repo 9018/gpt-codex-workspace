@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, writeFile, mkdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { runCodexTuiEvidenceCycle } from "../src/codex-tui-evidence-cycle.mjs";
@@ -74,6 +74,8 @@ test("TUI result.json missing uses reconstructed evidence when closure is provab
   assert.equal(out.create_repair_task, false);
   assert.equal(out.create_followup, false);
   assert.deepEqual(out.reconstructed_result, reconstructed);
+  const persisted = JSON.parse(await readFile(join(workspaceRoot, ".gptwork", "goals", "goal_reconstructed", "result.json"), "utf8"));
+  assert.deepEqual(persisted, reconstructed);
   assert.equal(out.finding.severity, "warning");
 });
 

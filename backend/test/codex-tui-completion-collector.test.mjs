@@ -339,3 +339,22 @@ test("collect prefers completed runtime-goals evidence over pending canonical re
   assert.equal(snapshot.result_json.status, "completed");
   assert.equal(snapshot.ready_for_review, true);
 });
+
+test("collector preserves committed changed files using session base commit", async () => {
+  const repo = await makeGitRepo();
+  const base = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  await createSession(repo, { session: { baseCommit: base } });
+  const goalDir = join(repo, ".gptwork", "goals", "goal_1");
+  await mkdir(goalDir, { recursive: true });
+  await writeFile(join(repo, "closure-check.txt"), "ok\n");
+  execFileSync("git", ["add", "closure-check.txt"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "canary"], { cwd: repo, stdio: "ignore" });
+  await writeFile(join(goalDir, "result.md"), "Summary: done\nTests: node --test\n");
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: "session_1", workspaceRoot: repo });
+  const head = execFileSync("git", ["rev-parse", "HEAD"], { cwd: repo, encoding: "utf8" }).trim();
+  assert.equal(snapshot.commit, head);
+  assert.deepEqual(snapshot.changed_files, ["closure-check.txt"]);
+  assert.equal(snapshot.worktree_clean, true);
+  assert.equal(snapshot.reconstructed_result.verification.passed, true);
+});

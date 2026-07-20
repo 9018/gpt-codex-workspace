@@ -1,4 +1,6 @@
 import { existsSync } from "node:fs";
+import { mkdir, rename, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { collectCodexTuiCompletion } from "./codex-tui-completion-collector.mjs";
 
@@ -13,6 +15,13 @@ async function waitForResult({ resultJsonPath, now, sleepFn, maxWaitMs, pollMs }
     await sleepFn(pollMs);
   }
   return existsSync(resultJsonPath);
+}
+
+async function writeJsonAtomic(path, value) {
+  await mkdir(join(path, ".."), { recursive: true });
+  const tmp = `${path}.${randomUUID()}.tmp`;
+  await writeFile(tmp, `${JSON.stringify(value, null, 2)}\n`, "utf8");
+  await rename(tmp, path);
 }
 
 /**
@@ -49,6 +58,9 @@ export async function runCodexTuiEvidenceCycle({
   const closureProvable = collected?.ready_for_review === true;
 
   if (!resultJsonUsable) {
+    if (closureProvable && reconstructed) {
+      await writeJsonAtomic(resultJsonPath, reconstructed);
+    }
     const code = resultJsonObserved
       ? "tui_result_json_invalid_reconstructed"
       : partialResultObserved

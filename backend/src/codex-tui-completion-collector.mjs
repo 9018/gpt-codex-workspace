@@ -199,9 +199,17 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const statusLines = gitLines(cwd, ["status", "--short"]);
   const statusChangedFiles = changedFilesFromStatus(statusLines);
   const diffFiles = gitLines(cwd, ["diff", "--name-only"]);
-  const changedFiles = [...new Set([...statusChangedFiles, ...diffFiles].filter((path) => !isInternalEvidencePath(path)))].sort();
-  const worktreeClean = changedFiles.length === 0;
-  const commit = session.commit || session.metadata?.commit || parsedResultJson.value?.commit || resultEvidence.commit || null;
+  const baseCommit = session.base_commit || session.metadata?.base_commit || null;
+  const headCommit = gitLines(cwd, ["rev-parse", "HEAD"])[0] || null;
+  const committedDiffFiles = baseCommit && headCommit && baseCommit !== headCommit
+    ? gitLines(cwd, ["diff", "--name-only", `${baseCommit}..${headCommit}`])
+    : [];
+  const externalStatusFiles = statusChangedFiles.filter((path) => !isInternalEvidencePath(path));
+  const externalDiffFiles = diffFiles.filter((path) => !isInternalEvidencePath(path));
+  const changedFiles = [...new Set([...externalStatusFiles, ...externalDiffFiles, ...committedDiffFiles.filter((path) => !isInternalEvidencePath(path))])].sort();
+  const worktreeClean = externalStatusFiles.length === 0 && externalDiffFiles.length === 0;
+  const commit = session.commit || session.metadata?.commit || parsedResultJson.value?.commit || resultEvidence.commit
+    || (baseCommit && headCommit && baseCommit !== headCommit ? headCommit : null);
   const tests = session.tests || session.metadata?.tests || parsedResultJson.value?.tests || parsedResultJson.value?.verification?.commands || resultEvidence.tests || null;
 
   const findings = [];
@@ -218,6 +226,25 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     findings.push({ code: "commit_missing", severity: "blocker", message: "Dirty work exists but no durable commit evidence was found." });
   }
 
+  const reconstructedResult = {
+    status: parsedResultJson.value?.status || (resultMdPresent && worktreeClean && (!requiresCommit || commit) ? "completed" : "waiting_for_review"),
+    summary: parsedResultJson.value?.summary || "Reconstructed from durable TUI, Git and result.md evidence.",
+    changed_files: changedFiles,
+    tests,
+    commit: commit || "none",
+    remote_head: parsedResultJson.value?.remote_head || "none",
+    warnings: Array.isArray(parsedResultJson.value?.warnings) ? parsedResultJson.value.warnings : [],
+    followups: Array.isArray(parsedResultJson.value?.followups) ? parsedResultJson.value.followups : [],
+    verification: parsedResultJson.value?.verification || {
+      commands: Array.isArray(tests) ? tests : (tests ? [{ cmd: String(tests), exit_code: 0, passed: true }] : []),
+      passed: Boolean(tests) && worktreeClean,
+    },
+    reconstructed: true,
+    evidence_source: "tui_session_git_result_md",
+    base_commit: baseCommit,
+    head_commit: headCommit,
+  };
+
   return {
     kind: "codex_tui_completion_snapshot",
     session_id: session.id,
@@ -226,10 +253,13 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
     task_context_digest: session.task_context_digest || null,
     task_context_revision: session.task_context_revision || null,
     cwd,
+    base_commit: baseCommit,
+    head_commit: headCommit,
     changed_files: changedFiles,
     tests,
     commit,
     result_json: parsedResultJson.value,
+    reconstructed_result: reconstructedResult,
     result_json_present: resultJsonPresent,
     result_json_valid: resultJsonPresent ? !parsedResultJson.error : false,
     result_json_error: parsedResultJson.error,

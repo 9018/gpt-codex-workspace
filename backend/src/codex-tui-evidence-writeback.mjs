@@ -26,6 +26,7 @@ import { collectCodexTuiCompletion } from "./codex-tui-completion-collector.mjs"
 import { normalizeOperationEvidence } from "./evidence/evidence-normalizer.mjs";
 import { decideTaskFinalization, applyTaskFinalStateDecision } from "./task-finalization/task-final-state-decider.mjs";
 import { normalizeToUnifiedDecision } from "./codex-unified-decision.mjs";
+import { releaseLockForTask } from "./repo-lock.mjs";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,7 +83,7 @@ const PERSISTABLE_TERMINAL_STATUSES = new Set([
   "waiting_for_integration",
 ]);
 
-export async function persistTuiTerminalState({ store, task, taskResult = {}, unifiedDecision = {} } = {}) {
+export async function persistTuiTerminalState({ store, task, taskResult = {}, unifiedDecision = {}, workspaceRoot = null } = {}) {
   if (!store || typeof store.mutate !== "function" || !task?.id) {
     return { persisted: false, reason: "store_or_task_unavailable" };
   }
@@ -124,8 +125,28 @@ export async function persistTuiTerminalState({ store, task, taskResult = {}, un
         item.updated_at = now;
       }
     }
+    const success = status === "completed";
+    for (const run of state.agent_runs || []) {
+      if (run?.task_id !== task.id || !["queued", "declared", "running", "waiting_for_supervisor"].includes(run.status)) continue;
+      run.status = success ? "skipped" : "blocked";
+      run.summary = success
+        ? "Task reached completed before this role required separate execution."
+        : `Task reached ${status}; downstream role did not execute.`;
+      run.events = Array.isArray(run.events) ? run.events : [];
+      run.events.push({ type: run.status, message: run.summary, data: { task_status: status, code: "upstream_terminal_state" }, created_at: now });
+      run.updated_at = now;
+    }
+    for (const run of state.advisory_runs || []) {
+      if (run?.task_id !== task.id || !["queued", "declared", "running"].includes(run.status)) continue;
+      run.status = success ? "skipped" : "blocked";
+      run.summary = `Task reached ${status}; advisory run closed by terminal propagation.`;
+      run.updated_at = now;
+    }
     return state;
   });
+  if (found && workspaceRoot) {
+    await releaseLockForTask(workspaceRoot, task.id).catch(() => {});
+  }
   return { persisted: found, status, reason: found ? "canonical_terminal_state_persisted" : "task_not_found" };
 }
 
@@ -313,6 +334,7 @@ export async function writebackTuiEvidence({
     task,
     taskResult: { ...applied.taskResult, unified_decision: unifiedDecision, finalizer_decision: finalizerDecision },
     unifiedDecision,
+    workspaceRoot,
   });
 
   return {

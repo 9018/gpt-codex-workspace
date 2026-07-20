@@ -27,6 +27,8 @@ const MUTATION_SCOPE_ALIASES = Object.freeze({
   code_tests_docs: "repo",
   docs_and_tests_only: "repo",
   docs_tests_only: "repo",
+  repository: "repo",
+  codebase: "repo",
 });
 
 function normalizeProductContractAliases(explicit = {}) {
@@ -188,6 +190,38 @@ function compileCriteria(criteria = []) {
   });
 }
 
+
+function contractDemandsRepositoryMutation({ explicit = {}, args = {}, blockingRequirements = [] } = {}) {
+  const text = JSON.stringify({
+    title: args.title,
+    description: args.description,
+    user_request: args.user_request,
+    goal_prompt: args.goal_prompt,
+    criteria: explicit.criteria,
+    blocking_requirements: blockingRequirements,
+  }).toLowerCase();
+  const requiresCommit = explicit.requirements?.requires_commit === true || explicit.requires_commit === true;
+  const requiresIntegration = explicit.requirements?.requires_integration === true || explicit.requires_integration === true;
+  const mutationSignal = /新增|添加|创建|修改|删除|写入|提交|commit|changed[_ -]?files|git diff|merge|integration|implement|fix|refactor|source|code|file/.test(text);
+  return requiresCommit || requiresIntegration || mutationSignal;
+}
+
+function normalizeMutationContract(contract, { explicit, args, blockingRequirements }) {
+  if (!contractDemandsRepositoryMutation({ explicit, args, blockingRequirements })) return contract;
+  const nonMutating = new Set(["noop", "diagnostic", "readonly_validation", "already_integrated"]);
+  const repoMutating = new Set(["code_change", "file_write", "docs_only", "config_change", "repair", "integration"]);
+  const wasNonMutating = nonMutating.has(contract.intent?.operation_kind);
+  if (wasNonMutating) contract.intent.operation_kind = "code_change";
+  if (wasNonMutating || repoMutating.has(contract.intent?.operation_kind)) contract.intent.mutation_scope = "repo";
+  if (explicit.requirements?.requires_commit === true || explicit.requires_commit === true || /commit|提交/i.test(JSON.stringify(blockingRequirements))) {
+    contract.requirements.requires_commit = true;
+  }
+  if (explicit.requirements?.requires_integration === true || explicit.requires_integration === true || /integration|merge|集成|合并/i.test(JSON.stringify(blockingRequirements))) {
+    contract.requirements.requires_integration = true;
+  }
+  return contract;
+}
+
 function hasCharacterIndexedKeys(obj) {
   if (!obj || typeof obj !== "object") return false;
   for (const key of Object.keys(obj)) {
@@ -271,6 +305,11 @@ export function buildAcceptanceContract(args = {}) {
   };
 
   contract.intent.operation_kind = operationKind;
+  normalizeMutationContract(contract, {
+    explicit,
+    args,
+    blockingRequirements: hasExplicitBlockingRequirements ? explicit.blocking_requirements : compiledCriteria,
+  });
   if (!explicit.intent?.semantic_confidence) contract.intent.semantic_confidence = inferred.semantic_confidence;
 
   // When explicit intent had character-indexed keys (serialization artifact),

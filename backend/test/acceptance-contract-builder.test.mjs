@@ -497,3 +497,35 @@ test("admin 清空 Codex Session uses cleanup contract without git integration",
   assert.equal(contract.requirements.requires_commit, false);
   assert.equal(contract.requirements.requires_integration, false);
 });
+
+test("file mutation and commit blocking requirements override erroneous noop intent", () => {
+  const contract = buildAcceptanceContract({
+    title: "closure canary",
+    user_request: "新增文件并提交 commit",
+    mode: "full",
+    acceptance_contract: {
+      intent: { operation_kind: "noop", mutation_scope: "none", execution_mode: "full", semantic_confidence: "low" },
+      requirements: { requires_commit: false, requires_integration: false },
+      blocking_requirements: [
+        { id: "file", description: "新增 closure-check.txt 文件", evidence: ["verification"] },
+        { id: "commit", description: "任务分支包含可核验 commit", evidence: ["git"] },
+      ],
+    },
+  });
+  assert.equal(contract.intent.operation_kind, "code_change");
+  assert.equal(contract.intent.mutation_scope, "repo");
+  assert.equal(contract.requirements.requires_commit, true);
+  assert.equal(contract.semantic_validation.valid, true);
+});
+
+test("repository mutation_scope alias normalizes to repo", () => {
+  const contract = buildAcceptanceContract({
+    user_request: "修改源码",
+    acceptance_contract: {
+      intent: { operation_kind: "code_change", mutation_scope: "repository", execution_mode: "full", semantic_confidence: "high" },
+      requirements: { requires_commit: true, requires_integration: false },
+    },
+  });
+  assert.equal(contract.intent.mutation_scope, "repo");
+  assert.equal(contract.semantic_validation.valid, true);
+});
