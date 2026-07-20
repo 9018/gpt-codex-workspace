@@ -10,6 +10,7 @@ import {
   clearAllBoundCodexSessions,
   reconcileCodexSessionBindings,
   pruneBoundNativeSession,
+  cleanupTaskOwnedCodexSessions,
 } from '../src/codex-session/codex-session-lifecycle-manager.mjs';
 
 async function exists(path) {
@@ -230,4 +231,28 @@ test('cleanupTaskOwnedCodexSessions removes unbound descendant rollouts in the t
   assert.equal(await exists(childPath), false);
   assert.equal(await exists(protectedPath), true);
   assert.deepEqual(result.deleted_native_sessions, [childPath]);
+});
+
+test('cleanupTaskOwnedCodexSessions can prune native evidence while preserving terminal control metadata', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'codex-session-preserve-control-'));
+  const workspaceRoot = join(root, 'workspace');
+  const projectRoot = join(root, 'project');
+  const nativeSessionsRoot = join(root, 'native');
+  const controlId = 'control_preserved';
+  const taskId = 'task_preserved';
+  const nativeId = '019f80b2-b54e-7bb3-889f-5261a471079d';
+  await mkdir(join(workspaceRoot, '.gptwork', 'codex-tui-sessions'), { recursive: true });
+  await mkdir(join(projectRoot, '.gptwork', 'codex-sessions'), { recursive: true });
+  await mkdir(join(nativeSessionsRoot, '2026', '07', '21'), { recursive: true });
+  await writeFile(join(workspaceRoot, '.gptwork', 'codex-tui-sessions', `${controlId}.json`), JSON.stringify({ id: controlId, task_id: taskId, native_session_id: nativeId }));
+  await writeFile(join(projectRoot, '.gptwork', 'codex-sessions', `${controlId}.json`), JSON.stringify({ control_session_id: controlId, task_id: taskId, native_session_id: nativeId }));
+  const rollout = join(nativeSessionsRoot, '2026', '07', '21', `rollout-${nativeId}.jsonl`);
+  await writeFile(rollout, '{}\n');
+
+  const result = await cleanupTaskOwnedCodexSessions({ taskId, workspaceRoot, projectRoot, nativeSessionsRoot, preserveControlRecords: true });
+
+  assert.deepEqual(result.deleted_control_sessions, []);
+  assert.equal(await readFile(join(workspaceRoot, '.gptwork', 'codex-tui-sessions', `${controlId}.json`), 'utf8').then(Boolean), true);
+  assert.equal(await readFile(join(projectRoot, '.gptwork', 'codex-sessions', `${controlId}.json`), 'utf8').then(Boolean), true);
+  await assert.rejects(readFile(rollout, 'utf8'), /ENOENT/);
 });

@@ -157,6 +157,7 @@ export async function cleanupTaskOwnedCodexSessions({
   startedAt = null,
   endedAt = new Date().toISOString(),
   stopSessionFn = null,
+  preserveControlRecords = false,
 } = {}) {
   if (!taskId) throw new TypeError('taskId is required');
   if (!workspaceRoot) throw new TypeError('workspaceRoot is required');
@@ -184,10 +185,12 @@ export async function cleanupTaskOwnedCodexSessions({
   const deletedControlSessions = [];
   const deletedNativeSessions = [];
   for (const controlSessionId of ownedControlIds) {
-    const result = await deleteBoundCodexSession({
-      controlSessionId, workspaceRoot, projectRoot, nativeSessionsRoot, stopSessionFn,
-    });
-    if (result.deleted_control_session) deletedControlSessions.push(controlSessionId);
+    const result = preserveControlRecords
+      ? await pruneBoundNativeSession({ controlSessionId, workspaceRoot, projectRoot, nativeSessionsRoot })
+      : await deleteBoundCodexSession({
+          controlSessionId, workspaceRoot, projectRoot, nativeSessionsRoot, stopSessionFn,
+        });
+    if (!preserveControlRecords && result.deleted_control_session) deletedControlSessions.push(controlSessionId);
     deletedNativeSessions.push(...result.deleted_native_sessions);
   }
 

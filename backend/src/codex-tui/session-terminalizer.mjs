@@ -266,6 +266,7 @@ export async function terminalizeCodexTuiSession({ sessionId, store, event = {},
         nativeSessionsRoot: current.metadata?.native_sessions_root || null,
         startedAt: current.started_at || current.created_at || null,
         endedAt: terminalizedAt,
+        preserveControlRecords: true,
       }).catch(() => null);
     } else {
       await pruneBoundNativeSession({
