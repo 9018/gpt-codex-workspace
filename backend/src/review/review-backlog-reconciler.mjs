@@ -110,6 +110,30 @@ const NO_MUTATION_PROFILES = new Set([
 /** Non-mutation / diagnostic-like profiles that can have changed_files_mismatch as non-blocking. */
 const DIAGNOSTIC_NO_MUTATION_PROFILES = NO_MUTATION_PROFILES;
 
+/**
+ * Completion must be proven by evidence independent from task.status.
+ * Using a terminal task projection as its own proof creates a circular
+ * reconciliation path: completed -> evidence reconciled -> completed.
+ */
+function hasIndependentCompletionEvidence(bundle = {}) {
+  const contract = bundle.contract_verification || {};
+  const closure = bundle.closure_decision || bundle.result_summary?.closure_decision || {};
+  const pipelineGate = bundle.pipeline_gate || bundle.result_summary?.pipeline_gate || {};
+  const acceptance = bundle.acceptance || {};
+  const verificationPassed = bundle.verification?.passed === true;
+
+  return Boolean(
+    bundle.integration?.merged === true ||
+    contract.blocking_passed === true ||
+    contract.completion_eligible === true ||
+    closure.auto_complete_allowed === true ||
+    ['auto_completed_clean', 'auto_completed_with_followups'].includes(closure.status) ||
+    pipelineGate.passed === true ||
+    pipelineGate.status === 'passed' ||
+    (verificationPassed && (acceptance.passed === true || acceptance.status === 'accepted'))
+  );
+}
+
 // ---------------------------------------------------------------------------
 // Single-item reconciliation
 // ---------------------------------------------------------------------------
@@ -191,6 +215,7 @@ export function reconcileBundle({ task, bundle, state, store } = {}) {
   );
   const isWaitingForReview = taskStatus === TASK_STATUSES.WAITING_FOR_REVIEW || bundle.status === TASK_STATUSES.WAITING_FOR_REVIEW;
   const isWaitingForRepair = taskStatus === TASK_STATUSES.WAITING_FOR_REPAIR || bundle.status === TASK_STATUSES.WAITING_FOR_REPAIR;
+  const hasIndependentCompletion = hasIndependentCompletionEvidence(bundle);
 
   // ---- Check 1: Stale result_summary.status ----
   // If the task is completed/integrated but the bundle still shows a stale status
@@ -215,12 +240,12 @@ export function reconcileBundle({ task, bundle, state, store } = {}) {
         resolved_by: 'terminal_completion_and_integration',
       });
       evidence.stale_status_reconciled = true;
-    } else if (isCompleted) {
+    } else if (isCompleted && hasIndependentCompletion) {
       findings.push({
         code: RECONCILIATION_TYPES.RECONCILED_STATUS,
-        message: `result_summary.status reconciled from "${resultStatus}" to "${taskStatus}" based on task completion evidence`,
+        message: `result_summary.status reconciled from "${resultStatus}" to "${taskStatus}" based on independent completion evidence`,
         evidence: { task_status: taskStatus },
-        resolved_by: 'terminal_completion',
+        resolved_by: 'independent_completion_evidence',
       });
       evidence.stale_status_reconciled = true;
     }
@@ -272,7 +297,7 @@ export function reconcileBundle({ task, bundle, state, store } = {}) {
   }
 
   // ---- Check 3: Stale waiting_for_review / waiting_for_repair status ----
-  if (isWaitingForReview && isCompleted) {
+  if (isWaitingForReview && isCompleted && hasIndependentCompletion) {
     // Task is completed on the top-level but bundle shows waiting_for_review
     if (stillBlocking.length === 0) {
       findings.push({
@@ -319,23 +344,30 @@ export function reconcileBundle({ task, bundle, state, store } = {}) {
           resolved_by: 'integration_evidence',
           original_code: code,
         });
-      } else if (isCompleted && stillBlocking.length === 0) {
+      } else if (isCompleted && hasIndependentCompletion && stillBlocking.length === 0) {
         findings.push({
           code: RECONCILIATION_TYPES.RECONCILED_BY_COMPLETION,
-          message: 'Missing contract_verification reconciled by terminal completion with no blockers',
-          evidence: { task_status: taskStatus },
-          resolved_by: 'terminal_completion',
+          message: 'Missing contract_verification reconciled by independent completion evidence',
+          evidence: { task_status: taskStatus, independent_completion_evidence: true },
+          resolved_by: 'independent_completion_evidence',
           original_code: code,
         });
-      } else if (!isCompleted) {
-        // Task truly not complete — report as typed recovery reason
-        findings.push({
+      } else {
+        const unresolved = {
           code: RECONCILIATION_TYPES.MISSING_CONTRACT_VERIFICATION,
-          message: 'Contract verification evidence is genuinely missing — not reconciled',
+          message: 'Contract verification evidence is genuinely missing — task status alone is not proof',
           evidence: { task_status: taskStatus, pending_evidence: true },
           resolved_by: null,
           original_code: code,
-        });
+        };
+        findings.push(unresolved);
+        if (!stillBlocking.some((entry) => entry.code === code)) {
+          stillBlocking.push({
+            ...item,
+            severity: item.severity || 'major',
+            reason_unresolved: unresolved.message,
+          });
+        }
       }
     }
   }

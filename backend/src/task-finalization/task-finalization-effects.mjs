@@ -5,6 +5,24 @@ import { applyTaskStateProjection } from "./task-state-projection.mjs";
 export function buildProgressionDecision({ task = {}, goal = null, taskResult = {}, doneAt, config = {} } = {}) {
   const unifiedDecision = taskResult.unified_decision || taskResult.finalizer_decision?.unified_decision;
   if (!unifiedDecision || typeof unifiedDecision !== "object") return null;
+
+  // P0-AFC6: The reconciler (task-closure-reconciler.mjs) may set a minimal
+  // unified_decision via buildReconciledUnifiedDecision() that lacks the
+  // schema_version, effects, and facts fields required by
+  // assertValidUnifiedDecision(). When detected, prefer the finalizer's
+  // proper unified_decision as the base (which has all required fields)
+  // and apply the reconciler's overrides on top.
+  //
+  // This prevents a "circular proof" state inconsistency crash: the reconciler
+  // creates a minimal unified_decision -> buildProgressionDecision validates it ->
+  // assertValidUnifiedDecision throws UnifiedDecisionInvariantError ->
+  // finalization crashes despite successful reconciliation.
+  if (!unifiedDecision.schema_version && taskResult.finalizer_decision?.unified_decision?.schema_version) {
+    const resolved = { ...taskResult.finalizer_decision.unified_decision, ...unifiedDecision };
+    resolved.normalized_at = doneAt ?? resolved.normalized_at ?? new Date().toISOString();
+    return buildProgressionDecision({ task, goal, taskResult: { ...taskResult, unified_decision: resolved }, doneAt, config });
+  }
+
   const revision = task.decision_revision
     ?? taskResult.finalizer_decision?.revision
     ?? doneAt

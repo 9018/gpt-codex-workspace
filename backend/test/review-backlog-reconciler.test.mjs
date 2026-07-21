@@ -676,3 +676,37 @@ test('reconcileBundle: MA4 scenario reproduces known stale state detection', () 
   assert.ok(mismatchReconciled,
     'changed_files_mismatch should be reconciled by integration evidence');
 });
+
+test('reconcileBundle: completed task cannot self-prove completion when independent evidence is missing', () => {
+  const task = {
+    id: 'task_circular_completion',
+    status: 'completed',
+    result: { status: 'failed' },
+  };
+  const bundle = {
+    task_id: task.id,
+    status: 'completed',
+    result_summary: { status: 'failed', summary: 'verification failed' },
+    verification: { passed: false, commands: [] },
+    contract_verification: null,
+    pipeline_gate: null,
+    closure_decision: null,
+    integration: null,
+    blockers: [],
+    missing_evidence: [
+      { code: 'contract_verification_missing', message: 'No contract verification evidence' },
+    ],
+    changed_files: [],
+  };
+
+  const result = reconcileBundle({ task, bundle });
+
+  assert.equal(result.reconciled, false);
+  assert.equal(result.status, RECONCILIATION_TYPES.STILL_BLOCKING);
+  assert.equal(result.evidence?.stale_status_reconciled, undefined);
+  assert.ok(result.still_blocking.some((item) => item.code === 'contract_verification_missing'));
+  assert.equal(
+    result.reconciled_findings.some((item) => item.resolved_by === 'terminal_completion'),
+    false,
+  );
+});

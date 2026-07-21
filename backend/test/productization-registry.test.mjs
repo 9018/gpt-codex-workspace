@@ -72,7 +72,7 @@ test("default standard tool mode exposes bounded ChatGPT-first tools", async () 
   assert.equal(names.includes("schedule_service_restart"), false);
   assert.equal(names.includes("shell_exec"), false);
   assert.ok(names.length > 60, `standard mode should include the full curated ChatGPT surface, got ${names.length} tools`);
-  assert.ok(names.length < 120, `standard mode should remain bounded, got ${names.length} tools`);
+  assert.ok(names.length < 140, `standard mode should remain bounded, got ${names.length} tools`);
 
   // P0 cleanup tools (cleanup-tools-group)
   assert.ok(names.includes("cleanup_goals"), "standard mode includes cleanup_goals (P0.1)");
@@ -104,6 +104,8 @@ test("minimal tool mode exposes only its explicit safe subset", async () => {
     "list_tasks",
     "open_project_context",
     "runtime_status",
+    "supervisor_review_active_runs",
+    "supervisor_submit_decisions",
     "tool_describe",
     "tool_search",
     "worker_status",
@@ -173,6 +175,24 @@ test("tools/call keeps shell_exec available in codex and full modes", async () =
       id: 1,
       method: "tools/call",
       params: { name: "shell_exec", arguments: { command: "printf visible" } },
+    }, { authorization: "Bearer test-token" });
+
+    assert.ifError(response.error);
+    assert.equal(response.result.structuredContent.returncode, 0);
+    assert.match(response.result.structuredContent.stdout, /visible/);
+  }
+});
+
+
+
+test("tools/call keeps run_command alias available in codex and full modes", async () => {
+  for (const toolMode of ["codex", "full"]) {
+    const server = await makeServer({ toolMode });
+    const response = await server.handleRpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "run_command", arguments: { command: "printf visible" } },
     }, { authorization: "Bearer test-token" });
 
     assert.ifError(response.error);

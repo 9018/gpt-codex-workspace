@@ -335,3 +335,141 @@ test("runFinalizationPostStateEffects applies post-state effects and returns rec
     progression_commands: { applied: 2 },
   });
 });
+
+test("buildProgressionDecision handles reconciler's minimal unified_decision without crashing", () => {
+  // P0-AFC6 regression test: The reconciler's buildReconciledUnifiedDecision()
+  // creates a minimal unified_decision that lacks schema_version, effects,
+  // and facts fields. buildProgressionDecision must handle this gracefully
+  // by falling back to the finalizer's proper unified_decision as the base.
+  //
+  // This test simulates the scenario where R1 (or any R1-R5/fix) fires and
+  // sets unified_decision to the reconciler's minimal version.
+
+  const finalizerFullUnified = {
+    schema_version: 2,
+    task_id: "task_reconciler_minimal",
+    status: "completed",
+    reason: "terminal_evidence_satisfied",
+    decision_revision: "rev-1",
+    evidence_revision: "ev-1",
+    blocking_passed: true,
+    safe_to_auto_advance: true,
+    requires_review: false,
+    requires_repair: false,
+    requires_integration: false,
+    requires_restart: false,
+    effects: {
+      task: { status: "completed" },
+      goal: { status: "completed", complete_goal: true, safe_to_auto_advance: true },
+      queue: { status: "completed", unblock_dependents: true, hold_queue: false },
+      integration: { required: false, satisfied: true, terminal: true },
+    },
+    facts: {
+      verification: { passed: true },
+      acceptance: { passed: true },
+      integration: { required: false, satisfied: true, terminal: true },
+    },
+    source: "finalizer",
+    normalized_at: "2026-07-17T10:00:00.000Z",
+  };
+
+  // Simulate the reconciler's buildReconciledUnifiedDecision() output
+  const reconcilerMinimalUnified = {
+    status: "completed",
+    blocking_passed: true,
+    safe_to_auto_advance: true,
+    requires_review: false,
+    requires_repair: false,
+    requires_integration: false,
+    requires_restart: false,
+    source: "reconciler",
+    reconciled: true,
+    normalized_at: "2026-07-17T11:00:00.000Z",
+  };
+
+  // Now simulate what buildProgressionDecision receives after reconciliation:
+  // taskResult.unified_decision is the reconciler's minimal version
+  // taskResult.finalizer_decision.unified_decision is the finalizer's proper version
+  const decision = buildProgressionDecision({
+    task: { id: "task_reconciler_minimal", goal_id: "goal_test" },
+    goal: { id: "goal_test" },
+    doneAt: "2026-07-17T11:00:00.000Z",
+    config: { defaultBranch: "main" },
+    taskResult: {
+      unified_decision: reconcilerMinimalUnified,
+      finalizer_decision: {
+        status: "completed",
+        unified_decision: finalizerFullUnified,
+      },
+      commit: "abc123",
+      integration: { status: "merged" },
+      verification: { revision: "ev-1" },
+    },
+  });
+
+  // Must not throw UnifiedDecisionInvariantError
+  assert.ok(decision, "Should return a progression decision");
+  assert.equal(decision.task_id, "task_reconciler_minimal");
+  assert.equal(decision.status, "completed");
+  assert.equal(decision.schema_version, 2);
+  assert.equal(decision.reconciled, true);
+  assert.equal(decision.source, "reconciler");
+  assert.ok(decision.effects, "Should have effects from finalizer base");
+  assert.ok(decision.facts, "Should have facts from finalizer base");
+  assert.equal(decision.effects.goal.complete_goal, true);
+});
+
+test("buildProgressionDecision handles finalizer unified_decision without reconciler override", () => {
+  // When the reconciler hasn't fired (no unified_decision override),
+  // buildProgressionDecision should work normally with the finalizer's
+  // proper unified_decision.
+
+  const finalizerFullUnified = {
+    schema_version: 2,
+    task_id: "task_normal",
+    status: "completed",
+    reason: "terminal_evidence_satisfied",
+    decision_revision: "rev-1",
+    evidence_revision: "ev-1",
+    blocking_passed: true,
+    safe_to_auto_advance: true,
+    requires_review: false,
+    requires_repair: false,
+    requires_integration: false,
+    requires_restart: false,
+    effects: {
+      task: { status: "completed" },
+      goal: { status: "completed", complete_goal: true, safe_to_auto_advance: true },
+      queue: { status: "completed", unblock_dependents: true, hold_queue: false },
+      integration: { required: false, satisfied: true, terminal: true },
+    },
+    facts: {
+      verification: { passed: true },
+      acceptance: { passed: true },
+      integration: { required: false, satisfied: true, terminal: true },
+    },
+    source: "finalizer",
+    normalized_at: "2026-07-17T10:00:00.000Z",
+  };
+
+  const decision = buildProgressionDecision({
+    task: { id: "task_normal", goal_id: "goal_normal" },
+    goal: { id: "goal_normal" },
+    doneAt: "2026-07-17T12:00:00.000Z",
+    config: { defaultBranch: "main" },
+    taskResult: {
+      unified_decision: finalizerFullUnified,
+      finalizer_decision: {
+        status: "completed",
+        unified_decision: finalizerFullUnified,
+      },
+      commit: "abc123",
+      integration: { status: "merged" },
+    },
+  });
+
+  assert.ok(decision, "Should return a progression decision");
+  assert.equal(decision.task_id, "task_normal");
+  assert.equal(decision.schema_version, 2);
+  assert.equal(decision.source, "finalizer");
+});

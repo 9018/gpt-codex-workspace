@@ -277,6 +277,7 @@ export const TOOL_MODE_ALLOWLISTS = {
     "upload_base64_file",
     "download_file_base64",
     "shell_exec",
+    "run_command",
     "git_remote_status",
     "git_remote_diff",
     "git_remote_changed_files",

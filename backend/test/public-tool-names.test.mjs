@@ -163,6 +163,7 @@ const EXPECTED_PUBLIC_TOOL_NAMES = [
   "run_agent_pipeline",
   "run_ephemeral_tool_batch",
   "run_assigned_codex_tasks",
+  "run_command",
   "runtime_status",
   "schedule_service_restart",
  "search_files",

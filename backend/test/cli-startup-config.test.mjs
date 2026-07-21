@@ -59,3 +59,28 @@ test("resolveCliStartupConfig keeps process.env precedence over runtime.env", as
   assert.equal(resolved.sources.port, "process.env");
   assert.equal(resolved.sources.codexWorker, "process.env");
 });
+
+
+test("resolveCliStartupConfig started from backend loads repository .gptwork/runtime.env", async () => {
+  clearGptWorkVars();
+  const { resolveCliStartupConfig } = await import("../src/cli-startup-config.mjs");
+  const root = await mkdtemp(join(tmpdir(), "gptwork-cli-backend-cwd-"));
+  await mkdir(join(root, "backend"), { recursive: true });
+  await mkdir(join(root, ".gptwork"), { recursive: true });
+  await writeFile(join(root, ".gptwork", "runtime.env"), [
+    "GPTWORK_TOOL_MODE=full",
+    "GPTWORK_RECOVERY_PLANE_ENABLED=true",
+    "",
+  ].join("\n"), "utf8");
+
+  const resolved = resolveCliStartupConfig({
+    cwd: join(root, "backend"),
+    env: {},
+  });
+
+  assert.equal(resolved.config.toolMode, "full");
+  assert.equal(resolved.config.recoveryPlaneEnabled, true);
+  assert.equal(resolved.sources.toolMode, "runtime.env");
+  assert.equal(resolved.sources.recoveryPlaneEnabled, "runtime.env");
+  assert.equal(resolved.envLoadResult.loadedPath, join(root, ".gptwork", "runtime.env"));
+});

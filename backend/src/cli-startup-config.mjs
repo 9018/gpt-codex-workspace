@@ -1,4 +1,5 @@
-import { resolve } from "node:path";
+import { existsSync } from "node:fs";
+import { basename, dirname, resolve } from "node:path";
 import { buildRuntimeConfig } from "./runtime-config.mjs";
 import { loadRuntimeEnv } from "./runtime-env.mjs";
 
@@ -14,8 +15,10 @@ export function resolveCliStartupConfig({ cwd = process.cwd(), env = process.env
   }
 
   try {
-    const workspaceRoot = process.env.GPTWORK_WORKSPACE_ROOT || resolve(cwd, "data/workspaces/default");
-    const runtimeEnvFile = process.env.GPTWORK_RUNTIME_ENV_FILE;
+    const projectRoot = basename(resolve(cwd)) === "backend" ? dirname(resolve(cwd)) : resolve(cwd);
+    const workspaceRoot = process.env.GPTWORK_WORKSPACE_ROOT || resolve(projectRoot, "data/workspaces/default");
+    const defaultRuntimeEnvFile = resolve(projectRoot, ".gptwork", "runtime.env");
+    const runtimeEnvFile = process.env.GPTWORK_RUNTIME_ENV_FILE || (existsSync(defaultRuntimeEnvFile) ? defaultRuntimeEnvFile : undefined);
     const earlyEnvResult = loadRuntimeEnv(workspaceRoot, runtimeEnvFile);
     const runtimeConfig = buildRuntimeConfig(workspaceRoot, runtimeEnvFile, earlyEnvResult.keys);
     return { ...runtimeConfig, earlyEnvResult };

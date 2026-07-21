@@ -17,9 +17,12 @@ import {
 } from "../workspace-service.mjs";
 
 export function createWorkspaceOperationsToolsGroup({ tool, schema, store, config }) {
+  const commandSchema = schema({ command: "string", cwd: "string", timeout: "integer", max_output_bytes: "integer", workspace_id: "string" }, ["command"]);
+  const runWorkspaceCommand = async (args, context) => workspaceShellExec(store, config, args, context);
   return {
     upload_from_url: tool("Download a URL and save it to the workspace.", schema({ url: "string", path: "string", overwrite: "boolean", workspace_id: "string" }, ["url", "path"]), async (args, context) => workspaceUploadFromUrl(store, config, args, context)),
     extract_zip_archive: tool("Extract a ZIP archive into a workspace directory.", schema({ zip_path: "string", target_dir: "string", workspace_id: "string" }, ["zip_path"]), async (args, context) => workspaceShellZip(store, config, "extract", args, context)),
-    shell_exec: tool("在工作区执行终端命令，用于检查服务状态和运行配置脚本。", schema({ command: "string", cwd: "string", timeout: "integer", max_output_bytes: "integer", workspace_id: "string" }, ["command"]), async (args, context) => workspaceShellExec(store, config, args, context)),
+    shell_exec: tool("在工作区执行终端命令，用于检查服务状态和运行配置脚本。", commandSchema, runWorkspaceCommand),
+    run_command: tool("Run a terminal command in the workspace.", commandSchema, runWorkspaceCommand),
   };
 }

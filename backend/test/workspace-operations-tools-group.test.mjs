@@ -16,6 +16,7 @@ const fakeConfig = { defaultWorkspaceRoot: "/tmp/test-workspace" };
 
 const expectedToolNames = [
   "extract_zip_archive",
+  "run_command",
   "shell_exec",
   "upload_from_url",
 ];
@@ -53,13 +54,14 @@ test("workspace operations tool group has correct input schemas", () => {
   assert.equal(tools.extract_zip_archive.inputSchema.properties.target_dir, "string");
   assert.equal(tools.extract_zip_archive.inputSchema.properties.workspace_id, "string");
 
-  // shell_exec: command (required), cwd (optional), timeout (integer), max_output_bytes (integer), workspace_id (optional)
-  assert.deepEqual(tools.shell_exec.inputSchema.required, ["command"]);
-  assert.equal(tools.shell_exec.inputSchema.properties.command, "string");
-  assert.equal(tools.shell_exec.inputSchema.properties.cwd, "string");
-  assert.equal(tools.shell_exec.inputSchema.properties.timeout, "integer");
-  assert.equal(tools.shell_exec.inputSchema.properties.max_output_bytes, "integer");
-  assert.equal(tools.shell_exec.inputSchema.properties.workspace_id, "string");
+  for (const commandTool of ["shell_exec", "run_command"]) {
+    assert.deepEqual(tools[commandTool].inputSchema.required, ["command"]);
+    assert.equal(tools[commandTool].inputSchema.properties.command, "string");
+    assert.equal(tools[commandTool].inputSchema.properties.cwd, "string");
+    assert.equal(tools[commandTool].inputSchema.properties.timeout, "integer");
+    assert.equal(tools[commandTool].inputSchema.properties.max_output_bytes, "integer");
+    assert.equal(tools[commandTool].inputSchema.properties.workspace_id, "string");
+  }
 });
 
 test("workspace operations tool group has descriptions for all tools", () => {
@@ -100,4 +102,5 @@ test("workspace operations tool descriptions match original inline values", () =
   assert.equal(tools.upload_from_url.description, "Download a URL and save it to the workspace.");
   assert.equal(tools.extract_zip_archive.description, "Extract a ZIP archive into a workspace directory.");
   assert.equal(tools.shell_exec.description, "在工作区执行终端命令，用于检查服务状态和运行配置脚本。");
+  assert.equal(tools.run_command.description, "Run a terminal command in the workspace.");
 });
