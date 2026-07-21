@@ -212,6 +212,26 @@ function isRecoverySafeTerminalTaskStatus(status) {
 // Allowlisted recovery commands
 // ---------------------------------------------------------------------------
 
+function resolveRecoveryRepoPath({ config, repoDir }) {
+  const candidates = [
+    config.defaultRepoPath,
+    repoDir,
+    config.defaultWorkspaceRoot,
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    const resolved = resolve(candidate);
+    if (existsSync(join(resolved, ".git"))) return resolved;
+  }
+
+  for (const candidate of candidates) {
+    const resolved = resolve(candidate);
+    if (existsSync(resolved)) return resolved;
+  }
+
+  return resolve(repoDir || config.defaultRepoPath || config.defaultWorkspaceRoot || process.cwd());
+}
+
 const ALLOWLISTED_COMMANDS = {
   repo_status: { cmd: (rp) => `cd ${rp} && git remote -v && git branch && echo "---" && git log --oneline -5`, desc: "Git remote and branch status" },
   git_diff: { cmd: (rp) => `cd ${rp} && git diff --stat && echo "---" && git diff --no-color`, desc: "Git diff with stats" },
@@ -1248,7 +1268,7 @@ export function createRecoveryToolsGroup({
     handler: async ({ command, custom_command, args, timeout_ms }) => {
       const start = Date.now();
       const tOut = Math.min(Number(timeout_ms) || 30000, 120000);
-      const repoPath = config.defaultRepoPath || config.defaultWorkspaceRoot;
+      const repoPath = resolveRecoveryRepoPath({ config, repoDir });
       let cmdStr, cmdDesc;
       const isUnrestricted = config.recoveryUnrestrictedLocalCommandEnabled;
 

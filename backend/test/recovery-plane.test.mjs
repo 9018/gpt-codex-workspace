@@ -382,6 +382,22 @@ test("14. recovery_command_runner returns error for unknown command", async () =
   }
 });
 
+test("14a. recovery_command_runner falls back to the running repo when configured repo path is stale", async () => {
+  process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
+  try {
+    const staleRepoPath = join(tmpdir(), "gptwork-missing-repo-" + Date.now());
+    const server = await makeServer({ toolMode: "full", defaultRepoPath: staleRepoPath });
+    const response = await callTool(server, "recovery_command_runner", { command: "repo_status" });
+
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const result = response.result.structuredContent;
+    assert.equal(result.ok, true, result.stderr || result.stdout || result.error);
+    assert.match(result.stdout, /origin|main|master|HEAD/);
+  } finally {
+    delete process.env.GPTWORK_RECOVERY_PLANE_ENABLED;
+  }
+});
+
 test("14b. recovery_command_runner runtime_status uses bounded /health probe", async () => {
   process.env.GPTWORK_RECOVERY_PLANE_ENABLED = "true";
   const sockets = new Set();
