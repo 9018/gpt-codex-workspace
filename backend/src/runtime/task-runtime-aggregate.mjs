@@ -182,7 +182,7 @@ export async function buildTaskRuntimeAggregate(options = {}) {
   // --- Session ---
   const sessionInfo = {
     session_id: session?.id || null,
-    exists: Boolean(session && (session.status === "running" || session.status === "created")),
+    exists: Boolean(session && ["running", "created", "waiting_for_supervisor", "waiting_for_supervisor_direct", "chatgpt_direct"].includes(session.status)),
     status: session?.status || null,
     last_output_at: session?.last_output_at || session?.started_at || null,
     last_meaningful_progress_at: session?.last_meaningful_progress_at || session?.started_at || null,
@@ -291,6 +291,13 @@ function recommendAction({
 }) {
   // Terminal states: no action
   if (["completed", "failed", "cancelled"].includes(state)) return RECOMMENDED_ACTION.CONTINUE;
+
+  // Supervisor checkpoints are durable control states. Preserve the native
+  // Codex session and ask ChatGPT to take over; never destructively stop,
+  // clear the Goal, or quit merely because automatic recovery was exhausted.
+  if (["waiting_for_supervisor", "waiting_for_supervisor_direct", "chatgpt_direct"].includes(sessionInfo.status)) {
+    return RECOMMENDED_ACTION.ASK;
+  }
 
   // Orphaned/inconsistent running tasks: stop and retry
   if (health === HEALTH.ORPHANED || health === HEALTH.INCONSISTENT) {

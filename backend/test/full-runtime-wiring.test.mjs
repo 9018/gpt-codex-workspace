@@ -56,6 +56,34 @@ describe('full runtime wiring', () => {
     assert.equal(store.state.task_transition_events[0].next_status, 'completed');
   });
 
+
+  it('preserves native Codex session at supervisor checkpoint instead of stop_retry', async () => {
+    const task = {
+      id: 'task_supervisor', goal_id: 'goal_supervisor', status: 'running',
+      acceptance_contract: { mode: 'full', retry_policy: { no_progress_timeout_ms: 1, wake_grace_ms: 0 } },
+    };
+    const store = makeStore({ tasks: [task], goals: [], activities: [] });
+    let stopped = false;
+    let retried = false;
+    const { reconcileTaskRuntime } = await import('../src/runtime/task-runtime-reconciler.mjs');
+    const result = await reconcileTaskRuntime({
+      store, taskId: task.id,
+      context: {
+        session: {
+          id: 'native_control', status: 'waiting_for_supervisor', pty_pid: process.pid,
+          started_at: '2020-01-01T00:00:00Z', last_meaningful_progress_at: '2020-01-01T00:00:00Z',
+        },
+        lock: { task_id: task.id, status: 'acquired' },
+      },
+      sessionProvider: { stop: async () => { stopped = true; } },
+      retryTask: async () => { retried = true; },
+    });
+    assert.equal(result.action, 'ask');
+    assert.equal(stopped, false);
+    assert.equal(retried, false);
+    assert.equal(store.state.tasks[0].status, 'waiting_for_review');
+  });
+
   it('reconciler creates retry on stop_retry', async () => {
     const task = {
       id: 'task_retry', goal_id: 'goal_retry', status: 'running', attempt: 1,
