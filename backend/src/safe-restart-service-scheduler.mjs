@@ -18,15 +18,21 @@ export async function scheduleServiceRestart(options = {}) {
     store = null,
     dryRun = false,
     restartScheduler = scheduleDetachedRestart,
-    restartConfig = null
+    restartConfig = null,
+    skipWorkspaceRootValidation = false,
+    workspaceRootValidationWarning = null,
+    runtimeEnvPath = null
   } = options;
 
   if (!workspaceRoot) throw new Error("workspaceRoot is required");
   if (!taskId) throw new Error("taskId is required");
 
-  // P0: Validate workspaceRoot is not a repo-local path
+  // P0: Validate workspaceRoot is not a repo-local path. Tool entrypoints may
+  // intentionally bypass this when they have reparsed runtime.env and need the
+  // safe-restart path to survive stale in-process workspaceRoot caches.
   const _wsRootValidation = validateWorkspaceRoot(workspaceRoot);
-  if (!_wsRootValidation.valid) {
+  const validationWarning = !_wsRootValidation.valid ? _wsRootValidation.reason : workspaceRootValidationWarning;
+  if (!_wsRootValidation.valid && !skipWorkspaceRootValidation) {
     throw new Error(_wsRootValidation.reason);
   }
 
@@ -226,7 +232,10 @@ export async function scheduleServiceRestart(options = {}) {
     duration_ms: duration,
     warning: !restart.scheduled
       ? (restart.error || "Failed to schedule detached restart")
-      : undefined
+      : validationWarning || undefined,
+    restart_cwd: restartConfig ? restartConfig.cwd : undefined,
+    runtime_env_path: runtimeEnvPath || undefined,
+    workspace_root_validation_warning: validationWarning || undefined
   };
   // Add diagnostic for result.json commit rejection (P2.0b.5)
   if (resultJsonCommitRejected) {
