@@ -117,13 +117,13 @@ test('determineClosurePath: repairable failures → REPAIR', () => {
   assert.equal(result.skipRepair, false);
 });
 
-test('determineClosurePath: missing_result_json → REPAIR', () => {
+test('determineClosurePath: missing_result_json → REVIEW without repair', () => {
   const result = determineClosurePath({
     failure_class: 'missing_result_json',
     summary: 'result.json missing',
   });
-  assert.equal(result.path, CLOSURE_PATHS.REPAIR);
-  assert.equal(result.skipRepair, false);
+  assert.equal(result.path, CLOSURE_PATHS.REVIEW);
+  assert.equal(result.skipRepair, true);
 });
 
 test('determineClosurePath: code change success → INTEGRATE', () => {
@@ -502,12 +502,12 @@ test('auto-closure: full scenario matrix coverage', () => {
       requiresRetry: false,
     },
     {
-      name: 'missing result.json (repairable)',
+      name: 'missing result.json requires evidence review without repair',
       taskResult: { failure_class: 'missing_result_json', summary: 'no result' },
       task: { status: 'failed', notifications: [] },
-      expectedPath: 'repair',
-      requiresReview: false,
-      requiresRepair: true,
+      expectedPath: 'review',
+      requiresReview: true,
+      requiresRepair: false,
       requiresRetry: false,
     },
     {

@@ -346,7 +346,7 @@ test("codex_tui_goal ready evidence enters acceptance integration finalizer path
   assert.equal(finalized.integration.status, "completed");
 });
 
-test("codex_tui_goal missing result.json enters automatic retry with actionable evidence", async () => {
+test("codex_tui_goal missing result.json enters human review without retry or repair", async () => {
   const root = track(await mkdtemp(join(tmpdir(), "codex-tui-route-missing-")));
   const store = makeStore(root, { metadata: { codex_execution_provider: "codex_tui_goal" } });
 

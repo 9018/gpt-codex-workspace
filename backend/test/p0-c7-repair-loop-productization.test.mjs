@@ -181,12 +181,13 @@ test("P0-C7 SCENARIO 2: Result contract invalid repair", async (t) => {
     assert.equal(result.reviewState, REVIEW_STATES.WAITING_FOR_RESULT_CONTRACT_REPAIR);
   });
 
-  await t.test("missing_result_json is still classified correctly (backward compat)", () => {
+  await t.test("missing_result_json is non-repairable and requires evidence review", () => {
     const failure = classifyTaskFailure({
       verification: { findings: [{ code: "result_json_missing", message: "No task result data" }] },
     });
     assert.equal(failure.failure_class, "missing_result_json");
-    assert.equal(failure.repairable, true);
+    assert.equal(failure.repairable, false);
+    assert.notEqual(failure.repair_strategy, "repair_result_contract");
   });
 
   await t.test("createRepairGoalFromFindings includes tracking fields for contract repair", () => {

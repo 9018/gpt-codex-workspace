@@ -161,21 +161,6 @@ test("shouldReuseWorktreeForRepair: returns false when no worktree_path", async 
 
 console.log("repair-loop tests loaded");
 
-test("buildRepairPrompt: result JSON failures are finalizer-only and avoid business code rewrites", () => {
-  const prompt = buildRepairPrompt({
-    task: { id: "task_json", title: "Implement feature", result: { summary: "Code finished" } },
-    goal: { id: "goal_json", goal_prompt: "Implement the feature" },
-    failure: { failure_class: "missing_result_json", reason: "result.json missing", repair_strategy: "repair_result_contract" },
-    verification: { findings: [{ severity: "blocker", code: "result_json_missing", message: "No result.json" }] },
-    logs: "worker could not find result.json",
-  });
-
-  assert.match(prompt, /failure_class: missing_result_json/);
-  assert.match(prompt, /repair finalizer\/result-json output only/i);
-  assert.match(prompt, /Do not rewrite unrelated business code/i);
-  assert.doesNotMatch(prompt, /Refactor the implementation/i);
-});
-
 test("buildRepairPrompt: command failures include command and log context", () => {
   const prompt = buildRepairPrompt({
     task: { id: "task_checks", title: "Fix checks", result: { summary: "Initial implementation" } },

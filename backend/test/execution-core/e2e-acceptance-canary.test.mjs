@@ -161,9 +161,9 @@ test("[Canary 6] question has zero side effects", () => {
 });
 
 // =========================================================================
-// Canary 7: 删除 result.json → 只触发 Evidence Repair
+// Canary 7: 删除 result.json → 只触发现有证据重建
 // =========================================================================
-test("[Canary 7] missing result.json triggers evidence repair", () => {
+test("[Canary 7] missing result.json triggers evidence reconstruction only", () => {
   // Missing all evidence
   const missing = findMissingEvidence({
     run_id: null,
@@ -181,7 +181,9 @@ test("[Canary 7] missing result.json triggers evidence repair", () => {
 
   // Recovery classifies it as evidence repair
   const recovery = classifyFailure({ code: "result_json_missing" });
-  assert.equal(recovery.automatic_action, "recollect_evidence", "should recollect evidence only");
+  assert.equal(recovery.automatic_action, "recollect_evidence", "should reconstruct evidence only");
+  assert.notEqual(recovery.automatic_action, "retry_original_task");
+  assert.notEqual(recovery.automatic_action, "create_repair_task");
   assert.equal(recovery.retry_scope, "evidence_only", "should not retry the full run");
 });
 

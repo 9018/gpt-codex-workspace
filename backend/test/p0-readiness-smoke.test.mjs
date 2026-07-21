@@ -57,7 +57,7 @@ test("P0-4: buildEvidence works", async (t) => {
   assert.ok(Array.isArray(evidence.changed_files));
 });
 
-test.skip("P0-4: runAcceptanceAgent returns reviewerDecision", async (t) => {
+test("P0-4: runAcceptanceAgent returns reviewerDecision", async (t) => {
   const mod = await import("../src/acceptance-agent.mjs");
   const result = await mod.runAcceptanceAgent({
     task: { id: "t1" },

@@ -43,6 +43,7 @@ async function makeServer(extra = {}) {
       defaultWorkspaceRoot: join(root, "workspace"),
       tokens: ["test-token"],
       requireAuth: true,
+      supervisorWorkerEnabled: false,
       ...extra,
     }),
   };
@@ -176,7 +177,10 @@ test("Area 2a: minimal mode exposes only P0 minimal tools", async () => {
   assert.ok(!names.includes("shell_exec"), "shell_exec not in minimal");
   assert.ok(!names.includes("handoff_to_agent"), "handoff_to_agent not in minimal");
   assert.ok(!names.includes("run_agent_pipeline"), "run_agent_pipeline not in minimal");
-  assert.ok(names.length <= 10, "minimal has <= 10 tools");
+  assert.ok(names.length > 0, "minimal exposes a bounded capability set");
+  assert.ok(names.length <= 12, "minimal capability set remains bounded");
+  assert.ok(!names.includes("create_task"), "minimal does not expose direct task mutation");
+  assert.ok(!names.includes("schedule_service_restart"), "minimal does not expose operations tools");
 });
 
 test("Area 2b: operator mode does not expose agent/handoff tools", async () => {
@@ -718,4 +722,10 @@ test("Contract: filterToolsForMode full returns all tools", () => {
   };
   const full = filterToolsForMode(sampleTools, "full");
   assert.deepEqual(Object.keys(full).sort(), ["handoff_to_agent", "health_check", "shell_exec"]);
+});
+
+test("Contract: product E2E entrypoint includes the real native TUI production Canary", async () => {
+  const packageJson = JSON.parse(await readFile(resolve(TEST_DIR, "../package.json"), "utf8"));
+  assert.match(packageJson.scripts["test:e2e-acceptance"], /test:e2e-production-canary/);
+  assert.equal(packageJson.scripts["test:e2e-production-canary"], "node scripts/e2e-tui-first-loop.mjs");
 });

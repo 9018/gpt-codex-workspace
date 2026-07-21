@@ -42,11 +42,6 @@ test("isIntegrationLocked: returns false for unknown repo/branch", async () => {
   assert.equal(result, false);
 });
 
-test("releaseIntegrationLock: does not throw for unknown repo/branch", async () => {
-  await releaseIntegrationLock("github.com/unknown/repo", "main");
-  // Should not throw
-  assert.ok(true);
-});
 
 test("releaseIntegrationLock: called on unknown key is a no-op", async () => {
   // Verify the function is callable and doesn't crash
@@ -115,25 +110,6 @@ test("runIntegrationQueue open_pr returns push_failed before attempting PR when 
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
-});
-
-// ===========================================================================
-// Test: TODO about Map-based in-memory lock
-// ===========================================================================
-
-test("integration-queue: memory lock note and TODO", async () => {
-  // This test documents that INTEGRATION_LOCKS is a Map-based in-memory lock.
-  // For production multi-process use, it should be replaced with persistent
-  // locks (e.g., repo-lock-lifecycle filesystem locks).
-  //
-  // FIXED(P0): INTEGRATION_LOCKS now uses file-based locks when locksBasePath is provided.
-  // locks using repo-lock-lifecycle's acquireRepoLock/releaseRepoLock pattern.
-  // This ensures cross-process serial integration and survives process restarts.
-  //
-  // Current limitation: Map-based locks are per-process only. A process restart
-  // loses all integration locks, which can result in concurrent integrations
-  // on the same repo+branch.
-  assert.ok(true, "TODO documented: INTEGRATION_LOCKS is Map-based (in-memory only)");
 });
 
 

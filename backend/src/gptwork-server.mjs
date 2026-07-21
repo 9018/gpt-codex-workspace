@@ -134,8 +134,8 @@ export async function createGptWorkServer(options = {}) {
     retentionArchiveBeforeDelete: rcc.retentionArchiveBeforeDelete,
 
     // Supervisor review worker
-    supervisorWorkerEnabled: rcc.supervisorWorkerEnabled,
-    supervisorWorkerIntervalMs: rcc.supervisorWorkerIntervalMs,
+    supervisorWorkerEnabled: options.supervisorWorkerEnabled ?? rcc.supervisorWorkerEnabled,
+    supervisorWorkerIntervalMs: options.supervisorWorkerIntervalMs ?? rcc.supervisorWorkerIntervalMs,
 
     _recoveryAllowedRootsArr: rcc._recoveryAllowedRootsArr,
 

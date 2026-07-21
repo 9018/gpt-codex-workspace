@@ -194,7 +194,7 @@ test("import_task_handoffs: dry_run=true + source=github has no side effects", a
   assert.equal(result.total_imported, 0);
 });
 
-test.skip("import_task_handoffs: dry_run=true + source=inbox has no side effects", async () => {
+test("import_task_handoffs: dry_run=true + source=inbox has no side effects", async () => {
   const tools = createGroup(true);
   const result = await tools.import_task_handoffs.handler({ source: "inbox", dry_run: true, apply: false });
   assert.equal(result.error, undefined);

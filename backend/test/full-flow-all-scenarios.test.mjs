@@ -117,8 +117,8 @@ test("failure-classifier: test_failed IS repairable", () => {
   assert.equal(failureClassRequiresRepair("test_failed"), true);
 });
 
-test("failure-classifier: missing_result_json IS repairable", () => {
-  assert.equal(failureClassRequiresRepair("missing_result_json"), true);
+test("failure-classifier: missing_result_json is NOT repairable", () => {
+  assert.equal(failureClassRequiresRepair("missing_result_json"), false);
 });
 
 test("failure-classifier: terminal-non-repairable includes all network classes", () => {
