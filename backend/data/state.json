@@ -18,8 +18,8 @@
       "name": "Default Project",
       "description": "Default GPTWork project",
       "default_workspace_id": "hosted-default",
-      "created_at": "2026-06-15T02:20:17.321Z",
-      "updated_at": "2026-06-15T02:20:17.321Z"
+      "created_at": "2026-07-22T03:48:37.000Z",
+      "updated_at": "2026-07-22T03:48:37.000Z"
     }
   ],
   "workspaces": [
@@ -28,13 +28,19 @@
       "project_id": "default",
       "name": "Hosted Default",
       "type": "hosted",
-      "root": "./data/workspaces/default",
+      "root": "/home/a9017/mcp/workspace/gpt-codex-workspace/backend/data/workspaces/default",
       "default": true,
-      "created_at": "2026-06-15T02:20:17.321Z",
-      "updated_at": "2026-06-15T02:20:17.321Z"
+      "created_at": "2026-07-22T03:48:37.000Z",
+      "updated_at": "2026-07-22T03:48:37.000Z"
     }
   ],
+  "workstreams": [],
+  "context_links": [],
   "goals": [],
+  "agent_runs": [],
+  "progression_commands": {},
+  "progression_command_idempotency": {},
+  "goal_queue": [],
   "conversations": [],
   "memories": [],
   "tasks": [],
