@@ -260,12 +260,32 @@ export function canDeterministicallyConverge(task, indexes) {
   // --- 6. Provider-empty shape with no failure evidence ---
   // Guard: do not converge pending/review/repair tasks based on null result alone.
   // Those statuses mean the system has explicitly placed the task in a wait state.
+  // Also never auto-complete active TUI sessions: empty result just means the
+  // interactive session has not produced durable artifacts yet.
   const pendingNonConvergeStatuses = new Set([
+    TASK_STATUSES.ASSIGNED,
+    TASK_STATUSES.QUEUED,
+    TASK_STATUSES.RUNNING,
+    TASK_STATUSES.STARTING,
+    TASK_STATUSES.COLLECTING,
+    TASK_STATUSES.ACCEPTING,
+    TASK_STATUSES.WAITING_FOR_LOCK,
     TASK_STATUSES.WAITING_FOR_REVIEW,
     TASK_STATUSES.WAITING_FOR_REPAIR,
     TASK_STATUSES.WAITING_FOR_INTEGRATION,
+    TASK_STATUSES.WAITING_FOR_SUPERVISOR,
     ...TYPED_REVIEW_STATES,
   ]);
+  const isActiveTui = (
+    task?.metadata?.codex_execution_provider === 'codex_tui_goal'
+    || task?.metadata?.tui_session_id
+    || task?.result?.provider === 'codex_tui_goal'
+    || task?.result?.codex_execution_provider === 'codex_tui_goal'
+    || task?.metadata?.tui_loop_canary === true
+  );
+  if (isActiveTui && (hasNullResult || PROVIDER_EMPTY_SHAPES.has(resultShape))) {
+    return { canConverge: false, reason: 'active TUI session without durable completion evidence', convergenceAction: 'none' };
+  }
   if (!pendingNonConvergeStatuses.has(status) && hasNullResult) {
     return { canConverge: true, reason: 'provider-empty: null result — no provider output', convergenceAction: 'complete_task' };
   }

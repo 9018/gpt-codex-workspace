@@ -522,3 +522,26 @@ test('manifest entries include evidence from task result', async () => {
   assert.match(entry.evidence, /commit=/, 'evidence includes commit');
   assert.match(entry.evidence, /changed_files=/, 'evidence includes changed_files');
 });
+
+
+test('canDeterministicallyConverge: active TUI empty result must not auto-complete', () => {
+  const task = {
+    id: 'task_tui_active',
+    status: 'running',
+    metadata: { codex_execution_provider: 'codex_tui_goal', tui_loop_canary: true },
+    result: null,
+  };
+  const result = canDeterministicallyConverge(task, emptyIndexes());
+  assert.equal(result.canConverge, false);
+  assert.match(result.reason, /active TUI session/i);
+});
+
+test('canDeterministicallyConverge: assigned TUI null result must not auto-complete', () => {
+  const task = {
+    id: 'task_tui_assigned',
+    status: 'assigned',
+    metadata: { codex_execution_provider: 'codex_tui_goal' },
+  };
+  const result = canDeterministicallyConverge(task, emptyIndexes());
+  assert.equal(result.canConverge, false);
+});
