@@ -815,8 +815,12 @@ export async function runTaskExecution(store, config, task, context, github, dep
     });
 
     if (!collected?.evidence_ready) {
-      // Session still active with partial progress: keep task running and preserve ownership.
-      if (collected?.continue_waiting === true || collected?.status === "running") {
+      // Live TUI sessions must stay open for GPT mid-course corrections and long canaries.
+      // Only park/stop when the session itself is terminal or explicitly timed out.
+      const sessionStillLive = collected?.continue_waiting === true
+        || collected?.status === "running"
+        || ["running", "created"].includes(String(collected?.session_status || ""));
+      if (sessionStillLive) {
         await updateTaskFn(store, task.id, (item) => {
           item.status = "running";
           item.metadata = {
@@ -827,7 +831,7 @@ export async function runTaskExecution(store, config, task, context, github, dep
           };
           item.logs.push({
             time: new Date().toISOString(),
-            message: `[worker] codex_tui_goal still writing durable evidence (${collected?.reason || "partial_active"})`,
+            message: `[worker] codex_tui_goal still writing durable evidence (${collected?.reason || "session_active"})`,
           });
         });
         return {
@@ -837,7 +841,7 @@ export async function runTaskExecution(store, config, task, context, github, dep
           progressed: true,
           skipped: false,
           session_id: session.id,
-          reason: collected?.reason || "tui_result_partial_session_active",
+          reason: collected?.reason || "tui_result_missing_session_active",
           collect_result: collected || null,
         };
       }

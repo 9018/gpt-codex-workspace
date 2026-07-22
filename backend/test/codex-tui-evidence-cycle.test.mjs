@@ -187,3 +187,33 @@ test("TUI partial result after session finished parks human review", async () =>
   assert.equal(out.reason, "tui_result_partial_only_reconstructed");
   assert.equal(out.requires_human_review, true);
 });
+
+
+test("TUI missing result while session active continues waiting even without partial", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-active-"));
+  const out = await runCodexTuiEvidenceCycle({
+    task: { id: "task_active" },
+    goal: { id: "goal_active" },
+    sessionId: "session_active",
+    workspaceRoot,
+    maxWaitMs: 1,
+    pollMs: 1,
+    sleepFn: async () => {},
+    getSessionStatusFn: async () => ({ status: "running" }),
+    collectFn: async () => ({
+      result_json: null,
+      result_json_valid: false,
+      ready_for_review: false,
+      changed_files: [],
+      tests: null,
+      commit: null,
+      worktree_clean: true,
+    }),
+  });
+  assert.equal(out.evidence_ready, false);
+  assert.equal(out.continue_waiting, true);
+  assert.equal(out.status, "running");
+  assert.equal(out.reason, "tui_result_missing_session_active");
+  assert.equal(out.requires_human_review, false);
+  assert.equal(out.create_repair_task, false);
+});

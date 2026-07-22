@@ -177,17 +177,23 @@ export async function runCodexTuiEvidenceCycle({
       latestSessionStatus = status?.status || latestSessionStatus;
     } catch {}
   }
+  // Known live statuses keep the session open even without partial/result yet.
+  // Unknown status still fail-closed after wait (no status probe / vanished session).
   const sessionActive = latestSessionStatus
     ? !TERMINAL_SESSION_STATUSES.has(latestSessionStatus)
     : false;
 
   if (!resultJsonUsable) {
-    // Active session + only partial progress => keep observing, do not park review yet.
-    if (!closureProvable && partialResultObserved && sessionActive) {
+    // Live session with incomplete evidence => keep observing.
+    // Do not require partial.json; argv-prompt TUI may work for minutes before writing it.
+    if (!closureProvable && sessionActive) {
+      const reason = partialResultObserved
+        ? "tui_result_partial_session_active"
+        : "tui_result_missing_session_active";
       return {
         evidence_ready: false,
         continue_waiting: true,
-        reason: "tui_result_partial_session_active",
+        reason,
         status: "running",
         requires_human_review: false,
         retry_original_task: false,
@@ -198,13 +204,15 @@ export async function runCodexTuiEvidenceCycle({
         goal_id: goal.id,
         task_id: task?.id || null,
         expected_result_json: resultJsonPath,
-        observed_partial_result_json: partialResultJsonPath,
+        observed_partial_result_json: partialResultObserved ? partialResultJsonPath : null,
         expected_result_md: join(goalDir, "result.md"),
         session_status: latestSessionStatus,
         finding: {
           severity: "info",
-          code: "tui_result_partial_session_active",
-          message: "Only result.partial.json is present while the TUI session is still active; continue waiting for durable result.json.",
+          code: reason,
+          message: partialResultObserved
+            ? "Only result.partial.json is present while the TUI session is still active; continue waiting for durable result.json."
+            : "No durable result.json yet while the TUI session is still active; continue waiting instead of parking review or stopping the session.",
         },
         reconstructed_result: reconstructed,
         collected,
