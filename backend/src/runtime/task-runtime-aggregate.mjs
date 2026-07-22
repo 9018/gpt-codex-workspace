@@ -222,6 +222,7 @@ export async function buildTaskRuntimeAggregate(options = {}) {
 
   // --- Determine recommended action ---
   const recommendedAction = recommendAction({
+    task,
     state,
     health,
     processInfo,
@@ -287,7 +288,7 @@ function classifyHealth({ state, processInfo, sessionInfo, lockInfo, evidence, n
 
 function recommendAction({
   state, health, processInfo, sessionInfo, evidence, acceptanceInfo, lockInfo,
-  now, noProgressTimeoutMs, wakeGraceMs,
+  now, noProgressTimeoutMs, wakeGraceMs, task = null,
 }) {
   // Terminal states: no action
   if (["completed", "failed", "cancelled"].includes(state)) return RECOMMENDED_ACTION.CONTINUE;
@@ -299,6 +300,26 @@ function recommendAction({
     return RECOMMENDED_ACTION.ASK;
   }
 
+  const provider = String(
+    task?.metadata?.codex_execution_provider
+    || task?.result?.codex_execution_provider
+    || task?.result?.provider
+    || sessionInfo?.provider
+    || ""
+  );
+  const isLiveTui = provider.includes("codex_tui")
+    || sessionInfo?.kind === "codex_tui"
+    || Boolean(sessionInfo?.control_session_id || sessionInfo?.session_id);
+  const tuiSessionLive = ["running", "created"].includes(String(sessionInfo?.status || ""));
+
+  // Live Codex TUI sessions must not be auto-stopped by bulk reconciler noise:
+  // process pid probes can lag/miss while the control session is still active,
+  // and long mid-course-correction canaries intentionally stay quiet for minutes.
+  if (isLiveTui && tuiSessionLive && state === "running") {
+    if (evidence?.result_json) return RECOMMENDED_ACTION.COLLECT;
+    return RECOMMENDED_ACTION.CONTINUE;
+  }
+
   // Orphaned/inconsistent running tasks: stop and retry
   if (health === HEALTH.ORPHANED || health === HEALTH.INCONSISTENT) {
     return RECOMMENDED_ACTION.STOP_RETRY;
@@ -306,6 +327,8 @@ function recommendAction({
 
   // Stalled: try wake first, then stop+retry
   if (health === HEALTH.STALLED && state === "running") {
+    // Never stop-retry a live TUI control session solely due to quiet progress.
+    if (isLiveTui && tuiSessionLive) return RECOMMENDED_ACTION.CONTINUE;
     const quietTime = ageMs(sessionInfo.last_meaningful_progress_at, now);
     if (quietTime > noProgressTimeoutMs + wakeGraceMs) {
       return RECOMMENDED_ACTION.STOP_RETRY;

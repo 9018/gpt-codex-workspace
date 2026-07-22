@@ -119,6 +119,20 @@ export async function reconcileTaskRuntime(options = {}) {
       output = result(true, aggregate, action, { reason: 'wake sent' }); return;
     }
     if (action === RECOMMENDED_ACTION.STOP_RETRY) {
+      const provider = String(
+        task?.metadata?.codex_execution_provider
+        || task?.result?.codex_execution_provider
+        || task?.result?.provider
+        || ""
+      );
+      const sessionStatus = String(aggregate?.session?.status || "");
+      if (provider.includes("codex_tui") && ["running", "created"].includes(sessionStatus)) {
+        // Preserve live TUI control sessions for GPT mid-course corrections.
+        output = result(false, aggregate, RECOMMENDED_ACTION.CONTINUE, {
+          reason: "live_tui_session_preserved",
+        });
+        return;
+      }
       if (sessionProvider && aggregate.session.session_id) {
         try { await sessionProvider.stop(aggregate.session.session_id, { reason: `reconciler_${trigger}` }); } catch {}
       }
