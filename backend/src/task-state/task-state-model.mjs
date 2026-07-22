@@ -227,16 +227,19 @@ export function resolveTaskTransition({ currentStatus, event, payload = {}, task
     return { nextStatus: null, allowed: false, terminal: false, reason: "missing_status_or_event" };
   }
 
-  // Check terminal statuses — only reconciliation_correction allowed
+  // Check terminal statuses — reconciliation_correction can recover durable evidence
+  // into a different terminal status (e.g. failed -> completed after late result.json).
   if (isTerminalStatus(currentStatus)) {
     if (event === TASK_EVENTS.RECONCILIATION_CORRECTION) {
       const canonical = payload?.canonical_status;
-      if (canonical && !isTerminalStatus(canonical)) {
+      if (canonical && canonical !== currentStatus) {
         return {
           nextStatus: canonical,
           allowed: true,
-          terminal: false,
-          reason: "reconciliation_correction_from_terminal",
+          terminal: isTerminalStatus(canonical),
+          reason: isTerminalStatus(canonical)
+            ? "reconciliation_correction_between_terminals"
+            : "reconciliation_correction_from_terminal",
         };
       }
       return {

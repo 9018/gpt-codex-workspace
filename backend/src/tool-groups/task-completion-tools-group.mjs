@@ -76,6 +76,43 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         if (existingTask?.status === "completed") {
           return { task: existingTask, idempotent_replay: true };
         }
+        // Recover false-failed TUI tasks when durable evidence already proves completion.
+        if (existingTask && ["failed", "timed_out", "blocked"].includes(existingTask.status)) {
+          const durable = existingTask.result || {};
+          const durableCompleted = durable.status === "completed"
+            || durable.verification?.passed === true
+            || durable.reviewer_decision?.passed === true
+            || durable.reviewer_decision?.status === "accepted";
+          if (durableCompleted || admin_override) {
+            const recovered = await transitionService.transition({
+              task_id,
+              event: TASK_EVENTS.RECONCILIATION_CORRECTION,
+              payload: {
+                canonical_status: "completed",
+                unified_decision: {
+                  status: "completed",
+                  blocking_passed: true,
+                  completion_eligible: true,
+                  requires_review: false,
+                  safe_to_auto_advance: true,
+                  source: "complete_task_terminal_recovery",
+                },
+                result: {
+                  ...durable,
+                  status: "completed",
+                  requires_review: false,
+                  summary: summary || durable.summary || "Recovered completed evidence from terminal false-failure",
+                  completed_at: new Date().toISOString(),
+                  recovered_from_terminal_status: existingTask.status,
+                },
+              },
+              reason: "complete_task recovered durable completed evidence from terminal status",
+              actor: { type: "operator", id: "complete_task" },
+              idempotency_key: `complete_task_recover:${task_id}:${existingTask.status}`,
+            });
+            return { task: recovered.task || recovered, recovered_from_terminal: existingTask.status };
+          }
+        }
 
         if (!admin_override) {
           try {
