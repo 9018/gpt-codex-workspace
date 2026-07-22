@@ -286,6 +286,68 @@ function classifyHealth({ state, processInfo, sessionInfo, lockInfo, evidence, n
 // Action recommendation
 // ---------------------------------------------------------------------------
 
+/**
+ * Evidence-based TUI session liveness.
+ * Persist status alone is not enough: dead PIDs / expired progress must recover.
+ *
+ * @returns {"not_tui"|"live"|"starting"|"stale"|"dead"|"unknown"}
+ */
+export function assessTuiSessionLiveness({
+  task = null,
+  processInfo = {},
+  sessionInfo = {},
+  now = Date.now(),
+  noProgressTimeoutMs = 180_000,
+  startGraceMs = 60_000,
+} = {}) {
+  const provider = String(
+    task?.metadata?.codex_execution_provider
+    || task?.result?.codex_execution_provider
+    || task?.result?.provider
+    || sessionInfo?.provider
+    || ""
+  );
+  const isTui = provider.includes("codex_tui")
+    || sessionInfo?.kind === "codex_tui"
+    || Boolean(sessionInfo?.control_session_id);
+  if (!isTui) return "not_tui";
+
+  const status = String(sessionInfo?.status || "");
+  if (!["running", "created"].includes(status)) return "not_tui";
+
+  // Explicit dead process always wins over persisted "running".
+  if (processInfo?.exists === false) return "dead";
+
+  const freshest = [
+    sessionInfo?.last_meaningful_progress_at,
+    sessionInfo?.last_output_at,
+    processInfo?.last_heartbeat_at,
+  ].filter(Boolean);
+  const quietTime = freshest.length
+    ? Math.min(...freshest.map((ts) => ageMs(ts, now)))
+    : Infinity;
+
+  // Created sessions get a short start window; after that they are stale.
+  if (status === "created") {
+    if (quietTime <= startGraceMs) return "starting";
+    return "stale";
+  }
+
+  // Live process with recent evidence: preserve for mid-course corrections.
+  if (processInfo?.exists === true) {
+    if (quietTime <= noProgressTimeoutMs) return "live";
+    return "stale";
+  }
+
+  // Unknown process existence: only preserve when recent activity proves life.
+  if (processInfo?.exists == null) {
+    if (quietTime <= noProgressTimeoutMs) return "unknown";
+    return "stale";
+  }
+
+  return "unknown";
+}
+
 function recommendAction({
   state, health, processInfo, sessionInfo, evidence, acceptanceInfo, lockInfo,
   now, noProgressTimeoutMs, wakeGraceMs, task = null,
@@ -300,22 +362,17 @@ function recommendAction({
     return RECOMMENDED_ACTION.ASK;
   }
 
-  const provider = String(
-    task?.metadata?.codex_execution_provider
-    || task?.result?.codex_execution_provider
-    || task?.result?.provider
-    || sessionInfo?.provider
-    || ""
-  );
-  const isLiveTui = provider.includes("codex_tui")
-    || sessionInfo?.kind === "codex_tui"
-    || Boolean(sessionInfo?.control_session_id || sessionInfo?.session_id);
-  const tuiSessionLive = ["running", "created"].includes(String(sessionInfo?.status || ""));
+  const tuiLiveness = assessTuiSessionLiveness({
+    task,
+    processInfo,
+    sessionInfo,
+    now,
+    noProgressTimeoutMs,
+  });
 
-  // Live Codex TUI sessions must not be auto-stopped by bulk reconciler noise:
-  // process pid probes can lag/miss while the control session is still active,
-  // and long mid-course-correction canaries intentionally stay quiet for minutes.
-  if (isLiveTui && tuiSessionLive && state === "running") {
+  // Preserve only genuinely live/starting TUI sessions. Dead/stale sessions
+  // must still enter stop_retry so recovery can clear ownership and retry.
+  if ((tuiLiveness === "live" || tuiLiveness === "starting") && state === "running") {
     if (evidence?.result_json) return RECOMMENDED_ACTION.COLLECT;
     return RECOMMENDED_ACTION.CONTINUE;
   }
@@ -327,13 +384,15 @@ function recommendAction({
 
   // Stalled: try wake first, then stop+retry
   if (health === HEALTH.STALLED && state === "running") {
-    // Never stop-retry a live TUI control session solely due to quiet progress.
-    if (isLiveTui && tuiSessionLive) return RECOMMENDED_ACTION.CONTINUE;
+    // Live TUI with fresh process/heartbeat already returned CONTINUE above.
+    // Stale/dead TUI falls through to wake/stop_retry.
     const quietTime = ageMs(sessionInfo.last_meaningful_progress_at, now);
     if (quietTime > noProgressTimeoutMs + wakeGraceMs) {
       return RECOMMENDED_ACTION.STOP_RETRY;
     }
     if (quietTime > noProgressTimeoutMs) {
+      // Prefer wake only when process still looks potentially alive.
+      if (tuiLiveness === "dead") return RECOMMENDED_ACTION.STOP_RETRY;
       return RECOMMENDED_ACTION.WAKE;
     }
   }
