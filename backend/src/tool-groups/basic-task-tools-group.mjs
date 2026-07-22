@@ -45,6 +45,17 @@ function applyTaskDeletionPlan(state, plan, { deleteLinkedGoals = false } = {}) 
   return next;
 }
 
+async function persistTaskDeletionPlan(store, plan, { deleteLinkedGoals = false } = {}) {
+  if (typeof store.mutate === 'function') {
+    await store.mutate((state) => {
+      const next = applyTaskDeletionPlan(state, plan, { deleteLinkedGoals });
+      Object.assign(state, next);
+    });
+    return;
+  }
+  await store.save(applyTaskDeletionPlan(await store.load(), plan, { deleteLinkedGoals }));
+}
+
 /**
  * Build a task summary object suitable for ChatGPT reasoning.
  * Keeps the payload bounded and does not include full result objects.
@@ -274,7 +285,7 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         if (!dry_run) {
           const target = (state.tasks || []).find((task) => task.id === task_id);
           if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
-          await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goal }));
+          await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goal });
           await eventLogger?.append("task.deleted", { task_id, delete_linked_goal });
         }
         return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };
@@ -304,7 +315,7 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
             const target = (state.tasks || []).find((task) => task.id === id);
             if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
           }
-          await store.save(applyTaskDeletionPlan(state, plan, { deleteLinkedGoals: delete_linked_goals }));
+          await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goals });
           await eventLogger?.append("tasks.deleted", { task_ids: plan.deletable, delete_linked_goals });
         }
         return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };

@@ -1,6 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createBasicTaskToolsGroup } from '../src/tool-groups/basic-task-tools-group.mjs';
+import { StateStore } from '../src/state-store.mjs';
 
 function fakeTool(descriptionOrDescriptor, inputSchema, handler) {
   if (descriptionOrDescriptor && typeof descriptionOrDescriptor === "object" && !Array.isArray(descriptionOrDescriptor)) {
@@ -312,4 +316,77 @@ test('delete_tasks all_terminal deletes selected tasks with one state save', asy
   assert.equal(saves, 1);
   assert.deepEqual(new Set(result.deleted_task_ids), new Set(['done', 'failed']));
   assert.deepEqual(saved.tasks.map((task) => task.id), ['active']);
+});
+
+
+test('delete_task persists deletion when using the real StateStore and a fresh reload', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-delete-task-'));
+  try {
+    const statePath = join(root, 'state.json');
+    const store = new StateStore({ statePath, defaultWorkspaceRoot: root });
+    const state = await store.load();
+    state.tasks.push({ id: 't-real', status: 'completed', goal_id: 'g-real' });
+    state.goals.push({ id: 'g-real', task_id: 't-real' });
+    state.goal_queue.push({ id: 'q-real', task_id: 't-real' });
+    state.agent_runs.push({ id: 'r-real', task_id: 't-real' });
+    state.activities.push({ id: 'a-real', task_id: 't-real' });
+    state.repo_locks = [{ id: 'l-real', task_id: 't-real' }];
+    await store.save();
+
+    const tools = createBasicTaskToolsGroup({
+      tool: fakeTool,
+      schema: fakeSchema,
+      config: {},
+      store,
+      createTask: async () => {},
+      github: { syncTask: async () => {} },
+    });
+
+    const result = await tools.delete_task.handler({ task_id: 't-real', dry_run: false });
+    assert.deepEqual(result.deleted_task_ids, ['t-real']);
+
+    const reloadedStore = new StateStore({ statePath, defaultWorkspaceRoot: root });
+    const reloaded = await reloadedStore.load();
+    assert.equal(reloaded.tasks.some((task) => task.id === 't-real'), false);
+    assert.equal(reloaded.goal_queue.some((item) => item.task_id === 't-real'), false);
+    assert.equal(reloaded.agent_runs.some((item) => item.task_id === 't-real'), false);
+    assert.equal(reloaded.activities.some((item) => item.task_id === 't-real'), false);
+    assert.equal(reloaded.repo_locks.some((item) => item.task_id === 't-real'), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test('delete_tasks persists batch deletion when using the real StateStore', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'gptwork-delete-tasks-'));
+  try {
+    const statePath = join(root, 'state.json');
+    const store = new StateStore({ statePath, defaultWorkspaceRoot: root });
+    const state = await store.load();
+    state.tasks.push(
+      { id: 'done-real', status: 'completed' },
+      { id: 'failed-real', status: 'failed' },
+      { id: 'active-real', status: 'running' },
+    );
+    await store.save();
+
+    const tools = createBasicTaskToolsGroup({
+      tool: fakeTool,
+      schema: fakeSchema,
+      config: {},
+      store,
+      createTask: async () => {},
+      github: { syncTask: async () => {} },
+    });
+
+    const result = await tools.delete_tasks.handler({ all_terminal: true, dry_run: false });
+    assert.deepEqual(new Set(result.deleted_task_ids), new Set(['done-real', 'failed-real']));
+
+    const reloadedStore = new StateStore({ statePath, defaultWorkspaceRoot: root });
+    const reloaded = await reloadedStore.load();
+    assert.deepEqual(reloaded.tasks.map((task) => task.id), ['active-real']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 });
