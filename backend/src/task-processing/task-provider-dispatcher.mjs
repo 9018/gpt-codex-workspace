@@ -138,12 +138,20 @@ export async function dispatchTaskProvider(input = {}, deps = {}) {
   const requested = requestedProvider(input.task);
   let selection;
   try {
-    selection = await selectExecutionProvider({
-      policy: { provider: requested },
-      task: input.task,
-      availability,
-      history: input.providerHistory || {},
-    });
+    // Explicit codex_exec must not be overridden by TUI-first auto policy.
+    if (requested === "codex_exec") {
+      if (!availability.codex_exec) {
+        throw new Error("execution provider unavailable: codex_exec");
+      }
+      selection = { provider: "codex_exec", reason_code: "explicit_provider", scores: null };
+    } else {
+      selection = await selectExecutionProvider({
+        policy: { provider: requested },
+        task: input.task,
+        availability,
+        history: input.providerHistory || {},
+      });
+    }
   } catch (error) {
     const provider = requested === "auto" ? "codex_exec" : requested;
     const unavailable = await persistUnavailableAttempt({

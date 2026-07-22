@@ -34,3 +34,23 @@ test("failover returns null when alternate provider is unavailable", () => {
     availability: { codex_tui: false },
   }), null);
 });
+
+
+test("TUI native session bind failure fails over to exec", () => {
+  assert.deepEqual(
+    selectFailoverProvider({
+      attempt: { provider: "codex_tui" },
+      failure: { code: "codex_tui_native_session_unbound" },
+      availability: { codex_exec: true },
+    }),
+    { provider: "codex_exec", reason_code: "tui_native_session_unbound" },
+  );
+  assert.deepEqual(
+    selectFailoverProvider({
+      attempt: { provider: "codex_tui" },
+      failure: { code: "codex_tui_cwd_mismatch" },
+      availability: { codex_exec: true },
+    }),
+    { provider: "codex_exec", reason_code: "tui_cwd_mismatch" },
+  );
+});

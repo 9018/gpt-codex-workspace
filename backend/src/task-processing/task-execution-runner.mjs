@@ -457,21 +457,137 @@ export async function runTaskExecution(store, config, task, context, github, dep
     && providerExecutionReady.status === "failed"
   ) {
     const providerFailure = providerExecutionReady.attempt?.failure || providerExecutionReady.failure || {};
-    const providerError = Object.assign(
-      new Error(providerFailure.message || providerFailure.detail || providerFailure.code || "execution provider failed"),
-      { code: providerFailure.code || null },
+    const failureCode = String(providerFailure.code || "");
+    const shouldFailoverToExec = (
+      providerExecutionReady.provider === "codex_tui"
+      && [
+        "codex_tui_native_session_unbound",
+        "codex_tui_cwd_mismatch",
+        "native_session_not_found",
+        "native_session_ambiguous",
+        "pty_unavailable",
+      ].includes(failureCode)
     );
-    healingAction = determineHealingActionFn({
-      error: providerError,
-      task,
-      retryCount: task.healing_retry_count || 0,
-    });
-    if (RETRY_HEALING_ACTIONS.has(healingAction?.action)) {
-      return parkTaskForHealingRetry({
-        store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
-        releaseLockForTaskFn, repoLockPath, error: providerError, healingAction,
-        prefix: "[worker] execution provider failed",
+    if (shouldFailoverToExec) {
+      await updateTaskFn(store, task.id, (item) => {
+        item.metadata = {
+          ...(item.metadata || {}),
+          codex_execution_provider: "codex_exec",
+          forced_provider_failover: true,
+          forced_provider_failover_from: "codex_tui",
+          forced_provider_failover_code: failureCode,
+        };
+        item.logs.push({
+          time: new Date().toISOString(),
+          message: `[worker] TUI provider failed (${failureCode}); failing over to codex_exec`,
+        });
       });
+      try {
+        providerExecutionReady = await taskProviderDispatcherFn({
+          workspaceRoot: config.defaultWorkspaceRoot || workspace.root,
+          task: {
+            ...task,
+            metadata: {
+              ...(task.metadata || {}),
+              codex_execution_provider: "codex_exec",
+            },
+            execution_policy: {
+              ...(task.execution_policy || {}),
+              provider: "codex_exec",
+              fallback_allowed: true,
+            },
+          },
+          goal,
+          executionCwd,
+          pathContext: executionPathContext,
+          inputSnapshot: {
+            digest: `${task.id}:${runId || "no-run"}:failover-exec`,
+            task_id: task.id,
+            goal_id: goal?.id || null,
+            acceptance_contract: task.acceptance_contract || goal?.acceptance_contract || null,
+          },
+          tuiAvailable: false,
+          codexTuiEvidenceWaitMs: config.codexTuiEvidenceWaitMs ?? 120_000,
+          context: {
+            config,
+            workspaceRoot: workspace.root,
+            candidateWorkspaceRoots: [config.defaultWorkspaceRoot, workspace.root].filter(Boolean),
+            task: {
+              ...task,
+              metadata: {
+                ...(task.metadata || {}),
+                codex_execution_provider: "codex_exec",
+              },
+            },
+            goal,
+            resultJsonPath: _resultJsonPath,
+            promptFile,
+            runFilePath,
+            runId,
+            repoLockPath,
+            executionCwd,
+            pathContext: executionPathContext,
+            executionId: runId,
+            worktreePath: executionCwd,
+            branch: resolvedRepo.worktree_lifecycle?.branch_name || resolvedRepo.task_branch || null,
+            baseCommit: resolvedRepo.worktree_lifecycle?.base_sha || resolvedRepo.base_sha || null,
+            releaseLockFn: () => releaseLockForTaskFn(config.defaultWorkspaceRoot, task.id),
+          },
+        }, {
+          executeCodexTaskRunFn: (args) => executeAgentBackendRunFn({
+            ...args,
+            role: task.role || task.agent_role || goal?.role || goal?.agent_role || mode,
+          }),
+          startCodexTuiGoalSessionFn,
+          runCodexTuiEvidenceCycleFn,
+          stopCodexTuiSessionFn,
+          tuiAvailableFn: async () => false,
+          repositorySnapshot: deps.repositorySnapshotFn,
+          acceptanceSnapshot: deps.acceptanceSnapshotFn,
+          sleepFn: deps.executionProviderSleepFn,
+          ...(deps.executionProviderObserveIntervalMs !== undefined
+            ? { observeIntervalMs: deps.executionProviderObserveIntervalMs }
+            : {}),
+          ...(deps.executionProviderMaxObserveCycles !== undefined
+            ? { maxObserveCycles: deps.executionProviderMaxObserveCycles }
+            : {}),
+        });
+      } catch (failoverError) {
+        healingAction = determineHealingActionFn({
+          error: failoverError,
+          task,
+          retryCount: task.healing_retry_count || 0,
+        });
+        return parkTaskForHealingRetry({
+          store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
+          releaseLockForTaskFn, repoLockPath, error: failoverError, healingAction,
+          prefix: "[worker] failed during codex_exec failover after TUI provider failure",
+        });
+      }
+    }
+
+    if (
+      providerExecutionReady
+      && !providerExecutionReady.evidence
+      && !providerExecutionReady.attempt?.provider_handle?.result
+      && providerExecutionReady.status === "failed"
+    ) {
+      const providerError = Object.assign(
+        new Error(providerFailure.message || providerFailure.detail || providerFailure.code || "execution provider failed"),
+        { code: providerFailure.code || null },
+      );
+      healingAction = determineHealingActionFn({
+        error: providerError,
+        task,
+        retryCount: task.healing_retry_count || 0,
+      });
+      if (RETRY_HEALING_ACTIONS.has(healingAction?.action)) {
+        return parkTaskForHealingRetry({
+          store, config, task, goal, context, updateTaskFn, appendGoalMessageFn,
+          releaseLockForTaskFn, repoLockPath, error: providerError, healingAction,
+          prefix: "[worker] execution provider failed",
+        });
+      }
     }
   }
 

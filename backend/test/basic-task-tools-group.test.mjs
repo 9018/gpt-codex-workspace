@@ -443,3 +443,51 @@ test("delete_task records tombstones and cleans goal artifacts when delete_linke
     await rm(root, { recursive: true, force: true });
   }
 });
+
+
+test("delete_task cleans short-id view folders for linked goals", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-delete-views-"));
+  try {
+    const goalId = "goal_43e9ce27-438e-4884-b7a2-a6329ad63d8f";
+    const taskId = "task_56f87073-b00e-4d56-b886-a821000ed8f1";
+    const viewGoal = join(root, ".gptwork", "views", "goals", "gptwork-closed-loop-canary2--g43e9ce27");
+    const viewTask = join(viewGoal, "tasks", "gptwork-closed-loop-canary2--t56f87073");
+    await mkdir(viewTask, { recursive: true });
+    await writeFile(join(viewGoal, "README.md"), "goal view");
+    await writeFile(join(viewTask, "README.md"), "task view");
+    await mkdir(join(root, ".gptwork", "goals", goalId), { recursive: true });
+    await writeFile(join(root, ".gptwork", "goals", goalId, "goal.md"), "goal");
+
+    const state = {
+      tasks: [{ id: taskId, status: "completed", goal_id: goalId }],
+      goals: [{ id: goalId, task_id: taskId }],
+      goal_queue: [],
+      agent_runs: [],
+      activities: [],
+      repo_locks: [],
+    };
+    const tools = createBasicTaskToolsGroup({
+      tool: fakeTool,
+      schema: fakeSchema,
+      config: { defaultWorkspaceRoot: root, defaultRepoPath: root },
+      store: {
+        load: async () => state,
+        save: async (next) => Object.assign(state, next),
+      },
+      createTask: async () => {},
+      github: { syncTask: async () => {} },
+      cancelTaskExecution: async () => ({ deleted_sessions: [] }),
+    });
+
+    const result = await tools.delete_task.handler({
+      task_id: taskId,
+      dry_run: false,
+      delete_linked_goal: true,
+    });
+    assert.deepEqual(result.deleted_task_ids, [taskId]);
+    assert.equal(existsSync(viewGoal), false);
+    assert.equal(existsSync(join(root, ".gptwork", "goals", goalId)), false);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
