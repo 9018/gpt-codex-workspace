@@ -79,6 +79,14 @@ test('terminalizeCodexTuiSession does not fail-closed when marker evidence exist
     must_have_files: [markerRel],
     requirements: { requires_commit: false, requires_integration: false },
   }));
+  await writeFile(join(goalDir, 'result.partial.json'), JSON.stringify({
+    status: 'finished',
+    phase: 'finished',
+    summary: 'marker written for terminal recovery',
+    changed_files: [markerRel],
+    verification: { passed: true, commands: [] },
+  }));
+  await writeFile(join(goalDir, 'result.md'), 'Summary: marker written for terminal recovery\n');
   const store = createCodexTuiSessionStore({ workspaceRoot });
   await store.createSession({
     sessionId,

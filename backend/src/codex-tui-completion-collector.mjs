@@ -277,7 +277,12 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
   const failClosedLike = parsedResultJson.value
     && ["failed", "timed_out", "stopped", "cancelled", "detached"].includes(parsedResultJson.value.status)
     && parsedResultJson.value.verification?.passed !== true;
-  if ((!parsedResultJson.value || failClosedLike) && (markersSatisfied || isFinishedPartial(partialValue))) {
+  // Marker files alone are progress, not completion. Require finished partial,
+  // result.md, or an already-completed durable result before promoting.
+  if ((!parsedResultJson.value || failClosedLike) && (
+    isFinishedPartial(partialValue)
+    || (markersSatisfied && (resultMdPresent || isFinishedPartial(partialValue)))
+  )) {
     parsedResultJson.value = {
       status: "completed",
       summary: partialValue?.summary
@@ -349,7 +354,7 @@ export async function collectCodexTuiCompletion({ sessionId, workspaceRoot } = {
 
   const reconstructedCompletedFromEvidence = (
     parsedResultJson.value?.status === "completed" && parsedResultJson.value?.verification?.passed === true
-  ) || (markersSatisfied && worktreeClean);
+  ) || (markersSatisfied && worktreeClean && isFinishedPartial(partialValue));
   const reconstructedResult = {
     status: parsedResultJson.value?.status
       || (reconstructedCompletedFromEvidence || (resultMdPresent && worktreeClean && (!requiresCommit || commit))

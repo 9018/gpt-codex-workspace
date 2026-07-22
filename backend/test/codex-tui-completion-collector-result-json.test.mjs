@@ -108,6 +108,14 @@ test('collect recovers completed evidence from marker files even when result.jso
     followups: [],
     verification: { commands: [], passed: false },
   }));
+  await writeFile(join(goalDir, 'result.partial.json'), JSON.stringify({
+    status: 'finished',
+    phase: 'finished',
+    summary: 'marker written for recovery',
+    changed_files: [markerRel],
+    verification: { passed: true, commands: [] },
+  }));
+  await writeFile(join(goalDir, 'result.md'), 'Summary: marker written for recovery\n');
 
   const snapshot = await collectCodexTuiCompletion({ sessionId: 'session_marker', workspaceRoot: repo });
   assert.equal(snapshot.result_json.status, 'completed');

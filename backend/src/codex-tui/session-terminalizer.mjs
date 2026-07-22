@@ -299,8 +299,13 @@ export async function recoverTerminalResultFromEvidence({
     return existingResult;
   }
 
-  // Canary / noop-class recovery: marker + partial/result.md is enough to complete.
-  if (markersPresent || fromPartial?.verification?.passed === true || (partialPresent && resultMdPresent) || (markersPresent && partialPresent)) {
+  // Only promote when partial is finished-like, or verification already passed.
+  // A started/running partial + marker is progress, not completion.
+  if (
+    fromPartial?.verification?.passed === true
+    || Boolean(fromPartial) // normalizePartialCandidate already filters finished-like
+    || (markersPresent && resultMdPresent && Boolean(fromPartial))
+  ) {
     const summary = fromPartial?.summary
       || partialValue?.summary
       || (markersPresent
