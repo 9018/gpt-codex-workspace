@@ -1,6 +1,6 @@
 # GPTWork
 
-> 当前版本：2026-07-19，由 ChatGPT 直接手动重写。
+> 当前版本：2026-07-22，由 ChatGPT 直接维护。
 >
 > 让 ChatGPT 负责产品推进，让 Codex 负责执行。
 
@@ -411,7 +411,7 @@ Codex CLI 非交互执行
 
 适合：
 
-- 默认自动化流程
+- 显式指定的非交互执行流程
 - 可预测任务
 - 批量执行
 - 并行任务
@@ -441,6 +441,8 @@ ChatGPT 中途检查
 - 需要连续交互的实现
 - 需要观察执行过程
 - 原生 Codex Session 管理
+
+GPTWork 当前默认执行模式是 **Codex TUI**。只有任务或调用方明确选择 `codex_exec` 时，才切换到 Codex Exec。
 
 两种模式都必须进入同一套验收闭环。
 
@@ -643,14 +645,51 @@ gptwork init --production
 
 ## 默认执行策略
 
+默认运行配置位于：
+
+```text
+.gptwork/runtime.env
+```
+
+推荐默认配置：
+
+```dotenv
+GPTWORK_TOOL_MODE=full
+GPTWORK_DELAYED_TOOL_DISCOVERY=true
+
+GPTWORK_CODEX_HOME_MODE=user
+GPTWORK_CODEX_TUI_ENABLED=true
+GPTWORK_EXECUTE_PROVIDER=codex_tui_goal
+
+GPTWORK_RECOVERY_PLANE_ENABLED=true
+GPTWORK_CODEX_WORKER=true
+
+GPTWORK_WORKSPACE_ROOT=/home/a9017/mcp/workspace
+GPTWORK_STATE_PATH=/home/a9017/mcp/workspace/gpt-codex-workspace/.gptwork/state.json
+
+GPTWORK_DEFAULT_REPO=9018/gpt-codex-workspace
+GPTWORK_DEFAULT_REPO_PATH=/home/a9017/mcp/workspace/gpt-codex-workspace
+GPTWORK_DEFAULT_BRANCH=main
+
+GPTWORK_RECOVERY_ALLOWED_ROOTS=/home/a9017/mcp/workspace/gpt-codex-workspace
+```
+
+关键语义：
+
+- `GPTWORK_DELAYED_TOOL_DISCOVERY=true`：启动时只暴露引导工具，其他工具按需发现，减少工具清单开销。
+- `GPTWORK_CODEX_TUI_ENABLED=true`：启用 Codex TUI 执行能力。
+- `GPTWORK_EXECUTE_PROVIDER=codex_tui_goal`：把 Codex TUI 设为默认执行 Provider。
+- `GPTWORK_DEFAULT_REPO_PATH`：必须指向真实主仓库，不能省略中间的 `workspace` 目录。
+- 配置优先级为 `process.env > .gptwork/runtime.env > 代码默认值`。
+
 ```text
 默认自动执行
    ↓
-Codex Exec
-
-需要长时间交互
-   ↓
 Codex TUI
+
+明确要求非交互执行
+   ↓
+Codex Exec
 
 多个独立任务
    ↓
