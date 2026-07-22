@@ -64,10 +64,20 @@ export function validateTaskDelta(delta, session) {
   }
   const deltaContextDigest = normalizeContextDigest(normalized.base_context_digest);
   const sessionContextDigest = normalizeContextDigest(session.task_context_digest);
-  if (deltaContextDigest !== sessionContextDigest) {
-    throw new Error("delta context digest mismatch");
+  // Allow first correction during early TUI bootstrap when session digest has not been
+  // materialized yet. Prefer binding the provided digest into the delta for auditability.
+  if (sessionContextDigest) {
+    if (!deltaContextDigest || deltaContextDigest !== sessionContextDigest) {
+      throw new Error("delta context digest mismatch");
+    }
+    normalized.base_context_digest = sessionContextDigest;
+  } else if (deltaContextDigest) {
+    normalized.base_context_digest = deltaContextDigest;
+  } else {
+    // No digest available yet; still allow operator/GPT correction so the loop can re-align.
+    normalized.base_context_digest = null;
+    normalized.digest_deferred = true;
   }
-  normalized.base_context_digest = deltaContextDigest;
 
   const expectedRevision =
     Number(session.active_delta_revision || 0) + 1;

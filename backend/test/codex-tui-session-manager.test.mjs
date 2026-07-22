@@ -587,7 +587,7 @@ test("does not create or inject project CODEX_HOME before spawning Codex TUI", a
   const cwd = track(await mkdtemp(join(tmpdir(), "codex-tui-home-")));
   const codexHome = join(cwd, ".codex-runtime");
   const fakeAdapter = makeFakeAdapter();
-  await assert.rejects(() => startCodexTuiGoalSession({
+  const session = await startCodexTuiGoalSession({
     task: { id: "task_home", title: "Home preparation" },
     goal: { id: "goal_home" },
     cwd,
@@ -600,8 +600,15 @@ test("does not create or inject project CODEX_HOME before spawning Codex TUI", a
       workspaceRoot: cwd,
       codexHome,
       nativeSessionsRoot: join(codexHome, "sessions"),
+      nativeBindingWaitMs: 200,
     },
-  }), (error) => error?.code === "codex_tui_native_session_unbound");
+  });
+  // Native binding may be deferred when no rollout file is produced by the fake adapter.
+  // Control session must still start so GPT correction/progress remains possible.
+  assert.equal(session.status, "running");
+  assert.equal(session.native_session_id, null);
+  assert.equal(fakeAdapter.spawns.length, 1);
+  assert.equal("CODEX_HOME" in (fakeAdapter.spawns[0].env || {}), false);
   await assert.rejects(stat(codexHome));
 });
 

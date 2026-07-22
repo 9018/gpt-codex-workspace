@@ -95,7 +95,7 @@ export async function startCodexTuiGoalSessionImpl({
   branch = null,
   baseCommit = null,
   headCommit = null,
-  taskContextDigest = null,
+  taskContextDigest = null, // may be seeded from goal package
   taskContextRevision = null,
   workstreamContextDigest = null,
   workstreamContextRevision = null,
@@ -161,6 +161,19 @@ export async function startCodexTuiGoalSessionImpl({
   const runtimeGoalRoot = join(cwd, ".gptwork", "runtime-goals");
   const runtimeGoalDir = join(runtimeGoalRoot, goal.id);
 
+  let effectiveTaskContextDigest = taskContextDigest;
+  if (!effectiveTaskContextDigest) {
+    try {
+      const { readFile } = await import("node:fs/promises");
+      const digestPath = join(canonicalGoalDir, "task.context.digest");
+      const digestRaw = await readFile(digestPath, "utf8");
+      const digest = String(digestRaw || "").trim();
+      if (digest) effectiveTaskContextDigest = digest;
+    } catch {
+      // optional during bootstrap
+    }
+  }
+
   let record = await store.createSession({
     sessionId,
     taskId: task?.id || null,
@@ -173,7 +186,7 @@ export async function startCodexTuiGoalSessionImpl({
     branch,
     baseCommit,
     headCommit,
-    taskContextDigest,
+    taskContextDigest: effectiveTaskContextDigest,
     taskContextRevision,
     workstreamContextDigest,
     workstreamContextRevision,
@@ -366,10 +379,15 @@ export async function startCodexTuiGoalSessionImpl({
         pid: ptySession.pid ?? null,
       })
       : null;
-    const bindingDeadline = Date.now() + 5_000;
+    const bindingWaitMs = Number.isFinite(Number(pathContext?.nativeBindingWaitMs))
+      ? Math.max(0, Number(pathContext.nativeBindingWaitMs))
+      : 30_000;
+    const bindingDeadline = Date.now() + bindingWaitMs;
     let nativeRecord = nativeBinding?.nativeSessionId
       ? nativeSessionsAfter.find((item) => item.id === nativeBinding.nativeSessionId)
       : null;
+    let stagnantPolls = 0;
+    let lastCandidateCount = -1;
     while (pathContext && (!nativeBinding?.nativeSessionId || !nativeRecord?.cwd) && Date.now() < bindingDeadline) {
       await new Promise((resolveDelay) => setTimeout(resolveDelay, 100));
       nativeSessionsAfter = await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => []);
@@ -390,15 +408,32 @@ export async function startCodexTuiGoalSessionImpl({
           nativeRecord = cwdCandidates[0];
           nativeBinding = { nativeSessionId: nativeRecord.id, source: "sessions_root_cwd", reason: null, path: nativeRecord.path };
         }
+        const candidateCount = cwdCandidates.length + (nativeBinding?.candidateCount || 0);
+        if (candidateCount === lastCandidateCount) stagnantPolls += 1;
+        else {
+          stagnantPolls = 0;
+          lastCandidateCount = candidateCount;
+        }
+        // Early defer when no rollout candidates appear and no session id is in output.
+        if (stagnantPolls >= 15 && !nativeBinding?.nativeSessionId) break;
       }
     }
     if (pathContext && (!nativeBinding?.nativeSessionId || !nativeRecord?.cwd)) {
-      try { ptySession.write("\u0003"); } catch {}
-      try { ptySession.stop(); } catch {}
-      activeSessions.delete(sessionId);
-      const error = new Error(`Codex TUI native session binding failed: ${nativeBinding?.reason || "native_session_not_found"}`);
-      error.code = "codex_tui_native_session_unbound";
-      throw error;
+      // Keep the live control TUI session even if native rollout binding lags.
+      // GPT correction/progress can still target the control session.
+      await store.appendSessionLog(
+        sessionId,
+        `[bootstrap] native session binding deferred: ${nativeBinding?.reason || "native_session_not_found"}\n`,
+      ).catch(() => {});
+      nativeBinding = {
+        nativeSessionId: null,
+        source: "deferred",
+        reason: nativeBinding?.reason || "native_session_not_found",
+        path: null,
+        cwd: null,
+        deferred: true,
+      };
+      nativeRecord = null;
     }
     if (pathContext && nativeBinding?.nativeSessionId) {
       const expectedCwd = resolve(worktreePath || cwd);

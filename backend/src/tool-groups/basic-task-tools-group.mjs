@@ -304,14 +304,21 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
           if (target && config?.defaultWorkspaceRoot) cleanup = await cancelTaskExecution({ task: target, config });
           await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goal });
           if (config?.defaultWorkspaceRoot) {
-            const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
-            const artifactCleanup = await cleanupDeletedTaskArtifacts({
-              workspaceRoot: config.defaultWorkspaceRoot,
-              projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
-              taskIds: plan.deletable,
-              goalIds: delete_linked_goal ? plan.linked_goal_ids : [],
-            });
-            cleanup = { ...(cleanup || {}), artifacts: artifactCleanup };
+            try {
+              const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
+              const artifactCleanup = await cleanupDeletedTaskArtifacts({
+                workspaceRoot: config.defaultWorkspaceRoot,
+                projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
+                taskIds: plan.deletable,
+                goalIds: delete_linked_goal ? plan.linked_goal_ids : [],
+              });
+              cleanup = { ...(cleanup || {}), artifacts: artifactCleanup };
+            } catch (cleanupError) {
+              cleanup = {
+                ...(cleanup || {}),
+                artifacts_error: cleanupError?.message || String(cleanupError),
+              };
+            }
           }
           await eventLogger?.append("task.deleted", { task_id, delete_linked_goal });
         }
@@ -345,13 +352,17 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
           }
           await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goals });
           if (config?.defaultWorkspaceRoot) {
-            const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
-            cleanup = await cleanupDeletedTaskArtifacts({
-              workspaceRoot: config.defaultWorkspaceRoot,
-              projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
-              taskIds: plan.deletable,
-              goalIds: delete_linked_goals ? plan.linked_goal_ids : [],
-            });
+            try {
+              const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
+              cleanup = await cleanupDeletedTaskArtifacts({
+                workspaceRoot: config.defaultWorkspaceRoot,
+                projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
+                taskIds: plan.deletable,
+                goalIds: delete_linked_goals ? plan.linked_goal_ids : [],
+              });
+            } catch (cleanupError) {
+              cleanup = { artifacts_error: cleanupError?.message || String(cleanupError) };
+            }
           }
           await eventLogger?.append("tasks.deleted", { task_ids: plan.deletable, delete_linked_goals });
         }

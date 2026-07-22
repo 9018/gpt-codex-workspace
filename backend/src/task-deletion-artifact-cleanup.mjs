@@ -2,7 +2,26 @@ import { readdir, rm } from "node:fs/promises";
 import { join } from "node:path";
 
 async function rmPath(path) {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return true;
+    } catch (error) {
+      if (error?.code === "ENOENT") return false;
+      // Directory may still be written by a late TUI/result flush; retry briefly.
+      if (error?.code === "ENOTEMPTY" || error?.code === "EBUSY") {
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+  // Final best-effort pass: empty children then remove.
   try {
+    const entries = await readdir(path, { withFileTypes: true });
+    for (const entry of entries) {
+      await rm(join(path, entry.name), { recursive: true, force: true });
+    }
     await rm(path, { recursive: true, force: true });
     return true;
   } catch (error) {

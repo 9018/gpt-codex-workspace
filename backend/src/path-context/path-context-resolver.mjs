@@ -1,5 +1,18 @@
 import { join, resolve } from "node:path";
+import { existsSync } from "node:fs";
 import { resolveCodexSessionsRoot } from "../codex-session/codex-session-root.mjs";
+
+function normalizeCodexHome(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  const root = resolve(value.trim());
+  // If configured as a user home (contains .codex/sessions as child) prefer that.
+  const nested = join(root, ".codex");
+  const nestedSessions = join(nested, "sessions");
+  const directSessions = join(root, "sessions");
+  if (!existsSync(directSessions) && existsSync(nestedSessions)) return nested;
+  return root;
+}
+
 
 import { PathContextError } from "./path-context-schema.mjs";
 import { validatePathContext } from "./path-context-validator.mjs";
@@ -72,7 +85,7 @@ export async function resolvePathContext({
     executionCwd: worktreePath || canonicalRepoPath,
     worktreePath,
     controlSessionsRoot: join(canonicalRepoPath, ".gptwork", "codex-sessions"),
-    codexHome: firstPath(config.codexHome),
+    codexHome: normalizeCodexHome(firstPath(config.codexHome)),
     nativeSessionsRoot: resolveCodexSessionsRoot(config.codexHome),
   });
 }

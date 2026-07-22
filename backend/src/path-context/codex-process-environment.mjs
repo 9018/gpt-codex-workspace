@@ -9,6 +9,8 @@ export function buildCodexProcessEnvironment(pathContext = {}, bindings = {}, ba
     GPTWORK_CANONICAL_REPO_PATH: pathContext.canonicalRepoPath,
     GPTWORK_EXECUTION_CWD: pathContext.executionCwd,
   };
+  // Intentionally omit CODEX_HOME so Codex uses the user-default home.
+  // pathContext.nativeSessionsRoot is resolved independently for inventory/binding.
   delete env.CODEX_HOME;
   delete env.GPTWORK_CODEX_HOME;
   delete env.GPTWORK_CODEX_HOME_MODE;
