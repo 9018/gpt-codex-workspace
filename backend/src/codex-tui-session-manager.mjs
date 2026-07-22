@@ -25,4 +25,5 @@ export {
   readTerminalResultWithRetry,
   writeJsonAtomic,
   failClosedResult,
+  recoverTerminalResultFromEvidence,
 } from "./codex-tui/session-terminalizer.mjs";

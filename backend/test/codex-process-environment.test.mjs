@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { buildCodexProcessEnvironment } from "../src/path-context/codex-process-environment.mjs";
+import { buildCodexProcessEnvironment, resolveCodexCommandPath, ensureCodexCommandOnPath } from "../src/path-context/codex-process-environment.mjs";
+import { existsSync } from "node:fs";
 import { executeCodexTaskRun } from "../src/task-codex-execution.mjs";
 import { createCodexTuiPtyAdapter } from "../src/codex-tui-pty-adapter.mjs";
 
@@ -63,4 +64,25 @@ test("exec and TUI both omit CODEX_HOME and use the resolved execution cwd", asy
   assert.equal("CODEX_HOME" in calls[0].options.env, false);
   assert.equal(calls[0].options.cwd, pathContext.executionCwd);
   assert.equal(execEnv.GPTWORK_PROJECT_ROOT, calls[0].options.env.GPTWORK_PROJECT_ROOT);
+});
+
+
+test("resolveCodexCommandPath finds npm-global codex even when PATH is thin", () => {
+  const resolved = resolveCodexCommandPath({
+    command: "codex",
+    baseEnv: { PATH: "/usr/bin", HOME: process.env.HOME },
+  });
+  assert.ok(resolved.includes("/"), resolved);
+  assert.equal(existsSync(resolved), true);
+});
+
+test("ensureCodexCommandOnPath prepends codex directory without dropping existing PATH", () => {
+  const resolved = resolveCodexCommandPath({
+    command: "codex",
+    baseEnv: { PATH: "/usr/bin", HOME: process.env.HOME },
+  });
+  const env = ensureCodexCommandOnPath({ PATH: "/usr/bin", HOME: process.env.HOME }, resolved);
+  const dir = resolved.slice(0, resolved.lastIndexOf("/"));
+  assert.ok(env.PATH.startsWith(dir));
+  assert.ok(env.PATH.includes("/usr/bin"));
 });

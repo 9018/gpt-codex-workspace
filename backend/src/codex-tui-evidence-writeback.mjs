@@ -97,6 +97,20 @@ export async function persistTuiTerminalState({ store, task, taskResult = {}, un
     const storedTask = (state.tasks || []).find((item) => item?.id === task.id);
     if (!storedTask) return state;
     found = true;
+    const protectedStatuses = new Set(["completed", "waiting_for_review", "waiting_for_integration"]);
+    const incomingIsFailure = ["failed", "timed_out", "cancelled", "stopped", "detached"].includes(status);
+    const alreadySucceeded = protectedStatuses.has(storedTask.status)
+      || storedTask.result?.status === "completed"
+      || storedTask.result?.verification?.passed === true;
+    if (alreadySucceeded && incomingIsFailure) {
+      storedTask.logs = Array.isArray(storedTask.logs) ? storedTask.logs : [];
+      storedTask.logs.push({
+        time: now,
+        message: `[tui-writeback] ignored demotion ${storedTask.status} -> ${status}; preserving successful evidence`,
+      });
+      storedTask.updated_at = now;
+      return state;
+    }
     storedTask.status = status;
     storedTask.result = {
       ...(storedTask.result || {}),

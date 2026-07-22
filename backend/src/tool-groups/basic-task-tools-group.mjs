@@ -14,21 +14,53 @@ function buildTaskDeletionPlan(state, taskIds, { force = false } = {}) {
   const requested = [...new Set((taskIds || []).filter(Boolean))];
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
   const byId = new Map(tasks.map((task) => [task.id, task]));
+  // Expand to repair/follow-up children that still point at selected parents.
+  const expanded = new Set(requested);
+  for (const task of tasks) {
+    const parentId = task?.parent_task_id || task?.repair_of_task_id || null;
+    if (parentId && expanded.has(parentId)) expanded.add(task.id);
+  }
+  const selected = [...expanded];
   const missing = requested.filter((id) => !byId.has(id));
-  const blocked = requested.map((id) => byId.get(id)).filter(Boolean)
+  const blocked = selected.map((id) => byId.get(id)).filter(Boolean)
     .filter((task) => !force && !DELETABLE_TASK_STATUSES.has(task.status))
     .map((task) => ({ task_id: task.id, status: task.status }));
   const blockedIds = new Set(blocked.map((item) => item.task_id));
-  const deletable = requested.filter((id) => byId.has(id) && !blockedIds.has(id));
+  const deletable = selected.filter((id) => byId.has(id) && !blockedIds.has(id));
   const ids = new Set(deletable);
   const linkedGoalIds = new Set(tasks.filter((task) => ids.has(task.id)).map((task) => task.goal_id).filter(Boolean));
+  for (const task of tasks) {
+    if (!ids.has(task.id)) continue;
+    if (task.repair_of_goal_id) linkedGoalIds.add(task.repair_of_goal_id);
+  }
+  for (const goal of (state.goals || [])) {
+    if (goal?.repair_of_goal_id && linkedGoalIds.has(goal.repair_of_goal_id)) linkedGoalIds.add(goal.id);
+    if (goal?.parent_goal_id && linkedGoalIds.has(goal.parent_goal_id)) linkedGoalIds.add(goal.id);
+  }
+  const markerNames = tasks
+    .filter((task) => ids.has(task.id))
+    .flatMap((task) => {
+      const title = String(task.title || "");
+      const values = [title];
+      const m = title.match(/tui-loop-canary[\w-]+/i);
+      if (m) values.push(m[0], `${m[0]}.txt`);
+      return values;
+    });
   const countMatches = (key, predicate) => Array.isArray(state[key]) ? state[key].filter(predicate).length : 0;
-  return { requested, deletable, missing, blocked, linked_goal_ids: [...linkedGoalIds], related: {
-    queue_items: countMatches('goal_queue', (item) => ids.has(item.task_id)),
-    agent_runs: countMatches('agent_runs', (item) => ids.has(item.task_id)),
-    activities: countMatches('activities', (item) => ids.has(item.task_id)),
-    task_locks: countMatches('repo_locks', (item) => ids.has(item.task_id)),
-  } };
+  return {
+    requested,
+    deletable,
+    missing,
+    blocked,
+    linked_goal_ids: [...linkedGoalIds],
+    marker_names: [...new Set(markerNames.filter(Boolean))],
+    related: {
+      queue_items: countMatches("goal_queue", (item) => ids.has(item.task_id)),
+      agent_runs: countMatches("agent_runs", (item) => ids.has(item.task_id)),
+      activities: countMatches("activities", (item) => ids.has(item.task_id)),
+      task_locks: countMatches("repo_locks", (item) => ids.has(item.task_id)),
+    },
+  };
 }
 
 function applyTaskDeletionPlan(state, plan, { deleteLinkedGoals = false } = {}) {
@@ -311,6 +343,7 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
                 projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
                 taskIds: plan.deletable,
                 goalIds: delete_linked_goal ? plan.linked_goal_ids : [],
+                markerNames: plan.marker_names || [],
               });
               cleanup = { ...(cleanup || {}), artifacts: artifactCleanup };
             } catch (cleanupError) {
@@ -359,6 +392,7 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
                 projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
                 taskIds: plan.deletable,
                 goalIds: delete_linked_goals ? plan.linked_goal_ids : [],
+                markerNames: plan.marker_names || [],
               });
             } catch (cleanupError) {
               cleanup = { artifacts_error: cleanupError?.message || String(cleanupError) };

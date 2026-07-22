@@ -20,6 +20,7 @@ export {
   readTerminalResultWithRetry,
   writeJsonAtomic,
   failClosedResult,
+  recoverTerminalResultFromEvidence,
   TERMINAL_RESULT_STATUSES,
 } from "./session-terminalizer.mjs";
 export { cleanupIsolatedWorktreeProcesses, isProcessAlive, uniqueStrings, candidateWorkspaceRoots } from "./session-process-cleanup.mjs";

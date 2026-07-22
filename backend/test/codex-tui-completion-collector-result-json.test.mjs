@@ -82,3 +82,36 @@ test("evidence cycle becomes ready when result.json exists", async () => {
   assert.equal(cycle.reason, "tui_result_json_collected");
   assert.equal(cycle.collected.result_json.status, "passed");
 });
+
+
+test('collect recovers completed evidence from marker files even when result.json is fail-closed', async () => {
+  const repo = await makeGitRepo();
+  await createSession(repo, { sessionId: 'session_marker', taskId: 'task_marker', goalId: 'goal_marker' });
+  const goalDir = join(repo, '.gptwork', 'goals', 'goal_marker');
+  await mkdir(goalDir, { recursive: true });
+  await mkdir(join(repo, '.gptwork', 'tmp'), { recursive: true });
+  const markerRel = '.gptwork/tmp/tui-loop-canary10-marker.txt';
+  await writeFile(join(repo, markerRel), 'tui-loop-ok marker\n');
+  await writeFile(join(goalDir, 'acceptance.contract.json'), JSON.stringify({
+    profile: 'noop',
+    must_have_files: [markerRel],
+    requirements: { requires_commit: false, requires_integration: false },
+  }));
+  await writeFile(join(goalDir, 'result.json'), JSON.stringify({
+    status: 'failed',
+    summary: 'Codex TUI terminated without contract-valid result evidence: PTY exited with code 0',
+    changed_files: [],
+    tests: 'none',
+    commit: 'none',
+    remote_head: 'none',
+    warnings: [],
+    followups: [],
+    verification: { commands: [], passed: false },
+  }));
+
+  const snapshot = await collectCodexTuiCompletion({ sessionId: 'session_marker', workspaceRoot: repo });
+  assert.equal(snapshot.result_json.status, 'completed');
+  assert.equal(snapshot.result_json.verification.passed, true);
+  assert.equal(snapshot.markers_satisfied, true);
+  assert.equal(snapshot.ready_for_review, true);
+});

@@ -394,8 +394,35 @@ export function createCodexTuiToolsGroup({
             sessionId: terminalSession.id,
             workspaceRoot: workspaceRoot || canonicalRepoPath,
           });
-          const resultStatus = snapshot?.result_json?.status;
-          const canonicalStatus = resultStatus === "completed" ? "waiting_for_review"
+          const currentState = await store.load().catch(() => null);
+          const currentTask = (currentState?.tasks || []).find((item) => item.id === task.id) || null;
+          const currentStatus = currentTask?.status || null;
+          const protectedStatuses = new Set(["completed", "waiting_for_review", "waiting_for_integration"]);
+          const resultStatus = snapshot?.result_json?.status
+            || (snapshot?.ready_for_review ? "completed" : null)
+            || terminalSession?.result_status
+            || terminalSession?.status;
+          const completedEvidence = resultStatus === "completed"
+            || snapshot?.ready_for_review === true
+            || snapshot?.result_json?.verification?.passed === true;
+          // Never demote an already completed/review-ready task because the PTY exited.
+          if (protectedStatuses.has(currentStatus) && !completedEvidence) {
+            await mutableStore.mutate((state) => {
+              const item = (state.tasks || []).find((candidate) => candidate.id === task.id);
+              if (!item) return;
+              item.metadata = { ...(item.metadata || {}), tui_session_id: terminalSession.id };
+              delete item.metadata.tui_session_owner;
+              delete item.metadata.manual_tui_session_starting;
+              item.logs ||= [];
+              item.logs.push({
+                time: new Date().toISOString(),
+                message: `[tui] terminal auto-collect ignored demotion; preserving ${currentStatus}`,
+              });
+            }).catch(() => {});
+            return;
+          }
+          const canonicalStatus = completedEvidence
+            ? (currentStatus === "completed" ? "completed" : "waiting_for_review")
             : (resultStatus === "timed_out" ? "timed_out" : "failed");
           await transitionService.transitionTask({
             task_id: task.id,
@@ -418,7 +445,7 @@ export function createCodexTuiToolsGroup({
             idempotency_key: `tui_terminal_collect:${task.id}:${terminalSession.id}:${resultStatus || terminalSession.status}`,
           });
           await execStore.updateExecution(execution.id, {
-            status: canonicalStatus === "waiting_for_review" ? "completed" : canonicalStatus,
+            status: ["completed", "waiting_for_review"].includes(canonicalStatus) ? "completed" : canonicalStatus,
             evidence_ref: snapshot?.result_json_path || null,
           }).catch(() => {});
           await mutableStore.mutate((state) => {
@@ -617,7 +644,18 @@ codex_tui_collect: tool({
           try {
             const state = await store.load();
             const currentTask = (state.tasks || []).find((item) => item.id === snapshot.task_id);
-            if (currentTask && !isTerminalStatus(currentTask.status)) {
+            const protectFromFailClosed = currentTask && (
+              ["completed", "waiting_for_review", "waiting_for_integration"].includes(currentTask.status)
+              || currentTask.result?.status === "completed"
+              || currentTask.result?.verification?.passed === true
+            );
+            if (protectFromFailClosed) {
+              snapshot.terminal_writeback = {
+                persisted: false,
+                reason: "preserve_completed_or_review_state",
+                current_status: currentTask.status,
+              };
+            } else if (currentTask && !isTerminalStatus(currentTask.status)) {
               snapshot.terminal_writeback = await persistTuiTerminalState({
                 store: mutableStore,
                 task: currentTask,

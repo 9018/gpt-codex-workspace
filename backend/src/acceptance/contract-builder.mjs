@@ -207,8 +207,19 @@ function contractDemandsRepositoryMutation({ explicit = {}, args = {}, blockingR
 }
 
 function normalizeMutationContract(contract, { explicit, args, blockingRequirements }) {
-  if (!contractDemandsRepositoryMutation({ explicit, args, blockingRequirements })) return contract;
+  // Only top-level product intent (profile/operation_kind) is authoritative for
+  // preserving non-mutating canaries. Intent-only "noop" may be an erroneous
+  // classification and remains eligible for mutation override.
+  const explicitKind = explicit.operation_kind || explicit.profile || explicit.acceptance_profile || null;
   const nonMutating = new Set(["noop", "diagnostic", "readonly_validation", "already_integrated"]);
+  if (nonMutating.has(explicitKind)
+    && explicit.requirements?.requires_commit !== true
+    && explicit.requirements?.requires_integration !== true
+    && explicit.requires_commit !== true
+    && explicit.requires_integration !== true) {
+    return contract;
+  }
+  if (!contractDemandsRepositoryMutation({ explicit, args, blockingRequirements })) return contract;
   const repoMutating = new Set(["code_change", "file_write", "docs_only", "config_change", "repair", "integration"]);
   const wasNonMutating = nonMutating.has(contract.intent?.operation_kind);
   if (wasNonMutating) contract.intent.operation_kind = "code_change";
@@ -257,7 +268,12 @@ export function buildAcceptanceContract(args = {}) {
   // The intent block may contain auto-classified or corrupted values
   // (e.g. data_migration from semantic inference), while the top-level
   // fields are set deliberately by the caller.
-  const explicitTopKind = explicit.operation_kind || args.operation_kind;
+  // Also honor product aliases: profile / acceptance_profile.
+  const explicitTopKind = explicit.operation_kind
+    || explicit.profile
+    || explicit.acceptance_profile
+    || args.operation_kind
+    || args.profile;
   const explicitIntentKind = explicit.intent?.operation_kind;
   const explicitKind = KNOWN_OPERATION_KINDS.has(explicitTopKind) ? explicitTopKind
     : KNOWN_OPERATION_KINDS.has(explicitIntentKind) ? explicitIntentKind
@@ -342,6 +358,26 @@ export function buildAcceptanceContract(args = {}) {
   if (!Array.isArray(contract.required_checks)) contract.required_checks = [];
   if (!contract.retry_policy) contract.retry_policy = { ...FULL_CONTRACT_DEFAULTS.retry_policy };
   if (!contract.acceptance_policy) contract.acceptance_policy = { ...FULL_CONTRACT_DEFAULTS.acceptance_policy };
+
+  // Preserve canary/product marker constraints that are not part of the core
+  // schema but are used by TUI recovery/cleanup paths.
+  const mustHave = [
+    ...(Array.isArray(explicit.must_have_files) ? explicit.must_have_files : []),
+    ...(Array.isArray(args.must_have_files) ? args.must_have_files : []),
+    ...(Array.isArray(explicit.requirements?.must_have_files) ? explicit.requirements.must_have_files : []),
+  ].map((item) => String(item || "").trim()).filter(Boolean);
+  if (mustHave.length) {
+    contract.must_have_files = [...new Set(mustHave)];
+    contract.requirements = {
+      ...(contract.requirements || {}),
+      must_have_files: [...new Set(mustHave)],
+    };
+  }
+  if (typeof explicit.must_not_modify_source === "boolean") {
+    contract.must_not_modify_source = explicit.must_not_modify_source;
+  } else if (typeof args.must_not_modify_source === "boolean") {
+    contract.must_not_modify_source = args.must_not_modify_source;
+  }
 
   if (contract.intent.semantic_confidence === "low") {
     addReviewReason(contract, "semantic_ambiguity");

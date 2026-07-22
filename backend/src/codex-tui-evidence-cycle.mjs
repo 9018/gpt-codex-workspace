@@ -3,6 +3,7 @@ import { mkdir, rename, writeFile } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { join } from "node:path";
 import { collectCodexTuiCompletion } from "./codex-tui-completion-collector.mjs";
+import { recoverTerminalResultFromEvidence } from "./codex-tui/session-terminalizer.mjs";
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -138,10 +139,36 @@ export async function runCodexTuiEvidenceCycle({
 
   const resultJsonObserved = wait.observed || existsSync(resultJsonPath);
   const partialResultObserved = existsSync(partialResultJsonPath);
-  const collected = await collectFn({ sessionId, workspaceRoot });
+  let collected = await collectFn({ sessionId, workspaceRoot });
+  // Last-chance recovery for canary-class marker/partial completion before parking review.
+  if (!collected?.result_json || collected?.result_json?.status !== "completed" || collected?.result_json?.verification?.passed !== true) {
+    try {
+      const recovered = await recoverTerminalResultFromEvidence({
+        workspaceRoot,
+        cwd: collected?.cwd || null,
+        goalId: goal.id,
+      });
+      if (recovered?.status === "completed" && recovered.verification?.passed === true) {
+        await writeJsonAtomic(resultJsonPath, recovered);
+        collected = {
+          ...(collected || {}),
+          result_json: recovered,
+          result_json_present: true,
+          result_json_valid: true,
+          result_json_path: resultJsonPath,
+          ready_for_review: true,
+          reconstructed_result: recovered,
+          findings: [],
+        };
+      }
+    } catch {
+      // best-effort recovery only
+    }
+  }
   const reconstructed = collected?.reconstructed_result || null;
   const resultJsonUsable = Boolean(collected?.result_json && collected?.result_json_valid !== false);
-  const closureProvable = collected?.ready_for_review === true;
+  const closureProvable = collected?.ready_for_review === true
+    || (collected?.result_json?.status === "completed" && collected?.result_json?.verification?.passed === true);
 
   let latestSessionStatus = wait.session_status;
   if (typeof getSessionStatusFn === "function") {

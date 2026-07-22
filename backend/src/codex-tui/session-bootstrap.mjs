@@ -15,7 +15,7 @@ import { createCodexTuiPtyAdapter } from "../codex-tui-pty-adapter.mjs";
 import { buildCodexTuiGoalObjective } from "../codex-tui-goal-prompt.mjs";
 import { detectMeaningfulOutput } from "../codex-tui-progress-utils.mjs";
 import { createTaskContextStore } from "../context-contract/task-context-store.mjs";
-import { buildCodexProcessEnvironment } from "../path-context/codex-process-environment.mjs";
+import { buildCodexProcessEnvironment, resolveCodexCommandPath, ensureCodexCommandOnPath } from "../path-context/codex-process-environment.mjs";
 import { snapshotNativeSessions } from "../codex-session/codex-session-inventory.mjs";
 import { resolveNativeSessionBinding } from "../codex-session/codex-session-resolver.mjs";
 import { createCodexSessionManifestStore } from "../codex-session/codex-session-manifest-store.mjs";
@@ -121,7 +121,7 @@ export async function startCodexTuiGoalSessionImpl({
   const sessionStoreRoot = workspaceRoot || candidateRoots[0] || cwd;
   const deprecatedCwdSessionRoot = !workspaceRoot && candidateRoots.length === 0;
   const store = createCodexTuiSessionStore({ workspaceRoot: sessionStoreRoot });
-  const adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
+  let adapter = ptyAdapter || null;
   const sessionId = sessionIdFor(task, goal);
   sessionStores.set(sessionId, store);
 
@@ -130,14 +130,19 @@ export async function startCodexTuiGoalSessionImpl({
     ? await snapshotNativeSessions(pathContext.nativeSessionsRoot).catch(() => [])
     : [];
 
-  const processEnv = pathContext
+  let processEnv = pathContext
     ? buildCodexProcessEnvironment(pathContext, {
       taskId: task?.id,
       goalId: goal?.id,
       executionId,
       controlSessionId: sessionId,
     })
-    : undefined;
+    : { ...process.env };
+  // Service managers often launch with a thin PATH. Resolve an absolute codex
+  // binary so node-pty/script can spawn the real CLI.
+  command = resolveCodexCommandPath({ command, baseEnv: processEnv });
+  processEnv = ensureCodexCommandOnPath(processEnv, command);
+  adapter = ptyAdapter || createCodexTuiPtyAdapter({ command });
 
   // Check for existing session
   let existing = null;
@@ -316,12 +321,21 @@ export async function startCodexTuiGoalSessionImpl({
   if (pendingTrustAccept) { ptySession.write("\r"); pendingTrustAccept = false; }
   for (const input of pendingAutopilotInputs.splice(0)) ptySession.write(input);
   activeSessions.set(sessionId, { store, ptySession, autopilot, releaseLockFn, onTerminalized });
+  // Mark control session running immediately so supervisor tools can correct mid-flight
+  // even while native binding / quiet-period waits continue.
+  await store.updateSession(sessionId, {
+    status: "running",
+    active: true,
+    pty_pid: ptySession.pid ?? null,
+    bootstrap_method: "pty_argv_prompt",
+    provisional_running: true,
+  }).catch(() => {});
 
   // Wait for the interactive TUI and allow MCP servers to finish booting before dispatch.
   const firstOutputAt = await waitForTuiOutput(store, sessionId, 15_000);
-  const startupQuietMs = ptyAdapter ? 0 : 1_500;
-  const startupMinReadyAt = Date.now() + (ptyAdapter ? 0 : 5_000);
-  const startupDeadline = Date.now() + (ptyAdapter ? 0 : 60_000);
+  const startupQuietMs = ptyAdapter ? 0 : 500;
+  const startupMinReadyAt = Date.now() + (ptyAdapter ? 0 : 1_000);
+  const startupDeadline = Date.now() + (ptyAdapter ? 0 : 8_000);
   while (startupQuietMs > 0 && Date.now() < startupDeadline) {
     const quietForMs = lastBootstrapOutputAt ? Date.now() - lastBootstrapOutputAt : 0;
     if (Date.now() >= startupMinReadyAt && quietForMs >= startupQuietMs) break;
@@ -382,9 +396,12 @@ export async function startCodexTuiGoalSessionImpl({
         pid: ptySession.pid ?? null,
       })
       : null;
+    // Keep native binding best-effort and short. The control TUI is already live;
+    // blocking bootstrap here freezes session status at "created" and blocks GPT
+    // corrections for tens of seconds.
     const bindingWaitMs = Number.isFinite(Number(pathContext?.nativeBindingWaitMs))
       ? Math.max(0, Number(pathContext.nativeBindingWaitMs))
-      : 30_000;
+      : 1_500;
     const bindingDeadline = Date.now() + bindingWaitMs;
     let nativeRecord = nativeBinding?.nativeSessionId
       ? nativeSessionsAfter.find((item) => item.id === nativeBinding.nativeSessionId)
@@ -418,7 +435,7 @@ export async function startCodexTuiGoalSessionImpl({
           lastCandidateCount = candidateCount;
         }
         // Early defer when no rollout candidates appear and no session id is in output.
-        if (stagnantPolls >= 15 && !nativeBinding?.nativeSessionId) break;
+        if (stagnantPolls >= 3 && !nativeBinding?.nativeSessionId) break;
       }
     }
     if (pathContext && (!nativeBinding?.nativeSessionId || !nativeRecord?.cwd)) {

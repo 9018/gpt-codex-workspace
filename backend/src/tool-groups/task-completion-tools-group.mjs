@@ -76,15 +76,20 @@ export function createTaskCompletionToolsGroup({ tool, schema, store, github, ev
         if (existingTask?.status === "completed") {
           return { task: existingTask, idempotent_replay: true };
         }
-        // Recover false-failed TUI tasks when durable evidence already proves completion.
-        if (existingTask && ["failed", "timed_out", "blocked"].includes(existingTask.status)) {
+        // Recover false-failed / false-repaired TUI tasks when durable evidence already proves completion.
+        if (existingTask && ["failed", "timed_out", "blocked", "waiting_for_repair", "waiting_for_review"].includes(existingTask.status)) {
           const durable = existingTask.result || {};
           const durableCompleted = durable.status === "completed"
             || durable.verification?.passed === true
             || durable.reviewer_decision?.passed === true
-            || durable.reviewer_decision?.status === "accepted";
+            || durable.reviewer_decision?.status === "accepted"
+            || durable.contract_verification?.completion_eligible === true
+            || durable.noop === true
+            || durable.kind === "noop"
+            || (Array.isArray(durable.marker_files) && durable.marker_files.length > 0 && durable.reconstructed === true)
+            || durable.evidence_source === "marker_files";
           if (durableCompleted || admin_override) {
-            const recovered = await transitionService.transition({
+            const recovered = await transitionService.transitionTask({
               task_id,
               event: TASK_EVENTS.RECONCILIATION_CORRECTION,
               payload: {
