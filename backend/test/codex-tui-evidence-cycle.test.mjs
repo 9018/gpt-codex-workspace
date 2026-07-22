@@ -122,3 +122,68 @@ test("TUI evidence cycle throws when sessionId is missing", async () => {
     /sessionId is required/,
   );
 });
+
+
+test("TUI partial result while session active continues waiting instead of human review", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-partial-active-"));
+  const goal = { id: "goal_partial_active" };
+  const dir = join(workspaceRoot, ".gptwork", "goals", goal.id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "result.partial.json"), JSON.stringify({ status: "running", phase: "building" }));
+
+  const out = await runCodexTuiEvidenceCycle({
+    task: { id: "task_partial_active" },
+    goal,
+    sessionId: "session_partial_active",
+    workspaceRoot,
+    maxWaitMs: 1,
+    pollMs: 1,
+    postTerminalGraceMs: 0,
+    sleepFn: async () => {},
+    getSessionStatusFn: async () => ({ status: "running" }),
+    collectFn: async () => ({
+      result_json: null,
+      result_json_valid: false,
+      ready_for_review: false,
+    }),
+  });
+
+  assert.equal(out.evidence_ready, false);
+  assert.equal(out.continue_waiting, true);
+  assert.equal(out.status, "running");
+  assert.equal(out.requires_human_review, false);
+  assert.equal(out.reason, "tui_result_partial_session_active");
+  assert.equal(out.retry_original_task, false);
+  assert.equal(out.create_repair_task, false);
+});
+
+test("TUI partial result after session finished parks human review", async () => {
+  const workspaceRoot = await mkdtemp(join(tmpdir(), "tui-evidence-partial-done-"));
+  const goal = { id: "goal_partial_done" };
+  const dir = join(workspaceRoot, ".gptwork", "goals", goal.id);
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, "result.partial.json"), JSON.stringify({ status: "running", phase: "building" }));
+
+  const out = await runCodexTuiEvidenceCycle({
+    task: { id: "task_partial_done" },
+    goal,
+    sessionId: "session_partial_done",
+    workspaceRoot,
+    maxWaitMs: 1,
+    pollMs: 1,
+    postTerminalGraceMs: 0,
+    sleepFn: async () => {},
+    getSessionStatusFn: async () => ({ status: "stopped" }),
+    collectFn: async () => ({
+      result_json: null,
+      result_json_valid: false,
+      ready_for_review: false,
+    }),
+  });
+
+  assert.equal(out.evidence_ready, false);
+  assert.equal(out.continue_waiting, false);
+  assert.equal(out.status, "waiting_for_review");
+  assert.equal(out.reason, "tui_result_partial_only_reconstructed");
+  assert.equal(out.requires_human_review, true);
+});

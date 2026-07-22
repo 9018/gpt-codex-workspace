@@ -34,13 +34,29 @@ function buildTaskDeletionPlan(state, taskIds, { force = false } = {}) {
 function applyTaskDeletionPlan(state, plan, { deleteLinkedGoals = false } = {}) {
   const ids = new Set(plan.deletable);
   const goalIds = new Set(plan.linked_goal_ids);
+  const deletedTasks = (state.tasks || []).filter((task) => ids.has(task.id));
   const next = { ...state, tasks: (state.tasks || []).filter((task) => !ids.has(task.id)) };
   for (const key of ['goal_queue', 'agent_runs', 'activities', 'repo_locks']) {
     if (Array.isArray(state[key])) next[key] = state[key].filter((item) => !ids.has(item.task_id));
   }
+  // Tombstones prevent GitHub historical re-import of intentionally deleted tasks.
+  const deletedTaskIds = new Set([...(Array.isArray(state.deleted_task_ids) ? state.deleted_task_ids : []), ...ids]);
+  next.deleted_task_ids = [...deletedTaskIds].sort();
+  const deletedGithubIssues = new Set(Array.isArray(state.deleted_github_issues) ? state.deleted_github_issues : []);
+  for (const task of deletedTasks) {
+    const n = Number(task.github_issue_number);
+    if (Number.isFinite(n) && n > 0) deletedGithubIssues.add(n);
+  }
+  next.deleted_github_issues = [...deletedGithubIssues].sort((a, b) => a - b);
+
   if (deleteLinkedGoals && Array.isArray(state.goals)) {
     const stillReferenced = new Set(next.tasks.map((task) => task.goal_id).filter(Boolean));
+    const removedGoals = (state.goals || []).filter((goal) => goalIds.has(goal.id) && !stillReferenced.has(goal.id));
     next.goals = state.goals.filter((goal) => !goalIds.has(goal.id) || stillReferenced.has(goal.id));
+    const deletedGoalIds = new Set([...(Array.isArray(state.deleted_goal_ids) ? state.deleted_goal_ids : []), ...removedGoals.map((goal) => goal.id)]);
+    next.deleted_goal_ids = [...deletedGoalIds].sort();
+  } else {
+    next.deleted_goal_ids = Array.isArray(state.deleted_goal_ids) ? [...state.deleted_goal_ids] : [];
   }
   return next;
 }
@@ -282,13 +298,24 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         const plan = buildTaskDeletionPlan(state, [task_id], { force });
         if (plan.missing.length) throw new Error(`task_not_found:${task_id}`);
         if (plan.blocked.length) throw new Error(`task_not_terminal:${task_id}:${plan.blocked[0].status}`);
+        let cleanup = null;
         if (!dry_run) {
           const target = (state.tasks || []).find((task) => task.id === task_id);
-          if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
+          if (target && config?.defaultWorkspaceRoot) cleanup = await cancelTaskExecution({ task: target, config });
           await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goal });
+          if (config?.defaultWorkspaceRoot) {
+            const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
+            const artifactCleanup = await cleanupDeletedTaskArtifacts({
+              workspaceRoot: config.defaultWorkspaceRoot,
+              projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
+              taskIds: plan.deletable,
+              goalIds: delete_linked_goal ? plan.linked_goal_ids : [],
+            });
+            cleanup = { ...(cleanup || {}), artifacts: artifactCleanup };
+          }
           await eventLogger?.append("task.deleted", { task_id, delete_linked_goal });
         }
-        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };
+        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan, cleanup };
       },
     }),
     delete_tasks: tool({
@@ -310,15 +337,25 @@ export function createBasicTaskToolsGroup({ tool, schema, config, store, createT
         if (!Array.isArray(selected) || selected.length === 0) throw new Error('no_tasks_selected');
         const plan = buildTaskDeletionPlan(state, selected, { force });
         if (plan.blocked.length) throw new Error(`tasks_not_terminal:${plan.blocked.map((item) => `${item.task_id}:${item.status}`).join(',')}`);
+        let cleanup = null;
         if (!dry_run) {
           for (const id of plan.deletable) {
             const target = (state.tasks || []).find((task) => task.id === id);
             if (target && config?.defaultWorkspaceRoot) await cancelTaskExecution({ task: target, config });
           }
           await persistTaskDeletionPlan(store, plan, { deleteLinkedGoals: delete_linked_goals });
+          if (config?.defaultWorkspaceRoot) {
+            const { cleanupDeletedTaskArtifacts } = await import('../task-deletion-artifact-cleanup.mjs');
+            cleanup = await cleanupDeletedTaskArtifacts({
+              workspaceRoot: config.defaultWorkspaceRoot,
+              projectRoot: config.defaultRepoPath || config.defaultWorkspaceRoot,
+              taskIds: plan.deletable,
+              goalIds: delete_linked_goals ? plan.linked_goal_ids : [],
+            });
+          }
           await eventLogger?.append("tasks.deleted", { task_ids: plan.deletable, delete_linked_goals });
         }
-        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan };
+        return { dry_run, deleted_task_ids: dry_run ? [] : plan.deletable, plan, cleanup };
       },
     }),
     append_task_log: tool({

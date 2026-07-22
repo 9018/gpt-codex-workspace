@@ -166,6 +166,10 @@ export function createCodexTuiProvider({
           sessionId: sessionId(handle),
           workspaceRoot: context.workspaceRoot,
           maxWaitMs: context.codexTuiEvidenceWaitMs,
+          getSessionStatusFn: async (id) => getCodexTuiSessionStatusFn(id, {
+            workspaceRoot: context.workspaceRoot,
+            candidateWorkspaceRoots: context.candidateWorkspaceRoots || [],
+          }),
           sendInputFn: (id, input) => sendCodexTuiSessionInputFn(id, input, {
             workspaceRoot: context.workspaceRoot,
             candidateWorkspaceRoots: context.candidateWorkspaceRoots || [],
@@ -174,6 +178,18 @@ export function createCodexTuiProvider({
         if (cycle?.evidence_ready) {
           handle.completion = cycle.collected || cycle.completion || cycle;
           return { state: "evidence_ready", native_session_id: handle?.native_session_id || null };
+        }
+        // Partial progress while session is still writing durable evidence.
+        if (cycle?.continue_waiting === true || cycle?.status === "running") {
+          return {
+            state: "running",
+            native_session_id: handle?.native_session_id || null,
+            checkpoint: {
+              phase: "awaiting_result_json",
+              reason: cycle?.reason || "tui_result_partial_session_active",
+              session_status: cycle?.session_status || null,
+            },
+          };
         }
         const state = cycle?.status === "timed_out" ? "timed_out" : "failed";
         return {

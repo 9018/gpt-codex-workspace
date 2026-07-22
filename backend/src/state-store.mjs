@@ -410,6 +410,9 @@ export class StateStore {
       conversations: [],
       memories: [],
       tasks: [],
+      deleted_task_ids: [],
+      deleted_goal_ids: [],
+      deleted_github_issues: [],
       chatgpt_requests: [],
       activities: [],
       audit: []

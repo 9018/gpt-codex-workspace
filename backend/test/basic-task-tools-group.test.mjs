@@ -1,6 +1,7 @@
+import { mkdtemp, writeFile, mkdir, rm } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createBasicTaskToolsGroup } from '../src/tool-groups/basic-task-tools-group.mjs';
@@ -386,6 +387,58 @@ test('delete_tasks persists batch deletion when using the real StateStore', asyn
     const reloadedStore = new StateStore({ statePath, defaultWorkspaceRoot: root });
     const reloaded = await reloadedStore.load();
     assert.deepEqual(reloaded.tasks.map((task) => task.id), ['active-real']);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+
+test("delete_task records tombstones and cleans goal artifacts when delete_linked_goal=true", async () => {
+  const root = await mkdtemp(join(tmpdir(), "gptwork-delete-artifacts-"));
+  try {
+    const goalId = "goal_clean_1";
+    const taskId = "task_clean_1";
+    await mkdir(join(root, ".gptwork", "goals", goalId), { recursive: true });
+    await writeFile(join(root, ".gptwork", "goals", goalId, "goal.md"), "goal");
+    await mkdir(join(root, ".gptwork", "context-index", goalId), { recursive: true });
+    await writeFile(join(root, ".gptwork", "context-index", goalId, "chunks.json"), "[]");
+    await mkdir(join(root, ".gptwork", "runs", taskId), { recursive: true });
+    await writeFile(join(root, ".gptwork", "runs", taskId, "run.json"), "{}");
+
+    const state = {
+      tasks: [{ id: taskId, status: "completed", goal_id: goalId, github_issue_number: 1012 }],
+      goals: [{ id: goalId, task_id: taskId }],
+      goal_queue: [],
+      agent_runs: [],
+      activities: [],
+      repo_locks: [],
+    };
+    let saved = null;
+    const tools = createBasicTaskToolsGroup({
+      tool: fakeTool,
+      schema: fakeSchema,
+      config: { defaultWorkspaceRoot: root, defaultRepoPath: root },
+      store: {
+        load: async () => state,
+        save: async (next) => { saved = next; Object.assign(state, next); },
+      },
+      createTask: async () => {},
+      github: { syncTask: async () => {} },
+      cancelTaskExecution: async () => ({ deleted_sessions: [] }),
+    });
+
+    const result = await tools.delete_task.handler({
+      task_id: taskId,
+      dry_run: false,
+      delete_linked_goal: true,
+    });
+    assert.deepEqual(result.deleted_task_ids, [taskId]);
+    assert.ok(saved.deleted_task_ids.includes(taskId));
+    assert.ok(saved.deleted_goal_ids.includes(goalId));
+    assert.deepEqual(saved.deleted_github_issues, [1012]);
+    assert.equal(existsSync(join(root, ".gptwork", "goals", goalId)), false);
+    assert.equal(existsSync(join(root, ".gptwork", "context-index", goalId)), false);
+    assert.equal(existsSync(join(root, ".gptwork", "runs", taskId)), false);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

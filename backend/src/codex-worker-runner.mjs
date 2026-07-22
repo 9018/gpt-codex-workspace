@@ -319,6 +319,68 @@ async function ensureRepairTaskForWaitingParent(store, config, task) {
   return { task_id: current.id, status: TASK_STATUSES.WAITING_FOR_REPAIR, progressed: true, transitioned: true, repair_goal_id: created?.goal?.id || null, repair_task_id: created?.task?.id || null };
 }
 
+
+async function recoverDurableReviewEvidenceTasks(store, config, maxTasks = 10) {
+  const state = await store.load();
+  const tasks = Array.isArray(state.tasks) ? state.tasks : [];
+  const workspaceRoot = config?.defaultWorkspaceRoot || config?.defaultWorkspaceRootPath || null;
+  if (!workspaceRoot) return { recovered: 0, tasks: [] };
+  const candidates = tasks
+    .filter((task) => task?.status === TASK_STATUSES.WAITING_FOR_REVIEW)
+    .filter((task) => task?.goal_id)
+    .slice(0, Math.max(0, Math.min(Number(maxTasks) || 10, 50)));
+  if (candidates.length === 0) return { recovered: 0, tasks: [] };
+
+  const recovered = [];
+  const { readFile } = await import("node:fs/promises");
+  const { existsSync } = await import("node:fs");
+  const { join } = await import("node:path");
+  for (const candidate of candidates) {
+    const resultJsonPath = join(workspaceRoot, ".gptwork", "goals", candidate.goal_id, "result.json");
+    if (!existsSync(resultJsonPath)) continue;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(await readFile(resultJsonPath, "utf8"));
+    } catch {
+      continue;
+    }
+    if (!parsed || typeof parsed !== "object") continue;
+    const status = String(parsed.status || "").toLowerCase();
+    if (!["completed", "failed", "timed_out"].includes(status)) continue;
+    // Skip pure partial placeholders
+    if (parsed.phase === "running" && status !== "completed") continue;
+    const verificationPassed = parsed.verification?.passed === true
+      || parsed.reviewer_decision?.passed === true
+      || parsed.reviewer_decision?.status === "accepted";
+    if (status === "completed" && verificationPassed !== true && parsed.integration?.status !== "not_required" && parsed.integration?.ok !== true) {
+      // still durable enough to re-open for finalization if commit/tests present
+      if (!parsed.commit && !Array.isArray(parsed.tests)) continue;
+    }
+
+    await updateTask(store, candidate.id, (item) => {
+      item.status = status === "completed" ? TASK_STATUSES.COMPLETED : (status === "timed_out" ? TASK_STATUSES.TIMED_OUT : TASK_STATUSES.FAILED);
+      item.result = {
+        ...(item.result && typeof item.result === "object" ? item.result : {}),
+        ...parsed,
+        status,
+        requires_review: status !== "completed",
+        recovered_from_durable_result_json: {
+          path: resultJsonPath,
+          recovered_at: new Date().toISOString(),
+          previous_status: candidate.status,
+        },
+      };
+      item.logs = Array.isArray(item.logs) ? item.logs : [];
+      item.logs.push({
+        time: new Date().toISOString(),
+        message: `[worker] recovered durable result.json while ${candidate.status}; status -> ${item.status}`,
+      });
+    });
+    recovered.push({ task_id: candidate.id, status, path: resultJsonPath });
+  }
+  return { recovered: recovered.length, tasks: recovered };
+}
+
 async function recoverAcceptedVerifiedReviewTasks(store, maxTasks = 10) {
   const state = await store.load();
   const tasks = Array.isArray(state.tasks) ? state.tasks : [];
@@ -831,6 +893,11 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     releaseTaskLock: workspaceRoot ? (taskId) => releaseLockForTask(workspaceRoot, taskId) : null,
   }).catch((error) => ([{ action: "error", error: error.message }]));
   state = await store.load();
+  const durableReviewRecovery = await recoverDurableReviewEvidenceTasks(store, config, maxTasks).catch((error) => ({
+    recovered: 0,
+    tasks: [],
+    error: errorMessage(error),
+  }));
   const reviewRecovery = await recoverAcceptedVerifiedReviewTasks(store, maxTasks);
   const queueReconciliation = await reconcileRunningQueueItems(store);
   const progressionCommands = await drainProgressionCommands(store, config, maxTasks).catch((error) => ({
@@ -926,6 +993,7 @@ export async function runAssignedCodexTasks(store, config, github, { limit = 10,
     concurrency: maxConcurrency,
     queue_autostart: queueAutostart,
     review_recovery: reviewRecovery,
+    durable_review_recovery: durableReviewRecovery,
     queue_reconciliation: queueReconciliation,
     progression_commands: progressionCommands,
     runtime_reconciliation: runtimeReconciliation,

@@ -688,9 +688,43 @@ export async function runTaskExecution(store, config, task, context, github, dep
       sessionId: session.id,
       workspaceRoot: config.defaultWorkspaceRoot,
       maxWaitMs: config.codexTuiEvidenceWaitMs ?? 120_000,
+      getSessionStatusFn: async (id) => {
+        try {
+          const { getCodexTuiSessionStatus } = await import("../codex-tui-session-manager.mjs");
+          return getCodexTuiSessionStatus(id, { workspaceRoot: config.defaultWorkspaceRoot });
+        } catch {
+          return null;
+        }
+      },
     });
 
     if (!collected?.evidence_ready) {
+      // Session still active with partial progress: keep task running and preserve ownership.
+      if (collected?.continue_waiting === true || collected?.status === "running") {
+        await updateTaskFn(store, task.id, (item) => {
+          item.status = "running";
+          item.metadata = {
+            ...(item.metadata || {}),
+            tui_session_owner: "worker",
+            worker_tui_session_starting: false,
+            tui_session_id: session.id,
+          };
+          item.logs.push({
+            time: new Date().toISOString(),
+            message: `[worker] codex_tui_goal still writing durable evidence (${collected?.reason || "partial_active"})`,
+          });
+        });
+        return {
+          kind: "codex_tui_awaiting_result_json",
+          provider: CODEX_EXECUTION_PROVIDERS.TUI_GOAL,
+          status: "running",
+          progressed: true,
+          skipped: false,
+          session_id: session.id,
+          reason: collected?.reason || "tui_result_partial_session_active",
+          collect_result: collected || null,
+        };
+      }
       const evidenceTimedOut = collected?.status === "timed_out";
       try {
         await stopCodexTuiSessionFn(session.id, {

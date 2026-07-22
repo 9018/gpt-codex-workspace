@@ -419,6 +419,12 @@ function shouldPostResultComment(task) {
       const state = await store.load();
       const existingTasks = state.tasks || [];
       const existingTaskIds = new Set(existingTasks.map((task) => task.id));
+      const deletedTaskIds = new Set(Array.isArray(state.deleted_task_ids) ? state.deleted_task_ids : []);
+      const deletedGithubIssues = new Set(
+        (Array.isArray(state.deleted_github_issues) ? state.deleted_github_issues : [])
+          .map((value) => Number(value))
+          .filter((value) => Number.isFinite(value) && value > 0)
+      );
       const existingGithubIssueNumbers = new Set(existingTasks.map((task) => task.github_issue_number).filter((value) => Number.isFinite(value) && value > 0));
       const existingGithubIssueUrls = new Set(existingTasks.map((task) => task.github_issue_url).filter(Boolean));
       const maxIssues = Math.max(1, Math.min(Number(limit) || 100, 100));
@@ -428,6 +434,8 @@ function shouldPostResultComment(task) {
         if (issue.labels.includes("gptwork-question") && _hasTaskIntakeMarker(issue)) { _recordSkip("question_label_with_task_intake_imported", "issue #" + issue.number + " has task-intake marker"); }
         const idMatch = issue.body.match(/\*\*Task ID\*\*:\s*`(task_[a-f0-9-]+)`/);
         if (idMatch && existingTaskIds.has(idMatch[1])) { _recordSkip("already_imported", "issue #" + issue.number + " task " + idMatch[1]); continue; }
+        if (idMatch && deletedTaskIds.has(idMatch[1])) { _recordSkip("deleted_task_tombstone", "issue #" + issue.number + " task " + idMatch[1]); continue; }
+        if (deletedGithubIssues.has(issue.number)) { _recordSkip("deleted_github_issue_tombstone", "issue #" + issue.number); continue; }
         const reqIdMatch = issue.body.match(/\*\*Request ID\*\*:\s*`(chatreq_[\w-]+)`/);
         if (reqIdMatch && existingTasks.some(t => t.source_request_id === reqIdMatch[1])) { _recordSkip("duplicate_by_request_id", "issue #" + issue.number + " request " + reqIdMatch[1]); continue; }
         if (existingGithubIssueNumbers.has(issue.number) || existingGithubIssueUrls.has(issue.html_url)) { _recordSkip("duplicate_issue_number", "issue #" + issue.number); continue; }
