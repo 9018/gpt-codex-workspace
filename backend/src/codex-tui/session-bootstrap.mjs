@@ -258,7 +258,11 @@ export async function startCodexTuiGoalSessionImpl({
       command,
       args: resumeNativeSessionId
         ? ["resume", String(resumeNativeSessionId)]
-        : [],
+        : [
+            "-c", "approval_policy=\"never\"",
+            "-c", "sandbox_mode=\"danger-full-access\"",
+            initialPrompt,
+          ],
       onData: (chunk) => {
         const text = String(chunk ?? "");
         bootstrapOutput = (bootstrapOutput + text).slice(-32_000);
@@ -341,10 +345,9 @@ export async function startCodexTuiGoalSessionImpl({
     };
     await store.appendSessionLog(sessionId, `[bootstrap] native session resumed without /goal dispatch\n`).catch(() => {});
   } else {
-    const goalCommand = `/goal ${initialPrompt}`;
-    await submitTuiText(ptySession, goalCommand);
-    await store.appendSessionLog(sessionId, `[bootstrap-input] /goal dispatched\n`).catch(() => {});
-    bootstrapMethod = "pty_goal_slash_command";
+    await store.appendSessionLog(sessionId, `[bootstrap-input] argv prompt dispatched
+`).catch(() => {});
+    bootstrapMethod = "pty_argv_prompt";
 
     const outputBeforeDispatch = bootstrapOutput;
     const outputAtDispatch = lastBootstrapOutputAt;
