@@ -112,6 +112,8 @@ export async function cleanupDeletedTaskArtifacts({
   for (const goalId of goals) {
     const goalDir = join(workspaceRoot, ".gptwork", "goals", goalId);
     if (await rmPath(goalDir)) deleted.goals.push(goalDir);
+    const runtimeGoalDir = join(workspaceRoot, ".gptwork", "runtime-goals", goalId);
+    if (await rmPath(runtimeGoalDir)) deleted.goals.push(runtimeGoalDir);
     const indexDir = join(workspaceRoot, ".gptwork", "context-index", goalId);
     if (await rmPath(indexDir)) deleted.context_index.push(indexDir);
   }
@@ -186,6 +188,8 @@ export async function cleanupDeletedTaskArtifacts({
     for (const goalId of goals) {
       const goalDir = join(projectRoot, ".gptwork", "goals", goalId);
       if (await rmPath(goalDir)) deleted.goals.push(goalDir);
+      const runtimeGoalDir = join(projectRoot, ".gptwork", "runtime-goals", goalId);
+      if (await rmPath(runtimeGoalDir)) deleted.goals.push(runtimeGoalDir);
     }
     const projectViewsRoot = join(projectRoot, ".gptwork", "views", "goals");
     for (const entry of await listNames(projectViewsRoot)) {
